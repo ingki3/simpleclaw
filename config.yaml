@@ -1,0 +1,11 @@
+persona:
+  token_budget: 4096
+  local_dir: ".agent"
+  global_dir: "~/.agents/main"
+  files:
+    - name: "AGENT.md"
+      type: "agent"
+    - name: "USER.md"
+      type: "user"
+    - name: "MEMORY.md"
+      type: "memory"
