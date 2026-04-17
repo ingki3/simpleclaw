@@ -2,7 +2,7 @@
 
 ## Phase 1: Foundation (기반 체제 및 CLI)
 - [x] 페르소나 설정 파싱 엔진 및 프롬프트 인젝터
-- [ ] 다중 LLM API 연동 및 외부 CLI 툴 서브프로세스 래핑
+- [x] 다중 LLM API 연동 및 외부 CLI 툴 서브프로세스 래핑
 
 ## Phase 2: Extension & Memory (확장 도구 및 메모리 구조 통합)
 - [ ] 로컬 전용/전역 스킬 모듈 및 MCP 클라이언트

@@ -1,3 +1,19 @@
+llm:
+  default: "claude"
+  providers:
+    claude:
+      type: "api"
+      model: "claude-sonnet-4-20250514"
+      api_key_env: "ANTHROPIC_API_KEY"
+    openai:
+      type: "api"
+      model: "gpt-4o"
+      api_key_env: "OPENAI_API_KEY"
+    gemini:
+      type: "api"
+      model: "gemini-2.0-flash"
+      api_key_env: "GOOGLE_API_KEY"
+
 persona:
   token_budget: 4096
   local_dir: ".agent"
