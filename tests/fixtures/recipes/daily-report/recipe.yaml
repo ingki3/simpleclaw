@@ -1,0 +1,17 @@
+name: daily-report
+description: "Generate a daily status report"
+parameters:
+  - name: date
+    description: "Report date"
+    required: true
+  - name: format
+    description: "Output format"
+    required: false
+    default: "markdown"
+steps:
+  - type: command
+    name: "Gather data"
+    content: "echo Gathering data for ${date}"
+  - type: prompt
+    name: "Generate report"
+    content: "Generate a ${format} status report for ${date}."

@@ -6,7 +6,7 @@
 
 ## Phase 2: Extension & Memory (확장 도구 및 메모리 구조 통합)
 - [x] 로컬 전용/전역 스킬 모듈 및 MCP 클라이언트
-- [ ] Recipe 실행 엔진
+- [x] Recipe 실행 엔진
 - [ ] 시맨틱 메모리 연동 및 드리밍 파이프라인
 
 ## Phase 3: Autonomy & Automation (통신 인터페이스와 스케줄링)
