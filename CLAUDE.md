@@ -29,4 +29,6 @@ Python 3.11+: Follow standard conventions
 - 001-persona-parser-engine: Added Python 3.11+ + `markdown-it-py` (마크다운 파싱), `tiktoken` (토큰 카운팅), `PyYAML` (config.yaml 로드)
 
 <!-- MANUAL ADDITIONS START -->
+## 개발 작업 시 참고
+- AGENT.md 파일의 지침을 참고할 것
 <!-- MANUAL ADDITIONS END -->

@@ -1,6 +1,8 @@
 .claude
 .specify
 AGENT.md
+CLAUDE.md
+PROGRESS.md
 
 # Python
 __pycache__/
