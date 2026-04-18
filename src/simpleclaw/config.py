@@ -179,6 +179,100 @@ def load_daemon_config(config_path: str | Path) -> dict:
     }
 
 
+_TELEGRAM_DEFAULTS: dict = {
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "whitelist": {
+        "user_ids": [],
+        "chat_ids": [],
+    },
+}
+
+
+def load_telegram_config(config_path: str | Path) -> dict:
+    """Load Telegram bot configuration from config.yaml."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_TELEGRAM_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_TELEGRAM_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_TELEGRAM_DEFAULTS)
+
+    tg = data.get("telegram", {})
+    if not isinstance(tg, dict):
+        return dict(_TELEGRAM_DEFAULTS)
+
+    whitelist = tg.get("whitelist", {})
+    if not isinstance(whitelist, dict):
+        whitelist = {}
+
+    # Load .env for bot token
+    env_path = Path(config_path).parent / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path)
+
+    token_env = tg.get("bot_token_env", _TELEGRAM_DEFAULTS["bot_token_env"])
+    bot_token = os.environ.get(token_env, "")
+
+    return {
+        "bot_token": bot_token,
+        "bot_token_env": token_env,
+        "whitelist": {
+            "user_ids": whitelist.get("user_ids", []),
+            "chat_ids": whitelist.get("chat_ids", []),
+        },
+    }
+
+
+_WEBHOOK_DEFAULTS: dict = {
+    "enabled": True,
+    "host": "127.0.0.1",
+    "port": 8080,
+    "auth_token_env": "WEBHOOK_AUTH_TOKEN",
+}
+
+
+def load_webhook_config(config_path: str | Path) -> dict:
+    """Load webhook server configuration from config.yaml."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_WEBHOOK_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_WEBHOOK_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_WEBHOOK_DEFAULTS)
+
+    wh = data.get("webhook", {})
+    if not isinstance(wh, dict):
+        return dict(_WEBHOOK_DEFAULTS)
+
+    # Load .env for auth token
+    env_path = Path(config_path).parent / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path)
+
+    token_env = wh.get("auth_token_env", _WEBHOOK_DEFAULTS["auth_token_env"])
+    auth_token = os.environ.get(token_env, "")
+
+    return {
+        "enabled": wh.get("enabled", _WEBHOOK_DEFAULTS["enabled"]),
+        "host": wh.get("host", _WEBHOOK_DEFAULTS["host"]),
+        "port": wh.get("port", _WEBHOOK_DEFAULTS["port"]),
+        "auth_token": auth_token,
+        "auth_token_env": token_env,
+    }
+
+
 _SUB_AGENTS_DEFAULTS: dict = {
     "max_concurrent": 3,
     "default_timeout": 300,

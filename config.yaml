@@ -22,6 +22,18 @@ skills:
 mcp:
   servers: {}
 
+telegram:
+  bot_token_env: "TELEGRAM_BOT_TOKEN"
+  whitelist:
+    user_ids: []
+    chat_ids: []
+
+webhook:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8080
+  auth_token_env: "WEBHOOK_AUTH_TOKEN"
+
 sub_agents:
   max_concurrent: 3
   default_timeout: 300

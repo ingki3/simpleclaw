@@ -12,7 +12,7 @@
 ## Phase 3: Autonomy & Automation (통신 인터페이스와 스케줄링)
 - [x] Heartbeat 데몬 및 Cron 스케줄러
 - [x] 서브 에이전트 동적 호출 모델
-- [ ] 텔레그램 봇 및 Webhook 이벤트 리스너
+- [x] 텔레그램 봇 및 Webhook 이벤트 리스너
 
 ## Phase 4: Expansion (플랫폼 고도화)
 - [ ] STT/TTS 인터페이스
