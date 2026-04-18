@@ -22,13 +22,23 @@ class ClaudeProvider(LLMProvider):
         self._client = anthropic.AsyncAnthropic(api_key=api_key)
         self._name = name
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+    ) -> LLMResponse:
+        if messages is not None:
+            msg_list = messages
+        else:
+            msg_list = [{"role": "user", "content": user_message}]
+
         try:
             message = await self._client.messages.create(
                 model=self._model,
                 max_tokens=4096,
                 system=system_prompt if system_prompt else anthropic.NOT_GIVEN,
-                messages=[{"role": "user", "content": user_message}],
+                messages=msg_list,
             )
         except anthropic.AuthenticationError as e:
             raise LLMAuthError(f"Claude auth failed: {e}") from e

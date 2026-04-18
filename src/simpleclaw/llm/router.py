@@ -62,7 +62,9 @@ class LLMRouter:
         provider = self._providers[backend_name]
         logger.info("Routing request to backend '%s'", backend_name)
 
-        response = await provider.send(request.system_prompt, request.user_message)
+        response = await provider.send(
+            request.system_prompt, request.user_message, request.messages
+        )
         return response
 
     def list_backends(self) -> list[str]:
@@ -123,12 +125,17 @@ def create_router(config_path: str | Path) -> LLMRouter:
             provider_cls = _PROVIDER_REGISTRY.get(name)
             if provider_cls:
                 api_key = pconf.get("api_key", "")
-                provider = provider_cls(
-                    model=backend.model,
-                    api_key=api_key,
-                    name=name,
-                )
-                providers[name] = provider
+                try:
+                    provider = provider_cls(
+                        model=backend.model,
+                        api_key=api_key,
+                        name=name,
+                    )
+                    providers[name] = provider
+                except Exception as exc:
+                    logger.warning(
+                        "Skipping provider '%s': %s", name, exc
+                    )
             else:
                 logger.warning(
                     "No provider implementation for '%s', skipping.", name

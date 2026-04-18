@@ -179,6 +179,39 @@ def load_daemon_config(config_path: str | Path) -> dict:
     }
 
 
+_AGENT_DEFAULTS: dict = {
+    "history_limit": 20,
+    "db_path": ".agent/conversations.db",
+}
+
+
+def load_agent_config(config_path: str | Path) -> dict:
+    """Load agent orchestrator configuration from config.yaml."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_AGENT_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_AGENT_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_AGENT_DEFAULTS)
+
+    agent = data.get("agent", {})
+    if not isinstance(agent, dict):
+        return dict(_AGENT_DEFAULTS)
+
+    return {
+        "history_limit": agent.get(
+            "history_limit", _AGENT_DEFAULTS["history_limit"]
+        ),
+        "db_path": agent.get("db_path", _AGENT_DEFAULTS["db_path"]),
+    }
+
+
 _VOICE_DEFAULTS: dict = {
     "stt": {
         "provider": "openai",

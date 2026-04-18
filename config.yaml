@@ -1,5 +1,5 @@
 llm:
-  default: "claude"
+  default: "gemini"
   providers:
     claude:
       type: "api"
@@ -11,8 +11,12 @@ llm:
       api_key_env: "OPENAI_API_KEY"
     gemini:
       type: "api"
-      model: "gemini-2.0-flash"
+      model: "gemini-3.1-flash-lite-preview"
       api_key_env: "GOOGLE_API_KEY"
+
+agent:
+  history_limit: 20
+  db_path: ".agent/conversations.db"
 
 skills:
   local_dir: ".agent/skills"
@@ -38,7 +42,7 @@ voice:
 telegram:
   bot_token_env: "TELEGRAM_BOT_TOKEN"
   whitelist:
-    user_ids: []
+    user_ids: [6233568410]
     chat_ids: []
 
 webhook:

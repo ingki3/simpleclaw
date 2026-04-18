@@ -20,6 +20,7 @@ class MCPManager:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDefinition] = {}
         self._connected_servers: list[str] = []
+        self._server_configs: dict[str, dict] = {}
 
     async def connect_servers(self, mcp_config: dict) -> None:
         """Connect to MCP servers defined in config.
@@ -77,6 +78,7 @@ class MCPManager:
                         self._tools[tool.name] = tool_def
 
             self._connected_servers.append(name)
+            self._server_configs[name] = config
             logger.info(
                 "Connected to MCP server '%s', loaded %d tools.",
                 name, len(tools_result.tools),
@@ -89,6 +91,52 @@ class MCPManager:
         except Exception as e:
             raise MCPConnectionError(
                 f"Failed to connect to MCP server '{name}': {e}"
+            ) from e
+
+    async def call_tool(
+        self, tool_name: str, arguments: dict | None = None
+    ) -> str:
+        """Execute an MCP tool by name and return the result."""
+        tool = self._tools.get(tool_name)
+        if tool is None:
+            raise MCPConnectionError(f"MCP tool '{tool_name}' not found")
+
+        server_name = tool.source_name
+        server_conf = self._server_configs.get(server_name)
+        if server_conf is None:
+            raise MCPConnectionError(
+                f"MCP server '{server_name}' config not found"
+            )
+
+        try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+
+            server_params = StdioServerParameters(
+                command=server_conf["command"],
+                args=server_conf.get("args", []),
+                env=server_conf.get("env"),
+            )
+
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(
+                        tool_name, arguments=arguments or {}
+                    )
+                    texts = []
+                    for item in result.content:
+                        if hasattr(item, "text"):
+                            texts.append(item.text)
+                    return "\n".join(texts) if texts else str(result)
+
+        except ImportError:
+            raise MCPConnectionError(
+                "MCP package not installed. Install with: pip install mcp"
+            )
+        except Exception as e:
+            raise MCPConnectionError(
+                f"Failed to call MCP tool '{tool_name}': {e}"
             ) from e
 
     def list_tools(self) -> list[ToolDefinition]:

@@ -34,7 +34,12 @@ class CLIProvider(LLMProvider):
         self._timeout = timeout
         self._name = name
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+    ) -> LLMResponse:
         # Check if the command exists
         if not shutil.which(self._command):
             raise LLMCLINotFoundError(
@@ -46,9 +51,18 @@ class CLIProvider(LLMProvider):
         cmd_args = [self._command, *self._args]
 
         # Pass user message via stdin
-        input_text = user_message
-        if system_prompt:
+        if messages is not None:
+            parts = []
+            if system_prompt:
+                parts.append(f"System: {system_prompt}")
+            for msg in messages:
+                role = msg["role"].capitalize()
+                parts.append(f"{role}: {msg['content']}")
+            input_text = "\n\n".join(parts)
+        elif system_prompt:
             input_text = f"System: {system_prompt}\n\nUser: {user_message}"
+        else:
+            input_text = user_message
 
         try:
             process = await asyncio.create_subprocess_exec(

@@ -18,7 +18,7 @@ class RecordingProvider(LLMProvider):
         self.last_system_prompt = None
         self.last_user_message = None
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
+    async def send(self, system_prompt: str, user_message: str, messages: list[dict] | None = None) -> LLMResponse:
         self.last_system_prompt = system_prompt
         self.last_user_message = user_message
         return LLMResponse(

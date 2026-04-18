@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+
 class SkillScope(Enum):
     """Where the skill was loaded from."""
     LOCAL = "local"
@@ -27,6 +28,7 @@ class SkillDefinition:
     trigger: str = ""
     scope: SkillScope = SkillScope.LOCAL
     skill_dir: str = ""
+    commands: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -22,8 +22,8 @@ class MockProvider(LLMProvider):
             )
         )
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
-        return await self._mock_send(system_prompt, user_message)
+    async def send(self, system_prompt: str, user_message: str, messages: list[dict] | None = None) -> LLMResponse:
+        return await self._mock_send(system_prompt, user_message, messages)
 
 
 class TestLLMRouter:
@@ -74,5 +74,5 @@ class TestLLMRouter:
         )
         await router.send(request)
         router._providers["provider_a"]._mock_send.assert_called_once_with(
-            "You are helpful.", "hello"
+            "You are helpful.", "hello", None
         )

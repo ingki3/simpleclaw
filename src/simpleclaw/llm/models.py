@@ -30,6 +30,7 @@ class LLMRequest:
     system_prompt: str = ""
     user_message: str = ""
     backend_name: str | None = None
+    messages: list[dict] | None = None
 
 
 @dataclass

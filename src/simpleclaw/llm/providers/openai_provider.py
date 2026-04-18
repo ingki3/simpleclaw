@@ -22,16 +22,24 @@ class OpenAIProvider(LLMProvider):
         self._client = openai.AsyncOpenAI(api_key=api_key)
         self._name = name
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
-        messages = []
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+    ) -> LLMResponse:
+        msg_list = []
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": user_message})
+            msg_list.append({"role": "system", "content": system_prompt})
+        if messages is not None:
+            msg_list.extend(messages)
+        else:
+            msg_list.append({"role": "user", "content": user_message})
 
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
-                messages=messages,
+                messages=msg_list,
             )
         except openai.AuthenticationError as e:
             raise LLMAuthError(f"OpenAI auth failed: {e}") from e

@@ -23,14 +23,34 @@ class GeminiProvider(LLMProvider):
         self._client = genai.Client(api_key=api_key)
         self._name = name
 
-    async def send(self, system_prompt: str, user_message: str) -> LLMResponse:
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+    ) -> LLMResponse:
         try:
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt if system_prompt else None,
             )
+
+            if messages is not None:
+                # Convert to Gemini contents format
+                contents = []
+                for msg in messages:
+                    role = "model" if msg["role"] == "assistant" else "user"
+                    contents.append(
+                        types.Content(
+                            role=role,
+                            parts=[types.Part(text=msg["content"])],
+                        )
+                    )
+            else:
+                contents = user_message
+
             response = await self._client.aio.models.generate_content(
                 model=self._model,
-                contents=user_message,
+                contents=contents,
                 config=config,
             )
         except Exception as e:
