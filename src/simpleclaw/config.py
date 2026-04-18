@@ -177,3 +177,64 @@ def load_daemon_config(config_path: str | Path) -> dict:
             ),
         },
     }
+
+
+_SUB_AGENTS_DEFAULTS: dict = {
+    "max_concurrent": 3,
+    "default_timeout": 300,
+    "workspace_dir": "workspace/sub_agents",
+    "cleanup_workspace": False,
+    "default_scope": {
+        "allowed_paths": [],
+        "network": False,
+    },
+}
+
+
+def load_sub_agents_config(config_path: str | Path) -> dict:
+    """Load sub-agents configuration from config.yaml."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_SUB_AGENTS_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_SUB_AGENTS_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_SUB_AGENTS_DEFAULTS)
+
+    sa = data.get("sub_agents", {})
+    if not isinstance(sa, dict):
+        return dict(_SUB_AGENTS_DEFAULTS)
+
+    default_scope = sa.get("default_scope", {})
+    if not isinstance(default_scope, dict):
+        default_scope = {}
+
+    return {
+        "max_concurrent": sa.get(
+            "max_concurrent", _SUB_AGENTS_DEFAULTS["max_concurrent"]
+        ),
+        "default_timeout": sa.get(
+            "default_timeout", _SUB_AGENTS_DEFAULTS["default_timeout"]
+        ),
+        "workspace_dir": sa.get(
+            "workspace_dir", _SUB_AGENTS_DEFAULTS["workspace_dir"]
+        ),
+        "cleanup_workspace": sa.get(
+            "cleanup_workspace", _SUB_AGENTS_DEFAULTS["cleanup_workspace"]
+        ),
+        "default_scope": {
+            "allowed_paths": default_scope.get(
+                "allowed_paths",
+                _SUB_AGENTS_DEFAULTS["default_scope"]["allowed_paths"],
+            ),
+            "network": default_scope.get(
+                "network",
+                _SUB_AGENTS_DEFAULTS["default_scope"]["network"],
+            ),
+        },
+    }

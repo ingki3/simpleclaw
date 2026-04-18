@@ -22,6 +22,15 @@ skills:
 mcp:
   servers: {}
 
+sub_agents:
+  max_concurrent: 3
+  default_timeout: 300
+  workspace_dir: "workspace/sub_agents"
+  cleanup_workspace: false
+  default_scope:
+    allowed_paths: []
+    network: false
+
 daemon:
   heartbeat_interval: 300
   pid_file: ".agent/daemon.pid"
