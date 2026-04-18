@@ -22,6 +22,19 @@ skills:
 mcp:
   servers: {}
 
+voice:
+  stt:
+    provider: "openai"
+    model: "whisper-1"
+    max_duration: 300
+  tts:
+    provider: "openai"
+    model: "tts-1"
+    voice: "alloy"
+    speed: 1.0
+    output_format: "mp3"
+    max_text_length: 4096
+
 telegram:
   bot_token_env: "TELEGRAM_BOT_TOKEN"
   whitelist:

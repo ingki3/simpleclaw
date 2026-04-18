@@ -15,5 +15,5 @@
 - [x] 텔레그램 봇 및 Webhook 이벤트 리스너
 
 ## Phase 4: Expansion (플랫폼 고도화)
-- [ ] STT/TTS 인터페이스
+- [x] STT/TTS 인터페이스
 - [ ] 로깅 및 웹 대시보드

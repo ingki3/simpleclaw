@@ -179,6 +179,73 @@ def load_daemon_config(config_path: str | Path) -> dict:
     }
 
 
+_VOICE_DEFAULTS: dict = {
+    "stt": {
+        "provider": "openai",
+        "model": "whisper-1",
+        "max_duration": 300,
+    },
+    "tts": {
+        "provider": "openai",
+        "model": "tts-1",
+        "voice": "alloy",
+        "speed": 1.0,
+        "output_format": "mp3",
+        "max_text_length": 4096,
+    },
+}
+
+
+def load_voice_config(config_path: str | Path) -> dict:
+    """Load voice (STT/TTS) configuration from config.yaml."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_VOICE_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_VOICE_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_VOICE_DEFAULTS)
+
+    voice = data.get("voice", {})
+    if not isinstance(voice, dict):
+        return dict(_VOICE_DEFAULTS)
+
+    stt = voice.get("stt", {})
+    if not isinstance(stt, dict):
+        stt = {}
+
+    tts = voice.get("tts", {})
+    if not isinstance(tts, dict):
+        tts = {}
+
+    return {
+        "stt": {
+            "provider": stt.get("provider", _VOICE_DEFAULTS["stt"]["provider"]),
+            "model": stt.get("model", _VOICE_DEFAULTS["stt"]["model"]),
+            "max_duration": stt.get(
+                "max_duration", _VOICE_DEFAULTS["stt"]["max_duration"]
+            ),
+        },
+        "tts": {
+            "provider": tts.get("provider", _VOICE_DEFAULTS["tts"]["provider"]),
+            "model": tts.get("model", _VOICE_DEFAULTS["tts"]["model"]),
+            "voice": tts.get("voice", _VOICE_DEFAULTS["tts"]["voice"]),
+            "speed": tts.get("speed", _VOICE_DEFAULTS["tts"]["speed"]),
+            "output_format": tts.get(
+                "output_format", _VOICE_DEFAULTS["tts"]["output_format"]
+            ),
+            "max_text_length": tts.get(
+                "max_text_length", _VOICE_DEFAULTS["tts"]["max_text_length"]
+            ),
+        },
+    }
+
+
 _TELEGRAM_DEFAULTS: dict = {
     "bot_token_env": "TELEGRAM_BOT_TOKEN",
     "whitelist": {
