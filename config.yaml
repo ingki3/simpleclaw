@@ -22,6 +22,17 @@ skills:
 mcp:
   servers: {}
 
+daemon:
+  heartbeat_interval: 300
+  pid_file: ".agent/daemon.pid"
+  status_file: ".agent/HEARTBEAT.md"
+  db_path: ".agent/daemon.db"
+  dreaming:
+    overnight_hour: 3
+    idle_threshold: 7200
+  wait_state:
+    default_timeout: 3600
+
 persona:
   token_budget: 4096
   local_dir: ".agent"

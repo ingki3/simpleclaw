@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-04-18
 
 ## Active Technologies
+- Python 3.11+ + `apscheduler>=3.10` (scheduling), existing `simpleclaw` modules (memory, recipes) (006-heartbeat-cron-scheduler)
+- SQLite (cron jobs, execution logs, wait states) via existing patterns + HEARTBEAT.md status file (006-heartbeat-cron-scheduler)
 
 - Python 3.11+ + `markdown-it-py` (마크다운 파싱), `tiktoken` (토큰 카운팅), `PyYAML` (config.yaml 로드) (001-persona-parser-engine)
 
@@ -22,6 +24,7 @@ cd src && pytest && ruff check .
 Python 3.11+: Follow standard conventions
 
 ## Recent Changes
+- 006-heartbeat-cron-scheduler: Added Python 3.11+ + `apscheduler>=3.10` (scheduling), existing `simpleclaw` modules (memory, recipes)
 
 - 001-persona-parser-engine: Added Python 3.11+ + `markdown-it-py` (마크다운 파싱), `tiktoken` (토큰 카운팅), `PyYAML` (config.yaml 로드)
 

@@ -104,3 +104,76 @@ def load_llm_config(config_path: str | Path) -> dict:
         "default": llm.get("default", _LLM_DEFAULTS["default"]),
         "providers": providers,
     }
+
+
+_DAEMON_DEFAULTS: dict = {
+    "heartbeat_interval": 300,
+    "pid_file": ".agent/daemon.pid",
+    "status_file": ".agent/HEARTBEAT.md",
+    "db_path": ".agent/daemon.db",
+    "dreaming": {
+        "overnight_hour": 3,
+        "idle_threshold": 7200,
+    },
+    "wait_state": {
+        "default_timeout": 3600,
+    },
+}
+
+
+def load_daemon_config(config_path: str | Path) -> dict:
+    """Load daemon configuration from config.yaml.
+
+    Returns defaults if the file or daemon key is missing.
+    """
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_DAEMON_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_DAEMON_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_DAEMON_DEFAULTS)
+
+    daemon = data.get("daemon", {})
+    if not isinstance(daemon, dict):
+        return dict(_DAEMON_DEFAULTS)
+
+    dreaming = daemon.get("dreaming", {})
+    if not isinstance(dreaming, dict):
+        dreaming = {}
+
+    wait_state = daemon.get("wait_state", {})
+    if not isinstance(wait_state, dict):
+        wait_state = {}
+
+    return {
+        "heartbeat_interval": daemon.get(
+            "heartbeat_interval", _DAEMON_DEFAULTS["heartbeat_interval"]
+        ),
+        "pid_file": daemon.get("pid_file", _DAEMON_DEFAULTS["pid_file"]),
+        "status_file": daemon.get(
+            "status_file", _DAEMON_DEFAULTS["status_file"]
+        ),
+        "db_path": daemon.get("db_path", _DAEMON_DEFAULTS["db_path"]),
+        "dreaming": {
+            "overnight_hour": dreaming.get(
+                "overnight_hour",
+                _DAEMON_DEFAULTS["dreaming"]["overnight_hour"],
+            ),
+            "idle_threshold": dreaming.get(
+                "idle_threshold",
+                _DAEMON_DEFAULTS["dreaming"]["idle_threshold"],
+            ),
+        },
+        "wait_state": {
+            "default_timeout": wait_state.get(
+                "default_timeout",
+                _DAEMON_DEFAULTS["wait_state"]["default_timeout"],
+            ),
+        },
+    }

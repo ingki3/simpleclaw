@@ -10,7 +10,7 @@
 - [x] 시맨틱 메모리 연동 및 드리밍 파이프라인
 
 ## Phase 3: Autonomy & Automation (통신 인터페이스와 스케줄링)
-- [ ] Heartbeat 데몬 및 Cron 스케줄러
+- [x] Heartbeat 데몬 및 Cron 스케줄러
 - [ ] 서브 에이전트 동적 호출 모델
 - [ ] 텔레그램 봇 및 Webhook 이벤트 리스너
 
