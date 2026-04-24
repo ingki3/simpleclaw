@@ -22,6 +22,7 @@ llm:
 agent:
   history_limit: 5
   db_path: "{tmp_path}/conversations.db"
+  max_tool_iterations: 5
 
 skills:
   local_dir: "{tmp_path}/local_skills"
@@ -62,10 +63,10 @@ class TestAgentOrchestrator:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_process_message(self, config_file):
+    async def test_process_message_fallback(self, config_file):
+        """Plain text LLM response (no ReAct format) is returned as-is."""
         orchestrator = AgentOrchestrator(config_file)
 
-        # Mock the router
         mock_response = MagicMock()
         mock_response.text = "Hello! I'm SimpleClaw."
         mock_response.backend_name = "gemini"
@@ -75,54 +76,24 @@ class TestAgentOrchestrator:
         response = await orchestrator.process_message("Hi", 123, 456)
         assert response == "Hello! I'm SimpleClaw."
 
-        # Verify router was called with messages
-        call_args = orchestrator._router.send.call_args[0][0]
-        assert call_args.messages is not None
-        assert len(call_args.messages) == 1
-        assert call_args.messages[0]["role"] == "user"
-        assert call_args.messages[0]["content"] == "Hi"
-
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_conversation_history(self, config_file):
+    async def test_process_message_react_answer(self, config_file):
+        """ReAct Answer format is parsed and returned."""
         orchestrator = AgentOrchestrator(config_file)
 
         mock_response = MagicMock()
-        mock_response.text = "Response"
+        mock_response.text = (
+            "Thought: The user wants a greeting. No tool needed.\n"
+            "Answer: 안녕하세요! SimpleClaw입니다."
+        )
         mock_response.backend_name = "gemini"
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=mock_response)
 
-        # Send two messages
-        await orchestrator.process_message("First", 123, 456)
-        await orchestrator.process_message("Second", 123, 456)
-
-        # Second call should include history
-        second_call = orchestrator._router.send.call_args_list[1][0][0]
-        assert len(second_call.messages) == 3  # user + assistant + user
-        assert second_call.messages[0]["content"] == "First"
-        assert second_call.messages[1]["role"] == "assistant"
-        assert second_call.messages[2]["content"] == "Second"
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    @pytest.mark.asyncio
-    async def test_history_limit(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-
-        mock_response = MagicMock()
-        mock_response.text = "OK"
-        mock_response.backend_name = "gemini"
-        orchestrator._router = MagicMock()
-        orchestrator._router.send = AsyncMock(return_value=mock_response)
-
-        # Send more messages than history_limit (5)
-        for i in range(10):
-            await orchestrator.process_message(f"Message {i}", 123, 456)
-
-        # Last call should have limited history + current message
-        last_call = orchestrator._router.send.call_args[0][0]
-        # history_limit=5 means 5 recent messages from store + 1 current
-        assert len(last_call.messages) <= 6
+        response = await orchestrator.process_message("Hi", 123, 456)
+        assert "SimpleClaw" in response
+        assert "Thought:" not in response
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
@@ -138,10 +109,24 @@ class TestAgentOrchestrator:
         assert "오류" in response
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_conversation_stored(self, config_file):
+        """Messages are stored in conversation DB."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        mock_response = MagicMock()
+        mock_response.text = "Answer: OK"
+        mock_response.backend_name = "gemini"
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(return_value=mock_response)
+
+        await orchestrator.process_message("Hello", 123, 456)
+        assert orchestrator._store.count() == 2  # user + assistant
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_format_skills(self, config_file, tmp_path):
         orchestrator = AgentOrchestrator(config_file)
 
-        # Create a mock skill
         mock_skill = MagicMock()
         mock_skill.name = "test-skill"
         mock_skill.description = "A test skill"
@@ -158,10 +143,107 @@ class TestAgentOrchestrator:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_default_system_prompt(self, config_file, tmp_path):
-        # Create config without persona
         no_persona_dir = tmp_path / "empty_persona"
         no_persona_dir.mkdir()
         orchestrator = AgentOrchestrator(config_file)
-        # With persona file, should use persona
         prompt = orchestrator._build_system_prompt()
         assert len(prompt) > 0
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_process_cron_message_not_stored(self, config_file):
+        """Cron messages must NOT be stored in the shared conversation DB."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        mock_response = MagicMock()
+        mock_response.text = "[NO_NOTIFY]"
+        mock_response.backend_name = "gemini"
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(return_value=mock_response)
+
+        count_before = orchestrator._store.count()
+        await orchestrator.process_cron_message("읽지 않은 메일 확인")
+        count_after = orchestrator._store.count()
+
+        assert count_after == count_before
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_process_cron_message_isolated(self, config_file):
+        """Cron messages should use isolated context (no history)."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        mock_response = MagicMock()
+        mock_response.text = "Answer: 결과입니다."
+        mock_response.backend_name = "gemini"
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(return_value=mock_response)
+
+        # Seed history
+        mock_response.text = "이전 응답"
+        await orchestrator.process_message("이전 메시지", 123, 456)
+
+        # Cron call should have only 1 message (no history)
+        mock_response.text = "Answer: cron 결과"
+        await orchestrator.process_cron_message("메일 확인")
+
+        cron_call = orchestrator._router.send.call_args[0][0]
+        assert len(cron_call.messages) == 1
+
+
+class TestReActParsing:
+    def test_parse_thought_and_answer(self):
+        response = (
+            "Thought: The user wants a greeting.\n"
+            "Answer: Hello there!"
+        )
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert thought == "The user wants a greeting."
+        assert action is None
+        assert answer == "Hello there!"
+
+    def test_parse_thought_and_action(self):
+        response = (
+            'Thought: I need to search for news.\n'
+            'Action: {"skill_name": "news-skill", "command": "python search.py"}'
+        )
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert thought == "I need to search for news."
+        assert action == {"skill_name": "news-skill", "command": "python search.py"}
+        assert answer is None
+
+    def test_parse_answer_only(self):
+        response = "Answer: Just a direct answer."
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert thought is None
+        assert action is None
+        assert answer == "Just a direct answer."
+
+    def test_parse_no_pattern(self):
+        response = "This is just plain text with no ReAct format."
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert thought is None
+        assert action is None
+        assert answer is None
+
+    def test_parse_invalid_action_json(self):
+        response = (
+            "Thought: Let me try.\n"
+            "Action: {invalid json here}"
+        )
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert thought == "Let me try."
+        assert action is None
+        assert answer is None
+
+    def test_parse_multiline_answer(self):
+        response = (
+            "Thought: All data collected.\n"
+            "Answer: 오늘 결과입니다:\n"
+            "- SSG 5:0 kt\n"
+            "- LG 4:1 두산"
+        )
+        thought, action, answer = AgentOrchestrator._parse_react(response)
+        assert "SSG" in answer
+        assert "LG" in answer
+        assert "Thought" not in answer

@@ -42,7 +42,35 @@
 - **전용 저장소 및 YAML 정의:** 반복적이고 복잡한 다단계 작업은 일반 Skill과 격리된 전용 디렉토리(`.agent/recipes/`)에 `recipe.yaml` 형태로 저장.
 - **재사용성:** 프롬프트, 필요 변수(Parameters), 실행할 플러그인(Extensions/Builtin) 등을 사전 정의하여 명령어 하나로 일련의 워크플로우를 자동 실행.
 
-### 3.5. 스케줄링, 이벤트 트리거 및 비동기 워크플로우
+### 3.5. 명령 실행 보안 및 멀티턴 도구 루프 (Security & Multi-Turn Tool Loop)
+**참고:** Hermes Agent (`tools/approval.py`, `tools/environments/local.py`, `run_agent.py`)
+
+#### 3.5.1. 위험 명령 감지 (Dangerous Command Guard)
+- 모든 subprocess 명령 실행 전, 35개 이상의 정규식 패턴으로 위험 명령을 감지하여 차단.
+- 대상 카테고리: 파일 삭제(`rm -rf`), Git 파괴(`push --force`, `reset --hard`), DB 파괴(`DROP TABLE`), 권한 변경(`chmod 777`), pipe-to-shell(`curl|bash`), 시스템 명령(`reboot`, `shutdown`) 등.
+- ANSI 이스케이프 제거, 유니코드 NFKC 정규화, null 바이트 제거로 우회 방지.
+- `config.yaml`의 `security.command_guard.allowlist`에 패턴 키를 등록하여 특정 명령을 예외 처리.
+- 적용 범위: Agent 명령 실행(`agent.py`), Recipe 단계 실행(`recipes/executor.py`).
+
+#### 3.5.2. Subprocess 시크릿 스트리핑 (Environment Secret Filtering)
+- subprocess 실행 시 `os.environ`을 복사한 후 민감 키를 제거하여 전달.
+- 차단 패턴: `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `TELEGRAM_*`, `OPENAI_*`, `ANTHROPIC_*`, `GOOGLE_*`, `AWS_*`, `WEBHOOK_*`, `GH_TOKEN`, `GITHUB_*`.
+- `config.yaml`의 `security.env_passthrough`에 등록된 키는 차단에서 제외.
+- 적용 범위: Agent 명령 실행, 스킬 스크립트 실행(`skills/executor.py`), Recipe 명령 실행.
+
+#### 3.5.3. 프로세스 그룹 격리 (Process Group Isolation)
+- 모든 subprocess를 `os.setsid`로 독립 프로세스 그룹에서 실행.
+- timeout 발생 시 `os.killpg`로 프로세스 그룹 전체를 종료 (SIGTERM → 대기 → SIGKILL).
+- 좀비 프로세스 및 자식 프로세스 릭 방지.
+
+#### 3.5.4. 멀티턴 도구 실행 루프 (Multi-Turn Tool Execution Loop)
+- 기존 단일턴(1 메시지 → 1 도구 → 1 응답) 구조를 멀티턴 루프로 확장.
+- LLM이 도구 실행 결과를 확인한 후 추가 도구 호출이 필요하면 반복, 완료되면 최종 응답 생성.
+- `config.yaml`의 `agent.max_tool_iterations`로 최대 반복 횟수 제한 (기본: 5).
+- 이전 도구 실행 결과가 다음 라우팅 프롬프트에 자동 포함되어 LLM이 맥락을 인지.
+- 단일 도구만 필요한 경우 루프가 1회만 실행되어 기존 동작과 완전히 호환.
+
+### 3.6. 스케줄링, 이벤트 트리거 및 비동기 워크플로우
 **참고:** Hermes Agent / Paperclip
 - **Cron Job 관리:** 정해진 시간에 특정 프롬프트나 레시피를 실행하는 Cron Job 생성, 조회, 수정, 삭제 기능.
 - **이벤트 트리거 통합 (Webhook 전용):** 시스템 단편화를 막기 위해 이메일/캘린더 서비스 직접 연동 코어 탑재를 배제. 단 하나의 범용적인 **REST Webhook 수신 엔드포인트(FastAPI 등)**만 오픈하고, 타 서비스 통신(Zapier, n8n 등)이 이를 트리거하는 간결망으로 파이프라인 집중.
@@ -77,7 +105,8 @@
 - **개발 언어 및 환경 설정**: 코어 로직은 전면 **Python(파이썬)**으로 구현하며, 모든 구동 환경 변수는 `config.yaml` 또는 `.env` 파일을 통해 주입받아 모듈 확장성을 확보.
 - **메신저 채널 보안 접근 제어**: 복잡한 로그인 연동을 배제하고 설정 파일 내 지정된 소유자의 텔레그램 식별자(User ID / Chat ID)를 화이트리스트 방식으로 매칭. 비인가 접근 시도는 패킷 선에서 즉시 DROP.
 - **에이전트 제어 및 명시적 보안 (Permission Scope)**: 복잡한 내부 통신 프로토콜 규격(gRPC 등) 대신 범용성 높은 **표준 JSON 규격 텍스트** 입출력을 채택. 메인이 서브를 호출할 땐 무조건 권한 정보(허용 디스크 범위, Network IO 활성 상태) 파라미터를 주입하여 컨테이너 없이도 소프트-샌드박스를 강제.
-- **민감 정보 관리 (Secret Management)**: 환경 변수(`.env`) 또는 자체 보안 관리 도구(Vault)를 이용해 토큰과 API 키를 관리. 파일 저장 접근 권한 통제를 병행하여 평문 유출 차단.
+- **민감 정보 관리 (Secret Management)**: 환경 변수(`.env`) 또는 자체 보안 관리 도구(Vault)를 이용해 토큰과 API 키를 관리. 파일 저장 접근 권한 통제를 병행하여 평문 유출 차단. **subprocess 실행 시 API 키, 토큰 등 민감 환경변수를 자동 스트리핑**하여 스킬/레시피 스크립트에 시크릿 노출 차단.
+- **명령 실행 안전성 (Command Execution Safety)**: LLM이 생성한 셸 명령을 실행하기 전 **패턴 기반 위험 명령 감지(35개+ regex)**로 차단. 모든 subprocess는 **프로세스 그룹 격리(`os.setsid`)**로 실행하여 timeout 시 좀비 프로세스 방지. Hermes Agent의 보안 모델을 참고.
 - **로깅 및 가시성 (Logging & Telemetry)**: 실행 결과와 에이전트의 Reasoning(사고) 과정을 `.logs/execution_YYYYMMDD.log` 형태로 아카이빙. CLI 또는 웹 대시보드 환경에서 토큰 소비량, 에러 발생 빈도 등 가시적 지표 확인 체계 지원.
 
 ## 5. 아키텍처 및 참고 사례 (References)
@@ -88,6 +117,8 @@
 - [**Hermes Agent (NousResearch/hermes-agent):**](https://github.com/nousresearch/hermes-agent)
   - Cron 작업, 학습 루프(실행 중 경험 학습), 장기 기억(Memory) 관리 체계.
   - LLM 모델 핫스왑 기능.
+  - **명령 실행 보안**: `tools/approval.py`의 위험 명령 패턴 감지, `tools/environments/local.py`의 환경변수 시크릿 스트리핑 및 `preexec_fn=os.setsid` 프로세스 격리 패턴 참고.
+  - **멀티턴 도구 루프**: `run_agent.py`의 반복적 tool_calls → 결과 확인 → 추가 호출 루프 아키텍처 참고.
 - [**Paperclip (paperclipai/paperclip):**](https://github.com/paperclipai/paperclip)
   - 여러 에이전트(OpenClaw, Claude 등)를 조직화하고 백그라운드에서 오케스트레이션하는 기능.
   - 다양한 CLI 터미널 환경 기반 업무 지시 및 상태 관리.

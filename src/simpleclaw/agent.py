@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from simpleclaw.config import load_agent_config, load_persona_config
@@ -20,42 +21,60 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
+from simpleclaw.security import (
+    CommandGuard,
+    DangerousCommandError,
+    filter_env,
+    get_preexec_fn,
+    kill_process_group,
+)
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import SkillDefinition
 
 logger = logging.getLogger(__name__)
 
-_SKILL_ROUTER_PROMPT = """\
-You are a skill router. Given a user message and a list of available skills, \
-decide if any skill should be executed to answer the user's question.
+_REACT_SYSTEM_PROMPT = """\
+You are an AI agent that solves tasks step-by-step using available tools.
+Use the Thought / Action / Observation cycle.
 
-## Available Skills
-{skills_list}
+## Output Format
+
+When you need to use a tool:
+```
+Thought: <your reasoning about what to do next>
+Action: {{"skill_name": "<name>", "command": "<shell command>"}}
+```
+
+When you have enough information to give the final answer:
+```
+Thought: <why the task is complete>
+Answer: <your response to the user>
+```
 
 ## Rules
-- If the user's message can be answered with your own knowledge, respond: {{"use_skill": false}}
-- If a skill is needed, respond with the EXACT shell command to execute: \
-{{"use_skill": true, "skill_name": "<name>", "command": "<full shell command to run>"}}
-- For the command, refer to the skill's usage instructions and construct the appropriate CLI command.
-- Match skills by their name, description, and trigger conditions.
-- Only select a skill if it CLEARLY matches the user's intent.
-- Respond ONLY with valid JSON, nothing else.
+- Evaluate each Observation critically. If information is incomplete or partial, \
+take another Action with a different query.
+- Do NOT fabricate information. Only include facts from Observations.
+- If a tool fails, try a different approach or query.
+- **If ALL tool attempts fail, honestly tell the user the tool failed. \
+NEVER generate fake data from your training knowledge as a substitute.**
+- Maximum {max_iterations} tool calls allowed.
+- Respond in the same language as the user.
+- **CRITICAL: Only use commands EXACTLY as shown in the skill's usage instructions. \
+Copy the command template verbatim and only change the arguments. \
+NEVER invent file paths, script names, or modify the executable path.**
+- If a skill's usage shows `/path/to/venv/bin/python /path/to/script.py`, \
+use that EXACT path — do not substitute or guess alternative paths.
 
-## User Message
+## Available Tools
+{skills_list}"""
+
+_REACT_USER_PROMPT = """\
+{datetime_context}
+{react_trace}
+## User Request
 {user_message}"""
-
-_SKILL_RESULT_CONTEXT = """\
-## Skill Execution Result
-
-The skill **{skill_name}** was executed with the following result:
-
-```
-{result}
-```
-
-Use this result to formulate your response to the user. \
-Summarize or format the result naturally."""
 
 
 class AgentOrchestrator:
@@ -112,6 +131,17 @@ class AgentOrchestrator:
         # Skill execution timeout
         self._skill_timeout = skills_config.get("execution_timeout", 60)
 
+        # Security: command guard + env filtering
+        security_config = self._load_security_config()
+        guard_config = security_config.get("command_guard", {})
+        self._command_guard = CommandGuard(
+            allowlist=guard_config.get("allowlist", []),
+        )
+        self._env_passthrough = security_config.get("env_passthrough", [])
+
+        # Multi-turn tool execution
+        self._max_tool_iterations = agent_config.get("max_tool_iterations", 5)
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
@@ -119,47 +149,27 @@ class AgentOrchestrator:
             self._router.get_default_backend(),
         )
 
+    async def process_cron_message(self, text: str) -> str:
+        """Process a cron job message with isolated context.
+
+        Uses the ReAct loop but does NOT load conversation history
+        and does NOT store messages in the shared conversation DB.
+        """
+        return await self._react_loop(text, isolated=True)
+
     async def process_message(
         self, text: str, user_id: int, chat_id: int
     ) -> str:
-        """Process an incoming message through the full agent pipeline.
+        """Process an incoming message through the ReAct pipeline.
 
-        1. Skill routing: decide if a skill is needed
-        2. If needed: execute skill
-        3. Generate response with full context
+        ReAct loop:
+        1. LLM reasons (Thought) and decides an Action or Answer
+        2. If Action → execute skill → add Observation → loop
+        3. If Answer → return final response
         4. Store conversation
         """
-        # Step 1: Skill routing
-        skill_result = None
-        skill_name = None
+        response_text = await self._react_loop(text)
 
-        if self._skills:
-            routing = await self._route_to_skill(text)
-            if routing and routing.get("use_skill"):
-                skill_name = routing.get("skill_name", "")
-                command = routing.get("command", "")
-                logger.info(
-                    "Skill router selected: %s (command: %s)",
-                    skill_name, command,
-                )
-
-                # Step 2: Execute skill
-                if command:
-                    skill_result = await self._execute_command(
-                        skill_name, command
-                    )
-                else:
-                    skill_args = routing.get("args", "")
-                    skill_result = await self._execute_skill(
-                        skill_name, skill_args
-                    )
-
-        # Step 3: Generate response
-        response_text = await self._generate_response(
-            text, skill_name, skill_result
-        )
-
-        # Step 4: Store conversation
         self._store.add_message(ConversationMessage(
             role=MessageRole.USER, content=text,
         ))
@@ -169,41 +179,214 @@ class AgentOrchestrator:
 
         return response_text
 
-    async def _route_to_skill(self, user_message: str) -> dict | None:
-        """Ask LLM whether a skill should be used for this message."""
-        if not self._skills_router_list:
-            return None
+    async def _dispatch_routing(
+        self, routing: dict
+    ) -> tuple[str | None, str | None]:
+        """Execute a single routing decision and return (skill_name, result)."""
+        skill_name = routing.get("skill_name", "")
+        command = routing.get("command", "")
 
-        prompt = _SKILL_ROUTER_PROMPT.format(
-            skills_list=self._skills_router_list_with_usage,
+        logger.info(
+            "Skill router selected: %s (command: %s)",
+            skill_name, command,
+        )
+
+        if command:
+            result = await self._execute_command(skill_name, command)
+        else:
+            skill_args = routing.get("args", "")
+            result = await self._execute_skill(skill_name, skill_args)
+
+        return skill_name, result
+
+    # ------------------------------------------------------------------
+    # ReAct loop
+    # ------------------------------------------------------------------
+
+    async def _react_loop(
+        self, text: str, isolated: bool = False
+    ) -> str:
+        """Execute the ReAct (Reasoning + Acting) loop.
+
+        The LLM reasons about the task (Thought), takes actions (Action),
+        observes results (Observation), and repeats until it produces
+        a final Answer.
+
+        Args:
+            text: User message.
+            isolated: If True, skip conversation history (for cron jobs).
+        """
+        trace: list[str] = []
+
+        for i in range(self._max_tool_iterations):
+            raw = await self._react_step(text, trace, isolated)
+            thought, action, answer = self._parse_react(raw)
+
+            if thought:
+                trace.append(f"Thought: {thought}")
+                logger.info("ReAct [%d] Thought: %s", i + 1, thought[:100])
+
+            if answer is not None:
+                logger.info("ReAct [%d] Answer: %d chars", i + 1, len(answer))
+                return answer
+
+            if action:
+                trace.append(
+                    f"Action: {json.dumps(action, ensure_ascii=False)}"
+                )
+                skill_name, result = await self._dispatch_routing(action)
+                observation = result or "[no output]"
+                trace.append(f"Observation: {observation[:2000]}")
+                logger.info(
+                    "ReAct [%d] Action: %s → %d chars",
+                    i + 1, skill_name, len(observation),
+                )
+            else:
+                # No Action or Answer parsed → treat entire response as answer
+                logger.info("ReAct [%d] fallback: raw response", i + 1)
+                return raw
+
+        # Max iterations reached → generate final answer from trace
+        logger.warning(
+            "ReAct max iterations (%d) reached, generating final answer",
+            self._max_tool_iterations,
+        )
+        return await self._generate_final(text, trace, isolated)
+
+    async def _react_step(
+        self,
+        user_message: str,
+        trace: list[str],
+        isolated: bool = False,
+    ) -> str:
+        """Execute one ReAct step: send trace to LLM and get response."""
+        system_prompt = self._build_system_prompt()
+        react_system = _REACT_SYSTEM_PROMPT.format(
+            skills_list=self._skills_router_list_with_usage or "(no tools)",
+            max_iterations=self._max_tool_iterations,
+        )
+        full_system = f"{system_prompt}\n\n---\n\n{react_system}"
+
+        trace_text = "\n".join(trace) if trace else "(no previous steps)"
+
+        # Inject current datetime so LLM knows "today"
+        from datetime import datetime, timezone, timedelta
+        kst = timezone(timedelta(hours=9))
+        now_kst = datetime.now(kst)
+        datetime_context = now_kst.strftime(
+            "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
+        )
+
+        user_prompt = _REACT_USER_PROMPT.format(
+            datetime_context=datetime_context,
+            react_trace=trace_text,
             user_message=user_message,
         )
 
+        # Build messages with optional conversation history
+        if isolated:
+            messages = [{"role": "user", "content": user_prompt}]
+        else:
+            recent = self._store.get_recent(limit=self._history_limit)
+            messages = [
+                {"role": msg.role.value, "content": msg.content}
+                for msg in recent
+            ]
+            messages.append({"role": "user", "content": user_prompt})
+
         try:
             request = LLMRequest(
-                system_prompt=(
-                    "You are a JSON-only skill router. "
-                    "Respond with valid JSON only."
-                ),
-                user_message=prompt,
+                system_prompt=full_system,
+                user_message=user_prompt,
+                messages=messages,
             )
             response = await self._router.send(request)
-            raw = response.text.strip()
+            return response.text.strip()
+        except Exception as exc:
+            logger.error("ReAct LLM error: %s", exc)
+            return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
-            # Extract JSON from response (handle markdown code blocks)
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-                raw = raw.strip()
+    async def _generate_final(
+        self,
+        user_message: str,
+        trace: list[str],
+        isolated: bool = False,
+    ) -> str:
+        """Generate a final answer when max iterations are reached."""
+        system_prompt = self._build_system_prompt()
+        trace_text = "\n".join(trace)
+        final_prompt = (
+            f"Based on the following reasoning and observations, "
+            f"provide the best possible answer to the user.\n\n"
+            f"## Trace\n{trace_text}\n\n"
+            f"## User Request\n{user_message}\n\n"
+            f"Respond in the same language as the user. "
+            f"If information is incomplete, honestly state what is missing."
+        )
 
-            result = json.loads(raw)
-            logger.info("Skill routing result: %s", result)
-            return result
+        if isolated:
+            messages = [{"role": "user", "content": final_prompt}]
+        else:
+            recent = self._store.get_recent(limit=self._history_limit)
+            messages = [
+                {"role": msg.role.value, "content": msg.content}
+                for msg in recent
+            ]
+            messages.append({"role": "user", "content": final_prompt})
 
-        except (json.JSONDecodeError, Exception) as exc:
-            logger.warning("Skill routing failed: %s", exc)
-            return None
+        try:
+            request = LLMRequest(
+                system_prompt=system_prompt,
+                user_message=final_prompt,
+                messages=messages,
+            )
+            response = await self._router.send(request)
+            return response.text.strip()
+        except Exception as exc:
+            logger.error("ReAct final generation error: %s", exc)
+            return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
+
+    @staticmethod
+    def _parse_react(
+        response: str,
+    ) -> tuple[str | None, dict | None, str | None]:
+        """Parse a ReAct response into (thought, action, answer).
+
+        Returns:
+            thought: The Thought text, or None.
+            action: Parsed Action JSON dict, or None.
+            answer: The Answer text, or None.
+        """
+        thought = None
+        action = None
+        answer = None
+
+        # Extract Thought
+        thought_match = re.search(
+            r"Thought:\s*(.+?)(?=\nAction:|\nAnswer:|\Z)",
+            response, re.DOTALL,
+        )
+        if thought_match:
+            thought = thought_match.group(1).strip()
+
+        # Extract Answer
+        answer_match = re.search(r"Answer:\s*(.+)", response, re.DOTALL)
+        if answer_match:
+            answer = answer_match.group(1).strip()
+            return thought, None, answer
+
+        # Extract Action (JSON)
+        action_match = re.search(r"Action:\s*(\{.+?\})", response, re.DOTALL)
+        if action_match:
+            try:
+                action = json.loads(action_match.group(1))
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to parse Action JSON: %s",
+                    action_match.group(1)[:200],
+                )
+
+        return thought, action, answer
 
     def _resolve_skill_name(self, name: str) -> SkillDefinition | None:
         """Fuzzy-match a skill name returned by the router to a registered skill."""
@@ -236,12 +419,24 @@ class AgentOrchestrator:
         """Execute a shell command from the skill router and return output."""
         import asyncio
 
+        # Security: check for dangerous commands
+        try:
+            self._command_guard.check(command)
+        except DangerousCommandError as exc:
+            logger.warning("Command blocked for skill '%s': %s", skill_name, exc)
+            return f"Command blocked (dangerous pattern detected): {exc.description}"
+
+        # Fix bare "python"/"python3" → use script's local venv if available
+        command = self._fix_python_path(command)
+
         logger.info("Executing skill command: %s", command)
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=filter_env(passthrough=self._env_passthrough),
+                preexec_fn=get_preexec_fn(),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=self._skill_timeout
@@ -263,6 +458,7 @@ class AgentOrchestrator:
 
         except asyncio.TimeoutError:
             logger.error("Skill command timed out: %s", command)
+            await kill_process_group(proc)
             return f"Command timed out after {self._skill_timeout}s"
         except Exception as exc:
             logger.error("Skill command error: %s", exc)
@@ -297,48 +493,6 @@ class AgentOrchestrator:
         except Exception as exc:
             logger.error("Skill '%s' execution failed: %s", skill_name, exc)
             return f"Error executing skill {skill_name}: {str(exc)[:200]}"
-
-    async def _generate_response(
-        self,
-        user_message: str,
-        skill_name: str | None,
-        skill_result: str | None,
-    ) -> str:
-        """Generate the final response with full context."""
-        # Build system prompt
-        system_prompt = self._build_system_prompt()
-
-        # Add skill result to context if available
-        if skill_name and skill_result:
-            system_prompt += "\n\n" + _SKILL_RESULT_CONTEXT.format(
-                skill_name=skill_name,
-                result=skill_result[:3000],
-            )
-
-        # Build conversation history
-        recent = self._store.get_recent(limit=self._history_limit)
-        messages = [
-            {"role": msg.role.value, "content": msg.content}
-            for msg in recent
-        ]
-        messages.append({"role": "user", "content": user_message})
-
-        try:
-            request = LLMRequest(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                messages=messages,
-            )
-            response = await self._router.send(request)
-            logger.info(
-                "Agent response (%s): %d chars",
-                response.backend_name,
-                len(response.text),
-            )
-            return response.text
-        except Exception as exc:
-            logger.error("LLM error: %s", exc)
-            return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
     def _build_system_prompt(self) -> str:
         """Assemble the full system prompt from persona and skills."""
@@ -408,6 +562,59 @@ class AgentOrchestrator:
             entries.append(entry)
         return "\n---\n".join(entries)
 
+    @staticmethod
+    def _fix_python_path(command: str) -> str:
+        """Replace bare python/python3 with a script-local venv python if available.
+
+        When LLM generates 'python script.py' or 'python3 script.py',
+        check if a venv exists near the script and use its python instead.
+        """
+        import shlex
+
+        parts = command.split(None, 1)
+        if len(parts) < 2:
+            return command
+
+        interpreter, rest = parts[0], parts[1]
+
+        # Only handle bare python/python3 (not full paths like /usr/bin/python3)
+        if interpreter not in ("python", "python3"):
+            return command
+
+        # Find the script path in the rest of the command
+        try:
+            tokens = shlex.split(rest)
+        except ValueError:
+            tokens = rest.split()
+
+        script_path = None
+        for token in tokens:
+            if token.endswith(".py") and Path(token).is_file():
+                script_path = Path(token)
+                break
+
+        if script_path is None:
+            # Fallback: at least use python3
+            if interpreter == "python":
+                return f"python3 {rest}"
+            return command
+
+        # Look for venv near the script
+        for venv_dir in (
+            script_path.parent / "venv",
+            script_path.parent.parent / "venv",
+            script_path.parent / ".venv",
+            script_path.parent.parent / ".venv",
+        ):
+            venv_python = venv_dir / "bin" / "python"
+            if venv_python.is_file():
+                return f"{venv_python} {rest}"
+
+        # No venv found, use python3
+        if interpreter == "python":
+            return f"python3 {rest}"
+        return command
+
     def _load_skills_config(self) -> dict:
         """Load skills config section from config.yaml."""
         import yaml
@@ -416,5 +623,17 @@ class AgentOrchestrator:
             with open(self._config_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             return data.get("skills", {}) if isinstance(data, dict) else {}
+        except (yaml.YAMLError, OSError):
+            return {}
+
+    def _load_security_config(self) -> dict:
+        """Load security config section from config.yaml."""
+        import yaml
+
+        try:
+            with open(self._config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            sec = data.get("security", {}) if isinstance(data, dict) else {}
+            return sec if isinstance(sec, dict) else {}
         except (yaml.YAMLError, OSError):
             return {}

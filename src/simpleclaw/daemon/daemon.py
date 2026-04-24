@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 class AgentDaemon:
     """Persistent background daemon hosting heartbeat, scheduler, and event loop."""
 
-    def __init__(self, config_path: str | Path) -> None:
+    def __init__(
+        self, config_path: str | Path, agent_orchestrator=None,
+    ) -> None:
         self._config_path = Path(config_path)
         self._config = load_daemon_config(config_path)
         self._pid_file = Path(self._config["pid_file"])
@@ -34,6 +36,7 @@ class AgentDaemon:
         self._status_file = Path(self._config["status_file"])
         self._heartbeat_interval = self._config["heartbeat_interval"]
 
+        self._agent = agent_orchestrator
         self._store: DaemonStore | None = None
         self._heartbeat: HeartbeatMonitor | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -115,7 +118,8 @@ class AgentDaemon:
 
             self._scheduler = AsyncIOScheduler()
             self._cron_scheduler = CronScheduler(
-                self._store, self._scheduler
+                self._store, self._scheduler,
+                agent_orchestrator=self._agent,
             )
 
             self._scheduler.add_job(

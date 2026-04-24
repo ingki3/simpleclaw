@@ -132,7 +132,7 @@ class TestPRD_3_1_PersonaMemory:
         store = ConversationStore(tmp_path / "db.sqlite")
         pipeline = DreamingPipeline(store, memory)
 
-        backup = pipeline.create_backup()
+        backup = pipeline.create_backup(memory)
         assert backup is not None
         assert backup.exists()
         assert ".bak" in str(backup)
@@ -155,7 +155,8 @@ class TestPRD_3_1_PersonaMemory:
         result = await pipeline.run()
         assert result is not None
         assert "dreaming" in result.source
-        assert "Session" in memory.read_text()
+        content = memory.read_text()
+        assert "##" in content  # date-based header from dreaming summary
 
 
 # ──────────────────────────────────────────────────────────

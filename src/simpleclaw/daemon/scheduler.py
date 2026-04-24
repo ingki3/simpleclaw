@@ -29,10 +29,12 @@ class CronScheduler:
         store: DaemonStore,
         apscheduler: AsyncIOScheduler,
         recipe_executor=None,
+        agent_orchestrator=None,
     ) -> None:
         self._store = store
         self._apscheduler = apscheduler
         self._recipe_executor = recipe_executor
+        self._agent = agent_orchestrator
 
     def load_persisted_jobs(self) -> int:
         """Load all persisted jobs from the store and register them with APScheduler.
@@ -152,7 +154,12 @@ class CronScheduler:
         return execution
 
     async def _run_action(self, job: CronJob) -> str:
-        """Execute the job's target action (prompt or recipe)."""
+        """Execute the job's target action (prompt or recipe).
+
+        Both action types use process_cron_message (isolated context)
+        when an agent orchestrator is available, preventing conversation
+        history from leaking into cron job responses.
+        """
         if job.action_type == ActionType.RECIPE:
             if self._recipe_executor is None:
                 raise RuntimeError("Recipe executor not configured")
@@ -162,11 +169,24 @@ class CronScheduler:
 
             recipe = load_recipe(Path(job.action_reference))
             result = await execute_recipe(recipe)
+
+            # If agent is available, pass the recipe prompt through
+            # isolated LLM processing for natural-language output
+            if self._agent and result.success:
+                prompt_output = "\n".join(
+                    sr.output for sr in (result.step_results or [])
+                    if sr.output
+                )
+                if prompt_output:
+                    return await self._agent.process_cron_message(prompt_output)
+
             return f"Recipe completed: {result.success_count}/{result.total_steps} steps succeeded"
 
         elif job.action_type == ActionType.PROMPT:
-            # For prompts, log the prompt text as result (actual LLM execution
-            # would be integrated when the full agent loop is available)
+            if self._agent:
+                return await self._agent.process_cron_message(
+                    job.action_reference
+                )
             return f"Prompt scheduled: {job.action_reference[:200]}"
 
         return "Unknown action type"
