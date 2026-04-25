@@ -69,7 +69,7 @@ async def main():
 
     tg_config = load_telegram_config(CONFIG_PATH)
     if not tg_config["bot_token"]:
-        print("ERROR: TELEGRAM_BOT_TOKEN not set in .env")
+        print("ERROR: telegram.bot_token not set in config.yaml")
         return
 
     # Core modules

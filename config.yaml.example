@@ -4,15 +4,15 @@ llm:
     claude:
       type: "api"
       model: "claude-sonnet-4-20250514"
-      api_key_env: "ANTHROPIC_API_KEY"
+      api_key: ""  # Anthropic API 키
     openai:
       type: "api"
       model: "gpt-4o"
-      api_key_env: "OPENAI_API_KEY"
+      api_key: ""  # OpenAI API 키
     gemini:
       type: "api"
       model: "gemini-3-flash-preview"
-      api_key_env: "GOOGLE_API_KEY"
+      api_key: ""  # Google AI API 키
 
 agent:
   history_limit: 20
@@ -25,7 +25,6 @@ security:
     enabled: true
     allowlist: []
   env_passthrough:
-    - GEMINI_API_KEY
     - GOOGLE_API_KEY
 
 skills:
@@ -50,16 +49,16 @@ voice:
     max_text_length: 4096
 
 telegram:
-  bot_token_env: "TELEGRAM_BOT_TOKEN"
+  bot_token: ""  # Telegram Bot Token (@BotFather에서 발급)
   whitelist:
-    user_ids: [6233568410]
+    user_ids: []
     chat_ids: []
 
 webhook:
   enabled: true
   host: "127.0.0.1"
   port: 8080
-  auth_token_env: "WEBHOOK_AUTH_TOKEN"
+  auth_token: ""  # 웹훅 인증 토큰
 
 sub_agents:
   max_concurrent: 3
