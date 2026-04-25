@@ -1,4 +1,4 @@
-"""Tests for ReAct loop execution in AgentOrchestrator."""
+"""Tests for Native Function Calling tool loop in AgentOrchestrator."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.llm.models import ToolCall
 
 
 @pytest.fixture
@@ -67,60 +68,74 @@ def _make_orchestrator_with_skills(config_file, tmp_path):
 
     orchestrator._skills = [mock_skill]
     orchestrator._skills_by_name = {"weather-skill": mock_skill}
-    orchestrator._skills_router_list = "- weather-skill: Check weather"
-    orchestrator._skills_router_list_with_usage = "### weather-skill\nCheck weather"
+    orchestrator._skills_prompt = "## Available Skills\n\n- **weather-skill**: Check weather"
 
     return orchestrator
 
 
+def _text_response(text: str, backend: str = "gemini") -> MagicMock:
+    """Create a mock LLM response with text only (no tool calls)."""
+    resp = MagicMock()
+    resp.text = text
+    resp.tool_calls = None
+    resp.backend_name = backend
+    return resp
+
+
+def _tool_response(
+    tool_calls: list[ToolCall],
+    text: str = "",
+    backend: str = "gemini",
+) -> MagicMock:
+    """Create a mock LLM response with tool calls."""
+    resp = MagicMock()
+    resp.text = text
+    resp.tool_calls = tool_calls
+    resp.backend_name = backend
+    return resp
+
+
 class TestMultiTurnExecution:
-    """Tests for the ReAct loop."""
+    """Tests for the Native Function Calling tool loop."""
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_single_turn_backward_compat(self, config_file, tmp_path):
-        """When LLM returns Answer directly, no tool is executed."""
+    async def test_single_turn_no_tool(self, config_file, tmp_path):
+        """When LLM returns text without tool_calls, no tool is executed."""
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
 
-        # LLM returns an Answer directly (no tool needed)
-        react_response = MagicMock()
-        react_response.text = "Thought: The user just wants a greeting.\nAnswer: It's sunny today!"
-        react_response.backend_name = "gemini"
-
         orchestrator._router = MagicMock()
-        orchestrator._router.send = AsyncMock(return_value=react_response)
+        orchestrator._router.send = AsyncMock(
+            return_value=_text_response("It's sunny today!")
+        )
 
         result = await orchestrator.process_message("What's the weather?", 1, 1)
         assert result == "It's sunny today!"
-        # Only 1 ReAct step needed (Answer returned immediately)
+        # Only 1 LLM call needed (text returned immediately)
         assert orchestrator._router.send.call_count == 1
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_multi_turn_two_tools(self, config_file, tmp_path):
-        """LLM calls two tools then produces an Answer."""
+        """LLM calls two tools sequentially then produces a final text answer."""
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
 
-        # Step 1: Action (first tool)
-        step1 = MagicMock()
-        step1.text = (
-            'Thought: I need to check the weather.\n'
-            'Action: {"skill_name": "weather-skill", "command": "echo sunny"}'
-        )
-        step1.backend_name = "gemini"
+        # Step 1: tool call (first tool)
+        step1 = _tool_response([
+            ToolCall(id="c1", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "echo sunny",
+            }),
+        ])
 
-        # Step 2: Action (second tool)
-        step2 = MagicMock()
-        step2.text = (
-            'Thought: Now I need the temperature.\n'
-            'Action: {"skill_name": "weather-skill", "command": "echo 25C"}'
-        )
-        step2.backend_name = "gemini"
+        # Step 2: tool call (second tool)
+        step2 = _tool_response([
+            ToolCall(id="c2", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "echo 25C",
+            }),
+        ])
 
-        # Step 3: Answer
-        step3 = MagicMock()
-        step3.text = "Thought: I have all the info.\nAnswer: Sunny, 25C."
-        step3.backend_name = "gemini"
+        # Step 3: final text answer
+        step3 = _text_response("Sunny, 25C.")
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(side_effect=[step1, step2, step3])
@@ -137,17 +152,14 @@ class TestMultiTurnExecution:
         assert orchestrator._max_tool_iterations == 3
 
         # LLM always wants more tools
-        action_resp = MagicMock()
-        action_resp.text = (
-            'Thought: Need more data.\n'
-            'Action: {"skill_name": "weather-skill", "command": "echo data"}'
-        )
-        action_resp.backend_name = "gemini"
+        action_resp = _tool_response([
+            ToolCall(id="c1", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "echo data",
+            }),
+        ])
 
-        # Final response when max iterations hit (_generate_final)
-        final = MagicMock()
-        final.text = "Partial result."
-        final.backend_name = "gemini"
+        # Final response when max iterations hit (forced text-only call)
+        final = _text_response("Partial result.")
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(
@@ -156,53 +168,54 @@ class TestMultiTurnExecution:
 
         result = await orchestrator.process_message("Complex query", 1, 1)
         assert result == "Partial result."
-        # 3 ReAct steps (max iterations) + 1 _generate_final = 4
+        # 3 tool iterations (max) + 1 forced final = 4
         assert orchestrator._router.send.call_count == 4
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_tool_context_passed_to_router(self, config_file, tmp_path):
-        """Previous tool results (Observations) are included in subsequent ReAct steps."""
+    async def test_tool_result_messages_passed_to_router(self, config_file, tmp_path):
+        """Tool results are included as tool messages in subsequent LLM calls."""
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
 
-        # Step 1: Action
-        step1 = MagicMock()
-        step1.text = (
-            'Thought: I need weather info.\n'
-            'Action: {"skill_name": "weather-skill", "command": "echo first_result"}'
-        )
-        step1.backend_name = "gemini"
+        # Step 1: tool call
+        step1 = _tool_response([
+            ToolCall(id="c1", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "echo first_result",
+            }),
+        ])
 
-        # Step 2: Answer
-        step2 = MagicMock()
-        step2.text = "Thought: Got the data.\nAnswer: Done."
-        step2.backend_name = "gemini"
+        # Step 2: final text answer
+        step2 = _text_response("Done.")
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(side_effect=[step1, step2])
 
         await orchestrator.process_message("Check weather", 1, 1)
 
-        # Second ReAct step should contain the trace with Observation
-        second_call = orchestrator._router.send.call_args_list[1][0][0]
-        assert "Observation:" in second_call.user_message
+        # Second call's LLMRequest should have messages containing tool result
+        second_call_request = orchestrator._router.send.call_args_list[1][0][0]
+        messages = second_call_request.messages
+
+        # Find the tool result message
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["tool_call_id"] == "c1"
+        assert tool_msgs[0]["name"] == "execute_skill"
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_no_skills_skips_loop(self, config_file):
-        """When no skills are registered, ReAct still works (returns Answer)."""
+    async def test_no_skills_still_works(self, config_file):
+        """When no skills are registered, tool loop still works (returns text)."""
         with patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"}):
             orchestrator = AgentOrchestrator(config_file)
 
         # No skills registered (default from config)
         assert len(orchestrator._skills) == 0
 
-        final = MagicMock()
-        final.text = "Answer: No skills available."
-        final.backend_name = "gemini"
-
         orchestrator._router = MagicMock()
-        orchestrator._router.send = AsyncMock(return_value=final)
+        orchestrator._router.send = AsyncMock(
+            return_value=_text_response("No skills available.")
+        )
 
         result = await orchestrator.process_message("Hi", 1, 1)
         assert result == "No skills available."
@@ -211,21 +224,18 @@ class TestMultiTurnExecution:
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_dangerous_command_blocked_in_loop(self, config_file, tmp_path):
-        """Dangerous commands are blocked even inside the ReAct loop."""
+        """Dangerous commands are blocked even inside the tool loop."""
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
 
-        # Step 1: Action with dangerous command
-        step1 = MagicMock()
-        step1.text = (
-            'Thought: I need to clean up.\n'
-            'Action: {"skill_name": "weather-skill", "command": "rm -rf /"}'
-        )
-        step1.backend_name = "gemini"
+        # Step 1: tool call with dangerous command
+        step1 = _tool_response([
+            ToolCall(id="c1", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "rm -rf /",
+            }),
+        ])
 
-        # Step 2: After blocked command, LLM sees blocked observation and answers
-        step2 = MagicMock()
-        step2.text = "Thought: The command was blocked.\nAnswer: Command was blocked."
-        step2.backend_name = "gemini"
+        # Step 2: After blocked command, LLM sees blocked result and answers
+        step2 = _text_response("Command was blocked.")
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(side_effect=[step1, step2])
@@ -235,29 +245,36 @@ class TestMultiTurnExecution:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_tool_results_in_final_response(self, config_file, tmp_path):
-        """Tool results (Observations) are included in subsequent ReAct step context."""
+    async def test_tool_results_in_messages(self, config_file, tmp_path):
+        """Tool results are included in the messages list for subsequent calls."""
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
 
-        # Step 1: Action
-        step1 = MagicMock()
-        step1.text = (
-            'Thought: I need weather data.\n'
-            'Action: {"skill_name": "weather-skill", "command": "echo weather_data"}'
-        )
-        step1.backend_name = "gemini"
+        # Step 1: tool call
+        step1 = _tool_response([
+            ToolCall(id="c1", name="execute_skill", arguments={
+                "skill_name": "weather-skill", "command": "echo weather_data",
+            }),
+        ])
 
-        # Step 2: Answer
-        step2 = MagicMock()
-        step2.text = "Thought: Got the weather data.\nAnswer: The weather is great."
-        step2.backend_name = "gemini"
+        # Step 2: final text answer
+        step2 = _text_response("The weather is great.")
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(side_effect=[step1, step2])
 
         await orchestrator.process_message("Weather?", 1, 1)
 
-        # The second call should have the Observation in the user_message (trace)
-        final_call = orchestrator._router.send.call_args_list[-1][0][0]
-        assert "Observation:" in final_call.user_message
-        assert "weather-skill" in final_call.user_message
+        # The second call should have messages with assistant (tool_calls) + tool result
+        final_request = orchestrator._router.send.call_args_list[-1][0][0]
+        messages = final_request.messages
+
+        # Check assistant message with tool_calls
+        assistant_msgs = [m for m in messages if m.get("role") == "assistant" and m.get("tool_calls")]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["tool_calls"][0]["name"] == "execute_skill"
+
+        # Check tool result message
+        tool_msgs = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0]["name"] == "execute_skill"
+        assert tool_msgs[0]["tool_call_id"] == "c1"

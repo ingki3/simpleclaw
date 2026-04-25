@@ -57,8 +57,12 @@ class CLIProvider(LLMProvider):
         system_prompt: str,
         user_message: str,
         messages: list[dict] | None = None,
+        tools: list | None = None,
     ) -> LLMResponse:
-        """CLI 도구에 메시지를 stdin으로 전달하고 stdout 응답을 반환한다."""
+        """CLI 도구에 메시지를 stdin으로 전달하고 stdout 응답을 반환한다.
+
+        NOTE: CLI 프로바이더는 function calling을 지원하지 않으므로 tools는 무시된다.
+        """
         # 실행 전 바이너리 존재 여부를 확인하여 명확한 에러 메시지 제공
         if not shutil.which(self._command):
             raise LLMCLINotFoundError(

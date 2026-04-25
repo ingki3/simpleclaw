@@ -82,7 +82,8 @@ class LLMRouter:
         logger.info("Routing request to backend '%s'", backend_name)
 
         response = await provider.send(
-            request.system_prompt, request.user_message, request.messages
+            request.system_prompt, request.user_message, request.messages,
+            request.tools,
         )
         return response
 

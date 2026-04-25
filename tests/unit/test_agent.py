@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent.react import parse_react
 from simpleclaw.agent.commands import try_cron_command
 from simpleclaw.agent.builtin_tools import (
     handle_cron_action,
@@ -15,6 +14,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_skill_docs,
     handle_web_fetch,
 )
+from simpleclaw.llm.models import ToolCall
 
 
 @pytest.fixture
@@ -73,12 +73,13 @@ class TestAgentOrchestrator:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_process_message_fallback(self, config_file):
-        """Plain text LLM response (no ReAct format) is returned as-is."""
+    async def test_process_message_text_response(self, config_file):
+        """LLM returns text only (no tool calls) — returned as-is."""
         orchestrator = AgentOrchestrator(config_file)
 
         mock_response = MagicMock()
         mock_response.text = "Hello! I'm SimpleClaw."
+        mock_response.tool_calls = None
         mock_response.backend_name = "gemini"
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=mock_response)
@@ -88,22 +89,19 @@ class TestAgentOrchestrator:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_process_message_react_answer(self, config_file):
-        """ReAct Answer format is parsed and returned."""
+    async def test_process_message_simple_answer(self, config_file):
+        """LLM text answer is returned directly."""
         orchestrator = AgentOrchestrator(config_file)
 
         mock_response = MagicMock()
-        mock_response.text = (
-            "Thought: The user wants a greeting. No tool needed.\n"
-            "Answer: 안녕하세요! SimpleClaw입니다."
-        )
+        mock_response.text = "안녕하세요! SimpleClaw입니다."
+        mock_response.tool_calls = None
         mock_response.backend_name = "gemini"
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=mock_response)
 
         response = await orchestrator.process_message("Hi", 123, 456)
         assert "SimpleClaw" in response
-        assert "Thought:" not in response
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
@@ -125,7 +123,8 @@ class TestAgentOrchestrator:
         orchestrator = AgentOrchestrator(config_file)
 
         mock_response = MagicMock()
-        mock_response.text = "Answer: OK"
+        mock_response.text = "OK"
+        mock_response.tool_calls = None
         mock_response.backend_name = "gemini"
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=mock_response)
@@ -167,6 +166,7 @@ class TestAgentOrchestrator:
 
         mock_response = MagicMock()
         mock_response.text = "[NO_NOTIFY]"
+        mock_response.tool_calls = None
         mock_response.backend_name = "gemini"
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=mock_response)
@@ -183,18 +183,24 @@ class TestAgentOrchestrator:
         """Cron messages should use isolated context (no history)."""
         orchestrator = AgentOrchestrator(config_file)
 
-        mock_response = MagicMock()
-        mock_response.text = "Answer: 결과입니다."
-        mock_response.backend_name = "gemini"
+        # First call: seed history
+        mock_response_1 = MagicMock()
+        mock_response_1.text = "이전 응답"
+        mock_response_1.tool_calls = None
+        mock_response_1.backend_name = "gemini"
+
+        # Second call: cron message
+        mock_response_2 = MagicMock()
+        mock_response_2.text = "cron 결과"
+        mock_response_2.tool_calls = None
+        mock_response_2.backend_name = "gemini"
+
         orchestrator._router = MagicMock()
-        orchestrator._router.send = AsyncMock(return_value=mock_response)
+        orchestrator._router.send = AsyncMock(
+            side_effect=[mock_response_1, mock_response_2]
+        )
 
-        # Seed history
-        mock_response.text = "이전 응답"
         await orchestrator.process_message("이전 메시지", 123, 456)
-
-        # Cron call should have only 1 message (no history)
-        mock_response.text = "Answer: cron 결과"
         await orchestrator.process_cron_message("메일 확인")
 
         cron_call = orchestrator._router.send.call_args[0][0]
@@ -292,8 +298,8 @@ class TestCronCommands:
         assert "사용법" in result
 
 
-class TestCronReActIntegration:
-    """Tests for cron as a built-in tool in the ReAct loop."""
+class TestCronToolIntegration:
+    """Tests for cron as a built-in tool via _dispatch_tool_call."""
 
     def test_handle_cron_action_add(self):
         from simpleclaw.daemon.models import ActionType, CronJob
@@ -356,34 +362,16 @@ class TestCronReActIntegration:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_dispatch_routing_cron(self, config_file):
-        """ReAct dispatch routes cron actions to handle_cron_action."""
+    async def test_dispatch_tool_call_cron(self, config_file):
+        """_dispatch_tool_call routes cron tool calls to handle_cron_action."""
         orchestrator = AgentOrchestrator(config_file)
         mock_scheduler = MagicMock()
         mock_scheduler.list_jobs.return_value = []
         orchestrator.set_cron_scheduler(mock_scheduler)
 
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "cron", "cron_action": "list"}
-        )
-        assert skill_name == "cron"
+        tc = ToolCall(id="call_1", name="cron", arguments={"cron_action": "list"})
+        result = await orchestrator._dispatch_tool_call(tc)
         assert "없습니다" in result
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_builtin_tools_prompt_with_scheduler(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        mock_scheduler = MagicMock()
-        orchestrator.set_cron_scheduler(mock_scheduler)
-        prompt = orchestrator._build_builtin_tools_prompt()
-        assert "cron" in prompt
-        assert "스케줄" in prompt
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_builtin_tools_prompt_without_scheduler_has_core_tools(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        prompt = orchestrator._build_builtin_tools_prompt()
-        assert "cli" in prompt
-        assert "cron" not in prompt
 
     def test_handle_cron_action_recipe_type(self):
         from simpleclaw.daemon.models import ActionType, CronJob
@@ -419,7 +407,7 @@ class TestCronReActIntegration:
 
 
 class TestBuiltinWebFetch:
-    """Tests for web-fetch built-in tool."""
+    """Tests for web_fetch built-in tool."""
 
     @pytest.mark.asyncio
     async def test_web_fetch_missing_url(self):
@@ -447,7 +435,7 @@ class TestBuiltinWebFetch:
 
 
 class TestBuiltinFileRead:
-    """Tests for file-read built-in tool."""
+    """Tests for file_read built-in tool."""
 
     def test_file_read_missing_path(self, tmp_path):
         result = handle_file_read({"skill_name": "file-read"}, tmp_path)
@@ -497,7 +485,7 @@ class TestBuiltinFileRead:
 
 
 class TestBuiltinFileWrite:
-    """Tests for file-write built-in tool."""
+    """Tests for file_write built-in tool."""
 
     def test_file_write_missing_path(self, tmp_path):
         ws = tmp_path / "workspace"
@@ -544,7 +532,7 @@ class TestBuiltinFileWrite:
 
 
 class TestBuiltinFileManage:
-    """Tests for file-manage built-in tool."""
+    """Tests for file_manage built-in tool."""
 
     def test_file_manage_list(self, tmp_path):
         ws = tmp_path / "workspace"
@@ -615,70 +603,54 @@ class TestBuiltinFileManage:
         assert "required" in result
 
 
-class TestBuiltinDispatch:
-    """Tests for _dispatch_builtin routing."""
+class TestToolDispatch:
+    """Tests for _dispatch_tool_call routing."""
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_dispatch_cli(self, config_file):
         orchestrator = AgentOrchestrator(config_file)
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "cli", "command": "echo hello"}
-        )
-        assert skill_name == "cli"
+        tc = ToolCall(id="call_1", name="cli", arguments={"command": "echo hello"})
+        result = await orchestrator._dispatch_tool_call(tc)
         assert "hello" in result
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_dispatch_cli_missing_command(self, config_file):
         orchestrator = AgentOrchestrator(config_file)
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "cli"}
-        )
+        tc = ToolCall(id="call_1", name="cli", arguments={})
+        result = await orchestrator._dispatch_tool_call(tc)
         assert "required" in result
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_dispatch_file_read(self, config_file):
         orchestrator = AgentOrchestrator(config_file)
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "file-read", "path": "config.yaml"}
-        )
-        assert skill_name == "file-read"
+        tc = ToolCall(id="call_1", name="file_read", arguments={"path": "config.yaml"})
+        result = await orchestrator._dispatch_tool_call(tc)
+        # Result is either file content or a "not found" error — both are valid
+        assert isinstance(result, str)
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_dispatch_nonbuiltin_falls_through(self, config_file):
-        """Non-builtin skill_name should go to _execute_skill."""
+    async def test_dispatch_unknown_tool(self, config_file):
+        """Unknown tool name returns an error."""
         orchestrator = AgentOrchestrator(config_file)
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "nonexistent-skill"}
-        )
-        assert "not found" in result.lower() or "not found" in str(result).lower()
+        tc = ToolCall(id="call_1", name="nonexistent_tool", arguments={})
+        result = await orchestrator._dispatch_tool_call(tc)
+        assert "unknown" in result.lower()
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_builtin_tools_prompt_always_has_core_tools(self, config_file):
+    @pytest.mark.asyncio
+    async def test_dispatch_skill_docs(self, config_file):
         orchestrator = AgentOrchestrator(config_file)
-        # Even without cron scheduler, core tools should be present
-        prompt = orchestrator._build_builtin_tools_prompt()
-        assert "cli" in prompt
-        assert "web-fetch" in prompt
-        assert "file-read" in prompt
-        assert "file-write" in prompt
-        assert "file-manage" in prompt
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_builtin_tools_prompt_has_cron_when_scheduler(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        mock_scheduler = MagicMock()
-        orchestrator.set_cron_scheduler(mock_scheduler)
-
-        prompt = orchestrator._build_builtin_tools_prompt()
-        assert "cron" in prompt
+        tc = ToolCall(id="call_1", name="skill_docs", arguments={"name": "nonexistent"})
+        result = await orchestrator._dispatch_tool_call(tc)
+        assert "not found" in result
 
 
 class TestSkillDocs:
-    """Tests for skill-docs built-in tool."""
+    """Tests for skill_docs built-in tool."""
 
     def test_handle_skill_docs_returns_content(self, tmp_path):
         skill_dir = tmp_path / "test-skill"
@@ -728,141 +700,35 @@ class TestSkillDocs:
         assert "no documentation" in result
         assert "A skill without docs" in result
 
+
+class TestToolLoop:
+    """Tests for the Native Function Calling tool loop."""
+
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_dispatch_skill_docs(self, config_file):
+    async def test_tool_loop_with_tool_call(self, config_file):
+        """Tool loop executes tool calls and returns final text answer."""
         orchestrator = AgentOrchestrator(config_file)
-        skill_name, result = await orchestrator._dispatch_routing(
-            {"skill_name": "skill-docs", "name": "nonexistent"}
+
+        # First LLM call: wants to use cli tool
+        mock_response_1 = MagicMock()
+        mock_response_1.text = ""
+        mock_response_1.tool_calls = [
+            ToolCall(id="call_1", name="cli", arguments={"command": "echo test_output"})
+        ]
+        mock_response_1.backend_name = "gemini"
+
+        # Second LLM call: returns final answer
+        mock_response_2 = MagicMock()
+        mock_response_2.text = "The command output was: test_output"
+        mock_response_2.tool_calls = None
+        mock_response_2.backend_name = "gemini"
+
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(
+            side_effect=[mock_response_1, mock_response_2]
         )
-        assert skill_name == "skill-docs"
-        assert "not found" in result
 
-
-class TestTruncateDescription:
-    def test_short_passes_through(self):
-        assert AgentOrchestrator._truncate_description("Short desc.") == "Short desc."
-
-    def test_first_sentence(self):
-        desc = "First sentence. Second sentence with more detail."
-        assert AgentOrchestrator._truncate_description(desc) == "First sentence."
-
-    def test_long_single_sentence(self):
-        desc = "A" * 200
-        result = AgentOrchestrator._truncate_description(desc)
-        assert len(result) == 120
-        assert result.endswith("...")
-
-    def test_empty(self):
-        assert AgentOrchestrator._truncate_description("") == ""
-
-
-class TestPromptBudget:
-    """Tests for tiered prompt budget system."""
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_tier1_small_list(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        mock_skills = []
-        for i in range(5):
-            s = MagicMock()
-            s.name = f"skill-{i}"
-            s.description = f"Short description for skill {i}."
-            mock_skills.append(s)
-
-        result = orchestrator._format_skills_tier1(mock_skills)
-        assert "skill-0" in result
-        assert "Short description" in result
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_tier2_names_only(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        mock_skills = []
-        for i in range(5):
-            s = MagicMock()
-            s.name = f"skill-{i}"
-            s.description = f"Description {i}"
-            mock_skills.append(s)
-
-        result = orchestrator._format_skills_tier2(mock_skills)
-        assert "- skill-0" in result
-        assert "Description" not in result
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_tier3_truncates(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        # Create enough skills to trigger tier 3
-        mock_skills = []
-        for i in range(2000):
-            s = MagicMock()
-            s.name = f"very-long-skill-name-category-subcategory-{i:05d}"
-            s.description = "x" * 200
-            mock_skills.append(s)
-
-        result = orchestrator._format_skills_tier3(mock_skills)
-        assert "more skills" in result
-
-    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_estimate_prompt_size(self, config_file):
-        orchestrator = AgentOrchestrator(config_file)
-        size = orchestrator._estimate_prompt_size("test skills text")
-        assert size > 0
-        assert isinstance(size, int)
-
-
-class TestReActParsing:
-    def test_parse_thought_and_answer(self):
-        response = (
-            "Thought: The user wants a greeting.\n"
-            "Answer: Hello there!"
-        )
-        thought, action, answer = parse_react(response)
-        assert thought == "The user wants a greeting."
-        assert action is None
-        assert answer == "Hello there!"
-
-    def test_parse_thought_and_action(self):
-        response = (
-            'Thought: I need to search for news.\n'
-            'Action: {"skill_name": "news-skill", "command": "python search.py"}'
-        )
-        thought, action, answer = parse_react(response)
-        assert thought == "I need to search for news."
-        assert action == {"skill_name": "news-skill", "command": "python search.py"}
-        assert answer is None
-
-    def test_parse_answer_only(self):
-        response = "Answer: Just a direct answer."
-        thought, action, answer = parse_react(response)
-        assert thought is None
-        assert action is None
-        assert answer == "Just a direct answer."
-
-    def test_parse_no_pattern(self):
-        response = "This is just plain text with no ReAct format."
-        thought, action, answer = parse_react(response)
-        assert thought is None
-        assert action is None
-        assert answer is None
-
-    def test_parse_invalid_action_json(self):
-        response = (
-            "Thought: Let me try.\n"
-            "Action: {invalid json here}"
-        )
-        thought, action, answer = parse_react(response)
-        assert thought == "Let me try."
-        assert action is None
-        assert answer is None
-
-    def test_parse_multiline_answer(self):
-        response = (
-            "Thought: All data collected.\n"
-            "Answer: 오늘 결과입니다:\n"
-            "- SSG 5:0 kt\n"
-            "- LG 4:1 두산"
-        )
-        thought, action, answer = parse_react(response)
-        assert "SSG" in answer
-        assert "LG" in answer
-        assert "Thought" not in answer
+        response = await orchestrator.process_message("Run echo", 123, 456)
+        assert "test_output" in response
+        assert orchestrator._router.send.call_count == 2
