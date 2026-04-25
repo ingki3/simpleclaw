@@ -1,4 +1,9 @@
-"""OpenAI ChatGPT LLM provider."""
+"""OpenAI ChatGPT API 프로바이더.
+
+OpenAI의 Chat Completions API를 사용하여 GPT 모델과 통신한다.
+시스템 프롬프트는 role=system 메시지로 messages 리스트 맨 앞에 삽입되며,
+멀티턴 대화는 기존 messages에 시스템 프롬프트를 선행 추가하여 전달한다.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(LLMProvider):
-    """Provider for OpenAI ChatGPT API."""
+    """OpenAI ChatGPT API 프로바이더."""
 
     def __init__(self, model: str, api_key: str, name: str = "openai") -> None:
+        """OpenAIProvider를 초기화한다.
+
+        Args:
+            model: 사용할 OpenAI 모델 ID (예: gpt-4o).
+            api_key: OpenAI API 키.
+            name: 라우터에서 이 백엔드를 식별하는 이름.
+
+        Raises:
+            LLMAuthError: API 키가 비어있는 경우.
+        """
         if not api_key:
             raise LLMAuthError(f"API key missing for provider '{name}' (env var not set)")
         self._model = model
@@ -28,6 +43,8 @@ class OpenAIProvider(LLMProvider):
         user_message: str,
         messages: list[dict] | None = None,
     ) -> LLMResponse:
+        """Chat Completions API로 메시지를 전송하고 응답을 반환한다."""
+        # 시스템 프롬프트를 맨 앞에 배치한 뒤 대화 메시지를 이어붙임
         msg_list = []
         if system_prompt:
             msg_list.append({"role": "system", "content": system_prompt})

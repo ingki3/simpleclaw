@@ -1,4 +1,13 @@
-"""Configuration loader for SimpleClaw."""
+"""SimpleClaw 설정 로더 모듈.
+
+config.yaml 파일에서 각 서브시스템(페르소나, LLM, 데몬, 에이전트, 음성, 텔레그램,
+웹훅, 서브 에이전트)의 설정을 로드한다.
+
+설계 결정:
+- 각 서브시스템별 독립적인 load_*_config() 함수로 분리
+- 파일 누락이나 파싱 오류 시 안전한 기본값(_*_DEFAULTS) 반환
+- .env 파일에서 API 키/토큰 등 민감 정보를 환경변수로 로드
+"""
 
 from __future__ import annotations
 
@@ -9,6 +18,7 @@ import yaml
 from dotenv import load_dotenv
 
 
+# 페르소나 엔진 기본 설정값
 _DEFAULTS = {
     "token_budget": 4096,
     "local_dir": ".agent",
@@ -22,9 +32,9 @@ _DEFAULTS = {
 
 
 def load_persona_config(config_path: str | Path) -> dict:
-    """Load persona engine configuration from config.yaml.
+    """config.yaml에서 페르소나 엔진 설정을 로드한다.
 
-    Returns defaults if the file or persona key is missing.
+    파일이 없거나 persona 키가 없으면 기본값을 반환한다.
     """
     config_path = Path(config_path)
     if not config_path.is_file():
@@ -51,6 +61,7 @@ def load_persona_config(config_path: str | Path) -> dict:
     }
 
 
+# LLM 라우팅 기본 설정값
 _LLM_DEFAULTS: dict = {
     "default": "claude",
     "providers": {},
@@ -58,12 +69,12 @@ _LLM_DEFAULTS: dict = {
 
 
 def load_llm_config(config_path: str | Path) -> dict:
-    """Load LLM routing configuration from config.yaml.
+    """config.yaml에서 LLM 라우팅 설정을 로드한다.
 
-    Also loads .env file for API keys.
-    Returns defaults if the file or llm key is missing.
+    .env 파일에서 API 키도 함께 로드한다.
+    파일이 없거나 llm 키가 없으면 기본값을 반환한다.
     """
-    # Load .env for API keys
+    # .env에서 API 키 로드
     env_path = Path(config_path).parent / ".env"
     if env_path.is_file():
         load_dotenv(env_path)
@@ -85,7 +96,7 @@ def load_llm_config(config_path: str | Path) -> dict:
     if not isinstance(llm, dict):
         return dict(_LLM_DEFAULTS)
 
-    # Resolve API keys from environment variables
+    # 환경변수에서 API 키 값 확인
     providers = {}
     for name, pconfig in llm.get("providers", {}).items():
         if not isinstance(pconfig, dict):
@@ -93,7 +104,7 @@ def load_llm_config(config_path: str | Path) -> dict:
         provider = dict(pconfig)
         provider["name"] = name
 
-        # Resolve API key from env var
+        # api_key_env에 지정된 환경변수명으로 실제 키 값 조회
         api_key_env = provider.get("api_key_env")
         if api_key_env:
             provider["api_key"] = os.environ.get(api_key_env, "")
@@ -106,6 +117,7 @@ def load_llm_config(config_path: str | Path) -> dict:
     }
 
 
+# 데몬 기본 설정값
 _DAEMON_DEFAULTS: dict = {
     "heartbeat_interval": 300,
     "pid_file": ".agent/daemon.pid",
@@ -123,9 +135,10 @@ _DAEMON_DEFAULTS: dict = {
 
 
 def load_daemon_config(config_path: str | Path) -> dict:
-    """Load daemon configuration from config.yaml.
+    """config.yaml에서 데몬 설정을 로드한다.
 
-    Returns defaults if the file or daemon key is missing.
+    하트비트 간격, PID/상태 파일 경로, dreaming/wait_state 설정을 포함한다.
+    파일이 없거나 daemon 키가 없으면 기본값을 반환한다.
     """
     config_path = Path(config_path)
     if not config_path.is_file():
@@ -184,6 +197,7 @@ def load_daemon_config(config_path: str | Path) -> dict:
     }
 
 
+# 에이전트 오케스트레이터 기본 설정값
 _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
     "db_path": ".agent/conversations.db",
@@ -193,7 +207,7 @@ _AGENT_DEFAULTS: dict = {
 
 
 def load_agent_config(config_path: str | Path) -> dict:
-    """Load agent orchestrator configuration from config.yaml."""
+    """config.yaml에서 에이전트 오케스트레이터 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_AGENT_DEFAULTS)
@@ -225,6 +239,7 @@ def load_agent_config(config_path: str | Path) -> dict:
     }
 
 
+# 음성(STT/TTS) 기본 설정값
 _VOICE_DEFAULTS: dict = {
     "stt": {
         "provider": "openai",
@@ -243,7 +258,7 @@ _VOICE_DEFAULTS: dict = {
 
 
 def load_voice_config(config_path: str | Path) -> dict:
-    """Load voice (STT/TTS) configuration from config.yaml."""
+    """config.yaml에서 음성(STT/TTS) 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_VOICE_DEFAULTS)
@@ -292,6 +307,7 @@ def load_voice_config(config_path: str | Path) -> dict:
     }
 
 
+# 텔레그램 봇 기본 설정값
 _TELEGRAM_DEFAULTS: dict = {
     "bot_token_env": "TELEGRAM_BOT_TOKEN",
     "whitelist": {
@@ -302,7 +318,7 @@ _TELEGRAM_DEFAULTS: dict = {
 
 
 def load_telegram_config(config_path: str | Path) -> dict:
-    """Load Telegram bot configuration from config.yaml."""
+    """config.yaml에서 텔레그램 봇 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_TELEGRAM_DEFAULTS)
@@ -324,7 +340,7 @@ def load_telegram_config(config_path: str | Path) -> dict:
     if not isinstance(whitelist, dict):
         whitelist = {}
 
-    # Load .env for bot token
+    # .env에서 봇 토큰 로드
     env_path = Path(config_path).parent / ".env"
     if env_path.is_file():
         load_dotenv(env_path)
@@ -342,6 +358,7 @@ def load_telegram_config(config_path: str | Path) -> dict:
     }
 
 
+# 웹훅 서버 기본 설정값
 _WEBHOOK_DEFAULTS: dict = {
     "enabled": True,
     "host": "127.0.0.1",
@@ -351,7 +368,7 @@ _WEBHOOK_DEFAULTS: dict = {
 
 
 def load_webhook_config(config_path: str | Path) -> dict:
-    """Load webhook server configuration from config.yaml."""
+    """config.yaml에서 웹훅 서버 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_WEBHOOK_DEFAULTS)
@@ -369,7 +386,7 @@ def load_webhook_config(config_path: str | Path) -> dict:
     if not isinstance(wh, dict):
         return dict(_WEBHOOK_DEFAULTS)
 
-    # Load .env for auth token
+    # .env에서 인증 토큰 로드
     env_path = Path(config_path).parent / ".env"
     if env_path.is_file():
         load_dotenv(env_path)
@@ -386,6 +403,7 @@ def load_webhook_config(config_path: str | Path) -> dict:
     }
 
 
+# 서브 에이전트 기본 설정값
 _SUB_AGENTS_DEFAULTS: dict = {
     "max_concurrent": 3,
     "default_timeout": 300,
@@ -399,7 +417,7 @@ _SUB_AGENTS_DEFAULTS: dict = {
 
 
 def load_sub_agents_config(config_path: str | Path) -> dict:
-    """Load sub-agents configuration from config.yaml."""
+    """config.yaml에서 서브 에이전트 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_SUB_AGENTS_DEFAULTS)

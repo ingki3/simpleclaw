@@ -1,4 +1,13 @@
-"""Prompt templates for the ReAct agent and built-in tools."""
+"""ReAct 에이전트 및 내장 도구의 프롬프트 템플릿 모듈.
+
+시스템 프롬프트, 사용자 프롬프트, 각 내장 도구의 사용법 안내 프롬프트를 정의한다.
+이 프롬프트들은 LLM에 전달되어 ReAct 패턴(Thought/Action/Observation/Answer)의
+출력 형식과 도구 사용법을 지시한다.
+
+설계 결정:
+- 프롬프트 내 도구 사용법은 한국어로 작성 — 한국어 사용자 대상
+- {skills_list}, {builtin_tools} 등 포맷 변수로 동적 내용 주입
+"""
 
 REACT_SYSTEM_PROMPT = """\
 You are an AI agent that solves tasks step-by-step using available tools.

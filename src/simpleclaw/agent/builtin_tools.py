@@ -1,7 +1,15 @@
-"""Built-in tool handlers for the ReAct agent.
+"""ReAct 에이전트의 내장 도구 핸들러 모듈.
 
-Each handler is a standalone function that receives explicit dependencies,
-keeping AgentOrchestrator slim and testable.
+각 핸들러는 명시적 의존성을 인자로 받는 독립 함수로 구현되어 있어
+AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
+
+제공 도구:
+- web-fetch: URL에서 웹 페이지 내용 가져오기
+- file-read: 파일 텍스트 읽기 (프로젝트 내)
+- file-write: 파일 쓰기 (워크스페이스 내)
+- file-manage: 파일/디렉토리 관리 (list, mkdir, delete, info)
+- skill-docs: 사용자 설치 스킬 문서(SKILL.md) 조회
+- cron: ReAct 루프에서의 cron 작업 관리
 """
 
 from __future__ import annotations
@@ -18,7 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Names recognised by _dispatch_builtin in the orchestrator.
+# 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록
 BUILTIN_TOOL_NAMES = frozenset({
     "cron", "cli", "web-fetch", "file-read", "file-write", "file-manage",
     "skill-docs",
@@ -26,7 +34,7 @@ BUILTIN_TOOL_NAMES = frozenset({
 
 
 # ------------------------------------------------------------------
-# Path safety
+# 경로 안전성 검증
 # ------------------------------------------------------------------
 
 def resolve_safe_path(
@@ -35,9 +43,12 @@ def resolve_safe_path(
     *,
     write: bool = False,
 ) -> Path | str:
-    """Resolve a user-supplied path and validate safety boundaries.
+    """사용자가 제공한 경로를 해석하고 안전 경계를 검증한다.
 
-    Returns the resolved ``Path`` on success, or an error string.
+    읽기는 프로젝트 루트 내, 쓰기는 워크스페이스 디렉토리 내로 제한한다.
+
+    Returns:
+        성공 시 해석된 ``Path``, 경계 위반 시 에러 문자열.
     """
     project_root = Path.cwd().resolve()
     workspace = workspace_dir.resolve()
@@ -60,9 +71,10 @@ def resolve_safe_path(
 
 
 # ------------------------------------------------------------------
-# web-fetch
+# web-fetch — 웹 페이지 가져오기
 # ------------------------------------------------------------------
 
+# 내부/로컬 네트워크 URL 패턴 — SSRF 방지를 위해 차단
 _INTERNAL_URL_RE = re.compile(
     r"https?://(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
     r"192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|"
@@ -72,7 +84,11 @@ _INTERNAL_URL_RE = re.compile(
 
 
 async def handle_web_fetch(routing: dict) -> str:
-    """Fetch a URL and return its text content."""
+    """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
+
+    HTML인 경우 script/style 태그를 제거하고 태그를 strip하여 텍스트만 추출한다.
+    최대 8000자까지 반환하며, 초과 시 잘라낸다.
+    """
     import aiohttp
 
     url = routing.get("url", "")
@@ -112,11 +128,14 @@ async def handle_web_fetch(routing: dict) -> str:
 
 
 # ------------------------------------------------------------------
-# file-read
+# file-read — 파일 읽기
 # ------------------------------------------------------------------
 
 def handle_file_read(routing: dict, workspace_dir: Path) -> str:
-    """Read a file's text content."""
+    """파일의 텍스트 내용을 줄 번호와 함께 반환한다.
+
+    offset/limit으로 읽을 범위를 제어할 수 있으며, 음수 offset은 파일 끝 기준이다.
+    """
     raw_path = routing.get("path", "")
     if not raw_path:
         return "Error: 'path' field is required."
@@ -155,11 +174,14 @@ def handle_file_read(routing: dict, workspace_dir: Path) -> str:
 
 
 # ------------------------------------------------------------------
-# file-write
+# file-write — 파일 쓰기
 # ------------------------------------------------------------------
 
 def handle_file_write(routing: dict, workspace_dir: Path) -> str:
-    """Write content to a file (workspace only)."""
+    """파일에 내용을 쓴다 (워크스페이스 디렉토리 내에서만 허용).
+
+    append=True이면 기존 파일에 추가, 아니면 덮어쓴다.
+    """
     raw_path = routing.get("path", "")
     content = routing.get("content", "")
     append = routing.get("append", False)
@@ -190,11 +212,14 @@ def handle_file_write(routing: dict, workspace_dir: Path) -> str:
 
 
 # ------------------------------------------------------------------
-# file-manage
+# file-manage — 파일 관리
 # ------------------------------------------------------------------
 
 def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
-    """Handle file management operations (list, mkdir, delete, info)."""
+    """파일 관리 작업을 처리한다 (list, mkdir, delete, info).
+
+    list/info는 프로젝트 전체에서, mkdir/delete는 워크스페이스 내에서만 허용된다.
+    """
     operation = routing.get("operation", "")
     raw_path = routing.get("path", "")
 
@@ -290,11 +315,14 @@ def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
 
 
 # ------------------------------------------------------------------
-# skill-docs
+# skill-docs — 스킬 문서 조회
 # ------------------------------------------------------------------
 
 def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
-    """Return SKILL.md content for a named skill."""
+    """지정된 스킬의 SKILL.md 내용을 반환한다.
+
+    정확한 이름 매칭을 먼저 시도하고, 실패 시 소문자·하이픈 변환 후 퍼지 매칭한다.
+    """
     name = routing.get("name", "")
     if not name:
         return "Error: 'name' field is required."
@@ -328,14 +356,17 @@ def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
 
 
 # ------------------------------------------------------------------
-# cron (ReAct action handler — separate from /cron slash command)
+# cron — ReAct 액션 핸들러 (/cron 슬래시 명령과 별도)
 # ------------------------------------------------------------------
 
 def handle_cron_action(
     routing: dict,
     cron_scheduler: CronScheduler | None,
 ) -> str:
-    """Handle a cron Action from the ReAct loop."""
+    """ReAct 루프에서 발생한 cron 액션을 처리한다.
+
+    list, add, remove, enable, disable 액션을 지원한다.
+    """
     if cron_scheduler is None:
         return "Error: CronScheduler not available."
 
@@ -402,7 +433,7 @@ def handle_cron_action(
 
 
 def _cron_list(cron_scheduler: CronScheduler) -> str:
-    """Format a cron job listing (shared by ReAct handler and /cron command)."""
+    """cron 작업 목록을 포맷팅하여 반환한다 (ReAct 핸들러와 /cron 명령이 공유)."""
     jobs = cron_scheduler.list_jobs()
     if not jobs:
         return "📭 등록된 cron 작업이 없습니다."

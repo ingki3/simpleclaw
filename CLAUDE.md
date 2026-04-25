@@ -35,6 +35,25 @@ tests/
 
 Python 3.11+: Follow standard conventions
 
+## 주석 작성 규칙
+
+코드 주석은 한국어로 작성하며, 다음 3단계로 구분한다.
+
+### 1. 파일 레벨 (모듈 docstring)
+- 파일 최상단에 `"""..."""` 형식으로 작성
+- 모듈의 역할, 주요 동작 흐름, 설계 결정(예: hot-reload 정책)을 기술
+- 외부에서 이 파일을 처음 접하는 개발자가 전체 맥락을 파악할 수 있어야 함
+
+### 2. 함수/메서드 레벨 (docstring)
+- 모든 public/private 메서드에 한국어 docstring 작성
+- 한 줄 요약 + (필요 시) 상세 설명, Args, Returns 포함
+- "무엇을 하는가"보다 "왜 이렇게 하는가"에 중점
+
+### 3. 인라인 주석 (코드 라인)
+- 로직의 의도가 코드만으로 불명확한 곳에만 추가
+- `# 왜(why)` 중심으로 작성, `# 무엇(what)` 반복은 지양
+- 분기·예외 처리·보안 체크 등 판단 근거가 필요한 곳에 집중
+
 ## Recent Changes
 - 006-heartbeat-cron-scheduler: Added Python 3.11+ + `apscheduler>=3.10` (scheduling), existing `simpleclaw` modules (memory, recipes)
 

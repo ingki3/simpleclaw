@@ -1,4 +1,14 @@
-"""Skill discovery: scan directories and parse SKILL.md files."""
+"""스킬 탐색 모듈: 디렉터리를 스캔하여 SKILL.md 파일을 파싱한다.
+
+동작 흐름:
+1. 글로벌 스킬 디렉터리를 먼저 스캔 (낮은 우선순위)
+2. 로컬 스킬 디렉터리를 스캔하여 동일 이름의 글로벌 스킬을 덮어씀
+3. 각 SKILL.md는 YAML frontmatter 또는 마크다운 헤딩 방식으로 파싱
+
+설계 결정:
+- 로컬 스킬이 글로벌 스킬보다 우선하므로, 프로젝트별 커스터마이징 가능
+- 파싱 실패 시 해당 스킬만 건너뛰고 나머지는 계속 로드
+"""
 
 from __future__ import annotations
 
@@ -17,19 +27,26 @@ def discover_skills(
     local_dir: str | Path,
     global_dir: str | Path,
 ) -> list[SkillDefinition]:
-    """Discover skills from local and global directories.
+    """로컬 및 글로벌 디렉터리에서 스킬을 탐색한다.
 
-    Local skills override global skills with the same name.
+    동일 이름의 스킬이 양쪽에 존재하면 로컬 스킬이 우선한다.
+
+    Args:
+        local_dir: 프로젝트별 스킬 디렉터리 경로
+        global_dir: 사용자 전역 스킬 디렉터리 경로
+
+    Returns:
+        파싱된 SkillDefinition 목록
     """
     local_path = Path(local_dir).expanduser()
     global_path = Path(global_dir).expanduser()
 
     skills: dict[str, SkillDefinition] = {}
 
-    # Scan global first (lower priority)
+    # 글로벌을 먼저 스캔 (낮은 우선순위)
     _scan_skills_dir(global_path, SkillScope.GLOBAL, skills)
 
-    # Scan local second (higher priority, overrides global)
+    # 로컬을 나중에 스캔 (높은 우선순위, 글로벌을 덮어씀)
     _scan_skills_dir(local_path, SkillScope.LOCAL, skills)
 
     return list(skills.values())
@@ -40,7 +57,13 @@ def _scan_skills_dir(
     scope: SkillScope,
     skills: dict[str, SkillDefinition],
 ) -> None:
-    """Scan a directory for skill subdirectories containing SKILL.md."""
+    """디렉터리 내 SKILL.md를 포함하는 하위 디렉터리를 스캔한다.
+
+    Args:
+        directory: 스캔 대상 디렉터리
+        scope: 스킬의 범위 (LOCAL 또는 GLOBAL)
+        skills: 이름을 키로 하는 스킬 사전 (결과가 여기에 누적됨)
+    """
     if not directory.is_dir():
         logger.debug("Skills directory does not exist: %s", directory)
         return
@@ -64,13 +87,20 @@ def _scan_skills_dir(
 
 
 def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None:
-    """Parse a SKILL.md file into a SkillDefinition.
+    """SKILL.md 파일을 파싱하여 SkillDefinition으로 변환한다.
 
-    Supports two formats:
-    1. YAML frontmatter (---name: ...---) — OpenClaw/AgentSkills style
-    2. Markdown headings with ## Script/Target: — legacy style
+    두 가지 포맷을 지원한다:
+    1. YAML frontmatter (---name: ...---) — OpenClaw/AgentSkills 스타일
+    2. 마크다운 헤딩 + ## Script/Target: — 레거시 스타일
 
-    Also extracts executable commands from bash/shell code blocks.
+    또한 bash/shell 코드 블록에서 실행 가능한 명령어를 추출한다.
+
+    Args:
+        skill_md: SKILL.md 파일 경로
+        scope: 스킬의 범위 (LOCAL 또는 GLOBAL)
+
+    Returns:
+        파싱 성공 시 SkillDefinition, 실패 시 None
     """
     try:
         content = skill_md.read_text(encoding="utf-8")
@@ -81,7 +111,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
     name = ""
     description = ""
 
-    # Try YAML frontmatter first (---\n...\n---)
+    # YAML frontmatter를 먼저 시도 (---\n...\n---)
     fm_match = re.match(r"^---\s*\n(.+?)\n---\s*\n", content, re.DOTALL)
     if fm_match:
         try:
@@ -92,7 +122,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
         except yaml.YAMLError:
             pass
 
-    # Fallback: extract name from first # heading
+    # 폴백: 첫 번째 # 헤딩에서 이름 추출
     if not name:
         name_match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
         if not name_match:
@@ -100,14 +130,14 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
             return None
         name = name_match.group(1).strip()
 
-    # Fallback: extract description
+    # 폴백: 설명 추출
     if not description:
         desc_match = re.search(
             r"^#\s+.+\n\n(.+?)(?=\n##|\Z)", content, re.MULTILINE | re.DOTALL
         )
         description = desc_match.group(1).strip() if desc_match else ""
 
-    # Extract script target from ## Script section (legacy format)
+    # ## Script 섹션에서 스크립트 대상 경로 추출 (레거시 포맷)
     script_match = re.search(
         r"##\s+Script\s*\n+.*?Target:\s*`?([^`\n]+)`?",
         content,
@@ -117,7 +147,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
     if script_match:
         script_path = str(skill_md.parent / script_match.group(1).strip())
 
-    # Extract executable commands from bash/shell code blocks
+    # bash/shell 코드 블록에서 실행 가능한 명령어 추출
     commands: list[str] = []
     code_blocks = re.findall(
         r"```(?:bash|shell|sh)\s*\n(.+?)```",
@@ -130,7 +160,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
             if line and not line.startswith("#"):
                 commands.append(line)
 
-    # Extract trigger from ## Trigger or ## When to use sections
+    # ## Trigger 또는 ## When to use 섹션에서 트리거 조건 추출
     trigger_match = re.search(
         r"##\s+(?:Trigger|When to [Uu]se(?:\s*\(.+?\))?)\s*\n+(.+?)(?=\n##|\Z)",
         content,
