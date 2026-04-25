@@ -1,4 +1,8 @@
-"""Data models for the sub-agent spawner."""
+"""서브에이전트 스포너 데이터 모델.
+
+서브에이전트의 생명주기(PENDING→RUNNING→SUCCESS/FAILURE/TIMEOUT/KILLED),
+권한 범위(PermissionScope), 실행 결과(SubAgentResult) 등 핵심 데이터 구조를 정의한다.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from pathlib import Path
 
 
 class SubAgentStatus(Enum):
-    """Status of a sub-agent."""
+    """서브에이전트의 생명주기 상태."""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -20,20 +24,24 @@ class SubAgentStatus(Enum):
 
 
 class SubAgentError(Exception):
-    """Base error for sub-agent operations."""
+    """서브에이전트 작업의 기본 예외 클래스."""
 
 
 class SpawnError(SubAgentError):
-    """Raised when a sub-agent cannot be spawned."""
+    """서브에이전트 생성에 실패했을 때 발생하는 예외."""
 
 
 class PoolExhaustedError(SubAgentError):
-    """Raised when the concurrency pool is full and no queue is available."""
+    """동시 실행 풀이 가득 차서 대기열이 없을 때 발생하는 예외."""
 
 
 @dataclass
 class PermissionScope:
-    """Constraints applied to a sub-agent."""
+    """서브에이전트에 적용되는 권한 제약.
+
+    allowed_paths: 접근 허용 파일 시스템 경로 목록
+    network: 네트워크 접근 허용 여부
+    """
 
     allowed_paths: list[str] = field(default_factory=list)
     network: bool = False
@@ -47,7 +55,10 @@ class PermissionScope:
 
 @dataclass
 class SubAgent:
-    """A spawned subprocess representing a delegated task."""
+    """위임된 작업을 수행하는 서브프로세스 서브에이전트.
+
+    스포너가 생성하고 풀에서 동시 실행 수를 관리한다.
+    """
 
     agent_id: str
     task: str
@@ -63,7 +74,10 @@ class SubAgent:
 
 @dataclass
 class SubAgentResult:
-    """Parsed output from a completed sub-agent."""
+    """완료된 서브에이전트의 파싱된 출력 결과.
+
+    서브에이전트 stdout의 JSON을 파싱하여 status, data, error를 구조화한다.
+    """
 
     agent_id: str
     status: str

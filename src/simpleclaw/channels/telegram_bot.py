@@ -1,4 +1,10 @@
-"""Telegram bot: polling, whitelist authentication, message handling."""
+"""텔레그램 봇: 폴링 기반 메시지 수신, 화이트리스트 인증, 메시지 핸들링.
+
+python-telegram-bot 라이브러리를 사용하여 텔레그램 메시지를 수신·응답한다.
+- 화이트리스트(user_id / chat_id) 기반 접근 제어 (fail-closed 정책)
+- 모든 접근 시도를 AccessAttempt으로 기록
+- 외부 message_handler 콜백을 주입받아 메시지 처리 위임
+"""
 
 from __future__ import annotations
 
@@ -11,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramBot:
-    """Telegram bot integration with whitelist-based access control.
+    """화이트리스트 기반 접근 제어를 갖춘 텔레그램 봇.
 
-    Uses python-telegram-bot library for polling.
+    python-telegram-bot 라이브러리의 폴링 모드를 사용한다.
+    화이트리스트가 비어 있으면 모든 메시지를 거부하는 fail-closed 정책을 따른다.
     """
 
     def __init__(
@@ -32,9 +39,9 @@ class TelegramBot:
         self._access_log: list[AccessAttempt] = []
 
     def is_authorized(self, user_id: int, chat_id: int) -> bool:
-        """Check if a user/chat is authorized via whitelist.
+        """사용자/채팅이 화이트리스트에 포함되어 있는지 확인한다.
 
-        Fail-closed: if no whitelist is configured, all messages are rejected.
+        Fail-closed 정책: 화이트리스트가 설정되지 않으면 모든 메시지를 거부한다.
         """
         if not self._whitelist_user_ids and not self._whitelist_chat_ids:
             return False
@@ -49,6 +56,7 @@ class TelegramBot:
     def log_access(
         self, user_id: int, chat_id: int, authorized: bool
     ) -> AccessAttempt:
+        """접근 시도를 로그에 기록한다. 비인가 접근 시 경고 로그를 남긴다."""
         attempt = AccessAttempt(
             source="telegram",
             user_identifier=f"user:{user_id}/chat:{chat_id}",
@@ -64,19 +72,23 @@ class TelegramBot:
         return attempt
 
     def get_access_log(self) -> list[AccessAttempt]:
+        """접근 시도 로그의 복사본을 반환한다."""
         return list(self._access_log)
 
     async def handle_message(
         self, text: str, user_id: int, chat_id: int
     ) -> str | None:
-        """Process an incoming message after authorization."""
+        """수신 메시지를 인증 후 처리한다.
+
+        비인가 사용자이면 None을 반환하고, 핸들러가 없으면 에코 응답을 보낸다.
+        """
         if not self.is_authorized(user_id, chat_id):
             self.log_access(user_id, chat_id, authorized=False)
             return None
 
         self.log_access(user_id, chat_id, authorized=True)
 
-        # Truncate very long messages
+        # 텔레그램 메시지 최대 길이 제한 (4096자)
         text = text[:4096] if len(text) > 4096 else text
 
         if self._message_handler:
@@ -86,7 +98,7 @@ class TelegramBot:
                 logger.exception("Message handler error")
                 return "An error occurred while processing your message."
 
-        # Default: echo the message
+        # 기본 동작: 메시지 에코
         logger.info(
             "Telegram message from user=%d: %s",
             user_id,
@@ -95,7 +107,7 @@ class TelegramBot:
         return f"Received: {text[:200]}"
 
     async def start(self) -> None:
-        """Start the Telegram bot polling."""
+        """텔레그램 봇 폴링을 시작한다."""
         if not self._bot_token:
             logger.warning("Telegram bot token not configured. Skipping.")
             return
@@ -124,7 +136,7 @@ class TelegramBot:
                         await update.message.reply_text(response)
 
             self._application.add_handler(
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message)
+                MessageHandler(filters.TEXT, _on_message)
             )
 
             await self._application.initialize()
@@ -141,7 +153,7 @@ class TelegramBot:
             logger.exception("Failed to start Telegram bot")
 
     async def stop(self) -> None:
-        """Stop the Telegram bot."""
+        """텔레그램 봇을 정지한다."""
         if self._application and self._running:
             try:
                 await self._application.updater.stop()

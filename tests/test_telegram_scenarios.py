@@ -165,10 +165,12 @@ daemon:
 
 
 def _mock_router(orch, routing_response, final_response):
-    """Replace orch._router with a mock that returns specified responses.
+    """Replace orch._router with a mock that returns ReAct-formatted responses.
 
     Args:
-        routing_response: JSON string for skill router (or None to skip routing)
+        routing_response: JSON string for skill routing (or None to skip routing).
+            If it contains "use_skill": false, the LLM returns Answer directly.
+            If it contains "use_skill": true, it returns Action then Answer.
         final_response: text for the final agent response
     """
     call_count = 0
@@ -179,10 +181,20 @@ def _mock_router(orch, routing_response, final_response):
         resp = MagicMock()
         resp.backend_name = "gemini"
         resp.model = "gemini-flash"
-        if call_count == 1 and routing_response is not None:
-            resp.text = routing_response
+
+        if call_count == 1:
+            if routing_response is None or '"use_skill": false' in (routing_response or ""):
+                # No skill needed -> return Answer directly
+                resp.text = f"Thought: No skill needed.\nAnswer: {final_response}"
+            else:
+                # Skill needed -> return Action in ReAct format
+                import json as _json
+                data = _json.loads(routing_response)
+                action = {"skill_name": data.get("skill_name", ""), "command": data.get("command", "")}
+                resp.text = f"Thought: I need to use a skill.\nAction: {_json.dumps(action)}"
         else:
-            resp.text = final_response
+            # After tool execution, return Answer
+            resp.text = f"Thought: Got the result.\nAnswer: {final_response}"
         return resp
 
     orch._router = MagicMock()
@@ -260,15 +272,15 @@ class TestCmd_TimeSkill:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
-            if call_count == 1:  # Skill router
-                resp.text = json.dumps({
-                    "use_skill": True,
-                    "skill_name": "time-skill",
-                    "command": f"{sys.executable} {time_script}",
-                })
-            else:  # Final response
+            if call_count == 1:  # ReAct: Action
+                resp.text = (
+                    'Thought: 시간을 확인해야 합니다.\n'
+                    f'Action: {{"skill_name": "time-skill", "command": "{sys.executable} {time_script}"}}'
+                )
+            else:  # ReAct: Answer (Observation in trace)
                 captured["system_prompt"] = request.system_prompt
-                resp.text = "현재 시각을 알려드리겠습니다."
+                captured["user_message"] = request.user_message
+                resp.text = "Thought: 시간을 확인했습니다.\nAnswer: 현재 시각을 알려드리겠습니다."
             return resp
 
         orch._router = MagicMock()
@@ -279,8 +291,9 @@ class TestCmd_TimeSkill:
 
         # ── 예상 행동: 스킬 실제 실행 ──
         assert response is not None
-        assert "Skill Execution Result" in captured["system_prompt"]
-        assert "현재 시각:" in captured["system_prompt"]
+        # Observation (with real output) should be in the trace
+        assert "Observation:" in captured["user_message"]
+        assert "현재 시각:" in captured["user_message"]
 
         # ── 데이터 변경: DB ──
         conn = sqlite3.connect(str(agent_dir / "conversations.db"))
@@ -316,14 +329,13 @@ class TestCmd_CalcSkill:
             resp = MagicMock()
             resp.backend_name = "gemini"
             if call_count == 1:
-                resp.text = json.dumps({
-                    "use_skill": True,
-                    "skill_name": "calc-skill",
-                    "command": f'{sys.executable} {calc_script} "123 * 456"',
-                })
+                resp.text = (
+                    'Thought: 계산을 수행해야 합니다.\n'
+                    f'Action: {{"skill_name": "calc-skill", "command": "{sys.executable} {calc_script} \\"123 * 456\\""}}'
+                )
             else:
-                captured["system_prompt"] = request.system_prompt
-                resp.text = "123 × 456 = 56,088 입니다."
+                captured["user_message"] = request.user_message
+                resp.text = "Thought: 계산 결과를 확인했습니다.\nAnswer: 123 x 456 = 56,088 입니다."
             return resp
 
         orch._router = MagicMock()
@@ -332,8 +344,8 @@ class TestCmd_CalcSkill:
         # ── 사용자 명령 ──
         response = await bot.handle_message("123 * 456 계산해줘", USER_ID, CHAT_ID)
 
-        # ── 예상 행동: 계산 결과가 컨텍스트에 포함 ──
-        assert "Result: 56088" in captured["system_prompt"]
+        # ── 예상 행동: 계산 결과가 Observation에 포함 ──
+        assert "Result: 56088" in captured["user_message"]
 
         # ── 데이터 변경 ──
         conn = sqlite3.connect(str(agent_dir / "conversations.db"))
@@ -368,13 +380,11 @@ class TestCmd_MultiTurn:
             resp = MagicMock()
             resp.backend_name = "gemini"
 
-            if call_count in (1, 3):  # Skill routers
-                resp.text = '{"use_skill": false}'
-            elif call_count == 2:  # 첫 번째 응답
-                resp.text = "네, 김철수님으로 기억하겠습니다."
-            else:  # 두 번째 응답
+            if call_count == 1:  # First message: Answer directly
+                resp.text = "Thought: 이름을 기억합니다.\nAnswer: 네, 김철수님으로 기억하겠습니다."
+            else:  # Second message: Answer directly
                 captured_messages.append(request.messages)
-                resp.text = "김철수님이라고 하셨습니다."
+                resp.text = "Thought: 이전 대화를 참고합니다.\nAnswer: 김철수님이라고 하셨습니다."
             return resp
 
         orch._router = MagicMock()
@@ -461,11 +471,9 @@ class TestCmd_NoSkillNeeded:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
-            if call_count == 1:
-                resp.text = '{"use_skill": false}'
-            else:
-                captured["system_prompt"] = request.system_prompt
-                resp.text = "파이썬은 프로그래밍 언어입니다."
+            captured["system_prompt"] = request.system_prompt
+            # Answer directly, no skill needed
+            resp.text = "Thought: 스킬이 필요 없습니다.\nAnswer: 파이썬은 프로그래밍 언어입니다."
             return resp
 
         orch._router = MagicMock()
@@ -476,8 +484,7 @@ class TestCmd_NoSkillNeeded:
 
         # ── 예상 행동: 스킬 미사용, 직접 응답 ──
         assert "파이썬" in response
-        assert "Skill Execution Result" not in captured["system_prompt"]
-        assert call_count == 2  # router + response only
+        assert call_count == 1  # single ReAct step (Answer directly)
 
         # ── 데이터 변경 ──
         conn = sqlite3.connect(str(agent_dir / "conversations.db"))
@@ -671,7 +678,7 @@ class TestCmd_DreamingMemoryUpdate:
         # ── 데이터 변경 1: MEMORY.md 내용 추가 ──
         updated = memory_file.read_text()
         assert len(updated) > len(original)
-        assert "Session" in updated
+        assert "##" in updated  # date-based header from dreaming summary
 
         # ── 데이터 변경 2: .bak 백업 생성 ──
         backups = list(agent_dir.glob("MEMORY.*.bak"))
@@ -713,12 +720,9 @@ class TestCmd_PersonaReflection:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
-            if call_count == 1:
-                resp.text = '{"use_skill": false}'
-            else:
-                captured["system_prompt"] = request.system_prompt
-                captured["messages"] = request.messages
-                resp.text = "저는 SimpleClaw입니다."
+            captured["system_prompt"] = request.system_prompt
+            captured["messages"] = request.messages
+            resp.text = "Thought: 자기소개를 합니다.\nAnswer: 저는 SimpleClaw입니다."
             return resp
 
         orch._router = MagicMock()

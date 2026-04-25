@@ -1,4 +1,17 @@
-"""Recipe discovery and YAML parsing."""
+"""레시피 탐색 및 YAML 파싱 모듈.
+
+레시피 디렉터리를 스캔하여 recipe.yaml(또는 .yml) 파일을 찾아
+RecipeDefinition으로 변환한다.
+
+동작 흐름:
+1. 지정된 디렉터리의 하위 폴더를 순회
+2. 각 폴더에서 recipe.yaml 또는 recipe.yml 파일을 탐색
+3. YAML을 파싱하여 파라미터, 스텝, 지시문을 추출
+
+설계 결정:
+- 파싱 실패 시 해당 레시피만 건너뛰고 경고 로그 출력
+- recipe.yaml과 recipe.yml 모두 지원하여 유연성 확보
+"""
 
 from __future__ import annotations
 
@@ -19,7 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 def discover_recipes(recipes_dir: str | Path) -> list[RecipeDefinition]:
-    """Discover all recipes in the given directory."""
+    """지정된 디렉터리에서 모든 레시피를 탐색한다.
+
+    Args:
+        recipes_dir: 레시피가 위치한 상위 디렉터리 경로
+
+    Returns:
+        파싱된 RecipeDefinition 목록 (파싱 실패한 레시피는 제외)
+    """
     recipes_path = Path(recipes_dir).expanduser()
     if not recipes_path.is_dir():
         logger.debug("Recipes directory does not exist: %s", recipes_path)
@@ -45,7 +65,17 @@ def discover_recipes(recipes_dir: str | Path) -> list[RecipeDefinition]:
 
 
 def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
-    """Load and parse a single recipe.yaml file."""
+    """단일 recipe.yaml 파일을 로드하고 파싱한다.
+
+    Args:
+        recipe_path: recipe.yaml 파일의 경로
+
+    Returns:
+        파싱된 RecipeDefinition
+
+    Raises:
+        RecipeParseError: YAML 파싱 실패 또는 필수 필드 누락 시
+    """
     recipe_path = Path(recipe_path)
 
     try:
@@ -61,7 +91,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
     if not name:
         raise RecipeParseError(f"Recipe missing 'name' field in {recipe_path}")
 
-    # Parse parameters
+    # 파라미터 파싱
     parameters = []
     for pdata in data.get("parameters", []):
         if isinstance(pdata, dict):
@@ -72,7 +102,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
                 default=str(pdata.get("default", "")),
             ))
 
-    # Parse steps
+    # 스텝 파싱
     steps = []
     for sdata in data.get("steps", []):
         if isinstance(sdata, dict):
@@ -93,5 +123,6 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         description=data.get("description", ""),
         parameters=parameters,
         steps=steps,
+        instructions=data.get("instructions", ""),
         recipe_dir=str(recipe_path.parent),
     )

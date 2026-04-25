@@ -1,4 +1,10 @@
-"""Speech-to-text processor using OpenAI Whisper API."""
+"""음성→텍스트(STT) 프로세서 — OpenAI Whisper API 사용.
+
+오디오 파일을 받아 Whisper API로 텍스트를 추출한다.
+- 지원 포맷 검증 (SUPPORTED_FORMATS)
+- 빈 파일은 빈 결과 즉시 반환
+- API 키 미설정 시 명확한 예외 발생
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class STTProcessor:
-    """Transcribes audio files to text."""
+    """오디오 파일을 텍스트로 변환하는 STT 프로세서."""
 
     def __init__(
         self,
@@ -30,17 +36,17 @@ class STTProcessor:
         self._max_duration = max_duration
 
     async def transcribe(self, audio_path: str | Path) -> STTResult:
-        """Transcribe an audio file to text.
+        """오디오 파일을 텍스트로 변환한다.
 
         Args:
-            audio_path: Path to the audio file.
+            audio_path: 오디오 파일 경로.
 
         Returns:
-            STTResult with transcribed text.
+            변환된 텍스트를 담은 STTResult.
 
         Raises:
-            UnsupportedFormatError: If the audio format is not supported.
-            STTError: If transcription fails.
+            UnsupportedFormatError: 지원하지 않는 오디오 포맷인 경우.
+            STTError: 변환 실패 시.
         """
         audio_path = Path(audio_path)
         start = time.time()
@@ -48,7 +54,7 @@ class STTProcessor:
         if not audio_path.is_file():
             raise STTError(f"Audio file not found: {audio_path}")
 
-        # Check format
+        # 포맷 검증
         suffix = audio_path.suffix.lstrip(".").lower()
         if suffix not in SUPPORTED_FORMATS:
             raise UnsupportedFormatError(
@@ -56,7 +62,7 @@ class STTProcessor:
                 f"Supported: {', '.join(sorted(SUPPORTED_FORMATS))}"
             )
 
-        # Check file size (empty files)
+        # 빈 파일은 API 호출 없이 빈 결과 반환
         if audio_path.stat().st_size == 0:
             return STTResult(text="", duration_seconds=0.0)
 

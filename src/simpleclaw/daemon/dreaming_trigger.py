@@ -1,4 +1,13 @@
-"""Dreaming trigger: condition evaluator for automatic dreaming pipeline."""
+"""드리밍 트리거: 자동 드리밍 파이프라인의 실행 조건 평가기.
+
+드리밍(Dreaming)은 사용자가 비활성 상태일 때 대화 내용을 정리·요약하는 백그라운드 작업이다.
+이 모듈은 드리밍 실행 여부를 판단하고, 조건 충족 시 파이프라인을 기동한다.
+
+실행 조건 (모두 충족해야 함):
+1. 오늘 이미 드리밍을 실행하지 않았을 것 (하루 1회 제한)
+2. 현재 시각이 설정된 야간 시간(overnight_hour) 이후일 것
+3. 최근 사용자 입력이 idle_threshold 초 이상 경과했을 것
+"""
 
 from __future__ import annotations
 
@@ -15,13 +24,12 @@ LAST_DREAMING_KEY = "last_dreaming_timestamp"
 
 
 class DreamingTrigger:
-    """Evaluates conditions for automatic dreaming and triggers the pipeline.
+    """자동 드리밍 조건을 평가하고, 충족 시 파이프라인을 기동한다.
 
-    Conditions (both must be true):
-    1. Last user input was more than `idle_threshold` seconds ago.
-    2. Current time has passed the configured `overnight_hour`.
-
-    Additionally, dreaming only runs once per calendar day.
+    실행 조건 (모두 충족해야 함):
+    1. 마지막 사용자 입력이 idle_threshold 초 이상 경과했을 것
+    2. 현재 시각이 overnight_hour 이후일 것
+    3. 하루 1회만 실행 (같은 날짜에 이미 실행했으면 건너뜀)
     """
 
     def __init__(
@@ -39,24 +47,24 @@ class DreamingTrigger:
         self._idle_threshold = idle_threshold
 
     async def should_run(self) -> bool:
-        """Check if dreaming conditions are met."""
+        """드리밍 실행 조건이 충족되었는지 확인한다."""
         now = datetime.now()
 
-        # Check 1: Already ran today?
+        # 조건 1: 오늘 이미 실행했는가?
         last_dreaming = self._get_last_dreaming()
         if last_dreaming and last_dreaming.date() == now.date():
             return False
 
-        # Check 2: Past overnight hour?
+        # 조건 2: 야간 시간대에 진입했는가?
         if now.hour < self._overnight_hour:
             return False
 
-        # Check 3: No new messages since last dreaming?
+        # 조건 3: 처리할 메시지가 존재하는가?
         messages = self._conv_store.get_recent(limit=1)
         if not messages:
             return False
 
-        # Check 4: Last user input idle for threshold?
+        # 조건 4: 사용자가 충분히 오래 비활성 상태인가?
         last_input = messages[-1].timestamp
         if last_input is None:
             return False
@@ -68,7 +76,7 @@ class DreamingTrigger:
         return True
 
     async def execute(self) -> None:
-        """Run the dreaming pipeline and record the timestamp."""
+        """드리밍 파이프라인을 실행하고 완료 시각을 기록한다."""
         logger.info("Dreaming trigger: conditions met, starting dreaming pipeline.")
 
         last_dreaming = self._get_last_dreaming()
@@ -86,7 +94,7 @@ class DreamingTrigger:
             logger.exception("Dreaming pipeline failed")
 
     def _get_last_dreaming(self) -> datetime | None:
-        """Get the last dreaming timestamp from daemon state."""
+        """데몬 상태에서 마지막 드리밍 실행 시각을 조회한다."""
         value = self._daemon_store.get_state(LAST_DREAMING_KEY)
         if value:
             try:

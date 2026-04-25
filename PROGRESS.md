@@ -17,3 +17,9 @@
 ## Phase 4: Expansion (플랫폼 고도화)
 - [x] STT/TTS 인터페이스
 - [x] 로깅 및 웹 대시보드
+
+## Phase 5: Security & Multi-Turn (보안 강화 및 자율 실행)
+- [x] 위험 명령 감지 Guard (35개+ 패턴)
+- [x] Subprocess 시크릿 스트리핑
+- [x] 프로세스 그룹 격리 (os.setsid + killpg)
+- [x] 멀티턴 도구 실행 루프

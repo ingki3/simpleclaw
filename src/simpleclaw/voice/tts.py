@@ -1,4 +1,10 @@
-"""Text-to-speech processor using OpenAI TTS API."""
+"""텍스트→음성(TTS) 프로세서 — OpenAI TTS API 사용.
+
+텍스트를 음성 오디오 파일로 합성한다.
+- 최대 텍스트 길이 초과 시 자동 잘라내기
+- 출력 경로 미지정 시 임시 파일 생성
+- API 키 미설정 시 명확한 예외 발생
+"""
 
 from __future__ import annotations
 
@@ -12,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class TTSProcessor:
-    """Synthesizes text to speech audio."""
+    """텍스트를 음성 오디오로 합성하는 TTS 프로세서."""
 
     def __init__(
         self,
@@ -35,24 +41,24 @@ class TTSProcessor:
         text: str,
         output_path: str | Path | None = None,
     ) -> TTSResult | None:
-        """Synthesize text to speech audio.
+        """텍스트를 음성 오디오로 합성한다.
 
         Args:
-            text: Text to convert to speech.
-            output_path: Where to save the audio file. If None, uses a temp path.
+            text: 음성으로 변환할 텍스트.
+            output_path: 오디오 파일 저장 경로. None이면 임시 파일을 생성한다.
 
         Returns:
-            TTSResult with the audio file path, or None if text is empty.
+            오디오 파일 경로를 담은 TTSResult, 텍스트가 비어 있으면 None.
 
         Raises:
-            TTSError: If synthesis fails.
+            TTSError: 합성 실패 시.
         """
         if not text or not text.strip():
             return None
 
         start = time.time()
 
-        # Truncate if needed
+        # 최대 길이 초과 시 잘라내기
         if len(text) > self._max_text_length:
             text = text[: self._max_text_length]
             logger.warning(
@@ -84,7 +90,7 @@ class TTSProcessor:
                 response_format=self._output_format,
             )
 
-            # Write audio data
+            # 응답 오디오 데이터를 파일로 저장
             audio_data = response.read()
             output_path.write_bytes(audio_data)
 

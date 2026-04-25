@@ -1,7 +1,20 @@
-"""Dreaming pipeline: summarize conversations and update core memory."""
+"""드리밍 파이프라인: 대화 이력을 요약하여 핵심 기억(MEMORY.md)과 사용자 프로필(USER.md)을 갱신하는 모듈.
+
+주요 동작 흐름:
+1. run() 호출 시 기존 MEMORY.md / USER.md를 백업(.bak)한다.
+2. 마지막 드리밍 이후 미처리 대화 메시지를 수집한다.
+3. LLM에게 대화를 분석시켜 기억 요약(memory)과 사용자 인사이트(user_insights)를 추출한다.
+4. 결과를 각각 MEMORY.md, USER.md에 추가(append)한다.
+
+설계 결정:
+- LLM 호출 실패 시 단순 텍스트 요약(fallback)으로 대체하여 파이프라인이 중단되지 않도록 한다.
+- 대화 텍스트는 8000자로 잘라 LLM 컨텍스트 초과를 방지한다.
+- 백업 파일명에 타임스탬프를 포함하여 여러 번 드리밍해도 이전 백업이 덮어씌워지지 않는다.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from datetime import datetime
@@ -12,60 +25,176 @@ from simpleclaw.memory.conversation_store import ConversationStore
 
 logger = logging.getLogger(__name__)
 
+_DREAMING_PROMPT = """\
+다음 대화 내역을 분석하여 두 가지를 JSON으로 추출하세요.
+
+1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
+   - 날짜 헤더 포함 (## {date} 형식)
+   - 사실 기반만 (의견/추측 금지)
+   - 반복되는 주제나 관심사를 기록 (패턴 파악용)
+
+2. "user_insights": 사용자에 대해 새로 알게 된 정보 (선호도, 관심사, 습관)
+   - 이미 알고 있는 정보(기존 USER.md 내용)는 제외
+   - 추측이 아닌 대화에서 명확히 드러난 정보만
+   - 민감한 개인정보(비밀번호, 금융정보)는 절대 저장하지 않음
+   - 없으면 빈 문자열
+
+## 기존 USER.md 내용
+{existing_user_md}
+
+## 대화 내역
+{conversations}
+
+JSON 형식으로만 응답하세요:
+{{"memory": "## {date}\\n- 항목1\\n- 항목2", "user_insights": "- 새 정보1\\n- 새 정보2"}}"""
+
 
 class DreamingPipeline:
-    """Processes conversation history into core memory summaries.
+    """대화 이력을 분석하여 핵심 기억 요약을 생성하는 파이프라인.
 
-    Creates .bak backups before modifying persona files to allow
-    rollback in case of hallucination or corruption.
+    LLM을 사용해 대화를 분석하고, MEMORY.md와 USER.md를 갱신한다.
+    파일 수정 전 .bak 백업을 생성하여 데이터 손실을 방지한다.
     """
 
     def __init__(
         self,
         conversation_store: ConversationStore,
         memory_file: str | Path,
+        user_file: str | Path | None = None,
+        llm_router=None,
+        dreaming_model: str = "",
     ) -> None:
+        """드리밍 파이프라인을 초기화한다.
+
+        Args:
+            conversation_store: 대화 이력 저장소 인스턴스.
+            memory_file: MEMORY.md 파일 경로.
+            user_file: USER.md 파일 경로. None이면 사용자 인사이트를 저장하지 않는다.
+            llm_router: LLM 호출을 위한 라우터. None이면 폴백 요약을 사용한다.
+            dreaming_model: 드리밍에 사용할 LLM 모델명. 빈 문자열이면 라우터 기본값 사용.
+        """
         self._store = conversation_store
         self._memory_file = Path(memory_file)
+        self._user_file = Path(user_file) if user_file else None
+        self._router = llm_router
+        self._dreaming_model = dreaming_model or None
 
-    def create_backup(self) -> Path | None:
-        """Create a .bak backup of the memory file before modification.
+    def create_backup(self, file_path: Path) -> Path | None:
+        """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
 
-        Returns the backup path, or None if the file doesn't exist.
+        Args:
+            file_path: 백업할 원본 파일 경로.
+
+        Returns:
+            생성된 백업 파일 경로. 원본 파일이 없으면 None.
         """
-        if not self._memory_file.is_file():
+        if not file_path.is_file():
             return None
 
-        backup_path = self._memory_file.with_suffix(
+        backup_path = file_path.with_suffix(
             f".{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
         )
-        shutil.copy2(self._memory_file, backup_path)
-        logger.info("Created memory backup: %s", backup_path)
+        shutil.copy2(file_path, backup_path)
+        logger.info("Created backup: %s", backup_path)
         return backup_path
 
     def collect_unprocessed(self, last_dreaming: datetime | None = None) -> list:
-        """Collect conversation messages since last dreaming session."""
+        """마지막 드리밍 이후 미처리 대화 메시지를 수집한다.
+
+        Args:
+            last_dreaming: 마지막 드리밍 시각. None이면 최근 50개 메시지를 가져온다.
+
+        Returns:
+            처리 대상 ConversationMessage 리스트.
+        """
         if last_dreaming:
             return self._store.get_since(last_dreaming)
         return self._store.get_recent(limit=50)
 
-    def summarize(self, messages: list) -> str:
-        """Generate a summary of conversation messages.
+    async def summarize(self, messages: list) -> dict:
+        """LLM을 사용하여 대화 요약을 생성한다.
 
-        Note: In production, this would call an LLM to generate the
-        summary. For now, it produces a simple text-based summary.
+        LLM 호출이 실패하거나 라우터가 없으면 단순 텍스트 요약으로 폴백한다.
+
+        Args:
+            messages: 요약 대상 대화 메시지 리스트.
+
+        Returns:
+            'memory'와 'user_insights' 키를 포함하는 딕셔너리.
         """
         if not messages:
-            return ""
+            return {"memory": "", "user_insights": ""}
 
+        if self._router:
+            try:
+                return await self._summarize_with_llm(messages)
+            except Exception:
+                logger.exception("LLM summarization failed, using fallback")
+
+        return {"memory": self._summarize_fallback(messages), "user_insights": ""}
+
+    async def _summarize_with_llm(self, messages: list) -> dict:
+        """LLM을 호출하여 대화를 분석하고 기억 요약과 사용자 인사이트를 추출한다."""
+        from simpleclaw.llm.models import LLMRequest
+
+        existing_user_md = ""
+        if self._user_file and self._user_file.is_file():
+            existing_user_md = self._user_file.read_text(encoding="utf-8")
+
+        conv_lines = []
+        for msg in messages:
+            role = msg.role.value.upper()
+            conv_lines.append(f"[{role}] {msg.content}")
+        # LLM 컨텍스트 윈도우 초과를 방지하기 위해 8000자로 제한
+        conversations = "\n".join(conv_lines)[:8000]
+
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        prompt = _DREAMING_PROMPT.format(
+            existing_user_md=existing_user_md or "(없음)",
+            conversations=conversations,
+            date=date_str,
+        )
+
+        request = LLMRequest(
+            system_prompt="You are a conversation analyzer. Respond with valid JSON only.",
+            user_message=prompt,
+            backend_name=self._dreaming_model,
+        )
+        response = await self._router.send(request)
+        return self._parse_llm_result(response.text.strip())
+
+    def _parse_llm_result(self, raw: str) -> dict:
+        """LLM의 JSON 응답을 파싱하여 memory와 user_insights를 추출한다.
+
+        LLM이 마크다운 코드 블록으로 감싼 경우에도 처리할 수 있다.
+        JSON 파싱 실패 시 원본 텍스트 앞 500자를 memory로 사용한다.
+        """
+        # LLM이 ```json ... ``` 형태로 감싸는 경우 코드 블록 내용만 추출
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        try:
+            result = json.loads(raw)
+            return {
+                "memory": result.get("memory", ""),
+                "user_insights": result.get("user_insights", ""),
+            }
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse dreaming JSON: %s", raw[:200])
+            return {"memory": raw[:500], "user_insights": ""}
+
+    def _summarize_fallback(self, messages: list) -> str:
+        """LLM 없이 단순 텍스트 기반 요약을 생성한다. 각 메시지의 첫 5단어를 토픽으로 추출."""
         lines = []
         date_str = datetime.now().strftime("%Y-%m-%d")
-        lines.append(f"## Session {date_str}")
+        lines.append(f"## {date_str}")
         lines.append("")
 
         topics = set()
         for msg in messages:
-            # Extract key phrases (simple heuristic)
             words = msg.content.split()[:10]
             if words:
                 topics.add(" ".join(words[:5]))
@@ -76,7 +205,10 @@ class DreamingPipeline:
         return "\n".join(lines)
 
     def append_to_memory(self, summary: str) -> None:
-        """Append a dreaming summary to MEMORY.md."""
+        """드리밍 요약을 MEMORY.md 파일 끝에 추가한다.
+
+        파일이 없으면 '# Memory' 헤더와 함께 새로 생성한다.
+        """
         if not summary:
             return
 
@@ -86,39 +218,79 @@ class DreamingPipeline:
         if self._memory_file.is_file():
             existing = self._memory_file.read_text(encoding="utf-8")
 
-        if existing and not existing.endswith("\n"):
+        if not existing.strip():
+            existing = "# Memory\n"
+
+        if not existing.endswith("\n"):
             existing += "\n"
 
         new_content = f"{existing}\n{summary}\n"
         self._memory_file.write_text(new_content, encoding="utf-8")
         logger.info("Updated memory file: %s", self._memory_file)
 
-    async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
-        """Execute the full dreaming pipeline.
+    def update_user_file(self, insights: str) -> None:
+        """새로운 사용자 인사이트를 USER.md 파일에 추가한다.
 
-        1. Create backup of MEMORY.md
-        2. Collect unprocessed messages
-        3. Generate summary
-        4. Append to MEMORY.md
+        날짜별 섹션 헤더와 함께 인사이트를 기록한다.
+        user_file이 설정되지 않았거나 insights가 비어있으면 아무 작업도 하지 않는다.
         """
-        # Step 1: Backup
-        self.create_backup()
+        if not insights or not self._user_file:
+            return
 
-        # Step 2: Collect
+        self._user_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = ""
+        if self._user_file.is_file():
+            existing = self._user_file.read_text(encoding="utf-8")
+
+        if not existing.strip():
+            existing = "# User Profile\n"
+
+        if not existing.endswith("\n"):
+            existing += "\n"
+
+        new_content = f"{existing}\n## Dreaming Insights ({datetime.now().strftime('%Y-%m-%d')})\n{insights}\n"
+        self._user_file.write_text(new_content, encoding="utf-8")
+        logger.info("Updated user file: %s", self._user_file)
+
+    async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
+        """전체 드리밍 파이프라인을 실행한다.
+
+        1. MEMORY.md와 USER.md의 백업을 생성한다.
+        2. 미처리 대화 메시지를 수집한다.
+        3. LLM을 통해 요약을 생성한다.
+        4. 기억 요약을 MEMORY.md에 추가한다.
+        5. 사용자 인사이트를 USER.md에 추가한다 (있는 경우).
+
+        Args:
+            last_dreaming: 마지막 드리밍 시각. None이면 최근 메시지를 대상으로 한다.
+
+        Returns:
+            생성된 MemoryEntry 객체. 처리할 메시지가 없거나 결과가 비어있으면 None.
+        """
+        self.create_backup(self._memory_file)
+        if self._user_file:
+            self.create_backup(self._user_file)
+
         messages = self.collect_unprocessed(last_dreaming)
         if not messages:
             logger.info("No new messages to process for dreaming.")
             return None
 
-        # Step 3: Summarize
-        summary = self.summarize(messages)
-        if not summary:
+        result = await self.summarize(messages)
+        memory_summary = result.get("memory", "")
+        user_insights = result.get("user_insights", "")
+
+        if not memory_summary and not user_insights:
             return None
 
-        # Step 4: Append
-        self.append_to_memory(summary)
+        if memory_summary:
+            self.append_to_memory(memory_summary)
+
+        if user_insights:
+            self.update_user_file(user_insights)
 
         return MemoryEntry(
-            summary=summary,
+            summary=memory_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",
         )

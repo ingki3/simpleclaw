@@ -17,11 +17,42 @@ tests/
 
 ## Commands
 
-cd src && pytest && ruff check .
+```bash
+# 전체 테스트
+.venv/bin/python -m pytest tests/
+
+# 단위 테스트만 (빠름, CI 필수)
+.venv/bin/python -m pytest tests/unit/
+
+# 특정 모듈 테스트
+.venv/bin/python -m pytest tests/unit/test_agent.py -v
+
+# 린터
+.venv/bin/python -m ruff check src/
+```
 
 ## Code Style
 
 Python 3.11+: Follow standard conventions
+
+## 주석 작성 규칙
+
+코드 주석은 한국어로 작성하며, 다음 3단계로 구분한다.
+
+### 1. 파일 레벨 (모듈 docstring)
+- 파일 최상단에 `"""..."""` 형식으로 작성
+- 모듈의 역할, 주요 동작 흐름, 설계 결정(예: hot-reload 정책)을 기술
+- 외부에서 이 파일을 처음 접하는 개발자가 전체 맥락을 파악할 수 있어야 함
+
+### 2. 함수/메서드 레벨 (docstring)
+- 모든 public/private 메서드에 한국어 docstring 작성
+- 한 줄 요약 + (필요 시) 상세 설명, Args, Returns 포함
+- "무엇을 하는가"보다 "왜 이렇게 하는가"에 중점
+
+### 3. 인라인 주석 (코드 라인)
+- 로직의 의도가 코드만으로 불명확한 곳에만 추가
+- `# 왜(why)` 중심으로 작성, `# 무엇(what)` 반복은 지양
+- 분기·예외 처리·보안 체크 등 판단 근거가 필요한 곳에 집중
 
 ## Recent Changes
 - 006-heartbeat-cron-scheduler: Added Python 3.11+ + `apscheduler>=3.10` (scheduling), existing `simpleclaw` modules (memory, recipes)
@@ -31,6 +62,46 @@ Python 3.11+: Follow standard conventions
 <!-- MANUAL ADDITIONS START -->
 ## 개발 작업 시 참고
 - AGENT.md 파일의 지침을 참고할 것
+- TODO.md 파일의 백로그와 진행 상태를 참고할 것
+
+## TODO.md 관리 규칙
+
+`TODO.md`는 프로젝트의 백로그/진행/완료 상태를 추적하는 단일 소스 오브 트루스(SSOT)이다.
+
+1. **작업 시작 전**: TODO.md의 Backlog에서 작업을 확인하고, `[>]`로 변경하여 In Progress 섹션으로 이동
+2. **작업 완료 시**: `[x]`로 변경하여 Done 섹션으로 이동, 완료 날짜 기록
+3. **새 작업 발견 시**: Backlog 섹션에 `[ ]`로 추가
+4. **블로커 발생 시**: `[!]`로 변경하고 사유를 주석으로 기록
+5. **커밋 시**: TODO.md 변경사항도 함께 커밋
+
+## 테스트 계층
+
+| 계층 | 경로 | 목적 | API 키 필요 |
+|------|------|------|-------------|
+| 단위 테스트 | `tests/unit/` | 개별 모듈 로직 검증 | 아니오 |
+| 통합 테스트 | `tests/integration/` | 모듈 간 연동 검증 | 일부 |
+| 시나리오 테스트 | `tests/test_*_scenarios.py` | 실제 사용 시나리오 | 예 |
+| E2E 테스트 | `tests/test_e2e_*.py` | 전체 파이프라인 | 예 |
+
+## 테스트 작성 규칙
+
+1. **새 기능 추가 시 반드시 단위 테스트 동반**
+2. **LLM 호출이 필요한 테스트는 router를 mock** — `orchestrator._router.send = AsyncMock(...)`
+3. **ReAct 응답 형식 사용** — mock 응답은 `"Thought: ...\nAnswer: ..."` 또는 `"Thought: ...\nAction: {...}"` 형식
+4. **스킬 실행 테스트는 subprocess를 mock**
+5. **async 테스트는 `@pytest.mark.asyncio` 필수**
+6. **기능 변경 후 반드시 `pytest tests/unit/` 통과 확인** 후 전체 테스트 실행
+7. **Cron 테스트는 `process_cron_message()` 사용** — 대화 히스토리와 격리됨
+
+## Agent 실행
+
+```bash
+# 포그라운드
+.venv/bin/python scripts/run_bot.py
+
+# 백그라운드
+nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
+```
 
 ## Git 브랜치 관리 규칙
 

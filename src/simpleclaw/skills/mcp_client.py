@@ -1,4 +1,17 @@
-"""MCP (Model Context Protocol) client manager."""
+"""MCP (Model Context Protocol) 클라이언트 관리자.
+
+외부 MCP 서버에 연결하여 도구(tool)를 검색하고 호출하는 기능을 제공한다.
+
+동작 흐름:
+1. 설정에 정의된 MCP 서버들에 stdio 방식으로 연결
+2. 각 서버에서 제공하는 도구 목록을 로드하여 내부 레지스트리에 등록
+3. 에이전트 요청 시 해당 도구를 찾아 MCP 서버에 호출을 위임
+
+설계 결정:
+- 서버 연결 실패 시 해당 서버만 건너뛰고 나머지는 계속 연결 (부분 장애 허용)
+- 도구 호출마다 새 세션을 생성하므로 장기 연결 유지 부담 없음
+- mcp 패키지 미설치 시 ImportError를 MCPConnectionError로 변환하여 명확한 에러 메시지 제공
+"""
 
 from __future__ import annotations
 
@@ -15,18 +28,21 @@ logger = logging.getLogger(__name__)
 
 
 class MCPManager:
-    """Manages connections to MCP servers and provides tool access."""
+    """MCP 서버 연결을 관리하고 도구 접근을 제공하는 클래스."""
 
     def __init__(self) -> None:
-        self._tools: dict[str, ToolDefinition] = {}
-        self._connected_servers: list[str] = []
-        self._server_configs: dict[str, dict] = {}
+        self._tools: dict[str, ToolDefinition] = {}  # 도구 이름 -> 도구 정의
+        self._connected_servers: list[str] = []  # 연결 성공한 서버 이름 목록
+        self._server_configs: dict[str, dict] = {}  # 서버 이름 -> 설정 (재연결 시 사용)
 
     async def connect_servers(self, mcp_config: dict) -> None:
-        """Connect to MCP servers defined in config.
+        """설정에 정의된 MCP 서버들에 연결한다.
 
-        Failures are logged and skipped — the agent continues without
-        that server's tools.
+        개별 서버 연결 실패 시 로그를 남기고 건너뛴다 — 에이전트는
+        해당 서버의 도구 없이 계속 동작한다.
+
+        Args:
+            mcp_config: MCP 설정 딕셔너리 (servers 키 포함)
         """
         servers = mcp_config.get("servers", {})
         if not servers:
@@ -44,7 +60,7 @@ class MCPManager:
                 )
 
     async def _connect_server(self, name: str, config: dict) -> None:
-        """Connect to a single MCP server and load its tools."""
+        """단일 MCP 서버에 연결하고 제공하는 도구들을 로드한다."""
         transport = config.get("transport", "stdio")
         command = config.get("command")
 
@@ -96,7 +112,18 @@ class MCPManager:
     async def call_tool(
         self, tool_name: str, arguments: dict | None = None
     ) -> str:
-        """Execute an MCP tool by name and return the result."""
+        """이름으로 MCP 도구를 실행하고 결과를 반환한다.
+
+        Args:
+            tool_name: 실행할 도구의 이름
+            arguments: 도구에 전달할 인자 딕셔너리
+
+        Returns:
+            도구 실행 결과 텍스트
+
+        Raises:
+            MCPConnectionError: 도구를 찾을 수 없거나 실행에 실패한 경우
+        """
         tool = self._tools.get(tool_name)
         if tool is None:
             raise MCPConnectionError(f"MCP tool '{tool_name}' not found")
@@ -140,9 +167,9 @@ class MCPManager:
             ) from e
 
     def list_tools(self) -> list[ToolDefinition]:
-        """Return all tools from connected MCP servers."""
+        """연결된 모든 MCP 서버의 도구 목록을 반환한다."""
         return list(self._tools.values())
 
     def get_connected_servers(self) -> list[str]:
-        """Return names of successfully connected servers."""
+        """연결에 성공한 서버들의 이름 목록을 반환한다."""
         return list(self._connected_servers)

@@ -1,13 +1,23 @@
-"""Skill script executor via async subprocess."""
+"""스킬 스크립트 실행기: 비동기 서브프로세스를 통해 스킬을 실행한다.
+
+동작 흐름:
+1. 스킬의 script_path 유효성을 검증
+2. 파일 확장자에 따라 적절한 인터프리터로 실행 명령 구성
+3. 비동기 서브프로세스로 실행하고, 타임아웃 및 에러를 처리
+
+설계 결정:
+- 보안을 위해 filter_env()로 환경 변수를 필터링하고, 프로세스 그룹을 분리
+- 타임아웃 시 프로세스 그룹 전체를 종료하여 좀비 프로세스를 방지
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import sys
 from pathlib import Path
 
+from simpleclaw.security import filter_env, get_preexec_fn, kill_process_group
 from simpleclaw.skills.models import (
     SkillDefinition,
     SkillExecutionError,
@@ -24,15 +34,20 @@ async def execute_skill(
     args: list[str] | None = None,
     timeout: int = 60,
 ) -> SkillResult:
-    """Execute a skill's target script as an async subprocess.
+    """스킬의 대상 스크립트를 비동기 서브프로세스로 실행한다.
 
     Args:
-        skill: The skill definition to execute.
-        args: Optional arguments to pass to the script.
-        timeout: Maximum execution time in seconds.
+        skill: 실행할 스킬 정의
+        args: 스크립트에 전달할 선택적 인자 목록
+        timeout: 최대 실행 시간 (초)
 
     Returns:
-        SkillResult with output, exit code, and error info.
+        출력, 종료 코드, 에러 정보를 포함하는 SkillResult
+
+    Raises:
+        SkillNotFoundError: 스크립트 경로가 없거나 파일이 존재하지 않을 때
+        SkillTimeoutError: 실행 시간이 timeout을 초과할 때
+        SkillExecutionError: 스크립트가 비정상 종료(exit code != 0)할 때
     """
     if not skill.script_path:
         raise SkillNotFoundError(f"Skill '{skill.name}' has no script path defined")
@@ -43,7 +58,7 @@ async def execute_skill(
             f"Script not found for skill '{skill.name}': {skill.script_path}"
         )
 
-    # Determine how to run the script
+    # 파일 확장자에 따라 실행 명령 구성
     cmd = _build_command(script)
     if args:
         cmd.extend(args)
@@ -54,6 +69,8 @@ async def execute_skill(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=skill.skill_dir or None,
+            env=filter_env(),
+            preexec_fn=get_preexec_fn(),
         )
 
         stdout, stderr = await asyncio.wait_for(
@@ -61,8 +78,7 @@ async def execute_skill(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        await kill_process_group(process)
         raise SkillTimeoutError(
             f"Skill '{skill.name}' timed out after {timeout}s"
         )
@@ -94,7 +110,16 @@ async def execute_skill(
 
 
 def _build_command(script: Path) -> list[str]:
-    """Build the command to execute a script based on its extension."""
+    """파일 확장자에 따라 적절한 실행 명령을 구성한다.
+
+    .py -> python, .sh -> bash, .js -> node, 그 외 -> 직접 실행
+
+    Args:
+        script: 실행할 스크립트 파일 경로
+
+    Returns:
+        실행 명령 리스트 (예: ["python", "/path/to/script.py"])
+    """
     suffix = script.suffix.lower()
     if suffix == ".py":
         return [sys.executable, str(script)]
@@ -103,5 +128,5 @@ def _build_command(script: Path) -> list[str]:
     elif suffix == ".js":
         return ["node", str(script)]
     else:
-        # Try to run it directly (must have execute permission)
+        # 직접 실행 시도 (실행 권한 필요)
         return [str(script)]

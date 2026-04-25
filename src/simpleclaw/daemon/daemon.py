@@ -1,4 +1,15 @@
-"""Agent daemon: main orchestrator with PID lock, event loop, and scheduler."""
+"""에이전트 데몬: PID 잠금, 이벤트 루프, 스케줄러를 관리하는 메인 오케스트레이터.
+
+데몬의 생명주기를 관리한다:
+1. PID 파일로 단일 인스턴스를 보장 (중복 실행 방지)
+2. APScheduler 기반 하트비트 틱으로 주기적 상태 점검
+3. 크론 작업, 대기 상태, 드리밍 트리거 등 서브시스템 초기화 및 조율
+
+설계 결정:
+- PID 파일 기반 잠금: 외부 의존 없이 프로세스 단일성 보장
+- 컴포넌트 지연 초기화: start() 호출 시에만 리소스 할당
+- 비동기 콜백 체인: 하트비트 틱에 드리밍/타임아웃 검사를 연결
+"""
 
 from __future__ import annotations
 
@@ -24,9 +35,11 @@ logger = logging.getLogger(__name__)
 
 
 class AgentDaemon:
-    """Persistent background daemon hosting heartbeat, scheduler, and event loop."""
+    """하트비트, 스케줄러, 이벤트 루프를 호스팅하는 영구 백그라운드 데몬."""
 
-    def __init__(self, config_path: str | Path) -> None:
+    def __init__(
+        self, config_path: str | Path, agent_orchestrator=None,
+    ) -> None:
         self._config_path = Path(config_path)
         self._config = load_daemon_config(config_path)
         self._pid_file = Path(self._config["pid_file"])
@@ -34,6 +47,7 @@ class AgentDaemon:
         self._status_file = Path(self._config["status_file"])
         self._heartbeat_interval = self._config["heartbeat_interval"]
 
+        self._agent = agent_orchestrator
         self._store: DaemonStore | None = None
         self._heartbeat: HeartbeatMonitor | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -45,41 +59,49 @@ class AgentDaemon:
 
     @property
     def store(self) -> DaemonStore:
+        """데몬 저장소 인스턴스를 반환한다. 데몬 미시작 시 RuntimeError."""
         if self._store is None:
             raise RuntimeError("Daemon not started")
         return self._store
 
     @property
     def heartbeat(self) -> HeartbeatMonitor:
+        """하트비트 모니터 인스턴스를 반환한다. 데몬 미시작 시 RuntimeError."""
         if self._heartbeat is None:
             raise RuntimeError("Daemon not started")
         return self._heartbeat
 
     @property
     def cron_scheduler(self) -> CronScheduler:
+        """크론 스케줄러 인스턴스를 반환한다. 데몬 미시작 시 RuntimeError."""
         if self._cron_scheduler is None:
             raise RuntimeError("Daemon not started")
         return self._cron_scheduler
 
     @property
     def scheduler(self) -> AsyncIOScheduler:
+        """APScheduler 인스턴스를 반환한다. 데몬 미시작 시 RuntimeError."""
         if self._scheduler is None:
             raise RuntimeError("Daemon not started")
         return self._scheduler
 
     @property
     def config(self) -> dict:
+        """데몬 설정 딕셔너리를 반환한다."""
         return self._config
 
     @property
     def dreaming_trigger(self) -> DreamingTrigger | None:
+        """드리밍 트리거 인스턴스를 반환한다 (미설정 시 None)."""
         return self._dreaming_trigger
 
     @property
     def wait_state_manager(self) -> WaitStateManager | None:
+        """대기 상태 관리자 인스턴스를 반환한다 (미시작 시 None)."""
         return self._wait_state_manager
 
     def is_running(self) -> bool:
+        """데몬이 현재 실행 중인지 여부를 반환한다."""
         return self._running
 
     def setup_dreaming(
@@ -87,7 +109,7 @@ class AgentDaemon:
         conversation_store,
         dreaming_pipeline,
     ) -> None:
-        """Configure automatic dreaming trigger (call after start())."""
+        """자동 드리밍 트리거를 설정한다 (start() 이후에 호출해야 함)."""
         if self._store is None:
             raise RuntimeError("Daemon not started")
 
@@ -103,7 +125,7 @@ class AgentDaemon:
             self._heartbeat.add_tick_callback(self._dreaming_check)
 
     async def start(self) -> None:
-        """Start the daemon: acquire lock, init components, begin tick loop."""
+        """데몬을 시작한다: PID 잠금 획득, 컴포넌트 초기화, 틱 루프 시작."""
         self._acquire_lock()
 
         try:
@@ -115,7 +137,8 @@ class AgentDaemon:
 
             self._scheduler = AsyncIOScheduler()
             self._cron_scheduler = CronScheduler(
-                self._store, self._scheduler
+                self._store, self._scheduler,
+                agent_orchestrator=self._agent,
             )
 
             self._scheduler.add_job(
@@ -128,10 +151,10 @@ class AgentDaemon:
             self._scheduler.start()
             self._running = True
 
-            # Load persisted cron jobs
+            # DB에 저장된 크론 작업을 APScheduler에 복원
             self._cron_scheduler.load_persisted_jobs()
 
-            # Setup wait state manager with timeout checking
+            # 대기 상태 관리자 초기화 및 타임아웃 검사 등록
             wait_config = self._config.get("wait_state", {})
             self._wait_state_manager = WaitStateManager(
                 self._store,
@@ -149,7 +172,7 @@ class AgentDaemon:
                 self._heartbeat_interval,
             )
 
-            # Run initial tick
+            # 시작 직후 초기 틱 1회 실행
             await self._heartbeat_tick()
 
         except Exception:
@@ -157,7 +180,7 @@ class AgentDaemon:
             raise
 
     async def stop(self) -> None:
-        """Gracefully stop the daemon."""
+        """데몬을 안전하게 종료한다."""
         if not self._running:
             return
 
@@ -173,7 +196,7 @@ class AgentDaemon:
         logger.info("Daemon stopped.")
 
     async def _heartbeat_tick(self) -> None:
-        """Execute a heartbeat tick via the monitor."""
+        """하트비트 모니터를 통해 틱을 실행한다."""
         if not self._running and self._heartbeat is not None:
             return
         if self._heartbeat is None:
@@ -185,7 +208,7 @@ class AgentDaemon:
             logger.exception("Error during heartbeat tick")
 
     def _acquire_lock(self) -> None:
-        """Acquire PID lock file. Raises DaemonLockError if another instance is running."""
+        """PID 잠금 파일을 획득한다. 다른 인스턴스가 실행 중이면 DaemonLockError 발생."""
         self._pid_file.parent.mkdir(parents=True, exist_ok=True)
 
         if self._pid_file.exists():
@@ -197,13 +220,13 @@ class AgentDaemon:
                     f"Another daemon instance is running (PID {existing_pid})"
                 )
             except (ValueError, ProcessLookupError, PermissionError):
-                # Stale PID file — process is dead
+                # 오래된 PID 파일 — 해당 프로세스가 이미 종료됨
                 logger.warning("Removing stale PID file.")
 
         self._pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
     def _release_lock(self) -> None:
-        """Release PID lock file."""
+        """PID 잠금 파일을 해제한다."""
         try:
             if self._pid_file.exists():
                 self._pid_file.unlink()
@@ -211,7 +234,7 @@ class AgentDaemon:
             logger.warning("Failed to remove PID file.")
 
     def _timeout_check(self) -> None:
-        """Check for timed-out wait states."""
+        """만료된 대기 상태를 점검한다."""
         if self._wait_state_manager is None:
             return
         try:
@@ -220,7 +243,7 @@ class AgentDaemon:
             logger.exception("Wait state timeout check failed")
 
     async def _dreaming_check(self) -> None:
-        """Check dreaming conditions and execute if met."""
+        """드리밍 조건을 확인하고 충족 시 파이프라인을 실행한다."""
         if self._dreaming_trigger is None:
             return
         try:

@@ -1,4 +1,10 @@
-"""Webhook server: lightweight aiohttp-based REST endpoint for external events."""
+"""웹훅 서버: aiohttp 기반 경량 REST 엔드포인트.
+
+외부 시스템으로부터 이벤트를 수신하는 HTTP 서버를 제공한다.
+- POST /webhook : Bearer 토큰 인증 → 이벤트 파싱 → 핸들러 디스패치
+- GET /health   : 서버 상태 확인용 헬스체크
+- 인증 실패·성공 모두 AccessAttempt으로 기록하여 감사 추적 가능
+"""
 
 from __future__ import annotations
 
@@ -19,7 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class WebhookServer:
-    """Lightweight HTTP webhook receiver using aiohttp."""
+    """aiohttp 기반 경량 HTTP 웹훅 수신 서버.
+
+    Bearer 토큰 인증, JSON 페이로드 파싱, 이벤트 핸들러 디스패치를 담당한다.
+    """
 
     def __init__(
         self,
@@ -40,7 +49,7 @@ class WebhookServer:
         self._access_log: list[AccessAttempt] = []
 
     async def start(self) -> None:
-        """Start the webhook HTTP server."""
+        """웹훅 HTTP 서버를 시작한다."""
         self._app = web.Application()
         self._app.router.add_post("/webhook", self._handle_webhook)
         self._app.router.add_get("/health", self._handle_health)
@@ -54,7 +63,7 @@ class WebhookServer:
         logger.info("Webhook server started on %s:%d", self._host, self._port)
 
     async def stop(self) -> None:
-        """Stop the webhook HTTP server."""
+        """웹훅 HTTP 서버를 중지한다."""
         if self._runner:
             await self._runner.cleanup()
         self._running = False
@@ -65,17 +74,25 @@ class WebhookServer:
         return self._running
 
     def get_events(self) -> list[WebhookEvent]:
+        """수신된 이벤트 목록의 복사본을 반환한다."""
         return list(self._events)
 
     def get_access_log(self) -> list[AccessAttempt]:
+        """접근 시도 로그의 복사본을 반환한다."""
         return list(self._access_log)
 
     async def _handle_health(self, request: web.Request) -> web.Response:
+        """헬스체크 엔드포인트 — 서버 생존 확인용."""
         return web.json_response({"status": "ok"})
 
     async def _handle_webhook(self, request: web.Request) -> web.Response:
-        """Handle incoming webhook POST requests."""
-        # Auth check
+        """수신된 웹훅 POST 요청을 처리한다.
+
+        1. Bearer 토큰 인증 검사
+        2. JSON 페이로드 파싱 및 필수 필드 검증
+        3. WebhookEvent 생성 후 이벤트 핸들러 호출
+        """
+        # 인증 검사
         if self._auth_token:
             auth_header = request.headers.get("Authorization", "")
             expected = f"Bearer {self._auth_token}"
@@ -99,7 +116,7 @@ class WebhookServer:
             authorized=True,
         ))
 
-        # Parse body
+        # 요청 본문 파싱
         try:
             body = await request.json()
         except (json.JSONDecodeError, Exception):
@@ -112,14 +129,14 @@ class WebhookServer:
                 {"error": "Payload must be a JSON object"}, status=400
             )
 
-        # Validate required fields
+        # 필수 필드 검증
         event_type = body.get("event_type")
         if not event_type:
             return web.json_response(
                 {"error": "Missing required field: event_type"}, status=400
             )
 
-        # Parse action
+        # 액션 타입 파싱
         action_type = None
         action_ref = body.get("action_reference", "")
         raw_action = body.get("action_type")
@@ -146,7 +163,7 @@ class WebhookServer:
             raw_action,
         )
 
-        # Process event
+        # 이벤트 처리 — 핸들러가 동기/비동기 모두 가능하므로 __await__ 여부로 분기
         if self._event_handler and action_type:
             try:
                 result = self._event_handler(event)

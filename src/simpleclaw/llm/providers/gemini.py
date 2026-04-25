@@ -1,4 +1,9 @@
-"""Google Gemini LLM provider."""
+"""Google Gemini API 프로바이더.
+
+Google의 genai SDK를 사용하여 Gemini 모델과 통신한다.
+시스템 프롬프트는 GenerateContentConfig의 system_instruction으로 전달되며,
+멀티턴 대화 시 role 매핑(assistant → model)을 수행한다.
+"""
 
 from __future__ import annotations
 
@@ -14,9 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 class GeminiProvider(LLMProvider):
-    """Provider for Google Gemini API."""
+    """Google Gemini API 프로바이더."""
 
     def __init__(self, model: str, api_key: str, name: str = "gemini") -> None:
+        """GeminiProvider를 초기화한다.
+
+        Args:
+            model: 사용할 Gemini 모델 ID (예: gemini-2.0-flash).
+            api_key: Google AI API 키.
+            name: 라우터에서 이 백엔드를 식별하는 이름.
+
+        Raises:
+            LLMAuthError: API 키가 비어있는 경우.
+        """
         if not api_key:
             raise LLMAuthError(f"API key missing for provider '{name}' (env var not set)")
         self._model = model
@@ -29,13 +44,14 @@ class GeminiProvider(LLMProvider):
         user_message: str,
         messages: list[dict] | None = None,
     ) -> LLMResponse:
+        """Gemini API로 메시지를 전송하고 응답을 반환한다."""
         try:
             config = types.GenerateContentConfig(
                 system_instruction=system_prompt if system_prompt else None,
             )
 
             if messages is not None:
-                # Convert to Gemini contents format
+                # Gemini는 assistant 대신 model을 role로 사용하므로 변환 필요
                 contents = []
                 for msg in messages:
                     role = "model" if msg["role"] == "assistant" else "user"
@@ -54,6 +70,7 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
         except Exception as e:
+            # Gemini SDK는 통합된 에러 계층이 없으므로 이름 기반으로 인증 에러를 판별
             error_name = type(e).__name__
             if "auth" in error_name.lower() or "permission" in error_name.lower():
                 raise LLMAuthError(f"Gemini auth failed: {e}") from e
