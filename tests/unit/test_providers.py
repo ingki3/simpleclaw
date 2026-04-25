@@ -22,7 +22,8 @@ class TestClaudeProvider:
         )
 
         mock_message = MagicMock()
-        mock_message.content = [MagicMock(text="Hello from Claude")]
+        text_block = MagicMock(type="text", text="Hello from Claude")
+        mock_message.content = [text_block]
         mock_message.usage = MagicMock(input_tokens=10, output_tokens=5)
 
         provider._client.messages.create = AsyncMock(return_value=mock_message)
@@ -80,8 +81,19 @@ class TestGeminiProvider:
     async def test_send_returns_response(self):
         provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
 
+        # Gemini 응답 mock: candidates[0].content.parts[0].text 구조
+        text_part = MagicMock()
+        text_part.function_call = None
+        text_part.text = "Hello from Gemini"
+
+        content = MagicMock()
+        content.parts = [text_part]
+
+        candidate = MagicMock()
+        candidate.content = content
+
         mock_response = MagicMock()
-        mock_response.text = "Hello from Gemini"
+        mock_response.candidates = [candidate]
         mock_response.usage_metadata = MagicMock(
             prompt_token_count=7, candidates_token_count=3
         )

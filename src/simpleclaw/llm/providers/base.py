@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.models import LLMResponse, ToolDefinition
 
 
 class LLMProvider(ABC):
@@ -21,6 +21,7 @@ class LLMProvider(ABC):
         system_prompt: str,
         user_message: str,
         messages: list[dict] | None = None,
+        tools: list[ToolDefinition] | None = None,
     ) -> LLMResponse:
         """LLM에 메시지를 전송하고 응답을 반환한다.
 
@@ -28,7 +29,8 @@ class LLMProvider(ABC):
             system_prompt: 시스템 프롬프트 (비어있을 수 있음).
             user_message: 단일 턴 사용자 메시지.
             messages: 멀티턴 대화 이력. 주어지면 user_message 대신 사용된다.
+            tools: 도구 정의 목록. 주어지면 Native Function Calling 모드로 동작한다.
 
         Returns:
-            LLMResponse: 텍스트 응답과 메타데이터를 담은 객체.
+            LLMResponse: 텍스트 응답(또는 tool_calls)과 메타데이터를 담은 객체.
         """
