@@ -83,4 +83,24 @@ Python 3.11+: Follow standard conventions
 # 백그라운드
 nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
+
+## Git 브랜치 관리 규칙
+
+**반드시 아래 워크플로우를 따를 것. 예외 없음.**
+
+### 브랜치 구조
+```
+feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
+```
+
+### 규칙
+1. **`main`과 `dev`에 직접 push 금지** — 반드시 PR을 통해서만 merge
+2. **모든 작업은 feature branch에서 수행**:
+   - `dev`에서 분기: `git checkout dev && git checkout -b feature/작업명`
+   - 작업 완료 후 `origin`에 push: `git push -u origin feature/작업명`
+   - PR 생성: `feature/작업명` → `dev`
+3. **`dev` → `main` 릴리스**:
+   - dev에서 충분히 검증된 후 PR 생성: `dev` → `main`
+4. **커밋 메시지**: 변경 사항을 명확히 요약, 한글 또는 영문
+5. **PR 생성 시**: `gh pr create`로 생성, Summary와 Test plan 포함
 <!-- MANUAL ADDITIONS END -->
