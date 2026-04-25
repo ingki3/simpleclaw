@@ -129,6 +129,7 @@ class AgentOrchestrator:
         guard_config = security_config.get("command_guard", {})
         self._command_guard = CommandGuard(
             allowlist=guard_config.get("allowlist", []),
+            enabled=guard_config.get("enabled", True),
         )
         self._env_passthrough = security_config.get("env_passthrough", [])
 

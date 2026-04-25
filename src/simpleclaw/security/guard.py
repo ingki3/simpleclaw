@@ -101,14 +101,23 @@ def _normalize(command: str) -> str:
 class CommandGuard:
     """Pattern-based dangerous command detector with allowlist support."""
 
-    def __init__(self, allowlist: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        allowlist: list[str] | None = None,
+        enabled: bool = True,
+    ) -> None:
         self._allowlist: set[str] = set(allowlist or [])
+        self._enabled = enabled
 
     def check(self, command: str) -> None:
         """Raise DangerousCommandError if the command matches a dangerous pattern.
 
         Skips patterns whose ``pattern_key`` is in the allowlist.
+        Does nothing if the guard is disabled.
         """
+        if not self._enabled:
+            return
+
         normalized = _normalize(command)
 
         for pattern, key, description in _DANGEROUS_PATTERNS:
