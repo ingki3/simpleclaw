@@ -221,7 +221,8 @@ class CronScheduler:
             from simpleclaw.recipes.executor import execute_recipe
 
             recipe = load_recipe(Path(job.action_reference))
-            result = await execute_recipe(recipe)
+            guard = getattr(self._agent, "_command_guard", None) if self._agent else None
+            result = await execute_recipe(recipe, command_guard=guard)
 
             if self._agent and result.success:
                 prompt_output = "\n".join(

@@ -12,6 +12,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_file_manage,
     handle_file_read,
     handle_file_write,
+    handle_skill_docs,
     handle_web_fetch,
 )
 
@@ -674,6 +675,139 @@ class TestBuiltinDispatch:
 
         prompt = orchestrator._build_builtin_tools_prompt()
         assert "cron" in prompt
+
+
+class TestSkillDocs:
+    """Tests for skill-docs built-in tool."""
+
+    def test_handle_skill_docs_returns_content(self, tmp_path):
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Test Skill\n\nUsage: run test")
+
+        mock_skill = MagicMock()
+        mock_skill.skill_dir = str(skill_dir)
+        mock_skill.description = "A test skill"
+        skills = {"test-skill": mock_skill}
+
+        result = handle_skill_docs({"name": "test-skill"}, skills)
+        assert "Usage: run test" in result
+        assert "Documentation for" in result
+
+    def test_handle_skill_docs_missing_name(self):
+        result = handle_skill_docs({}, {})
+        assert "required" in result
+
+    def test_handle_skill_docs_unknown_skill(self):
+        result = handle_skill_docs({"name": "nonexistent"}, {"real-skill": MagicMock()})
+        assert "not found" in result
+        assert "real-skill" in result
+
+    def test_handle_skill_docs_fuzzy_match(self, tmp_path):
+        skill_dir = tmp_path / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# My Skill")
+
+        mock_skill = MagicMock()
+        mock_skill.skill_dir = str(skill_dir)
+        skills = {"my-skill": mock_skill}
+
+        result = handle_skill_docs({"name": "My Skill"}, skills)
+        assert "My Skill" in result
+
+    def test_handle_skill_docs_no_skillmd(self, tmp_path):
+        skill_dir = tmp_path / "no-docs"
+        skill_dir.mkdir()
+
+        mock_skill = MagicMock()
+        mock_skill.skill_dir = str(skill_dir)
+        mock_skill.description = "A skill without docs"
+        skills = {"no-docs": mock_skill}
+
+        result = handle_skill_docs({"name": "no-docs"}, skills)
+        assert "no documentation" in result
+        assert "A skill without docs" in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_dispatch_skill_docs(self, config_file):
+        orchestrator = AgentOrchestrator(config_file)
+        skill_name, result = await orchestrator._dispatch_routing(
+            {"skill_name": "skill-docs", "name": "nonexistent"}
+        )
+        assert skill_name == "skill-docs"
+        assert "not found" in result
+
+
+class TestTruncateDescription:
+    def test_short_passes_through(self):
+        assert AgentOrchestrator._truncate_description("Short desc.") == "Short desc."
+
+    def test_first_sentence(self):
+        desc = "First sentence. Second sentence with more detail."
+        assert AgentOrchestrator._truncate_description(desc) == "First sentence."
+
+    def test_long_single_sentence(self):
+        desc = "A" * 200
+        result = AgentOrchestrator._truncate_description(desc)
+        assert len(result) == 120
+        assert result.endswith("...")
+
+    def test_empty(self):
+        assert AgentOrchestrator._truncate_description("") == ""
+
+
+class TestPromptBudget:
+    """Tests for tiered prompt budget system."""
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_tier1_small_list(self, config_file):
+        orchestrator = AgentOrchestrator(config_file)
+        mock_skills = []
+        for i in range(5):
+            s = MagicMock()
+            s.name = f"skill-{i}"
+            s.description = f"Short description for skill {i}."
+            mock_skills.append(s)
+
+        result = orchestrator._format_skills_tier1(mock_skills)
+        assert "skill-0" in result
+        assert "Short description" in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_tier2_names_only(self, config_file):
+        orchestrator = AgentOrchestrator(config_file)
+        mock_skills = []
+        for i in range(5):
+            s = MagicMock()
+            s.name = f"skill-{i}"
+            s.description = f"Description {i}"
+            mock_skills.append(s)
+
+        result = orchestrator._format_skills_tier2(mock_skills)
+        assert "- skill-0" in result
+        assert "Description" not in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_tier3_truncates(self, config_file):
+        orchestrator = AgentOrchestrator(config_file)
+        # Create enough skills to trigger tier 3
+        mock_skills = []
+        for i in range(2000):
+            s = MagicMock()
+            s.name = f"very-long-skill-name-category-subcategory-{i:05d}"
+            s.description = "x" * 200
+            mock_skills.append(s)
+
+        result = orchestrator._format_skills_tier3(mock_skills)
+        assert "more skills" in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_estimate_prompt_size(self, config_file):
+        orchestrator = AgentOrchestrator(config_file)
+        size = orchestrator._estimate_prompt_size("test skills text")
+        assert size > 0
+        assert isinstance(size, int)
 
 
 class TestReActParsing:

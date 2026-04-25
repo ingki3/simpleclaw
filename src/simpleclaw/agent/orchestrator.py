@@ -39,6 +39,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_file_manage,
     handle_file_read,
     handle_file_write,
+    handle_skill_docs,
     handle_web_fetch,
 )
 from simpleclaw.agent.commands import try_cron_command, try_recipe_command
@@ -50,6 +51,7 @@ from simpleclaw.agent.prompts import (
     FILE_WRITE_TOOL_PROMPT,
     REACT_SYSTEM_PROMPT,
     REACT_USER_PROMPT,
+    SKILL_DOCS_TOOL_PROMPT,
     WEB_FETCH_TOOL_PROMPT,
 )
 from simpleclaw.agent.react import parse_react
@@ -58,6 +60,10 @@ if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
 
 logger = logging.getLogger(__name__)
+
+# Prompt budget tiers (character counts for the skills section)
+_PROMPT_BUDGET_TIER1_LIMIT = 18_000
+_PROMPT_BUDGET_TIER2_LIMIT = 24_000
 
 
 class AgentOrchestrator:
@@ -89,6 +95,10 @@ class AgentOrchestrator:
             persona_files, persona_config["token_budget"]
         )
         self._persona_prompt = assembly.assembled_text or ""
+
+        # Cron scheduler — injected after construction via set_cron_scheduler()
+        # Must be initialized before _format_skills_for_router (budget estimation)
+        self._cron_scheduler: CronScheduler | None = None
 
         # Skills — discover once, store as dict for lookup
         skills_config = self._load_skills_config()
@@ -130,9 +140,6 @@ class AgentOrchestrator:
             agent_config.get("workspace_dir", ".agent/workspace")
         )
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
-
-        # Cron scheduler — injected after construction via set_cron_scheduler()
-        self._cron_scheduler: CronScheduler | None = None
 
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
@@ -243,6 +250,8 @@ class AgentOrchestrator:
             return handle_file_write(routing, self._workspace_dir)
         if tool_name == "file-manage":
             return handle_file_manage(routing, self._workspace_dir)
+        if tool_name == "skill-docs":
+            return handle_skill_docs(routing, self._skills_by_name)
         return f"Error: unknown built-in tool '{tool_name}'."
 
     # ------------------------------------------------------------------
@@ -254,9 +263,6 @@ class AgentOrchestrator:
     ) -> str:
         """Execute the ReAct (Reasoning + Acting) loop."""
         trace: list[str] = []
-        # Track skills whose SKILL.md has been shown in this loop.
-        # First selection → inject docs; subsequent selections → execute.
-        skills_docs_shown: set[str] = set()
 
         for i in range(self._max_tool_iterations):
             raw = await self._react_step(text, trace, isolated)
@@ -274,27 +280,13 @@ class AgentOrchestrator:
                 trace.append(
                     f"Action: {json.dumps(action, ensure_ascii=False)}"
                 )
-                skill_name = action.get("skill_name", "")
-
-                # 2-step skill execution: inject SKILL.md on first selection
-                docs = self._maybe_inject_skill_docs(
-                    skill_name, skills_docs_shown
-                )
-                if docs is not None:
-                    observation = docs
-                    logger.info(
-                        "ReAct [%d] Injected docs for '%s' (%d chars)",
-                        i + 1, skill_name, len(docs),
-                    )
-                else:
-                    _, result = await self._dispatch_routing(action)
-                    observation = result or "[no output]"
-                    logger.info(
-                        "ReAct [%d] Action: %s → %d chars",
-                        i + 1, skill_name, len(observation),
-                    )
-
+                skill_name, result = await self._dispatch_routing(action)
+                observation = result or "[no output]"
                 trace.append(f"Observation: {observation[:2000]}")
+                logger.info(
+                    "ReAct [%d] Action: %s → %d chars",
+                    i + 1, skill_name, len(observation),
+                )
             else:
                 # First iteration without Action/Answer → LLM ignored ReAct format.
                 # Retry once by injecting the raw response as a failed thought.
@@ -411,51 +403,13 @@ class AgentOrchestrator:
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
     # ------------------------------------------------------------------
-    # 2-step skill docs injection
-    # ------------------------------------------------------------------
-
-    def _maybe_inject_skill_docs(
-        self, skill_name: str, shown: set[str]
-    ) -> str | None:
-        """Return SKILL.md content if this is the first time the skill is selected.
-
-        Built-in tools are skipped (they have inline docs in the prompt).
-        Returns None if docs were already shown or skill is built-in.
-        """
-        if skill_name in BUILTIN_TOOL_NAMES:
-            return None
-        if skill_name in shown:
-            return None
-
-        skill = self._resolve_skill_name(skill_name)
-        if skill is None:
-            return None
-
-        shown.add(skill_name)
-
-        skill_md = Path(skill.skill_dir) / "SKILL.md"
-        if not skill_md.is_file():
-            return None
-
-        try:
-            content = skill_md.read_text(encoding="utf-8")
-            # Cap at 3000 chars to avoid bloating the trace
-            if len(content) > 3000:
-                content = content[:3000] + "\n... [truncated]"
-            return (
-                f"[SYSTEM] Here is the usage documentation for '{skill_name}'. "
-                f"Read it carefully and use the EXACT commands shown.\n\n{content}"
-            )
-        except OSError:
-            return None
-
-    # ------------------------------------------------------------------
     # Prompt building
     # ------------------------------------------------------------------
 
     def _build_builtin_tools_prompt(self) -> str:
         """Build the built-in tools section for the ReAct system prompt."""
         sections = [
+            SKILL_DOCS_TOOL_PROMPT,
             CLI_TOOL_PROMPT,
             WEB_FETCH_TOOL_PROMPT,
             FILE_READ_TOOL_PROMPT,
@@ -619,14 +573,73 @@ class AgentOrchestrator:
             lines.append(f"- **{skill.name}**: {skill.description}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _truncate_description(desc: str, max_len: int = 120) -> str:
+        """Truncate a description to the first sentence or max_len chars."""
+        end = desc.find(". ")
+        if end > 0:
+            desc = desc[:end + 1]
+        if len(desc) > max_len:
+            desc = desc[:max_len - 3] + "..."
+        return desc
+
     def _format_skills_for_router(self, skills: list[SkillDefinition]) -> str:
+        """Format skills list with budget-aware tiering."""
         if not skills:
             return ""
+
+        # Tier 1: name + truncated description
+        tier1 = self._format_skills_tier1(skills)
+        if self._estimate_prompt_size(tier1) <= _PROMPT_BUDGET_TIER1_LIMIT:
+            return tier1
+
+        # Tier 2: names only (descriptions dropped)
+        tier2 = self._format_skills_tier2(skills)
+        if self._estimate_prompt_size(tier2) <= _PROMPT_BUDGET_TIER2_LIMIT:
+            logger.info(
+                "Prompt budget: Tier 2 (names only) for %d skills", len(skills)
+            )
+            return tier2
+
+        # Tier 3: binary search for max skills that fit
+        logger.warning(
+            "Prompt budget: Tier 3 (truncated) for %d skills", len(skills)
+        )
+        return self._format_skills_tier3(skills)
+
+    def _format_skills_tier1(self, skills: list[SkillDefinition]) -> str:
+        """Tier 1: name + truncated description."""
         lines = []
         for skill in skills:
-            desc = skill.description or ""
+            desc = self._truncate_description(skill.description or "")
             lines.append(f"- {skill.name}: {desc}")
         return "\n".join(lines)
+
+    def _format_skills_tier2(self, skills: list[SkillDefinition]) -> str:
+        """Tier 2: names only."""
+        return "\n".join(f"- {skill.name}" for skill in skills)
+
+    def _format_skills_tier3(self, skills: list[SkillDefinition]) -> str:
+        """Tier 3: binary search for max number of skills that fit."""
+        lo, hi = 0, len(skills)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            text = self._format_skills_tier2(skills[:mid])
+            if self._estimate_prompt_size(text) <= _PROMPT_BUDGET_TIER2_LIMIT:
+                lo = mid
+            else:
+                hi = mid - 1
+
+        text = self._format_skills_tier2(skills[:lo])
+        if lo < len(skills):
+            text += f"\n... and {len(skills) - lo} more skills (use skill-docs to discover)"
+        return text
+
+    def _estimate_prompt_size(self, skills_text: str) -> int:
+        """Estimate total system prompt size given a skills section."""
+        base = len(self._persona_prompt) + 2000  # ReAct template overhead
+        builtin = len(self._build_builtin_tools_prompt())
+        return base + builtin + len(skills_text)
 
     def _format_skills_for_router_with_usage(
         self, skills: list[SkillDefinition]

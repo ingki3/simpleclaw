@@ -26,8 +26,8 @@ class DangerousCommandError(Exception):
 # Each entry: (compiled regex, pattern_key, human-readable description)
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # --- Filesystem destruction ---
-    (re.compile(r"rm\s+(-\w*)?r", re.I), "rm_recursive", "Recursive file deletion"),
-    (re.compile(r"rm\s+(-\w*)?f", re.I), "rm_force", "Forced file deletion"),
+    (re.compile(r"rm\s+-\w*r", re.I), "rm_recursive", "Recursive file deletion"),
+    (re.compile(r"rm\s+-\w*f", re.I), "rm_force", "Forced file deletion"),
     (re.compile(r"shred\s+", re.I), "shred", "Secure file erasure"),
     (re.compile(r"mkfs[\s.]", re.I), "mkfs", "Filesystem format"),
     (re.compile(r"dd\s+if=", re.I), "dd", "Raw disk write"),
@@ -43,7 +43,7 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # --- Database destructive ---
     (re.compile(r"DROP\s+(TABLE|DATABASE|SCHEMA)", re.I), "drop_table", "Database drop"),
     (re.compile(r"TRUNCATE\s+TABLE", re.I), "truncate_table", "Table truncation"),
-    (re.compile(r"DELETE\s+FROM\s+\S+\s*;?\s*$", re.I | re.M), "delete_no_where", "DELETE without WHERE"),
+    (re.compile(r"DELETE\s+FROM\s+\S+\s*;?\s*\Z", re.I), "delete_no_where", "DELETE without WHERE"),
 
     # --- Permission escalation ---
     (re.compile(r"chmod\s+(777|666|a\+[rwx])", re.I), "chmod_wide", "Wide permission change"),

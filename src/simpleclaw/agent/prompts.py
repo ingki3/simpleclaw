@@ -41,12 +41,16 @@ use that EXACT path — do not substitute or guess alternative paths.
 - **NEVER use the `open` command.** It launches a GUI application on the server.
 - **Headless environment**: This agent runs without a display. \
 Do not execute commands that require a GUI or user interaction.
+- **Before using any user-installed skill for the first time, you MUST call \
+skill-docs to read its documentation.** Do not guess the command format.
 
 ## Tool Priority
 **Always prefer user-installed skills over built-in tools.** \
 Built-in tools are fallbacks for when no suitable skill exists.
 1. First, check if a user-installed skill can handle the task.
-2. Only use built-in tools (cli, web-fetch, file-read, etc.) when no matching skill is found, \
+2. Call `skill-docs` to read the skill's usage documentation.
+3. Then execute the skill using the EXACT commands from the documentation.
+4. Only use built-in tools (cli, web-fetch, file-read, etc.) when no matching skill is found, \
 or when a skill fails.
 
 ## User-Installed Skills
@@ -249,3 +253,23 @@ Action: {{"skill_name": "file-manage", "operation": "info", "path": "config.yaml
 - list, info는 프로젝트 디렉토리 전체에서 사용 가능합니다.
 - mkdir, delete는 workspace(.agent/workspace/) 내에서만 가능합니다.
 - 재귀 삭제(rm -rf)는 지원하지 않습니다. 빈 디렉토리만 삭제 가능합니다."""
+
+SKILL_DOCS_TOOL_PROMPT = """\
+## Built-in Tool: skill-docs (스킬 문서 조회)
+
+사용자가 설치한 스킬을 사용하기 전에 반드시 이 도구로 사용법을 확인하세요.
+
+### Action 형식
+```
+Action: {{"skill_name": "skill-docs", "name": "<스킬 이름>"}}
+```
+
+### 예시
+```
+Action: {{"skill_name": "skill-docs", "name": "news-search-skill"}}
+```
+
+### 중요
+- **스킬을 처음 사용하기 전에 반드시 skill-docs로 문서를 먼저 읽으세요.**
+- 문서에 나온 명령어를 정확히 그대로 사용하세요.
+- 문서 없이 스킬 명령어를 추측하지 마세요."""

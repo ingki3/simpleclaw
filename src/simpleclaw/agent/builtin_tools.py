@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Names recognised by _dispatch_builtin in the orchestrator.
 BUILTIN_TOOL_NAMES = frozenset({
     "cron", "cli", "web-fetch", "file-read", "file-write", "file-manage",
+    "skill-docs",
 })
 
 
@@ -286,6 +287,44 @@ def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
 
     else:
         return f"Error: unknown operation '{operation}'. Use list|mkdir|delete|info."
+
+
+# ------------------------------------------------------------------
+# skill-docs
+# ------------------------------------------------------------------
+
+def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
+    """Return SKILL.md content for a named skill."""
+    name = routing.get("name", "")
+    if not name:
+        return "Error: 'name' field is required."
+
+    # Exact match first, then fuzzy
+    skill = skills_by_name.get(name)
+    if skill is None:
+        lower = name.lower().replace(" ", "-")
+        for key, s in skills_by_name.items():
+            if key.lower() == lower:
+                skill = s
+                break
+    if skill is None:
+        available = ", ".join(sorted(skills_by_name.keys()))
+        return f"Error: skill '{name}' not found. Available: {available}"
+
+    skill_md = Path(skill.skill_dir) / "SKILL.md"
+    if not skill_md.is_file():
+        return f"Skill '{name}' has no documentation. Description: {skill.description}"
+
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+        if len(content) > 3000:
+            content = content[:3000] + "\n... [truncated]"
+        return (
+            f"# Documentation for '{name}'\n\n{content}\n\n"
+            f"Use the EXACT commands shown above."
+        )
+    except OSError:
+        return f"Error: could not read documentation for '{name}'."
 
 
 # ------------------------------------------------------------------
