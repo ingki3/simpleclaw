@@ -10,9 +10,30 @@ Auto-generated from all feature plans. Last updated: 2026-04-18
 
 ## Project Structure
 
+코드베이스의 구조와 모듈 간 관계는 `graphify-out/` 디렉토리의 분석 결과를 참고한다.
+
 ```text
-src/
+src/simpleclaw/
+  agent/          — 오케스트레이터, 도구 스키마, 내장 도구, 명령어 처리
+  llm/            — LLM 라우터, 프로바이더(Gemini/Claude/OpenAI), Native Function Calling
+  persona/        — 페르소나 파서, 어셈블러, 리졸버 (AGENT.md/USER.md/MEMORY.md)
+  skills/         — 스킬 디스커버리, 실행기, MCP 클라이언트
+  recipes/        — 레시피 로더, 실행기
+  memory/         — 대화 저장소, 드리밍 파이프라인
+  daemon/         — 데몬, 하트비트, 크론 스케줄러, 대기 상태
+  security/       — CommandGuard, 환경변수 필터, 프로세스 격리
+  channels/       — Telegram 봇, 웹훅 서버
+  voice/          — STT/TTS 인터페이스
+  logging/        — 구조화 로거, 메트릭, 대시보드
+  agents/         — 서브 에이전트 풀, 스포너, 워크스페이스
+  config.py       — 설정 로더 (config.yaml → 각 서브시스템)
 tests/
+  unit/           — 단위 테스트 (334개)
+  integration/    — 통합 테스트
+graphify-out/
+  graph.json      — 코드 지식 그래프 (1707 nodes, 7069 edges, 33 communities)
+  graph.html      — 인터랙티브 시각화
+  GRAPH_REPORT.md — 분석 리포트
 ```
 
 ## Commands
@@ -87,7 +108,7 @@ Python 3.11+: Follow standard conventions
 
 1. **새 기능 추가 시 반드시 단위 테스트 동반**
 2. **LLM 호출이 필요한 테스트는 router를 mock** — `orchestrator._router.send = AsyncMock(...)`
-3. **ReAct 응답 형식 사용** — mock 응답은 `"Thought: ...\nAnswer: ..."` 또는 `"Thought: ...\nAction: {...}"` 형식
+3. **Native Function Calling mock 사용** — `response.tool_calls = [ToolCall(...)]` 또는 `response.tool_calls = None` (텍스트 응답)
 4. **스킬 실행 테스트는 subprocess를 mock**
 5. **async 테스트는 `@pytest.mark.asyncio` 필수**
 6. **기능 변경 후 반드시 `pytest tests/unit/` 통과 확인** 후 전체 테스트 실행
@@ -122,4 +143,20 @@ feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
    - dev에서 충분히 검증된 후 PR 생성: `dev` → `main`
 4. **커밋 메시지**: 변경 사항을 명확히 요약, 한글 또는 영문
 5. **PR 생성 시**: `gh pr create`로 생성, Summary와 Test plan 포함
+
+## graphify 코드 분석 규칙
+
+**코드베이스 구조 파악 시 반드시 graphify 결과물을 먼저 참고한다.**
+
+### 코드 구조 파악
+1. **새 작업 시작 전**: `graphify-out/graph.json`과 `graphify-out/GRAPH_REPORT.md`를 확인하여 관련 모듈과 의존 관계를 파악
+2. **모듈 간 관계 질의**: `/graphify query "질문"` 또는 `/graphify path "모듈A" "모듈B"`로 그래프를 탐색
+3. **특정 개념 이해**: `/graphify explain "개념명"`으로 노드와 연결 관계 확인
+
+### 코드 변경 후 그래프 갱신 (필수)
+**코드 변경 작업이 완료되면 반드시 `/graphify . --update`를 실행하여 지식 그래프를 최신화한다.**
+
+1. **기능 추가/수정/삭제 후**: `/graphify . --update` 실행 — 변경된 파일만 재추출 (incremental)
+2. **대규모 리팩토링 후**: `/graphify .` 실행 — 전체 재분석
+3. **갱신 후 확인**: `graphify-out/GRAPH_REPORT.md`의 God Nodes, Surprising Connections 변화 확인
 <!-- MANUAL ADDITIONS END -->
