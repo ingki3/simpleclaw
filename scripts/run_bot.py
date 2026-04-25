@@ -8,7 +8,7 @@ Thin wrapper that wires together:
 All business logic lives in core modules. This script only does setup.
 
 Usage:
-    .venv/bin/python scripts/test_telegram.py
+    .venv/bin/python scripts/run_bot.py
 """
 
 import asyncio
@@ -35,11 +35,11 @@ CONFIG_PATH = "config.yaml"
 
 
 def _kill_existing_bots():
-    """Kill any other test_telegram.py processes to prevent 409 Conflict."""
+    """Kill any other run_bot.py processes to prevent 409 Conflict."""
     my_pid = os.getpid()
     try:
         result = subprocess.run(
-            ["pgrep", "-f", "test_telegram.py"],
+            ["pgrep", "-f", "run_bot.py"],
             capture_output=True, text=True,
         )
         for line in result.stdout.strip().split("\n"):
@@ -101,6 +101,9 @@ async def main():
         agent_orchestrator=orchestrator,
         notifier=notifier,
     )
+
+    # Wire cron scheduler into orchestrator for /cron commands
+    orchestrator.set_cron_scheduler(cron)
 
     # Start cron
     apscheduler.start()

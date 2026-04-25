@@ -72,14 +72,14 @@ Cron job 결과는 화이트리스트의 첫 번째 `user_id`에게 전송됩니
 
 ```bash
 # 포그라운드
-.venv/bin/python scripts/test_telegram.py
+.venv/bin/python scripts/run_bot.py
 
 # 백그라운드
-nohup .venv/bin/python scripts/test_telegram.py > .agent/bot.log 2>&1 &
+nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
 
 ## 관련 파일
 
 - `src/simpleclaw/channels/telegram_bot.py` — TelegramBot 클래스
 - `src/simpleclaw/channels/models.py` — AccessAttempt 모델
-- `scripts/test_telegram.py` — 봇 실행 스크립트
+- `scripts/run_bot.py` — 봇 실행 스크립트

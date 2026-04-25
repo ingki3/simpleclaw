@@ -97,11 +97,11 @@ src/simpleclaw/
 ### 설치
 
 ```bash
-git clone https://github.com/ingki3/simpleclaw.git
-cd simpleclaw
-uv venv .venv
+git clone https://github.com/ingki3/SimpleClaw.git
+cd SimpleClaw
+python -m venv .venv
 source .venv/bin/activate
-uv pip install -e ".[dev]"
+pip install -e ".[dev]"
 ```
 
 ### 설정
@@ -157,16 +157,24 @@ telegram:
 4. 실행:
 
 ```bash
-python scripts/test_telegram.py
+# 포그라운드
+.venv/bin/python scripts/run_bot.py
+
+# 백그라운드
+nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
 
 ### 테스트 실행
 
 ```bash
-pytest tests/ -v
+# 전체 테스트
+.venv/bin/python -m pytest tests/ -v
+
+# 단위 테스트만 (빠름)
+.venv/bin/python -m pytest tests/unit/ -v
 ```
 
-307개 테스트 (단위, 통합, PRD 시나리오, 실제 스킬 시나리오) 포함.
+389개 테스트 (단위, 통합, PRD 시나리오, 실제 스킬 시나리오) 포함.
 
 ## 스킬 시스템
 
@@ -206,7 +214,7 @@ pytest tests/ -v
 .agent/recipes/
   check-email/
     recipe.yaml       # instructions 필드에 프롬프트 작성 (v2 포맷)
-  daily-briefing/
+  morning-briefing/
     recipe.yaml
 ```
 
@@ -215,8 +223,8 @@ pytest tests/ -v
 사용자: /check-email
 에이전트: (gmail-skill 실행 후) 새 메일 3건이 있습니다...
 
-사용자: /daily-briefing
-에이전트: (뉴스 + 일정 + 메일 종합 브리핑)
+사용자: /morning-briefing
+에이전트: (메일 + 캘린더 종합 아침 브리핑)
 ```
 
 > 레시피 YAML의 `instructions` 필드에 프롬프트를 작성하면 에이전트가 ReAct 루프로 실행합니다.
@@ -231,7 +239,7 @@ llm:
   providers:
     gemini:
       type: "api"
-      model: "gemini-2.0-flash"
+      model: "gemini-3.1-flash-lite-preview"
       api_key_env: "GOOGLE_API_KEY"
     claude:
       type: "api"
@@ -258,7 +266,7 @@ daemon:
   dreaming:
     overnight_hour: 3                  # 드리밍 시각 (03:00)
     idle_threshold: 7200               # 드리밍 조건: 유휴 시간 (초)
-    model: ""                          # 드리밍 요약에 사용할 LLM (빈 값 = 기본 LLM)
+    model: "gemini"                    # 드리밍 요약에 사용할 LLM (빈 값 = 기본 LLM)
 
 sub_agents:
   max_concurrent: 3                    # 서브 에이전트 동시 실행 제한

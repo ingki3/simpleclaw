@@ -11,18 +11,17 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from simpleclaw.config import load_agent_config, load_persona_config
 from simpleclaw.llm.models import LLMRequest
-from simpleclaw.recipes.loader import discover_recipes, load_recipe
-from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
+from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.security import (
     CommandGuard,
     DangerousCommandError,
@@ -34,49 +33,31 @@ from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import SkillDefinition
 
+from simpleclaw.agent.builtin_tools import (
+    BUILTIN_TOOL_NAMES,
+    handle_cron_action,
+    handle_file_manage,
+    handle_file_read,
+    handle_file_write,
+    handle_web_fetch,
+)
+from simpleclaw.agent.commands import try_cron_command, try_recipe_command
+from simpleclaw.agent.prompts import (
+    CLI_TOOL_PROMPT,
+    CRON_TOOL_PROMPT,
+    FILE_MANAGE_TOOL_PROMPT,
+    FILE_READ_TOOL_PROMPT,
+    FILE_WRITE_TOOL_PROMPT,
+    REACT_SYSTEM_PROMPT,
+    REACT_USER_PROMPT,
+    WEB_FETCH_TOOL_PROMPT,
+)
+from simpleclaw.agent.react import parse_react
+
+if TYPE_CHECKING:
+    from simpleclaw.daemon.scheduler import CronScheduler
+
 logger = logging.getLogger(__name__)
-
-_REACT_SYSTEM_PROMPT = """\
-You are an AI agent that solves tasks step-by-step using available tools.
-Use the Thought / Action / Observation cycle.
-
-## Output Format
-
-When you need to use a tool:
-```
-Thought: <your reasoning about what to do next>
-Action: {{"skill_name": "<name>", "command": "<shell command>"}}
-```
-
-When you have enough information to give the final answer:
-```
-Thought: <why the task is complete>
-Answer: <your response to the user>
-```
-
-## Rules
-- Evaluate each Observation critically. If information is incomplete or partial, \
-take another Action with a different query.
-- Do NOT fabricate information. Only include facts from Observations.
-- If a tool fails, try a different approach or query.
-- **If ALL tool attempts fail, honestly tell the user the tool failed. \
-NEVER generate fake data from your training knowledge as a substitute.**
-- Maximum {max_iterations} tool calls allowed.
-- Respond in the same language as the user.
-- **CRITICAL: Only use commands EXACTLY as shown in the skill's usage instructions. \
-Copy the command template verbatim and only change the arguments. \
-NEVER invent file paths, script names, or modify the executable path.**
-- If a skill's usage shows `/path/to/venv/bin/python /path/to/script.py`, \
-use that EXACT path — do not substitute or guess alternative paths.
-
-## Available Tools
-{skills_list}"""
-
-_REACT_USER_PROMPT = """\
-{datetime_context}
-{react_trace}
-## User Request
-{user_message}"""
 
 
 class AgentOrchestrator:
@@ -150,12 +131,24 @@ class AgentOrchestrator:
         )
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
 
+        # Cron scheduler — injected after construction via set_cron_scheduler()
+        self._cron_scheduler: CronScheduler | None = None
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
             len(self._skills),
             self._router.get_default_backend(),
         )
+
+    def set_cron_scheduler(self, scheduler: CronScheduler) -> None:
+        """Inject CronScheduler so the agent can manage cron jobs via /cron commands."""
+        self._cron_scheduler = scheduler
+        logger.info("CronScheduler injected into AgentOrchestrator.")
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def process_cron_message(self, text: str) -> str:
         """Process a cron job message with isolated context.
@@ -168,14 +161,20 @@ class AgentOrchestrator:
     async def process_message(
         self, text: str, user_id: int, chat_id: int
     ) -> str:
-        """Process an incoming message through the ReAct pipeline.
+        """Process an incoming message through the ReAct pipeline."""
+        # Check for /cron commands
+        cron_result = try_cron_command(text, self._cron_scheduler)
+        if cron_result is not None:
+            self._store.add_message(ConversationMessage(
+                role=MessageRole.USER, content=text,
+            ))
+            self._store.add_message(ConversationMessage(
+                role=MessageRole.ASSISTANT, content=cron_result,
+            ))
+            return cron_result
 
-        Handles:
-        0. /recipe-name commands → execute recipe
-        1. Normal messages → ReAct loop
-        """
         # Check for /recipe-name commands
-        recipe_result = await self._try_recipe_command(text)
+        recipe_result = await try_recipe_command(text, self._react_loop)
         if recipe_result is not None:
             self._store.add_message(ConversationMessage(
                 role=MessageRole.USER, content=text,
@@ -196,6 +195,10 @@ class AgentOrchestrator:
 
         return response_text
 
+    # ------------------------------------------------------------------
+    # Routing & dispatch
+    # ------------------------------------------------------------------
+
     async def _dispatch_routing(
         self, routing: dict
     ) -> tuple[str | None, str | None]:
@@ -208,6 +211,11 @@ class AgentOrchestrator:
             skill_name, command,
         )
 
+        # Built-in tools — handled internally
+        if skill_name in BUILTIN_TOOL_NAMES:
+            result = await self._dispatch_builtin(skill_name, routing)
+            return skill_name, result
+
         if command:
             result = await self._execute_command(skill_name, command)
         else:
@@ -216,6 +224,27 @@ class AgentOrchestrator:
 
         return skill_name, result
 
+    async def _dispatch_builtin(
+        self, tool_name: str, routing: dict
+    ) -> str:
+        """Dispatch a built-in tool action."""
+        if tool_name == "cron":
+            return handle_cron_action(routing, self._cron_scheduler)
+        if tool_name == "cli":
+            cmd = routing.get("command", "")
+            if not cmd:
+                return "Error: 'command' field is required."
+            return await self._execute_command("cli", cmd)
+        if tool_name == "web-fetch":
+            return await handle_web_fetch(routing)
+        if tool_name == "file-read":
+            return handle_file_read(routing, self._workspace_dir)
+        if tool_name == "file-write":
+            return handle_file_write(routing, self._workspace_dir)
+        if tool_name == "file-manage":
+            return handle_file_manage(routing, self._workspace_dir)
+        return f"Error: unknown built-in tool '{tool_name}'."
+
     # ------------------------------------------------------------------
     # ReAct loop
     # ------------------------------------------------------------------
@@ -223,21 +252,15 @@ class AgentOrchestrator:
     async def _react_loop(
         self, text: str, isolated: bool = False
     ) -> str:
-        """Execute the ReAct (Reasoning + Acting) loop.
-
-        The LLM reasons about the task (Thought), takes actions (Action),
-        observes results (Observation), and repeats until it produces
-        a final Answer.
-
-        Args:
-            text: User message.
-            isolated: If True, skip conversation history (for cron jobs).
-        """
+        """Execute the ReAct (Reasoning + Acting) loop."""
         trace: list[str] = []
+        # Track skills whose SKILL.md has been shown in this loop.
+        # First selection → inject docs; subsequent selections → execute.
+        skills_docs_shown: set[str] = set()
 
         for i in range(self._max_tool_iterations):
             raw = await self._react_step(text, trace, isolated)
-            thought, action, answer = self._parse_react(raw)
+            thought, action, answer = parse_react(raw)
 
             if thought:
                 trace.append(f"Thought: {thought}")
@@ -251,19 +274,43 @@ class AgentOrchestrator:
                 trace.append(
                     f"Action: {json.dumps(action, ensure_ascii=False)}"
                 )
-                skill_name, result = await self._dispatch_routing(action)
-                observation = result or "[no output]"
-                trace.append(f"Observation: {observation[:2000]}")
-                logger.info(
-                    "ReAct [%d] Action: %s → %d chars",
-                    i + 1, skill_name, len(observation),
+                skill_name = action.get("skill_name", "")
+
+                # 2-step skill execution: inject SKILL.md on first selection
+                docs = self._maybe_inject_skill_docs(
+                    skill_name, skills_docs_shown
                 )
+                if docs is not None:
+                    observation = docs
+                    logger.info(
+                        "ReAct [%d] Injected docs for '%s' (%d chars)",
+                        i + 1, skill_name, len(docs),
+                    )
+                else:
+                    _, result = await self._dispatch_routing(action)
+                    observation = result or "[no output]"
+                    logger.info(
+                        "ReAct [%d] Action: %s → %d chars",
+                        i + 1, skill_name, len(observation),
+                    )
+
+                trace.append(f"Observation: {observation[:2000]}")
             else:
-                # No Action or Answer parsed → treat entire response as answer
+                # First iteration without Action/Answer → LLM ignored ReAct format.
+                # Retry once by injecting the raw response as a failed thought.
+                if i == 0:
+                    logger.warning(
+                        "ReAct [%d] no format detected, retrying with nudge", i + 1
+                    )
+                    trace.append(
+                        f"Thought: {raw[:500]}\n"
+                        "Observation: [SYSTEM] You must use the Thought/Action/Answer format. "
+                        "Use a tool to get real-time information. Do NOT answer from memory."
+                    )
+                    continue
                 logger.info("ReAct [%d] fallback: raw response", i + 1)
                 return raw
 
-        # Max iterations reached → generate final answer from trace
         logger.warning(
             "ReAct max iterations (%d) reached, generating final answer",
             self._max_tool_iterations,
@@ -278,15 +325,16 @@ class AgentOrchestrator:
     ) -> str:
         """Execute one ReAct step: send trace to LLM and get response."""
         system_prompt = self._build_system_prompt()
-        react_system = _REACT_SYSTEM_PROMPT.format(
-            skills_list=self._skills_router_list_with_usage or "(no tools)",
+        builtin_tools = self._build_builtin_tools_prompt()
+        react_system = REACT_SYSTEM_PROMPT.format(
+            skills_list=self._skills_router_list or "(no tools)",
             max_iterations=self._max_tool_iterations,
+            builtin_tools=builtin_tools,
         )
         full_system = f"{system_prompt}\n\n---\n\n{react_system}"
 
         trace_text = "\n".join(trace) if trace else "(no previous steps)"
 
-        # Inject current datetime so LLM knows "today"
         from datetime import datetime, timezone, timedelta
         kst = timezone(timedelta(hours=9))
         now_kst = datetime.now(kst)
@@ -294,13 +342,12 @@ class AgentOrchestrator:
             "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
         )
 
-        user_prompt = _REACT_USER_PROMPT.format(
+        user_prompt = REACT_USER_PROMPT.format(
             datetime_context=datetime_context,
             react_trace=trace_text,
             user_message=user_message,
         )
 
-        # Build messages with optional conversation history
         if isolated:
             messages = [{"role": "user", "content": user_prompt}]
         else:
@@ -363,67 +410,115 @@ class AgentOrchestrator:
             logger.error("ReAct final generation error: %s", exc)
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
-    @staticmethod
-    def _parse_react(
-        response: str,
-    ) -> tuple[str | None, dict | None, str | None]:
-        """Parse a ReAct response into (thought, action, answer).
+    # ------------------------------------------------------------------
+    # 2-step skill docs injection
+    # ------------------------------------------------------------------
 
-        Returns:
-            thought: The Thought text, or None.
-            action: Parsed Action JSON dict, or None.
-            answer: The Answer text, or None.
+    def _maybe_inject_skill_docs(
+        self, skill_name: str, shown: set[str]
+    ) -> str | None:
+        """Return SKILL.md content if this is the first time the skill is selected.
+
+        Built-in tools are skipped (they have inline docs in the prompt).
+        Returns None if docs were already shown or skill is built-in.
         """
-        thought = None
-        action = None
-        answer = None
+        if skill_name in BUILTIN_TOOL_NAMES:
+            return None
+        if skill_name in shown:
+            return None
 
-        # Extract Thought
-        thought_match = re.search(
-            r"Thought:\s*(.+?)(?=\nAction:|\nAnswer:|\Z)",
-            response, re.DOTALL,
-        )
-        if thought_match:
-            thought = thought_match.group(1).strip()
+        skill = self._resolve_skill_name(skill_name)
+        if skill is None:
+            return None
 
-        # Extract Answer
-        answer_match = re.search(r"Answer:\s*(.+)", response, re.DOTALL)
-        if answer_match:
-            answer = answer_match.group(1).strip()
-            return thought, None, answer
+        shown.add(skill_name)
 
-        # Extract Action (JSON)
-        action_match = re.search(r"Action:\s*(\{.+?\})", response, re.DOTALL)
-        if action_match:
-            try:
-                action = json.loads(action_match.group(1))
-            except json.JSONDecodeError:
-                logger.warning(
-                    "Failed to parse Action JSON: %s",
-                    action_match.group(1)[:200],
-                )
+        skill_md = Path(skill.skill_dir) / "SKILL.md"
+        if not skill_md.is_file():
+            return None
 
-        return thought, action, answer
+        try:
+            content = skill_md.read_text(encoding="utf-8")
+            # Cap at 3000 chars to avoid bloating the trace
+            if len(content) > 3000:
+                content = content[:3000] + "\n... [truncated]"
+            return (
+                f"[SYSTEM] Here is the usage documentation for '{skill_name}'. "
+                f"Read it carefully and use the EXACT commands shown.\n\n{content}"
+            )
+        except OSError:
+            return None
+
+    # ------------------------------------------------------------------
+    # Prompt building
+    # ------------------------------------------------------------------
+
+    def _build_builtin_tools_prompt(self) -> str:
+        """Build the built-in tools section for the ReAct system prompt."""
+        sections = [
+            CLI_TOOL_PROMPT,
+            WEB_FETCH_TOOL_PROMPT,
+            FILE_READ_TOOL_PROMPT,
+            FILE_WRITE_TOOL_PROMPT,
+            FILE_MANAGE_TOOL_PROMPT,
+        ]
+
+        if self._cron_scheduler is not None:
+            recipes = discover_recipes(".agent/recipes")
+            if recipes:
+                recipe_lines = []
+                for r in recipes:
+                    desc = r.description or "(no description)"
+                    recipe_lines.append(
+                        f"- **{r.name}**: {desc} → `{r.recipe_dir}/recipe.yaml`"
+                    )
+                available_recipes = "\n".join(recipe_lines)
+            else:
+                available_recipes = "(등록된 레시피 없음)"
+            sections.append(
+                CRON_TOOL_PROMPT.format(available_recipes=available_recipes)
+            )
+
+        return "\n\n".join(sections)
+
+    def _build_system_prompt(self) -> str:
+        """Assemble the full system prompt from persona and skills."""
+        parts = []
+
+        if self._persona_prompt:
+            parts.append(self._persona_prompt)
+
+        if self._skills_prompt:
+            parts.append(self._skills_prompt)
+
+        if not parts:
+            return (
+                "You are SimpleClaw, a helpful personal assistant agent. "
+                "Respond in the same language the user writes in. "
+                "Be concise and helpful."
+            )
+
+        return "\n\n---\n\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Skill execution
+    # ------------------------------------------------------------------
 
     def _resolve_skill_name(self, name: str) -> SkillDefinition | None:
         """Fuzzy-match a skill name returned by the router to a registered skill."""
-        # Exact match
         if name in self._skills_by_name:
             return self._skills_by_name[name]
 
-        # Case-insensitive match
         lower = name.lower()
         for key, skill in self._skills_by_name.items():
             if key.lower() == lower:
                 return skill
 
-        # Normalize: "Gmail Skill" → "gmail-skill"
         normalized = lower.replace(" ", "-")
         for key, skill in self._skills_by_name.items():
             if key.lower() == normalized:
                 return skill
 
-        # Partial match: "gmail" matches "gmail-skill"
         for key, skill in self._skills_by_name.items():
             if lower.replace("-", "").replace(" ", "") in key.lower().replace("-", ""):
                 return skill
@@ -436,14 +531,12 @@ class AgentOrchestrator:
         """Execute a shell command from the skill router and return output."""
         import asyncio
 
-        # Security: check for dangerous commands
         try:
             self._command_guard.check(command)
         except DangerousCommandError as exc:
             logger.warning("Command blocked for skill '%s': %s", skill_name, exc)
             return f"Command blocked (dangerous pattern detected): {exc.description}"
 
-        # Fix bare "python"/"python3" → use script's local venv if available
         command = self._fix_python_path(command)
 
         logger.info("Executing skill command: %s", command)
@@ -495,7 +588,6 @@ class AgentOrchestrator:
             return f"[Skill '{skill_name}' not found. Available: {', '.join(self._skills_by_name.keys())}]"
 
         if not skill.script_path:
-            # Skill has no executable script — read SKILL.md for context
             skill_md = Path(skill.skill_dir) / "SKILL.md"
             if skill_md.is_file():
                 content = skill_md.read_text(encoding="utf-8")[:2000]
@@ -515,81 +607,54 @@ class AgentOrchestrator:
             logger.error("Skill '%s' execution failed: %s", skill_name, exc)
             return f"Error executing skill {skill_name}: {str(exc)[:200]}"
 
-    def _build_system_prompt(self) -> str:
-        """Assemble the full system prompt from persona and skills."""
-        parts = []
-
-        if self._persona_prompt:
-            parts.append(self._persona_prompt)
-
-        if self._skills_prompt:
-            parts.append(self._skills_prompt)
-
-        if not parts:
-            return (
-                "You are SimpleClaw, a helpful personal assistant agent. "
-                "Respond in the same language the user writes in. "
-                "Be concise and helpful."
-            )
-
-        return "\n\n---\n\n".join(parts)
+    # ------------------------------------------------------------------
+    # Skill formatting
+    # ------------------------------------------------------------------
 
     def _format_skills_for_prompt(self, skills: list[SkillDefinition]) -> str:
-        """Format skills as a compact list for the system prompt."""
         if not skills:
             return ""
-
         lines = ["## Available Skills", ""]
         for skill in skills:
             lines.append(f"- **{skill.name}**: {skill.description}")
         return "\n".join(lines)
 
     def _format_skills_for_router(self, skills: list[SkillDefinition]) -> str:
-        """Format skills with details for the skill routing prompt."""
         if not skills:
             return ""
-
         lines = []
         for skill in skills:
-            entry = f"- name: {skill.name}\n  description: {skill.description}"
-            if skill.trigger:
-                entry += f"\n  trigger: {skill.trigger}"
-            lines.append(entry)
+            desc = skill.description or ""
+            lines.append(f"- {skill.name}: {desc}")
         return "\n".join(lines)
 
     def _format_skills_for_router_with_usage(
         self, skills: list[SkillDefinition]
     ) -> str:
-        """Format skills with SKILL.md usage instructions for the router."""
         if not skills:
             return ""
-
         entries = []
         for skill in skills:
             entry = f"### {skill.name}\n{skill.description}\n"
-
-            # Include SKILL.md usage if available
             skill_md = Path(skill.skill_dir) / "SKILL.md"
             if skill_md.is_file():
                 try:
                     content = skill_md.read_text(encoding="utf-8")
-                    # Extract usage section (keep it concise)
                     if len(content) > 800:
                         content = content[:800] + "..."
                     entry += f"\n{content}\n"
                 except OSError:
                     pass
-
             entries.append(entry)
         return "\n---\n".join(entries)
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _fix_python_path(command: str) -> str:
-        """Replace bare python/python3 with a script-local venv python if available.
-
-        When LLM generates 'python script.py' or 'python3 script.py',
-        check if a venv exists near the script and use its python instead.
-        """
+        """Replace bare python/python3 with a script-local venv python if available."""
         import shlex
 
         parts = command.split(None, 1)
@@ -598,11 +663,9 @@ class AgentOrchestrator:
 
         interpreter, rest = parts[0], parts[1]
 
-        # Only handle bare python/python3 (not full paths like /usr/bin/python3)
         if interpreter not in ("python", "python3"):
             return command
 
-        # Find the script path in the rest of the command
         try:
             tokens = shlex.split(rest)
         except ValueError:
@@ -615,12 +678,10 @@ class AgentOrchestrator:
                 break
 
         if script_path is None:
-            # Fallback: at least use python3
             if interpreter == "python":
                 return f"python3 {rest}"
             return command
 
-        # Look for venv near the script
         for venv_dir in (
             script_path.parent / "venv",
             script_path.parent.parent / "venv",
@@ -631,83 +692,12 @@ class AgentOrchestrator:
             if venv_python.is_file():
                 return f"{venv_python} {rest}"
 
-        # No venv found, use python3
         if interpreter == "python":
             return f"python3 {rest}"
         return command
 
-    # ------------------------------------------------------------------
-    # Recipe commands (/recipe-name)
-    # ------------------------------------------------------------------
-
-    async def _try_recipe_command(self, text: str) -> str | None:
-        """Check if text is a /recipe-name command and execute it.
-
-        Discovers recipes from .agent/recipes/ on every call so new
-        recipes are available without restart.
-
-        Returns the response text, or None if not a recipe command.
-        """
-        stripped = text.strip()
-        if not stripped.startswith("/"):
-            return None
-
-        parts = stripped[1:].split(None, 1)
-        if not parts:
-            return None
-
-        cmd_name = parts[0]
-        rest = parts[1] if len(parts) > 1 else ""
-
-        # Discover recipes fresh from disk
-        recipes = discover_recipes(".agent/recipes")
-        recipes_by_name = {r.name: r for r in recipes}
-
-        recipe = recipes_by_name.get(cmd_name)
-        if recipe is None:
-            return None
-
-        logger.info("Recipe command: /%s", cmd_name)
-
-        # Parse key=value parameters
-        params = {}
-        if rest:
-            for match in re.finditer(r'(\w+)=(?:"([^"]*)"|(\S+))', rest):
-                key = match.group(1)
-                value = match.group(2) if match.group(2) is not None else match.group(3)
-                params[key] = value
-
-        # Render instructions with parameter substitution
-        if recipe.instructions:
-            rendered = recipe.instructions
-            # Apply defaults for missing params
-            for p in recipe.parameters:
-                if p.name not in params and p.default:
-                    params[p.name] = p.default
-
-            # Substitute {{ var }} and ${var}
-            def jinja_replacer(match):
-                key = match.group(1).strip()
-                return params.get(key, match.group(0))
-
-            rendered = re.sub(r"\{\{\s*(\w+)\s*\}\}", jinja_replacer, rendered)
-
-            def shell_replacer(match):
-                key = match.group(1)
-                return params.get(key, match.group(0))
-
-            rendered = re.sub(r"\$\{(\w+)\}", shell_replacer, rendered)
-
-            # Process rendered instructions through ReAct pipeline
-            return await self._react_loop(rendered)
-
-        # No instructions — fallback to step-based execution
-        return f"레시피 '{cmd_name}'에 instructions가 정의되어 있지 않습니다."
-
     def _load_skills_config(self) -> dict:
-        """Load skills config section from config.yaml."""
         import yaml
-
         try:
             with open(self._config_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
@@ -716,9 +706,7 @@ class AgentOrchestrator:
             return {}
 
     def _load_security_config(self) -> dict:
-        """Load security config section from config.yaml."""
         import yaml
-
         try:
             with open(self._config_path, encoding="utf-8") as f:
                 data = yaml.safe_load(f)

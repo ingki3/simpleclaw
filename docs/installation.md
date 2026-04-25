@@ -92,13 +92,13 @@ You are **SimpleClaw**, a personal assistant AI agent.
 ### 텔레그램 봇 실행 (포그라운드)
 
 ```bash
-.venv/bin/python scripts/test_telegram.py
+.venv/bin/python scripts/run_bot.py
 ```
 
 ### 백그라운드 실행
 
 ```bash
-nohup .venv/bin/python scripts/test_telegram.py > .agent/bot.log 2>&1 &
+nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
 
 ### 로그 확인
@@ -110,7 +110,7 @@ tail -f .agent/bot.log
 ### 봇 중지
 
 ```bash
-pgrep -f "test_telegram.py" | xargs kill
+pgrep -f "run_bot.py" | xargs kill
 ```
 
 ## 테스트

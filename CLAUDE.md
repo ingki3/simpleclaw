@@ -43,6 +43,17 @@ Python 3.11+: Follow standard conventions
 <!-- MANUAL ADDITIONS START -->
 ## 개발 작업 시 참고
 - AGENT.md 파일의 지침을 참고할 것
+- TODO.md 파일의 백로그와 진행 상태를 참고할 것
+
+## TODO.md 관리 규칙
+
+`TODO.md`는 프로젝트의 백로그/진행/완료 상태를 추적하는 단일 소스 오브 트루스(SSOT)이다.
+
+1. **작업 시작 전**: TODO.md의 Backlog에서 작업을 확인하고, `[>]`로 변경하여 In Progress 섹션으로 이동
+2. **작업 완료 시**: `[x]`로 변경하여 Done 섹션으로 이동, 완료 날짜 기록
+3. **새 작업 발견 시**: Backlog 섹션에 `[ ]`로 추가
+4. **블로커 발생 시**: `[!]`로 변경하고 사유를 주석으로 기록
+5. **커밋 시**: TODO.md 변경사항도 함께 커밋
 
 ## 테스트 계층
 
@@ -67,9 +78,9 @@ Python 3.11+: Follow standard conventions
 
 ```bash
 # 포그라운드
-.venv/bin/python scripts/test_telegram.py
+.venv/bin/python scripts/run_bot.py
 
 # 백그라운드
-nohup .venv/bin/python scripts/test_telegram.py > .agent/bot.log 2>&1 &
+nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
 <!-- MANUAL ADDITIONS END -->

@@ -81,6 +81,9 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
 
     # --- Fork bomb ---
     (re.compile(r":\(\)\{.*\|.*\};:", re.I), "fork_bomb", "Fork bomb"),
+
+    # --- GUI / interactive ---
+    (re.compile(r"^open\s+(https?://|/)", re.I | re.M), "open_url", "macOS open (launches GUI browser/app)"),
 ]
 
 
