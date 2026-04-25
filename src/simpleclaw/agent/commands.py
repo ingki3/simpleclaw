@@ -1,4 +1,11 @@
-"""Slash-command handlers: /cron, /recipe."""
+"""슬래시 명령어 핸들러 모듈 — /cron, /recipe 처리.
+
+사용자가 입력한 슬래시 명령어를 파싱하고 적절한 핸들러로 디스패치한다.
+
+동작 흐름:
+- /cron: CronScheduler를 통해 예약 작업의 CRUD를 수행
+- /recipe-name: 레시피를 검색하고, 파라미터를 치환한 후 ReAct 루프로 실행
+"""
 
 from __future__ import annotations
 
@@ -22,9 +29,14 @@ def try_cron_command(
     text: str,
     cron_scheduler: CronScheduler | None,
 ) -> str | None:
-    """Handle ``/cron`` commands for managing scheduled jobs.
+    """``/cron`` 명령어를 처리하여 예약 작업을 관리한다.
 
-    Returns response text, or *None* if not a ``/cron`` command.
+    Args:
+        text: 사용자 입력 텍스트.
+        cron_scheduler: CronScheduler 인스턴스 (없으면 에러 메시지 반환).
+
+    Returns:
+        응답 텍스트. ``/cron`` 명령이 아니면 *None*.
     """
     stripped = text.strip()
     if not stripped.startswith("/cron"):
@@ -66,11 +78,13 @@ def try_cron_command(
 
 
 def _cron_list(cron_scheduler: CronScheduler) -> str:
+    """등록된 cron 작업 목록을 반환한다 (builtin_tools의 공유 함수에 위임)."""
     from simpleclaw.agent.builtin_tools import _cron_list as bt_cron_list
     return bt_cron_list(cron_scheduler)
 
 
 def _cron_add(args_text: str, cron_scheduler: CronScheduler) -> str:
+    """cron 작업을 새로 등록한다. 형식: <이름> <분> <시> <일> <월> <요일> recipe|prompt <대상>"""
     from simpleclaw.daemon.models import ActionType
 
     parts = args_text.split()
@@ -114,12 +128,14 @@ def _cron_add(args_text: str, cron_scheduler: CronScheduler) -> str:
 
 
 def _cron_remove(name: str, cron_scheduler: CronScheduler) -> str:
+    """이름으로 cron 작업을 삭제한다."""
     if cron_scheduler.remove_job(name):
         return f"🗑️ '{name}' 작업이 삭제되었습니다."
     return f"⚠️ '{name}' 작업을 찾을 수 없습니다."
 
 
 def _cron_enable(name: str, cron_scheduler: CronScheduler) -> str:
+    """이름으로 cron 작업을 활성화한다."""
     from simpleclaw.daemon.models import CronJobNotFoundError
     try:
         cron_scheduler.enable_job(name)
@@ -129,6 +145,7 @@ def _cron_enable(name: str, cron_scheduler: CronScheduler) -> str:
 
 
 def _cron_disable(name: str, cron_scheduler: CronScheduler) -> str:
+    """이름으로 cron 작업을 비활성화한다."""
     from simpleclaw.daemon.models import CronJobNotFoundError
     try:
         cron_scheduler.disable_job(name)
@@ -142,11 +159,12 @@ def _cron_disable(name: str, cron_scheduler: CronScheduler) -> str:
 # ------------------------------------------------------------------
 
 async def try_recipe_command(text: str, react_loop_fn) -> str | None:
-    """Check if text is a ``/recipe-name`` command and execute it.
+    """텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.
 
-    ``react_loop_fn`` is the bound ``_react_loop`` method of the orchestrator.
+    ``react_loop_fn``은 오케스트레이터의 바인딩된 ``_react_loop`` 메서드이다.
 
-    Returns the response text, or *None* if not a recipe command.
+    Returns:
+        레시피 실행 결과 텍스트. 레시피 명령이 아니면 *None*.
     """
     stripped = text.strip()
     if not stripped.startswith("/"):
@@ -168,7 +186,7 @@ async def try_recipe_command(text: str, react_loop_fn) -> str | None:
 
     logger.info("Recipe command: /%s", cmd_name)
 
-    # Parse key=value parameters
+    # key=value 형식의 파라미터 파싱
     params = {}
     if rest:
         for match in re.finditer(r'(\w+)=(?:"([^"]*)"|(\S+))', rest):

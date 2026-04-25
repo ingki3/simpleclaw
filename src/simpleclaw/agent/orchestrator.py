@@ -1,10 +1,16 @@
-"""Agent orchestrator: ties persona, skills, memory, and LLM together.
+"""Agent orchestrator — 페르소나·스킬·메모리·LLM을 하나로 묶는 중앙 조율기.
 
-Response process (OpenClaw-inspired):
-1. Receive user message
-2. Ask LLM: "Does this message need a skill?" (skill routing)
-3. If skill needed → execute skill → include result in context
-4. Generate final response with full context (persona + history + skill result)
+응답 파이프라인 (OpenClaw-inspired):
+1. 사용자 메시지 수신
+2. LLM에 스킬 라우팅 질의 ("이 메시지에 스킬이 필요한가?")
+3. 스킬이 필요하면 → 실행 → 결과를 컨텍스트에 포함
+4. 전체 컨텍스트(페르소나 + 대화 이력 + 스킬 결과)로 최종 응답 생성
+
+Hot-reload 정책:
+  AGENT.md, USER.md, MEMORY.md, 스킬/레시피 파일은 매 메시지(process_message /
+  process_cron_message) 진입 시 1회 디스크에서 다시 읽는다.
+  → 파일 수정 후 봇 리스타트 없이 다음 메시지부터 반영됨.
+  → ReAct 루프 내부에서는 캐시된 값을 재사용하여 불필요한 I/O를 방지함.
 """
 
 from __future__ import annotations
@@ -67,51 +73,37 @@ _PROMPT_BUDGET_TIER2_LIMIT = 24_000
 
 
 class AgentOrchestrator:
-    """Central orchestrator that assembles persona + skills + history + LLM.
+    """페르소나 + 스킬 + 대화 이력 + LLM을 조합하는 중앙 오케스트레이터.
 
-    Response pipeline:
-    1. Build system prompt (persona + skill list)
-    2. Skill routing: ask LLM if a skill is needed
-    3. If needed: execute skill, add result to context
-    4. Generate final response with full context
-    5. Store conversation
+    응답 파이프라인:
+    1. 시스템 프롬프트 조립 (페르소나 + 스킬 목록)
+    2. 스킬 라우팅: LLM에게 스킬 필요 여부 질의
+    3. 필요 시: 스킬 실행 → 결과를 컨텍스트에 추가
+    4. 전체 컨텍스트로 최종 응답 생성
+    5. 대화 저장
     """
 
     def __init__(self, config_path: str | Path = "config.yaml") -> None:
         self._config_path = Path(config_path)
 
-        # Load configs
+        # --- 정적 설정 로드 (리스타트 시에만 갱신) ---
         agent_config = load_agent_config(config_path)
         persona_config = load_persona_config(config_path)
 
         self._history_limit = agent_config["history_limit"]
 
-        # Persona — resolve and assemble once (cached)
-        persona_files = resolve_persona_files(
-            local_dir=persona_config["local_dir"],
-            global_dir=persona_config["global_dir"],
-        )
-        assembly = assemble_prompt(
-            persona_files, persona_config["token_budget"]
-        )
-        self._persona_prompt = assembly.assembled_text or ""
+        # 페르소나·스킬 설정값 보관 — _reload_dynamic_files()에서 참조
+        self._persona_config = persona_config
+        skills_config = self._load_skills_config()
+        self._skills_config = skills_config
+
+        # 초기 로드: 페르소나·스킬 파일을 디스크에서 읽어 캐시 필드 채움
+        # (이후 매 메시지 진입 시 _reload_dynamic_files()로 갱신)
+        self._reload_dynamic_files()
 
         # Cron scheduler — injected after construction via set_cron_scheduler()
         # Must be initialized before _format_skills_for_router (budget estimation)
         self._cron_scheduler: CronScheduler | None = None
-
-        # Skills — discover once, store as dict for lookup
-        skills_config = self._load_skills_config()
-        self._skills = discover_skills(
-            local_dir=skills_config.get("local_dir", ".agent/skills"),
-            global_dir=skills_config.get("global_dir", "~/.agents/skills"),
-        )
-        self._skills_by_name: dict[str, SkillDefinition] = {
-            s.name: s for s in self._skills
-        }
-        self._skills_prompt = self._format_skills_for_prompt(self._skills)
-        self._skills_router_list = self._format_skills_for_router(self._skills)
-        self._skills_router_list_with_usage = self._format_skills_for_router_with_usage(self._skills)
 
         # LLM router
         self._router = create_router(config_path)
@@ -149,6 +141,36 @@ class AgentOrchestrator:
             self._router.get_default_backend(),
         )
 
+    def _reload_dynamic_files(self) -> None:
+        """페르소나·스킬 파일을 디스크에서 다시 읽어 캐시 필드를 갱신한다 (hot-reload).
+
+        호출 시점: __init__() 초기화 + 매 메시지 진입 시 1회.
+        ReAct 루프 내부에서는 호출하지 않아 불필요한 I/O를 방지한다.
+        """
+        # --- 페르소나 리로드 (AGENT.md, USER.md, MEMORY.md) ---
+        persona_files = resolve_persona_files(
+            local_dir=self._persona_config["local_dir"],
+            global_dir=self._persona_config["global_dir"],
+        )
+        assembly = assemble_prompt(
+            persona_files, self._persona_config["token_budget"]
+        )
+        self._persona_prompt = assembly.assembled_text or ""
+
+        # --- 스킬 리로드 (.agent/skills, ~/.agents/skills) ---
+        self._skills = discover_skills(
+            local_dir=self._skills_config.get("local_dir", ".agent/skills"),
+            global_dir=self._skills_config.get("global_dir", "~/.agents/skills"),
+        )
+        # 이름 기반 조회용 딕셔너리 (fuzzy match에서도 사용)
+        self._skills_by_name = {s.name: s for s in self._skills}
+        # 시스템 프롬프트용 스킬 목록 (사용자에게 보여지는 형태)
+        self._skills_prompt = self._format_skills_for_prompt(self._skills)
+        # 라우팅 판단용 스킬 목록 (LLM이 스킬 선택 시 참조)
+        self._skills_router_list = self._format_skills_for_router(self._skills)
+        # skill-docs 도구용 상세 목록 (SKILL.md 내용 포함)
+        self._skills_router_list_with_usage = self._format_skills_for_router_with_usage(self._skills)
+
     def set_cron_scheduler(self, scheduler: CronScheduler) -> None:
         """Inject CronScheduler so the agent can manage cron jobs via /cron commands."""
         self._cron_scheduler = scheduler
@@ -159,18 +181,23 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     async def process_cron_message(self, text: str) -> str:
-        """Process a cron job message with isolated context.
+        """크론 잡 메시지를 격리된 컨텍스트로 처리한다.
 
-        Uses the ReAct loop but does NOT load conversation history
-        and does NOT store messages in the shared conversation DB.
+        ReAct 루프를 사용하되, 대화 이력을 불러오지 않고
+        공유 대화 DB에 메시지를 저장하지 않는다.
         """
+        # 매 메시지 진입 시 1회 hot-reload (파일 변경 반영)
+        self._reload_dynamic_files()
         return await self._react_loop(text, isolated=True)
 
     async def process_message(
         self, text: str, user_id: int, chat_id: int
     ) -> str:
-        """Process an incoming message through the ReAct pipeline."""
-        # Check for /cron commands
+        """수신 메시지를 ReAct 파이프라인으로 처리한다."""
+        # 매 메시지 진입 시 1회 hot-reload (파일 변경 반영)
+        self._reload_dynamic_files()
+
+        # /cron 명령어 확인
         cron_result = try_cron_command(text, self._cron_scheduler)
         if cron_result is not None:
             self._store.add_message(ConversationMessage(
@@ -181,7 +208,7 @@ class AgentOrchestrator:
             ))
             return cron_result
 
-        # Check for /recipe-name commands
+        # /recipe-name 명령어 확인 (e.g. /ai-report)
         recipe_result = await try_recipe_command(text, self._react_loop)
         if recipe_result is not None:
             self._store.add_message(ConversationMessage(
@@ -210,7 +237,12 @@ class AgentOrchestrator:
     async def _dispatch_routing(
         self, routing: dict
     ) -> tuple[str | None, str | None]:
-        """Execute a single routing decision and return (skill_name, result)."""
+        """라우팅 결정 1건을 실행하여 (skill_name, result) 튜플을 반환한다.
+
+        Args:
+            routing: ReAct 파서가 추출한 Action JSON.
+                     필수 키: skill_name / 선택 키: command, args
+        """
         skill_name = routing.get("skill_name", "")
         command = routing.get("command", "")
 
@@ -219,7 +251,7 @@ class AgentOrchestrator:
             skill_name, command,
         )
 
-        # Built-in tools — handled internally
+        # 내장 도구 (cron, cli, web-fetch, file-* 등) — 외부 프로세스 없이 처리
         if skill_name in BUILTIN_TOOL_NAMES:
             result = await self._dispatch_builtin(skill_name, routing)
             return skill_name, result
@@ -235,7 +267,7 @@ class AgentOrchestrator:
     async def _dispatch_builtin(
         self, tool_name: str, routing: dict
     ) -> str:
-        """Dispatch a built-in tool action."""
+        """내장 도구를 실행한다. tool_name으로 분기하여 각 핸들러에 위임."""
         if tool_name == "cron":
             return handle_cron_action(routing, self._cron_scheduler)
         if tool_name == "cli":
@@ -262,7 +294,18 @@ class AgentOrchestrator:
     async def _react_loop(
         self, text: str, isolated: bool = False
     ) -> str:
-        """Execute the ReAct (Reasoning + Acting) loop."""
+        """ReAct (Reasoning + Acting) 루프를 실행한다.
+
+        매 반복마다 LLM에게 Thought/Action/Answer 형식의 응답을 요청한다.
+        - Answer가 반환되면 즉시 종료
+        - Action이 반환되면 스킬 실행 후 Observation을 trace에 추가
+        - 어느 형식도 아니면 raw 텍스트를 그대로 반환 (fallback)
+        - max_tool_iterations 초과 시 _generate_final()로 강제 종결
+
+        Args:
+            text: 사용자 원본 메시지
+            isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등)
+        """
         trace: list[str] = []
 
         for i in range(self._max_tool_iterations):
@@ -273,11 +316,13 @@ class AgentOrchestrator:
                 trace.append(f"Thought: {thought}")
                 logger.info("ReAct [%d] Thought: %s", i + 1, thought[:100])
 
+            # Answer가 파싱되면 최종 응답으로 반환
             if answer is not None:
                 logger.info("ReAct [%d] Answer: %d chars", i + 1, len(answer))
                 return answer
 
             if action:
+                # Action → 스킬 실행 → Observation을 trace에 기록
                 trace.append(
                     f"Action: {json.dumps(action, ensure_ascii=False)}"
                 )
@@ -289,21 +334,11 @@ class AgentOrchestrator:
                     i + 1, skill_name, len(observation),
                 )
             else:
-                # First iteration without Action/Answer → LLM ignored ReAct format.
-                # Retry once by injecting the raw response as a failed thought.
-                if i == 0:
-                    logger.warning(
-                        "ReAct [%d] no format detected, retrying with nudge", i + 1
-                    )
-                    trace.append(
-                        f"Thought: {raw[:500]}\n"
-                        "Observation: [SYSTEM] You must use the Thought/Action/Answer format. "
-                        "Use a tool to get real-time information. Do NOT answer from memory."
-                    )
-                    continue
+                # Action/Answer 모두 없음 → 일반 텍스트 응답으로 간주
                 logger.info("ReAct [%d] fallback: raw response", i + 1)
                 return raw
 
+        # 최대 반복 횟수 도달 — trace를 기반으로 최종 응답 생성
         logger.warning(
             "ReAct max iterations (%d) reached, generating final answer",
             self._max_tool_iterations,
@@ -316,7 +351,17 @@ class AgentOrchestrator:
         trace: list[str],
         isolated: bool = False,
     ) -> str:
-        """Execute one ReAct step: send trace to LLM and get response."""
+        """ReAct 루프 1회분: 현재 trace와 함께 LLM을 호출하여 응답을 받는다.
+
+        시스템 프롬프트 구성:
+          [페르소나 + 스킬 목록] + [ReAct 지시문 + 내장 도구 명세]
+
+        Args:
+            user_message: 사용자 원본 메시지
+            trace: 이전 Thought/Action/Observation 기록
+            isolated: True면 대화 이력 없이 독립 실행
+        """
+        # 시스템 프롬프트 = 페르소나·스킬 + ReAct 지시문·내장 도구
         system_prompt = self._build_system_prompt()
         builtin_tools = self._build_builtin_tools_prompt()
         react_system = REACT_SYSTEM_PROMPT.format(
@@ -328,6 +373,7 @@ class AgentOrchestrator:
 
         trace_text = "\n".join(trace) if trace else "(no previous steps)"
 
+        # 현재 시각을 KST로 주입하여 LLM이 시간 맥락을 파악하게 함
         from datetime import datetime, timezone, timedelta
         kst = timezone(timedelta(hours=9))
         now_kst = datetime.now(kst)
@@ -341,6 +387,8 @@ class AgentOrchestrator:
             user_message=user_message,
         )
 
+        # isolated=True(크론 잡): 이력 없이 단일 메시지만 전송
+        # isolated=False(일반): 최근 대화 이력 + 현재 메시지 전송
         if isolated:
             messages = [{"role": "user", "content": user_prompt}]
         else:
@@ -369,7 +417,7 @@ class AgentOrchestrator:
         trace: list[str],
         isolated: bool = False,
     ) -> str:
-        """Generate a final answer when max iterations are reached."""
+        """최대 반복 도달 시 trace 기반으로 최종 응답을 생성한다."""
         system_prompt = self._build_system_prompt()
         trace_text = "\n".join(trace)
         final_prompt = (
@@ -408,7 +456,7 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def _build_builtin_tools_prompt(self) -> str:
-        """Build the built-in tools section for the ReAct system prompt."""
+        """ReAct 시스템 프롬프트에 포함할 내장 도구 명세를 조립한다."""
         sections = [
             SKILL_DOCS_TOOL_PROMPT,
             CLI_TOOL_PROMPT,
@@ -437,7 +485,12 @@ class AgentOrchestrator:
         return "\n\n".join(sections)
 
     def _build_system_prompt(self) -> str:
-        """Assemble the full system prompt from persona and skills."""
+        """캐시된 페르소나·스킬 텍스트를 조합하여 시스템 프롬프트를 반환한다.
+
+        NOTE: 디스크 리로드는 여기서 하지 않는다.
+        process_message / process_cron_message 진입 시 1회
+        _reload_dynamic_files()가 호출되므로, 여기서는 캐시된 값만 사용.
+        """
         parts = []
 
         if self._persona_prompt:
@@ -460,20 +513,31 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def _resolve_skill_name(self, name: str) -> SkillDefinition | None:
-        """Fuzzy-match a skill name returned by the router to a registered skill."""
+        """LLM이 반환한 스킬 이름을 등록된 스킬과 fuzzy-match한다.
+
+        매칭 우선순위:
+        1. 정확히 일치
+        2. 대소문자 무시 일치
+        3. 공백→하이픈 정규화 후 일치
+        4. 구분자 제거 후 부분 문자열 포함
+        """
+        # 1단계: 정확 매치
         if name in self._skills_by_name:
             return self._skills_by_name[name]
 
+        # 2단계: 대소문자 무시
         lower = name.lower()
         for key, skill in self._skills_by_name.items():
             if key.lower() == lower:
                 return skill
 
+        # 3단계: 공백→하이픈 정규화 (e.g. "ai report" → "ai-report")
         normalized = lower.replace(" ", "-")
         for key, skill in self._skills_by_name.items():
             if key.lower() == normalized:
                 return skill
 
+        # 4단계: 구분자 제거 후 부분 문자열 매치
         for key, skill in self._skills_by_name.items():
             if lower.replace("-", "").replace(" ", "") in key.lower().replace("-", ""):
                 return skill
@@ -483,7 +547,15 @@ class AgentOrchestrator:
     async def _execute_command(
         self, skill_name: str, command: str
     ) -> str:
-        """Execute a shell command from the skill router and return output."""
+        """스킬 라우터가 요청한 셸 명령을 실행하고 출력을 반환한다.
+
+        보안 절차:
+        1. CommandGuard로 위험 명령 차단
+        2. python 경로를 venv 내 python으로 자동 치환
+        3. 환경변수 필터링 (env_passthrough만 전달)
+        4. 프로세스 그룹 격리 (preexec_fn)
+        5. 타임아웃 초과 시 프로세스 그룹 강제 종료
+        """
         import asyncio
 
         try:
@@ -536,7 +608,10 @@ class AgentOrchestrator:
     async def _execute_skill(
         self, skill_name: str, args_str: str
     ) -> str | None:
-        """Execute a skill by name and return its output."""
+        """이름으로 스킬을 찾아 실행하고 출력을 반환한다.
+
+        script_path가 없는 스킬은 SKILL.md 문서를 대신 반환한다.
+        """
         skill = self._resolve_skill_name(skill_name)
         if skill is None:
             logger.warning("Skill '%s' not found in registry", skill_name)
@@ -567,6 +642,7 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def _format_skills_for_prompt(self, skills: list[SkillDefinition]) -> str:
+        """사용자에게 보여지는 시스템 프롬프트용 스킬 목록을 생성한다."""
         if not skills:
             return ""
         lines = ["## Available Skills", ""]
@@ -585,16 +661,21 @@ class AgentOrchestrator:
         return desc
 
     def _format_skills_for_router(self, skills: list[SkillDefinition]) -> str:
-        """Format skills list with budget-aware tiering."""
+        """프롬프트 버짓에 맞춰 스킬 목록을 단계적으로 축약한다.
+
+        Tier 1: 이름 + 요약 설명 (18K자 이내)
+        Tier 2: 이름만 (24K자 이내)
+        Tier 3: 이분 탐색으로 들어갈 수 있는 최대 스킬 수만 포함
+        """
         if not skills:
             return ""
 
-        # Tier 1: name + truncated description
+        # Tier 1: 이름 + 요약 설명
         tier1 = self._format_skills_tier1(skills)
         if self._estimate_prompt_size(tier1) <= _PROMPT_BUDGET_TIER1_LIMIT:
             return tier1
 
-        # Tier 2: names only (descriptions dropped)
+        # Tier 2: 이름만 (설명 제거)
         tier2 = self._format_skills_tier2(skills)
         if self._estimate_prompt_size(tier2) <= _PROMPT_BUDGET_TIER2_LIMIT:
             logger.info(
@@ -602,7 +683,7 @@ class AgentOrchestrator:
             )
             return tier2
 
-        # Tier 3: binary search for max skills that fit
+        # Tier 3: 이분 탐색으로 최대 포함 가능 스킬 수 결정
         logger.warning(
             "Prompt budget: Tier 3 (truncated) for %d skills", len(skills)
         )
@@ -637,14 +718,15 @@ class AgentOrchestrator:
         return text
 
     def _estimate_prompt_size(self, skills_text: str) -> int:
-        """Estimate total system prompt size given a skills section."""
-        base = len(self._persona_prompt) + 2000  # ReAct template overhead
+        """스킬 섹션을 포함한 전체 시스템 프롬프트 크기를 추정한다 (문자 수 기준)."""
+        base = len(self._persona_prompt) + 2000  # ReAct 템플릿 오버헤드
         builtin = len(self._build_builtin_tools_prompt())
         return base + builtin + len(skills_text)
 
     def _format_skills_for_router_with_usage(
         self, skills: list[SkillDefinition]
     ) -> str:
+        """skill-docs 도구용 상세 스킬 목록을 생성한다 (SKILL.md 내용 포함)."""
         if not skills:
             return ""
         entries = []
@@ -668,7 +750,10 @@ class AgentOrchestrator:
 
     @staticmethod
     def _fix_python_path(command: str) -> str:
-        """Replace bare python/python3 with a script-local venv python if available."""
+        """python/python3 호출을 스크립트 인근 venv의 python으로 치환한다.
+
+        탐색 순서: script.py 기준 ./venv, ../venv, ./.venv, ../.venv
+        """
         import shlex
 
         parts = command.split(None, 1)
@@ -711,6 +796,7 @@ class AgentOrchestrator:
         return command
 
     def _load_skills_config(self) -> dict:
+        """config.yaml에서 skills 섹션을 로드한다."""
         import yaml
         try:
             with open(self._config_path, encoding="utf-8") as f:
@@ -720,6 +806,7 @@ class AgentOrchestrator:
             return {}
 
     def _load_security_config(self) -> dict:
+        """config.yaml에서 security 섹션을 로드한다."""
         import yaml
         try:
             with open(self._config_path, encoding="utf-8") as f:

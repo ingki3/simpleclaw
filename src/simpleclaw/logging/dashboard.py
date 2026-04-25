@@ -1,4 +1,11 @@
-"""Lightweight web dashboard for agent monitoring."""
+"""에이전트 모니터링용 경량 웹 대시보드.
+
+aiohttp 기반 단일 페이지 대시보드를 제공한다.
+- GET /           : 대시보드 HTML (메트릭 + 최근 실행 이력)
+- GET /api/metrics: MetricsCollector 스냅샷 JSON
+- GET /api/logs   : StructuredLogger 엔트리 JSON (날짜·건수 필터)
+프론트엔드는 10초 주기로 자동 갱신된다.
+"""
 
 from __future__ import annotations
 
@@ -73,7 +80,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 class DashboardServer:
-    """Lightweight web dashboard served via aiohttp."""
+    """aiohttp 기반 경량 웹 대시보드 서버.
+
+    MetricsCollector와 StructuredLogger를 주입받아 API 엔드포인트로 노출한다.
+    """
 
     def __init__(
         self,
@@ -91,6 +101,7 @@ class DashboardServer:
         self._running = False
 
     async def start(self) -> None:
+        """대시보드 HTTP 서버를 시작한다."""
         self._app = web.Application()
         self._app.router.add_get("/", self._handle_dashboard)
         self._app.router.add_get("/api/metrics", self._handle_metrics)
@@ -104,6 +115,7 @@ class DashboardServer:
         logger.info("Dashboard started on %s:%d", self._host, self._port)
 
     async def stop(self) -> None:
+        """대시보드 HTTP 서버를 중지한다."""
         if self._runner:
             await self._runner.cleanup()
         self._running = False
@@ -114,13 +126,16 @@ class DashboardServer:
         return self._running
 
     async def _handle_dashboard(self, request: web.Request) -> web.Response:
+        """대시보드 HTML 페이지를 반환한다."""
         return web.Response(text=_DASHBOARD_HTML, content_type="text/html")
 
     async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """현재 메트릭 스냅샷을 JSON으로 반환한다."""
         snapshot = self._metrics.get_snapshot()
         return web.json_response(snapshot.to_dict())
 
     async def _handle_logs(self, request: web.Request) -> web.Response:
+        """구조화된 로그 엔트리를 JSON 배열로 반환한다."""
         date = request.query.get("date")
         limit = int(request.query.get("limit", "50"))
         entries = self._logger.get_entries(date=date, limit=limit)

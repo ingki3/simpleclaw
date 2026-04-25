@@ -1,4 +1,8 @@
-"""Metrics collector for agent monitoring."""
+"""에이전트 모니터링용 메트릭 수집기.
+
+스레드 안전한 카운터로 실행 횟수, 성공/실패, 토큰 사용량, 서브에이전트 생성 수 등을
+추적한다. get_snapshot()으로 현재 시점의 불변 스냅샷을 얻을 수 있다.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,10 @@ from datetime import datetime
 
 @dataclass
 class MetricsSnapshot:
-    """A snapshot of current metrics."""
+    """현재 메트릭의 불변 스냅샷.
+
+    대시보드 API 응답 등에서 스레드 안전하게 전달하기 위해 사용한다.
+    """
 
     total_executions: int = 0
     successful_executions: int = 0
@@ -22,6 +29,7 @@ class MetricsSnapshot:
     timestamp: str = ""
 
     def to_dict(self) -> dict:
+        """JSON 직렬화용 딕셔너리로 변환한다."""
         return {
             "total_executions": self.total_executions,
             "successful_executions": self.successful_executions,
@@ -36,7 +44,10 @@ class MetricsSnapshot:
 
 
 class MetricsCollector:
-    """Thread-safe metrics collector for agent operations."""
+    """스레드 안전한 에이전트 작업 메트릭 수집기.
+
+    threading.Lock으로 동시 접근을 보호하며, 각 메트릭은 단조 증가 카운터이다.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -54,6 +65,7 @@ class MetricsCollector:
         duration_ms: float = 0.0,
         tokens_used: int = 0,
     ) -> None:
+        """에이전트 실행 결과를 기록한다."""
         with self._lock:
             self._total_executions += 1
             if success:
@@ -64,14 +76,17 @@ class MetricsCollector:
             self._total_tokens += tokens_used
 
     def record_sub_agent_spawn(self) -> None:
+        """서브에이전트 생성을 기록한다."""
         with self._lock:
             self._sub_agent_spawns += 1
 
     def set_active_cron_jobs(self, count: int) -> None:
+        """활성 크론 잡 수를 갱신한다."""
         with self._lock:
             self._active_cron_jobs = count
 
     def get_snapshot(self) -> MetricsSnapshot:
+        """현재 메트릭의 불변 스냅샷을 반환한다."""
         with self._lock:
             error_rate = (
                 self._failed / self._total_executions
@@ -91,6 +106,7 @@ class MetricsCollector:
             )
 
     def reset(self) -> None:
+        """모든 메트릭 카운터를 초기화한다."""
         with self._lock:
             self._total_executions = 0
             self._successful = 0

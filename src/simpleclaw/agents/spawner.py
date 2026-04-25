@@ -1,4 +1,10 @@
-"""Sub-agent spawner: spawn, manage, and communicate with sub-agents."""
+"""서브에이전트 스포너: 서브에이전트 생성, 관리, 통신.
+
+서브프로세스로 서브에이전트를 생성하고, 동시성 풀·워크스페이스·권한 범위를 관리한다.
+- 풀 슬롯 획득 → 워크스페이스 생성 → 환경변수로 권한 범위 주입 → 프로세스 실행
+- stdout의 JSON을 파싱하여 SubAgentResult로 반환
+- 타임아웃 시 SIGTERM → 유예 기간 후 SIGKILL 순서로 종료
+"""
 
 from __future__ import annotations
 
@@ -22,11 +28,14 @@ from simpleclaw.agents.workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
-_GRACE_PERIOD = 5  # seconds before SIGKILL after SIGTERM
+_GRACE_PERIOD = 5  # SIGTERM 후 SIGKILL까지 유예 시간(초)
 
 
 class SubAgentSpawner:
-    """Spawns and manages sub-agent subprocesses."""
+    """서브에이전트 서브프로세스를 생성하고 관리한다.
+
+    동시성 풀, 워크스페이스 매니저, 기본 권한 범위를 config에서 초기화한다.
+    """
 
     def __init__(self, config: dict) -> None:
         self._config = config
@@ -54,16 +63,16 @@ class SubAgentSpawner:
         scope: PermissionScope | None = None,
         timeout: int | None = None,
     ) -> SubAgentResult:
-        """Spawn a sub-agent and wait for its result.
+        """서브에이전트를 생성하고 결과를 대기한다.
 
-        Acquires a pool slot (blocks if pool is full), creates workspace,
-        injects permission scope, runs the command, and parses JSON output.
+        풀 슬롯 획득(풀이 가득 차면 대기) → 워크스페이스 생성 →
+        권한 범위 주입 → 커맨드 실행 → JSON 출력 파싱 후 결과 반환.
         """
         agent_id = str(uuid.uuid4())[:8]
         effective_scope = scope or self._default_scope
         effective_timeout = timeout or self._default_timeout
 
-        # Create workspace and add to scope
+        # 워크스페이스 생성 후 권한 범위에 추가
         workspace = self._workspace.create(agent_id)
         scope_with_workspace = PermissionScope(
             allowed_paths=[str(workspace)] + effective_scope.allowed_paths,
@@ -79,7 +88,7 @@ class SubAgentSpawner:
             timeout=effective_timeout,
         )
 
-        # Acquire pool slot
+        # 풀 슬롯 획득
         await self._pool.acquire()
         agent.status = SubAgentStatus.RUNNING
         agent.spawn_time = datetime.now()
@@ -104,7 +113,7 @@ class SubAgentSpawner:
         scope: PermissionScope | None = None,
         timeout: int | None = None,
     ) -> SubAgentResult:
-        """Convenience method to spawn a Python script as a sub-agent."""
+        """Python 스크립트를 서브에이전트로 실행하는 편의 메서드."""
         import sys
 
         return await self.spawn(
@@ -115,13 +124,15 @@ class SubAgentSpawner:
         )
 
     def get_running(self) -> list[SubAgent]:
+        """현재 실행 중인 서브에이전트 목록을 반환한다."""
         return list(self._running_agents.values())
 
     def get_pool_status(self) -> dict:
+        """동시성 풀의 현재 상태를 반환한다."""
         return self._pool.get_status()
 
     async def shutdown(self) -> None:
-        """Gracefully terminate all running sub-agents."""
+        """실행 중인 모든 서브에이전트를 안전하게 종료한다."""
         for agent_id, proc in list(self._processes.items()):
             agent = self._running_agents.get(agent_id)
             try:
@@ -144,10 +155,10 @@ class SubAgentSpawner:
         self._processes.clear()
 
     async def _execute(self, agent: SubAgent) -> SubAgentResult:
-        """Execute the sub-agent process and parse results."""
+        """서브에이전트 프로세스를 실행하고 결과를 파싱한다."""
         start_time = datetime.now()
 
-        # Prepare environment with permission scope
+        # 환경변수에 권한 범위·에이전트 ID·워크스페이스 경로 주입
         env = os.environ.copy()
         env["AGENT_SCOPE"] = json.dumps(agent.scope.to_dict())
         env["AGENT_ID"] = agent.agent_id
@@ -194,7 +205,7 @@ class SubAgentSpawner:
             agent.exit_code = proc.returncode
             agent.end_time = datetime.now()
 
-            # Parse JSON output
+            # stdout JSON 파싱
             stdout_text = stdout.decode("utf-8", errors="replace").strip()
 
             if proc.returncode != 0:
@@ -207,7 +218,7 @@ class SubAgentSpawner:
                     stderr_text[:500],
                 )
 
-                # Try to parse stdout as JSON even on failure
+                # 실패 시에도 stdout에 JSON이 있으면 파싱 시도
                 try:
                     parsed = json.loads(stdout_text) if stdout_text else {}
                     return SubAgentResult(
@@ -227,7 +238,7 @@ class SubAgentSpawner:
                         execution_time=elapsed,
                     )
 
-            # Success path — parse JSON
+            # 성공 경로 — JSON 파싱
             if not stdout_text:
                 agent.status = SubAgentStatus.SUCCESS
                 return SubAgentResult(
