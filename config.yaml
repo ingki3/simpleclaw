@@ -11,12 +11,22 @@ llm:
       api_key_env: "OPENAI_API_KEY"
     gemini:
       type: "api"
-      model: "gemini-3.1-flash-lite-preview"
+      model: "gemini-3-flash-preview"
       api_key_env: "GOOGLE_API_KEY"
 
 agent:
   history_limit: 20
   db_path: ".agent/conversations.db"
+  max_tool_iterations: 5
+  workspace_dir: ".agent/workspace"
+
+security:
+  command_guard:
+    enabled: true
+    allowlist: []
+  env_passthrough:
+    - GEMINI_API_KEY
+    - GOOGLE_API_KEY
 
 skills:
   local_dir: ".agent/skills"
@@ -68,6 +78,7 @@ daemon:
   dreaming:
     overnight_hour: 3
     idle_threshold: 7200
+    model: "gemini"
   wait_state:
     default_timeout: 3600
 

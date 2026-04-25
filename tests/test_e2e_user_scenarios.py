@@ -200,15 +200,11 @@ class TestScenario_NormalConversation:
         assert "SimpleClaw" in orch._persona_prompt
         assert "TestUser" in orch._persona_prompt
 
-        # LLM Mock: 스킬 라우터 → 스킬 불필요, 응답 생성
-        call_count = 0
+        # LLM Mock: ReAct → Answer directly (no skill needed)
         async def mock_send(request):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:  # Skill router
-                return _mock_llm_response('{"use_skill": false}')
-            else:  # Final response
-                return _mock_llm_response("안녕하세요! 무엇을 도와드릴까요?")
+            return _mock_llm_response(
+                "Thought: 일반 인사입니다.\nAnswer: 안녕하세요! 무엇을 도와드릴까요?"
+            )
 
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
@@ -235,9 +231,9 @@ class TestScenario_NormalConversation:
 
         async def mock_send(request):
             captured_requests.append(request)
-            if "use_skill" not in request.user_message:
-                return _mock_llm_response('{"use_skill": false}')
-            return _mock_llm_response("응답입니다.")
+            return _mock_llm_response(
+                "Thought: 대화를 처리합니다.\nAnswer: 응답입니다."
+            )
 
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
@@ -280,30 +276,34 @@ class TestScenario_SkillExecution:
         time_script = tmp_path / ".agent" / "skills" / "time-skill" / "run.py"
 
         call_count = 0
-        captured_system_prompt = None
+        captured_user_message = None
 
         async def mock_send(request):
-            nonlocal call_count, captured_system_prompt
+            nonlocal call_count, captured_user_message
             call_count += 1
-            if call_count == 1:  # Skill router
-                return _mock_llm_response(json.dumps({
-                    "use_skill": True,
+            if call_count == 1:  # ReAct: Action
+                action = json.dumps({
                     "skill_name": "time-skill",
                     "command": f"{sys.executable} {time_script}"
-                }))
-            else:  # Final response (with skill result in system prompt)
-                captured_system_prompt = request.system_prompt
-                return _mock_llm_response("현재 시간은 2026-04-18 21:30:00 입니다.")
+                })
+                return _mock_llm_response(
+                    f"Thought: 시간을 확인합니다.\nAction: {action}"
+                )
+            else:  # ReAct: Answer (Observation in trace)
+                captured_user_message = request.user_message
+                return _mock_llm_response(
+                    "Thought: 시간을 확인했습니다.\nAnswer: 현재 시간은 2026-04-18 21:30:00 입니다."
+                )
 
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
 
         response = await orch.process_message("지금 몇 시야?", 123456, 789)
 
-        # 스킬이 실제로 실행되어 결과가 시스템 프롬프트에 포함되었는지
-        assert captured_system_prompt is not None
-        assert "Skill Execution Result" in captured_system_prompt
-        assert "Current time:" in captured_system_prompt
+        # 스킬이 실제로 실행되어 결과가 Observation에 포함되었는지
+        assert captured_user_message is not None
+        assert "Observation:" in captured_user_message
+        assert "Current time:" in captured_user_message
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "fake"})
     @pytest.mark.asyncio
@@ -318,16 +318,16 @@ class TestScenario_SkillExecution:
         async def mock_send(request):
             nonlocal call_count
             call_count += 1
-            if call_count == 1:
-                return _mock_llm_response('{"use_skill": false}')
-            return _mock_llm_response("파이썬은 프로그래밍 언어입니다.")
+            return _mock_llm_response(
+                "Thought: 스킬이 필요 없습니다.\nAnswer: 파이썬은 프로그래밍 언어입니다."
+            )
 
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
 
         response = await orch.process_message("파이썬이 뭐야?", 123456, 789)
         assert "파이썬" in response
-        assert call_count == 2  # router + response (no skill execution)
+        assert call_count == 1  # single ReAct step (Answer directly)
 
 
 # ──────────────────────────────────────────────────────────
@@ -500,7 +500,7 @@ class TestScenario_Dreaming:
         # MEMORY.md 업데이트 확인
         updated_content = memory_file.read_text()
         assert len(updated_content) > len(original_content)
-        assert "Session" in updated_content
+        assert "##" in updated_content  # date-based header from dreaming summary
 
         # 백업 파일 생성 확인
         backups = list(tmp_path.glob(".agent/MEMORY.*.bak"))

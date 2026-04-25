@@ -13,6 +13,13 @@ from simpleclaw.recipes.models import (
     StepResult,
     StepType,
 )
+from simpleclaw.security import (
+    CommandGuard,
+    DangerousCommandError,
+    filter_env,
+    get_preexec_fn,
+    kill_process_group,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +28,7 @@ async def execute_recipe(
     recipe: RecipeDefinition,
     variables: dict[str, str] | None = None,
     timeout: int = 60,
+    command_guard: CommandGuard | None = None,
 ) -> RecipeResult:
     """Execute a recipe's steps sequentially.
 
@@ -55,7 +63,9 @@ async def execute_recipe(
         content = _substitute_variables(step.content, variables)
 
         if step.step_type == StepType.COMMAND:
-            result = await _execute_command(step.name, content, timeout)
+            result = await _execute_command(
+                step.name, content, timeout, command_guard=command_guard,
+            )
         elif step.step_type == StepType.PROMPT:
             # Prompt steps return the resolved prompt text
             # (actual LLM call is the caller's responsibility)
@@ -99,21 +109,36 @@ def _substitute_variables(content: str, variables: dict[str, str]) -> str:
 
 
 async def _execute_command(
-    name: str, command: str, timeout: int
+    name: str,
+    command: str,
+    timeout: int,
+    command_guard: CommandGuard | None = None,
 ) -> StepResult:
     """Execute a shell command and return the result."""
+    # Security: check for dangerous commands
+    if command_guard is not None:
+        try:
+            command_guard.check(command)
+        except DangerousCommandError as exc:
+            return StepResult(
+                step_name=name,
+                success=False,
+                error=f"Command blocked (dangerous pattern): {exc.description}",
+            )
+
     try:
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=filter_env(),
+            preexec_fn=get_preexec_fn(),
         )
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=timeout
         )
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        await kill_process_group(process)
         return StepResult(
             step_name=name,
             success=False,

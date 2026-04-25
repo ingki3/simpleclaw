@@ -31,11 +31,17 @@ class RecipeStep:
 
 @dataclass
 class RecipeDefinition:
-    """A complete recipe parsed from recipe.yaml."""
+    """A complete recipe parsed from recipe.yaml.
+
+    Supports two formats:
+    - Step-based: ``steps`` populated (legacy)
+    - Instruction-based: ``instructions`` populated (v2)
+    """
     name: str
     description: str = ""
     parameters: list[RecipeParameter] = field(default_factory=list)
     steps: list[RecipeStep] = field(default_factory=list)
+    instructions: str = ""
     recipe_dir: str = ""
 
 

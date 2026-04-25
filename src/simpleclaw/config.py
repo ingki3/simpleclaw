@@ -114,6 +114,7 @@ _DAEMON_DEFAULTS: dict = {
     "dreaming": {
         "overnight_hour": 3,
         "idle_threshold": 7200,
+        "model": "",
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -169,6 +170,10 @@ def load_daemon_config(config_path: str | Path) -> dict:
                 "idle_threshold",
                 _DAEMON_DEFAULTS["dreaming"]["idle_threshold"],
             ),
+            "model": dreaming.get(
+                "model",
+                _DAEMON_DEFAULTS["dreaming"]["model"],
+            ),
         },
         "wait_state": {
             "default_timeout": wait_state.get(
@@ -182,6 +187,8 @@ def load_daemon_config(config_path: str | Path) -> dict:
 _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
     "db_path": ".agent/conversations.db",
+    "max_tool_iterations": 5,
+    "workspace_dir": ".agent/workspace",
 }
 
 
@@ -209,6 +216,12 @@ def load_agent_config(config_path: str | Path) -> dict:
             "history_limit", _AGENT_DEFAULTS["history_limit"]
         ),
         "db_path": agent.get("db_path", _AGENT_DEFAULTS["db_path"]),
+        "max_tool_iterations": agent.get(
+            "max_tool_iterations", _AGENT_DEFAULTS["max_tool_iterations"]
+        ),
+        "workspace_dir": agent.get(
+            "workspace_dir", _AGENT_DEFAULTS["workspace_dir"]
+        ),
     }
 
 

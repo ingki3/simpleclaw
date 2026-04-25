@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shutil
 import sys
 from pathlib import Path
 
+from simpleclaw.security import filter_env, get_preexec_fn, kill_process_group
 from simpleclaw.skills.models import (
     SkillDefinition,
     SkillExecutionError,
@@ -54,6 +54,8 @@ async def execute_skill(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=skill.skill_dir or None,
+            env=filter_env(),
+            preexec_fn=get_preexec_fn(),
         )
 
         stdout, stderr = await asyncio.wait_for(
@@ -61,8 +63,7 @@ async def execute_skill(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        await kill_process_group(process)
         raise SkillTimeoutError(
             f"Skill '{skill.name}' timed out after {timeout}s"
         )

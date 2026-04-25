@@ -18,6 +18,11 @@ venv/
 .coverage
 htmlcov/
 
+# Agent runtime
+.agent/bot.log
+.agent/conversations.db
+.agent/daemon.db
+
 # OS / IDE
 .DS_Store
 .idea/

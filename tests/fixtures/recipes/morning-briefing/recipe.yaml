@@ -1,0 +1,21 @@
+name: morning-briefing
+description: "Morning briefing with email and calendar summary"
+trigger: "아침 브리핑, morning briefing"
+
+parameters:
+  - name: date
+    description: "Target date"
+    required: false
+    default: "today"
+
+skills:
+  - gmail-skill
+  - google-calendar-skill
+
+instructions: |
+  Check unread emails and calendar for {{ date }}.
+  Summarize important items in a brief morning report.
+  Group by urgency: must-act-today vs informational.
+
+settings:
+  timeout: 120
