@@ -27,7 +27,7 @@ llm:
     gemini:
       type: "api"
       model: "gemini-2.0-flash"
-      api_key_env: "GOOGLE_API_KEY"
+      api_key: "test-key"
 
 agent:
   history_limit: 5
