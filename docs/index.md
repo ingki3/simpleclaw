@@ -24,11 +24,13 @@ SimpleClaw는 **확장 가능한 개인 비서 AI 에이전트**입니다. Pytho
 사용자 (Telegram / Webhook)
     ↓
 AgentOrchestrator
-    ├── PersonaAssembler  ← AGENT.md, USER.md, MEMORY.md
-    ├── LLMRouter         ← Claude / Gemini / GPT-4o
-    ├── SkillExecutor     ← 스킬 디스커버리 + MCP + CommandGuard
-    ├── RecipeExecutor    ← YAML 레시피
-    ├── ConversationStore ← SQLite 대화 히스토리
-    ├── CronScheduler     ← APScheduler 예약 실행
-    └── SubAgentSpawner   ← 격리된 서브 에이전트
+    ├── ReAct Loop         ← Thought → Action → Observation → Answer
+    ├── PersonaAssembler   ← AGENT.md, USER.md, MEMORY.md
+    ├── LLMRouter          ← Claude / Gemini / GPT-4o
+    ├── SkillExecutor      ← 스킬 디스커버리 + MCP + CommandGuard
+    ├── RecipeExecutor     ← YAML 레시피 (/recipe-name 슬래시 명령)
+    ├── ConversationStore  ← SQLite 대화 히스토리
+    ├── Workspace          ← 스킬 파일 출력 격리 (.agent/workspace)
+    ├── CronScheduler      ← APScheduler 예약 실행
+    └── SubAgentSpawner    ← 격리된 서브 에이전트
 ```

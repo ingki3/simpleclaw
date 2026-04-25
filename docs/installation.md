@@ -49,6 +49,12 @@ llm:
 agent:
   history_limit: 20          # 대화 히스토리 최대 개수
   max_tool_iterations: 5     # 멀티턴 도구 최대 반복
+  workspace_dir: ".agent/workspace"  # 스킬 파일 출력 디렉토리
+
+# 데몬 설정
+daemon:
+  dreaming:
+    model: "gemini"          # 드리밍에 사용할 LLM (선택)
 
 # 텔레그램 화이트리스트
 telegram:
@@ -128,6 +134,7 @@ pgrep -f "test_telegram.py" | xargs kill
 .agent/
 ├── conversations.db    # 대화 히스토리 DB
 ├── daemon.db          # Cron 작업 DB
+├── workspace/         # 스킬 파일 출력 디렉토리
 ├── HEARTBEAT.md       # 데몬 상태
 └── bot.log            # 봇 로그 (백그라운드 실행 시)
 ```

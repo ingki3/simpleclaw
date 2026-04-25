@@ -18,6 +18,7 @@ agent:
   history_limit: 20
   db_path: ".agent/conversations.db"
   max_tool_iterations: 5
+  workspace_dir: ".agent/workspace"
 
 security:
   command_guard:

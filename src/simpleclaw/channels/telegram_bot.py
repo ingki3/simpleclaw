@@ -124,7 +124,7 @@ class TelegramBot:
                         await update.message.reply_text(response)
 
             self._application.add_handler(
-                MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message)
+                MessageHandler(filters.TEXT, _on_message)
             )
 
             await self._application.initialize()

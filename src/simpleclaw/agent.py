@@ -16,6 +16,8 @@ from pathlib import Path
 
 from simpleclaw.config import load_agent_config, load_persona_config
 from simpleclaw.llm.models import LLMRequest
+from simpleclaw.recipes.loader import discover_recipes, load_recipe
+from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
@@ -142,6 +144,12 @@ class AgentOrchestrator:
         # Multi-turn tool execution
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 5)
 
+        # Workspace directory for skill file output
+        self._workspace_dir = Path(
+            agent_config.get("workspace_dir", ".agent/workspace")
+        )
+        self._workspace_dir.mkdir(parents=True, exist_ok=True)
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
@@ -162,12 +170,21 @@ class AgentOrchestrator:
     ) -> str:
         """Process an incoming message through the ReAct pipeline.
 
-        ReAct loop:
-        1. LLM reasons (Thought) and decides an Action or Answer
-        2. If Action → execute skill → add Observation → loop
-        3. If Answer → return final response
-        4. Store conversation
+        Handles:
+        0. /recipe-name commands → execute recipe
+        1. Normal messages → ReAct loop
         """
+        # Check for /recipe-name commands
+        recipe_result = await self._try_recipe_command(text)
+        if recipe_result is not None:
+            self._store.add_message(ConversationMessage(
+                role=MessageRole.USER, content=text,
+            ))
+            self._store.add_message(ConversationMessage(
+                role=MessageRole.ASSISTANT, content=recipe_result,
+            ))
+            return recipe_result
+
         response_text = await self._react_loop(text)
 
         self._store.add_message(ConversationMessage(
@@ -431,11 +448,15 @@ class AgentOrchestrator:
 
         logger.info("Executing skill command: %s", command)
         try:
+            env = filter_env(passthrough=self._env_passthrough)
+            env["AGENT_WORKSPACE"] = str(self._workspace_dir.resolve())
+
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=filter_env(passthrough=self._env_passthrough),
+                cwd=str(self._workspace_dir),
+                env=env,
                 preexec_fn=get_preexec_fn(),
             )
             stdout, stderr = await asyncio.wait_for(
@@ -614,6 +635,74 @@ class AgentOrchestrator:
         if interpreter == "python":
             return f"python3 {rest}"
         return command
+
+    # ------------------------------------------------------------------
+    # Recipe commands (/recipe-name)
+    # ------------------------------------------------------------------
+
+    async def _try_recipe_command(self, text: str) -> str | None:
+        """Check if text is a /recipe-name command and execute it.
+
+        Discovers recipes from .agent/recipes/ on every call so new
+        recipes are available without restart.
+
+        Returns the response text, or None if not a recipe command.
+        """
+        stripped = text.strip()
+        if not stripped.startswith("/"):
+            return None
+
+        parts = stripped[1:].split(None, 1)
+        if not parts:
+            return None
+
+        cmd_name = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+
+        # Discover recipes fresh from disk
+        recipes = discover_recipes(".agent/recipes")
+        recipes_by_name = {r.name: r for r in recipes}
+
+        recipe = recipes_by_name.get(cmd_name)
+        if recipe is None:
+            return None
+
+        logger.info("Recipe command: /%s", cmd_name)
+
+        # Parse key=value parameters
+        params = {}
+        if rest:
+            for match in re.finditer(r'(\w+)=(?:"([^"]*)"|(\S+))', rest):
+                key = match.group(1)
+                value = match.group(2) if match.group(2) is not None else match.group(3)
+                params[key] = value
+
+        # Render instructions with parameter substitution
+        if recipe.instructions:
+            rendered = recipe.instructions
+            # Apply defaults for missing params
+            for p in recipe.parameters:
+                if p.name not in params and p.default:
+                    params[p.name] = p.default
+
+            # Substitute {{ var }} and ${var}
+            def jinja_replacer(match):
+                key = match.group(1).strip()
+                return params.get(key, match.group(0))
+
+            rendered = re.sub(r"\{\{\s*(\w+)\s*\}\}", jinja_replacer, rendered)
+
+            def shell_replacer(match):
+                key = match.group(1)
+                return params.get(key, match.group(0))
+
+            rendered = re.sub(r"\$\{(\w+)\}", shell_replacer, rendered)
+
+            # Process rendered instructions through ReAct pipeline
+            return await self._react_loop(rendered)
+
+        # No instructions — fallback to step-based execution
+        return f"레시피 '{cmd_name}'에 instructions가 정의되어 있지 않습니다."
 
     def _load_skills_config(self) -> dict:
         """Load skills config section from config.yaml."""

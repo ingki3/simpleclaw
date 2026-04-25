@@ -1,10 +1,15 @@
-"""Cron scheduler: APScheduler wrapper with CRUD for cron jobs."""
+"""Cron scheduler: APScheduler wrapper with CRUD for cron jobs.
+
+Includes NO_NOTIFY filtering and pluggable notification callbacks
+so that all cron business logic lives in the core module.
+"""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -20,9 +25,16 @@ from simpleclaw.daemon.store import DaemonStore
 
 logger = logging.getLogger(__name__)
 
+_NO_NOTIFY_TOKEN = "[NO_NOTIFY]"
+
 
 class CronScheduler:
-    """Manages cron jobs with APScheduler integration and SQLite persistence."""
+    """Manages cron jobs with APScheduler integration and SQLite persistence.
+
+    Supports:
+    - NO_NOTIFY filtering: if LLM response contains [NO_NOTIFY], skip notification
+    - Pluggable notifier callback: receives cron results to send to external channels
+    """
 
     def __init__(
         self,
@@ -30,11 +42,24 @@ class CronScheduler:
         apscheduler: AsyncIOScheduler,
         recipe_executor=None,
         agent_orchestrator=None,
+        notifier: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._store = store
         self._apscheduler = apscheduler
         self._recipe_executor = recipe_executor
         self._agent = agent_orchestrator
+        self._notifier = notifier
+
+    def set_notifier(
+        self, notifier: Callable[[str, str], Awaitable[None]]
+    ) -> None:
+        """Set the notification callback.
+
+        Signature: async (job_name: str, result_text: str) -> None
+        Called when a cron job produces a result that should be notified.
+        NOT called when the result contains [NO_NOTIFY].
+        """
+        self._notifier = notifier
 
     def load_persisted_jobs(self) -> int:
         """Load all persisted jobs from the store and register them with APScheduler.
@@ -154,24 +179,50 @@ class CronScheduler:
         return execution
 
     async def _run_action(self, job: CronJob) -> str:
+        """Execute the job's target action, filter NO_NOTIFY, and notify.
+
+        Flow:
+        1. Execute action (prompt or recipe) via process_cron_message
+        2. Check for [NO_NOTIFY] in response → skip notification
+        3. Otherwise call notifier callback (Telegram, etc.)
+        """
+        response = await self._execute_action(job)
+
+        # NO_NOTIFY filtering
+        if response and _NO_NOTIFY_TOKEN in response:
+            logger.info(
+                "Cron job '%s': nothing to notify, skipping.", job.name
+            )
+            return response
+
+        # Send notification
+        if response and self._notifier:
+            try:
+                await self._notifier(job.name, response)
+                logger.info(
+                    "Cron '%s' notification sent: %d chars",
+                    job.name, len(response),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send notification for cron '%s'", job.name
+                )
+
+        return response or "[No output]"
+
+    async def _execute_action(self, job: CronJob) -> str:
         """Execute the job's target action (prompt or recipe).
 
-        Both action types use process_cron_message (isolated context)
-        when an agent orchestrator is available, preventing conversation
-        history from leaking into cron job responses.
+        Uses process_cron_message (isolated context) when an agent
+        orchestrator is available.
         """
         if job.action_type == ActionType.RECIPE:
-            if self._recipe_executor is None:
-                raise RuntimeError("Recipe executor not configured")
-            # Import here to avoid circular deps
             from simpleclaw.recipes.loader import load_recipe
             from simpleclaw.recipes.executor import execute_recipe
 
             recipe = load_recipe(Path(job.action_reference))
             result = await execute_recipe(recipe)
 
-            # If agent is available, pass the recipe prompt through
-            # isolated LLM processing for natural-language output
             if self._agent and result.success:
                 prompt_output = "\n".join(
                     sr.output for sr in (result.step_results or [])
@@ -180,7 +231,9 @@ class CronScheduler:
                 if prompt_output:
                     return await self._agent.process_cron_message(prompt_output)
 
-            return f"Recipe completed: {result.success_count}/{result.total_steps} steps succeeded"
+            succeeded = sum(1 for s in result.step_results if s.success)
+            total = len(result.step_results)
+            return f"Recipe completed: {succeeded}/{total} steps succeeded"
 
         elif job.action_type == ActionType.PROMPT:
             if self._agent:

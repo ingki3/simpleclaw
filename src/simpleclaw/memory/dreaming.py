@@ -24,11 +24,12 @@ _DREAMING_PROMPT = """\
 1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
    - 날짜 헤더 포함 (## {date} 형식)
    - 사실 기반만 (의견/추측 금지)
-   - 반복되는 주제나 관심사를 기록
+   - 반복되는 주제나 관심사를 기록 (패턴 파악용)
 
 2. "user_insights": 사용자에 대해 새로 알게 된 정보 (선호도, 관심사, 습관)
-   - 이미 알고 있는 정보(아래 기존 USER.md 내용)는 제외
+   - 이미 알고 있는 정보(기존 USER.md 내용)는 제외
    - 추측이 아닌 대화에서 명확히 드러난 정보만
+   - 민감한 개인정보(비밀번호, 금융정보)는 절대 저장하지 않음
    - 없으면 빈 문자열
 
 ## 기존 USER.md 내용
@@ -63,10 +64,7 @@ class DreamingPipeline:
         self._dreaming_model = dreaming_model or None
 
     def create_backup(self, file_path: Path) -> Path | None:
-        """Create a .bak backup of a file before modification.
-
-        Returns the backup path, or None if the file doesn't exist.
-        """
+        """Create a .bak backup of a file before modification."""
         if not file_path.is_file():
             return None
 
@@ -92,36 +90,32 @@ class DreamingPipeline:
         if not messages:
             return {"memory": "", "user_insights": ""}
 
-        # Try LLM-based summarization
         if self._router:
             try:
                 return await self._summarize_with_llm(messages)
             except Exception:
                 logger.exception("LLM summarization failed, using fallback")
 
-        # Fallback: simple text-based summary
         return {"memory": self._summarize_fallback(messages), "user_insights": ""}
 
     async def _summarize_with_llm(self, messages: list) -> dict:
         """Call LLM to analyze conversations and extract memory + insights."""
         from simpleclaw.llm.models import LLMRequest
 
-        # Read existing USER.md
         existing_user_md = ""
         if self._user_file and self._user_file.is_file():
             existing_user_md = self._user_file.read_text(encoding="utf-8")
 
-        # Format conversations
         conv_lines = []
         for msg in messages:
             role = msg.role.value.upper()
             conv_lines.append(f"[{role}] {msg.content}")
-        conversations = "\n".join(conv_lines)
+        conversations = "\n".join(conv_lines)[:8000]
 
         date_str = datetime.now().strftime("%Y-%m-%d")
         prompt = _DREAMING_PROMPT.format(
             existing_user_md=existing_user_md or "(없음)",
-            conversations=conversations[:8000],
+            conversations=conversations,
             date=date_str,
         )
 
@@ -131,13 +125,10 @@ class DreamingPipeline:
             backend_name=self._dreaming_model,
         )
         response = await self._router.send(request)
-        raw = response.text.strip()
-
-        return self._parse_llm_result(raw)
+        return self._parse_llm_result(response.text.strip())
 
     def _parse_llm_result(self, raw: str) -> dict:
         """Parse LLM JSON response into memory + user_insights."""
-        # Handle markdown code blocks
         if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -183,7 +174,6 @@ class DreamingPipeline:
         if self._memory_file.is_file():
             existing = self._memory_file.read_text(encoding="utf-8")
 
-        # Add header if file is empty
         if not existing.strip():
             existing = "# Memory\n"
 
@@ -211,7 +201,6 @@ class DreamingPipeline:
         if not existing.endswith("\n"):
             existing += "\n"
 
-        # Append under a "Discovered by Dreaming" section
         new_content = f"{existing}\n## Dreaming Insights ({datetime.now().strftime('%Y-%m-%d')})\n{insights}\n"
         self._user_file.write_text(new_content, encoding="utf-8")
         logger.info("Updated user file: %s", self._user_file)
@@ -225,18 +214,15 @@ class DreamingPipeline:
         4. Append memory to MEMORY.md
         5. Append user insights to USER.md (if any)
         """
-        # Step 1: Backup
         self.create_backup(self._memory_file)
         if self._user_file:
             self.create_backup(self._user_file)
 
-        # Step 2: Collect
         messages = self.collect_unprocessed(last_dreaming)
         if not messages:
             logger.info("No new messages to process for dreaming.")
             return None
 
-        # Step 3: Summarize
         result = await self.summarize(messages)
         memory_summary = result.get("memory", "")
         user_insights = result.get("user_insights", "")
@@ -244,11 +230,9 @@ class DreamingPipeline:
         if not memory_summary and not user_insights:
             return None
 
-        # Step 4: Update MEMORY.md
         if memory_summary:
             self.append_to_memory(memory_summary)
 
-        # Step 5: Update USER.md
         if user_insights:
             self.update_user_file(user_insights)
 

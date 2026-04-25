@@ -93,5 +93,6 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         description=data.get("description", ""),
         parameters=parameters,
         steps=steps,
+        instructions=data.get("instructions", ""),
         recipe_dir=str(recipe_path.parent),
     )

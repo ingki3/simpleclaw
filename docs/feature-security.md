@@ -65,6 +65,15 @@ security:
     - "GOOGLE_API_KEY"    # 이 변수만 subprocess에 전달
 ```
 
+## Workspace 격리
+
+스킬 명령은 격리된 workspace 디렉토리에서 실행됩니다:
+
+- 기본 경로: `.agent/workspace` (`config.yaml`의 `agent.workspace_dir`로 변경 가능)
+- 스킬 subprocess의 `cwd`가 workspace로 설정됨
+- 환경변수 `AGENT_WORKSPACE`로 절대 경로가 자동 주입됨
+- 스킬 스크립트가 생성하는 파일이 프로젝트 루트를 오염시키지 않음
+
 ## 프로세스 격리
 
 스킬/레시피의 셸 명령은 격리된 프로세스 그룹에서 실행됩니다:

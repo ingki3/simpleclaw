@@ -188,6 +188,7 @@ _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
     "db_path": ".agent/conversations.db",
     "max_tool_iterations": 5,
+    "workspace_dir": ".agent/workspace",
 }
 
 
@@ -217,6 +218,9 @@ def load_agent_config(config_path: str | Path) -> dict:
         "db_path": agent.get("db_path", _AGENT_DEFAULTS["db_path"]),
         "max_tool_iterations": agent.get(
             "max_tool_iterations", _AGENT_DEFAULTS["max_tool_iterations"]
+        ),
+        "workspace_dir": agent.get(
+            "workspace_dir", _AGENT_DEFAULTS["workspace_dir"]
         ),
     }
 
