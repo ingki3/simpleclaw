@@ -110,10 +110,49 @@ instructions: |
 
 두 가지 문법을 지원합니다:
 
-| 문법 | 예시 |
-|------|------|
-| Jinja 스타일 | `{{ date }}` |
-| Shell 스타일 | `${date}` |
+| 문법 | 용도 | 예시 |
+|------|------|------|
+| Jinja 스타일 | v2 instructions 내 | `{{ date }}`, `{{ today }}` |
+| Shell 스타일 | v1 steps 내 | `${date}` |
+
+### 내장 변수 (Built-in Variables)
+
+v2 레시피 실행 시 아래 변수가 **자동으로 주입**됩니다. Cron, 슬래시 명령어 모두 동일하게 적용되며, `parameters`에 정의할 필요 없이 instructions에서 바로 사용 가능합니다.
+
+| 변수 | 설명 | 예시 값 |
+|------|------|---------|
+| `{{ today }}` | 실행 시점 날짜 (ISO 형식) | `2026-04-27` |
+| `{{ today_ko }}` | 실행 시점 날짜 (한국어) | `2026년 04월 27일` |
+| `{{ weekday }}` | 요일 (영어) | `Sunday` |
+| `{{ now }}` | 실행 시점 날짜+시간 | `2026-04-27 07:15` |
+
+**사용 예시:**
+
+```yaml
+instructions: |
+  오늘은 {{ today_ko }} ({{ weekday }}) 이야.
+  1. "AI news {{ today }}" 로 검색해줘
+  2. {{ today_ko }} 기준 뉴스만 포함해줘
+```
+
+> **NOTE:** 내장 변수와 사용자 변수가 동일한 이름이면 사용자 변수가 우선합니다.
+> 예: `parameters`에 `today`를 정의하고 `/recipe today=2026-05-01`로 실행하면 내장 변수 대신 사용자 값이 적용됩니다.
+
+### 사용자 정의 변수
+
+`parameters`에 정의한 변수는 슬래시 명령어 실행 시 사용자가 값을 전달합니다:
+
+```yaml
+parameters:
+  - name: topic
+    description: "검색할 토픽"
+    required: false
+    default: ""
+```
+
+```
+/ai-report topic=agent
+```
 
 ## v2 vs v1 비교
 

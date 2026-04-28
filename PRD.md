@@ -43,6 +43,7 @@
 - **전용 저장소 및 YAML 정의:** 반복적이고 복잡한 다단계 작업은 일반 Skill과 격리된 전용 디렉토리(`.agent/recipes/`)에 `recipe.yaml` 형태로 저장. v2 포맷의 `instructions` 필드에 프롬프트를 작성.
 - **슬래시 커맨드 실행:** 텔레그램에서 `/recipe-name`을 입력하면 해당 레시피를 즉시 실행. 레시피는 매 메시지마다 디스크에서 재탐색되므로 추가/수정 시 재시작 불필요.
 - **재사용성:** 프롬프트, 필요 변수(Parameters), 실행할 플러그인(Extensions/Builtin) 등을 사전 정의하여 명령어 하나로 일련의 워크플로우를 자동 실행.
+- **내장 변수 자동 주입:** v2 레시피 실행 시(Cron, 슬래시 명령어 모두) `{{ today }}`, `{{ today_ko }}`, `{{ weekday }}`, `{{ now }}` 등 날짜/시간 변수가 자동 치환되어 시점 정확한 작업 수행 가능.
 
 ### 3.5. 명령 실행 보안 및 멀티턴 도구 루프 (Security & Multi-Turn Tool Loop)
 **참고:** Hermes Agent (`tools/approval.py`, `tools/environments/local.py`, `run_agent.py`)

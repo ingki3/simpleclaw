@@ -1,17 +1,19 @@
-"""레시피 단계별 실행기.
+"""레시피 실행기 — v1(스텝 기반) 실행 + v2(instructions) 변수 렌더링.
 
-레시피에 정의된 스텝들을 순차적으로 실행하며, 변수 치환과 보안 검사를 수행한다.
-
-동작 흐름:
+v1 동작 흐름:
 1. 필수 파라미터 검증 및 기본값 적용
 2. 각 스텝의 content에 ${변수명} 패턴을 실제 값으로 치환
 3. COMMAND 스텝은 셸 명령으로 실행, PROMPT 스텝은 텍스트만 반환
 4. 첫 번째 실패 스텝에서 실행 중단
 
+v2 동작 흐름:
+1. render_instructions()로 내장 변수(today 등) + 사용자 변수를 치환
+2. 치환된 instructions 텍스트를 LLM에 전달 (호출자 책임)
+
 설계 결정:
 - PROMPT 스텝의 LLM 호출은 호출자의 책임 (관심사 분리)
 - CommandGuard를 통한 위험 명령 차단으로 보안 강화
-- 프로세스 그룹 분리 및 환경 변수 필터링으로 격리 실행
+- 내장 변수는 레시피 모듈에서 공통 관리 (Cron/슬래시 명령 모두 동일 적용)
 """
 
 from __future__ import annotations
@@ -120,6 +122,51 @@ async def execute_recipe(
         success=True,
         step_results=step_results,
     )
+
+
+def render_instructions(
+    instructions: str,
+    variables: dict[str, str] | None = None,
+) -> str:
+    """v2 레시피의 instructions에 내장 변수와 사용자 변수를 치환한다.
+
+    내장 변수 (실행 시점 KST 기준 자동 주입):
+      {{ today }}    — 2026-04-27
+      {{ today_ko }} — 2026년 04월 27일
+      {{ weekday }}  — Sunday
+      {{ now }}      — 2026-04-27 07:15
+
+    사용자 변수:
+      {{ variable }} — parameters에 정의된 값
+
+    Args:
+        instructions: 원본 instructions 텍스트
+        variables: 사용자 정의 변수 딕셔너리 (슬래시 명령어에서 전달)
+
+    Returns:
+        변수 치환이 완료된 instructions 텍스트
+    """
+    from datetime import datetime, timezone, timedelta
+
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(kst)
+
+    # 내장 변수
+    all_vars = {
+        "today": now.strftime("%Y-%m-%d"),
+        "today_ko": now.strftime("%Y년 %m월 %d일"),
+        "weekday": now.strftime("%A"),
+        "now": now.strftime("%Y-%m-%d %H:%M"),
+    }
+    # 사용자 변수로 덮어쓰기 (동명 시 사용자 변수 우선)
+    if variables:
+        all_vars.update(variables)
+
+    result = instructions
+    for key, val in all_vars.items():
+        result = result.replace("{{ " + key + " }}", val)
+        result = result.replace("{{" + key + "}}", val)
+    return result
 
 
 def _substitute_variables(content: str, variables: dict[str, str]) -> str:

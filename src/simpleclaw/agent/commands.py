@@ -195,22 +195,14 @@ async def try_recipe_command(text: str, react_loop_fn) -> str | None:
             params[key] = value
 
     if recipe.instructions:
-        rendered = recipe.instructions
+        # 파라미터 기본값 적용
         for p in recipe.parameters:
             if p.name not in params and p.default:
                 params[p.name] = p.default
 
-        def jinja_replacer(match):
-            key = match.group(1).strip()
-            return params.get(key, match.group(0))
-
-        rendered = re.sub(r"\{\{\s*(\w+)\s*\}\}", jinja_replacer, rendered)
-
-        def shell_replacer(match):
-            key = match.group(1)
-            return params.get(key, match.group(0))
-
-        rendered = re.sub(r"\$\{(\w+)\}", shell_replacer, rendered)
+        # 내장 변수(today 등) + 사용자 변수를 한 번에 치환
+        from simpleclaw.recipes.executor import render_instructions
+        rendered = render_instructions(recipe.instructions, variables=params)
 
         return await react_loop_fn(rendered)
 

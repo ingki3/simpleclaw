@@ -153,10 +153,10 @@ feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
 2. **모듈 간 관계 질의**: `/graphify query "질문"` 또는 `/graphify path "모듈A" "모듈B"`로 그래프를 탐색
 3. **특정 개념 이해**: `/graphify explain "개념명"`으로 노드와 연결 관계 확인
 
-### 코드 변경 후 그래프 갱신 (필수)
-**코드 변경 작업이 완료되면 반드시 `/graphify . --update`를 실행하여 지식 그래프를 최신화한다.**
+### 커밋 후 그래프 갱신 (필수)
+**커밋이 완료된 후 반드시 `/graphify . --update`를 실행하여 지식 그래프를 최신화한다.**
 
-1. **기능 추가/수정/삭제 후**: `/graphify . --update` 실행 — 변경된 파일만 재추출 (incremental)
-2. **대규모 리팩토링 후**: `/graphify .` 실행 — 전체 재분석
+1. **커밋 후**: `/graphify . --update` 실행 — 변경된 파일만 재추출 (incremental)
+2. **대규모 리팩토링 커밋 후**: `/graphify .` 실행 — 전체 재분석
 3. **갱신 후 확인**: `graphify-out/GRAPH_REPORT.md`의 God Nodes, Surprising Connections 변화 확인
 <!-- MANUAL ADDITIONS END -->
