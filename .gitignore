@@ -23,6 +23,7 @@ htmlcov/
 .agent/bot.log
 .agent/conversations.db
 .agent/daemon.db
+graphify-out/
 
 # OS / IDE
 .DS_Store

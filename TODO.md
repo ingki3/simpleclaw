@@ -25,6 +25,9 @@
 - [ ] `/dreaming` 수동 트리거 명령어 — Telegram에서 dreaming을 수동 실행할 수 있도록
 - [ ] LLM 라우터 hot reload — config.yaml의 LLM 프로바이더/모델 변경 시 재시작 없이 반영
 - [ ] 대화 히스토리 정리 기능 — 오래된 대화 자동 삭제 또는 아카이브
+- [ ] OpenAI 호환 API 지원 — OpenAI API 형식을 따르는 서드파티 LLM(vLLM, Ollama, LM Studio 등) 연동
+- [ ] Claude Code CLI 연동 — Claude Code CLI를 SimpleClaw의 백엔드 또는 도구로 활용
+- [ ] Claude, ChatGPT API 지원 — Claude/ChatGPT를 기본 LLM 백엔드로 실사용 가능하도록 검증 및 보완
 
 ### 스킬
 - [ ] us-market-expert 스킬 재구축 — 실행 스크립트 추가 (현재 삭제됨)
