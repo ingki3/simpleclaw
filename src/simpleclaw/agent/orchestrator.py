@@ -307,36 +307,16 @@ class AgentOrchestrator:
                 })
                 logger.info("Tool result: %s → %d chars", tc.name, len(result))
 
-        # 예산 소진 — tool 관련 메시지를 요약하여 깨끗한 컨텍스트로 최종 호출
+        # 예산 소진 — tools=None으로 최종 LLM 호출 (텍스트 강제)
         logger.warning(
             "Tool loop max iterations (%d) reached, forcing final answer",
             self._max_tool_iterations,
         )
         try:
-            # tool call/result 메시지를 텍스트 요약으로 변환
-            # (tools=None 호출 시 tool 메시지가 있으면 provider 에러 발생 가능)
-            tool_summary_parts = []
-            clean_messages = []
-            for msg in messages:
-                role = msg.get("role", "")
-                if role == "tool":
-                    tool_summary_parts.append(
-                        f"[{msg.get('name', '?')}]: {msg.get('content', '')[:500]}"
-                    )
-                elif role == "assistant" and msg.get("tool_calls"):
-                    names = [tc["name"] for tc in msg["tool_calls"]]
-                    tool_summary_parts.append(f"Called tools: {', '.join(names)}")
-                else:
-                    clean_messages.append(msg)
-
-            if tool_summary_parts:
-                summary = "## Tool Results\n" + "\n".join(tool_summary_parts)
-                clean_messages.append({"role": "user", "content": summary})
-
             final_request = LLMRequest(
                 system_prompt=system_prompt,
                 user_message=user_content,
-                messages=clean_messages,
+                messages=messages,
             )
             final_response = await self._router.send(final_request)
             return final_response.text.strip()
