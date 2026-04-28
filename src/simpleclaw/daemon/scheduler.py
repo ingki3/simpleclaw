@@ -231,7 +231,20 @@ class CronScheduler:
             from simpleclaw.recipes.loader import load_recipe
             from simpleclaw.recipes.executor import execute_recipe
 
-            recipe = load_recipe(Path(job.action_reference))
+            # action_reference가 파일 경로 또는 레시피 이름일 수 있음
+            ref_path = Path(job.action_reference)
+            if not ref_path.is_file():
+                # 레시피 이름으로 해석: .agent/recipes/<name>/recipe.yaml
+                ref_path = Path(f".agent/recipes/{job.action_reference}/recipe.yaml")
+            recipe = load_recipe(ref_path)
+
+            # v2 레시피 (instructions 필드 사용): 내장 변수 치환 후 LLM에 직접 전달
+            if recipe.instructions and self._agent:
+                from simpleclaw.recipes.executor import render_instructions
+                instructions = render_instructions(recipe.instructions)
+                return await self._agent.process_cron_message(instructions)
+
+            # v1 레시피 (steps 기반): 스텝별 실행
             guard = getattr(self._agent, "_command_guard", None) if self._agent else None
             result = await execute_recipe(recipe, command_guard=guard)
 
