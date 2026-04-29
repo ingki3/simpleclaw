@@ -4,6 +4,7 @@ Thin wrapper that wires together:
 - AgentOrchestrator (core agent logic)
 - TelegramBot (message handling)
 - CronScheduler (scheduled tasks + notification)
+- DreamingTrigger (야간 자동 대화 요약 → MEMORY.md/USER.md 갱신)
 
 All business logic lives in core modules. This script only does setup.
 
@@ -21,9 +22,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
-from simpleclaw.config import load_daemon_config, load_telegram_config
+from simpleclaw.config import load_daemon_config, load_llm_config, load_telegram_config
+from simpleclaw.daemon.dreaming_trigger import DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.dreaming import DreamingPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,7 +109,49 @@ async def main():
     # Wire cron scheduler into orchestrator for /cron commands
     orchestrator.set_cron_scheduler(cron)
 
-    # Start cron
+    # Dreaming — 야간 자동 대화 요약 (5분마다 조건 체크)
+    dreaming_config = daemon_config.get("dreaming", {})
+    # orchestrator와 동일한 대화 DB를 사용
+    from simpleclaw.config import load_agent_config
+    agent_config = load_agent_config(CONFIG_PATH)
+    conv_store = ConversationStore(agent_config["db_path"])
+    llm_router = orchestrator._router  # 오케스트레이터의 LLM 라우터 재사용
+
+    dreaming_pipeline = DreamingPipeline(
+        conversation_store=conv_store,
+        memory_file=".agent/MEMORY.md",
+        user_file=".agent/USER.md",
+        soul_file=".agent/SOUL.md",
+        agent_file=".agent/AGENT.md",
+        llm_router=llm_router,
+        dreaming_model=dreaming_config.get("model", ""),
+    )
+    dreaming_trigger = DreamingTrigger(
+        conversation_store=conv_store,
+        dreaming_pipeline=dreaming_pipeline,
+        daemon_store=daemon_store,
+        overnight_hour=dreaming_config.get("overnight_hour", 3),
+        idle_threshold=dreaming_config.get("idle_threshold", 7200),
+    )
+
+    async def _dreaming_check():
+        """APScheduler interval job: 드리밍 조건 체크 및 실행."""
+        try:
+            if await dreaming_trigger.should_run():
+                await dreaming_trigger.execute()
+        except Exception:
+            logger.exception("Dreaming check failed")
+
+    apscheduler.add_job(
+        _dreaming_check, "interval", minutes=5, id="dreaming-check",
+    )
+    logger.info(
+        "Dreaming enabled: overnight_hour=%d, idle_threshold=%ds, check every 5min",
+        dreaming_config.get("overnight_hour", 3),
+        dreaming_config.get("idle_threshold", 7200),
+    )
+
+    # Start cron + dreaming scheduler
     apscheduler.start()
     cron.load_persisted_jobs()
     jobs = cron.list_jobs()

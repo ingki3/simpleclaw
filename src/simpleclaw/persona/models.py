@@ -19,10 +19,12 @@ from enum import Enum
 class FileType(Enum):
     """페르소나 파일의 유형.
 
-    AGENT: 에이전트 행동 지시 (최우선)
+    SOUL: 에이전트 아이덴티티·성격·말투 (최우선)
+    AGENT: 에이전트 행동 지시
     USER: 사용자별 설정·선호
     MEMORY: 대화 기억·맥락
     """
+    SOUL = "soul"
     AGENT = "agent"
     USER = "user"
     MEMORY = "memory"

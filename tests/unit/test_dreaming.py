@@ -181,8 +181,9 @@ class TestDreamingPipeline:
 
         await pipeline.run()
 
-        # Check backups exist
-        memory_baks = list(memory_file.parent.glob("MEMORY.*.bak"))
-        user_baks = list(user_file.parent.glob("USER.*.bak"))
+        # Check backups exist in memory-backup/ subdirectory
+        backup_dir = memory_file.parent / "memory-backup"
+        memory_baks = list(backup_dir.glob("MEMORY.*.bak"))
+        user_baks = list(backup_dir.glob("USER.*.bak"))
         assert len(memory_baks) >= 1
         assert len(user_baks) >= 1

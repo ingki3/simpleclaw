@@ -23,6 +23,7 @@ htmlcov/
 .agent/bot.log
 .agent/conversations.db
 .agent/daemon.db
+.agent/memory-backup/
 graphify-out/
 
 # OS / IDE

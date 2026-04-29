@@ -1,6 +1,6 @@
 """페르소나 파일 경로 리졸버 — 로컬/글로벌 우선순위 처리.
 
-로컬 디렉터리와 글로벌 디렉터리에서 페르소나 파일(AGENT.md, USER.md, MEMORY.md)을
+로컬 디렉터리와 글로벌 디렉터리에서 페르소나 파일(SOUL.md, AGENT.md, USER.md, MEMORY.md)을
 탐색하고, 동일 유형의 파일이 양쪽에 있으면 로컬 파일이 우선한다.
 
 설계 결정:
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # 파일명 → FileType 매핑 (탐색 대상 정의)
 _FILE_MAP = {
+    "SOUL.md": FileType.SOUL,
     "AGENT.md": FileType.AGENT,
     "USER.md": FileType.USER,
     "MEMORY.md": FileType.MEMORY,
@@ -54,9 +55,9 @@ def resolve_persona_files(
     # 로컬을 나중에 스캔 (높은 우선순위 — 글로벌 덮어씀)
     _scan_directory(local_path, SourceScope.LOCAL, resolved)
 
-    # 정규 순서로 반환
+    # 정규 순서로 반환: SOUL → AGENT → USER → MEMORY
     result = []
-    for ft in [FileType.AGENT, FileType.USER, FileType.MEMORY]:
+    for ft in [FileType.SOUL, FileType.AGENT, FileType.USER, FileType.MEMORY]:
         if ft in resolved:
             result.append(resolved[ft])
         else:
