@@ -4,3 +4,14 @@
 - Primary language: Korean (한국어)
 - Communication style: Casual, direct
 - Prefers concise answers over verbose explanations
+
+## Dreaming Insights (2026-04-28)
+- 정치 뉴스와 시사 안보 이슈에 지속적인 관심을 보임
+- 크론(Cron) 작업을 설정하여 이메일 확인 및 AI 리포트 수신을 자동화하여 사용함
+- AI 에이전트 기술, 자율 실행 에이전트, AI 하드웨어 인프라와 같은 최신 기술 트렌드에 관심이 높음
+- 맥북에어 15인치 구매를 고려 중이며 기기 사양 및 가격 정보에 민감함
+- 고사양 시스템 환경(메모리 48GB)을 사용 중임
+
+## Dreaming Insights (2026-04-29)
+- 발생한 문제를 스스로 해결하려는 자기 주도적 성향을 보임
+- '형님'과 같은 친근한 호칭을 사용하는 대화 방식에 거부감이 없음

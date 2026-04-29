@@ -23,10 +23,10 @@ instructions: |
   - 최대 **3번의 검색**으로 수집을 완료해. 검색 예산을 아껴.
 
   ## 수집 워크플로우
-  1. **1차 검색**: news-search-skill로 "AI news {{ today }}" 검색
-  2. **2차 검색**: news-search-skill로 "AI 최신 뉴스 {{ today_ko }}" 한국어 검색
-  3. **핵심 이슈 선별**: 수집된 뉴스 중 가장 중요한 **5개**를 선별
-  {% if topic %}4. **특별 토픽**: news-search-skill로 "{{ topic }} {{ today }}" 추가 검색{% endif %}
+  1. **1차 검색**: news-search-skill로 "AI tech latest news"에 대한 소식 검색
+  2. **2차 검색**: news-search-skill로 "AI 기술 최신 뉴스"를 한국어로 검색
+  3. **핵심 이슈 선별**: 수집된 뉴스 중 가장 중요한 **10개**를 선별
+  {% if topic %}4. **특별 토픽**: news-search-skill로 "{{ topic }} latest news" 추가 검색{% endif %}
 
   ## 출력 형식 (채팅창에 직접 작성)
 
