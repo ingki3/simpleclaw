@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [x] **BIZ-16: Subprocess 좀비 프로세스 정리 및 타임아웃 보강** — `kill_process_group` SIGKILL 폴백 검증, `waitpid(WNOHANG)` 회수, 그룹 잔존 폴링, 좀비/누수 메트릭, 행 걸린 자식 통합 테스트 (2026-05-01)
+- [x] **BIZ-16: Subprocess 좀비 프로세스 정리 및 타임아웃 보강** — `kill_process_group` SIGKILL 폴백 검증, `waitpid(WNOHANG)` 회수, 그룹 잔존 폴링, 좀비/누수 메트릭, 행 걸린 자식 통합 테스트, `MetricsCollector` 운영 배선(`run_bot.py`) + 대시보드 카드 노출 (2026-05-01)
 
 ---
 
@@ -50,6 +50,7 @@
 - [ ] 프로세스 매니저 도입 — systemd 또는 supervisord로 봇 안정적 운영
 - [ ] 로그 로테이션 — bot.log 파일 크기 관리
 - [ ] CI/CD — GitHub Actions로 테스트 자동화
+- [ ] **서비스 모니터링 구성** — 1) 대시보드(`/api/metrics`) 임계치 알림(텔레그램), 2) `process_group_leaks > 0` 또는 좀비/자식 PID 단조 증가 시 자동 경보, 3) BIZ-16 후 1주 집중 관찰을 자동 스크립트로 대체. (BIZ-16에서 분리 — 후속 이슈로 등록)
 
 ### 문서
 - [ ] docs/ MkDocs 또는 Docusaurus 기반 정적 사이트 생성

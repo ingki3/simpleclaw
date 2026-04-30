@@ -26,6 +26,9 @@ from simpleclaw.config import load_daemon_config, load_llm_config, load_telegram
 from simpleclaw.daemon.dreaming_trigger import DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
+from simpleclaw.logging.dashboard import DashboardServer
+from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 
@@ -76,8 +79,14 @@ async def main():
         print("ERROR: telegram.bot_token not set in config.yaml")
         return
 
+    # 모니터링: 단일 MetricsCollector 인스턴스를 오케스트레이터·대시보드가 공유.
+    # 서브프로세스 종료/좀비 회수 카운터(`process_kills_*`, `process_group_leaks`,
+    # `zombies_reaped`)가 운영 환경에서 자동 누적되도록 한다.
+    metrics = MetricsCollector()
+    structured_logger = StructuredLogger()
+
     # Core modules
-    orchestrator = AgentOrchestrator(CONFIG_PATH)
+    orchestrator = AgentOrchestrator(CONFIG_PATH, metrics=metrics)
 
     whitelist = tg_config["whitelist"]
     bot = TelegramBot(
@@ -151,6 +160,20 @@ async def main():
         dreaming_config.get("idle_threshold", 7200),
     )
 
+    # 대시보드 — 메트릭 스냅샷을 127.0.0.1:8081에 노출.
+    # 외부 노출 없이 로컬 점검 용도로만 바인딩한다.
+    dashboard = DashboardServer(
+        metrics=metrics,
+        structured_logger=structured_logger,
+        host="127.0.0.1",
+        port=8081,
+    )
+    try:
+        await dashboard.start()
+    except Exception as exc:  # noqa: BLE001 — 대시보드 실패는 봇 동작을 막지 않음.
+        logger.warning("Dashboard failed to start: %s", exc)
+        dashboard = None
+
     # Start cron + dreaming scheduler
     apscheduler.start()
     cron.load_persisted_jobs()
@@ -181,6 +204,11 @@ async def main():
     print("\nStopping...")
     if apscheduler.running:
         apscheduler.shutdown(wait=False)
+    if dashboard is not None:
+        try:
+            await dashboard.stop()
+        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
+            logger.exception("Dashboard stop failed")
     await bot.stop()
     print("Done.")
 

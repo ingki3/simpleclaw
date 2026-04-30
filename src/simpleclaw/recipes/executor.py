@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from simpleclaw.recipes.models import (
     RecipeDefinition,
@@ -37,6 +38,9 @@ from simpleclaw.security import (
     kill_process_group,
 )
 
+if TYPE_CHECKING:
+    from simpleclaw.logging.metrics import MetricsCollector
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +49,8 @@ async def execute_recipe(
     variables: dict[str, str] | None = None,
     timeout: int = 60,
     command_guard: CommandGuard | None = None,
+    *,
+    metrics: MetricsCollector | None = None,
 ) -> RecipeResult:
     """레시피의 스텝들을 순차적으로 실행한다.
 
@@ -56,6 +62,7 @@ async def execute_recipe(
         variables: 스텝 내용에 치환할 변수 딕셔너리
         timeout: 각 명령의 최대 실행 시간 (초)
         command_guard: 위험 명령 차단을 위한 가드 (None이면 검사 생략)
+        metrics: 타임아웃 시 ``kill_process_group`` 결과를 누적할 메트릭 수집기.
 
     Returns:
         전체 실행 결과를 담은 RecipeResult
@@ -89,7 +96,11 @@ async def execute_recipe(
 
         if step.step_type == StepType.COMMAND:
             result = await _execute_command(
-                step.name, content, timeout, command_guard=command_guard,
+                step.name,
+                content,
+                timeout,
+                command_guard=command_guard,
+                metrics=metrics,
             )
         elif step.step_type == StepType.PROMPT:
             # PROMPT 스텝은 변수 치환된 프롬프트 텍스트만 반환
@@ -186,6 +197,8 @@ async def _execute_command(
     command: str,
     timeout: int,
     command_guard: CommandGuard | None = None,
+    *,
+    metrics: MetricsCollector | None = None,
 ) -> StepResult:
     """셸 명령을 실행하고 결과를 반환한다.
 
@@ -221,7 +234,7 @@ async def _execute_command(
             process.communicate(), timeout=timeout
         )
     except asyncio.TimeoutError:
-        await kill_process_group(process)
+        await kill_process_group(process, metrics=metrics)
         return StepResult(
             step_name=name,
             success=False,

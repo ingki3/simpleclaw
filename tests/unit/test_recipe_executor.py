@@ -93,3 +93,27 @@ class TestRecipeExecutor:
         result = await execute_recipe(recipe)
         assert result.success
         assert len(result.step_results) == 0
+
+    @pytest.mark.asyncio
+    async def test_timeout_records_metrics(self):
+        """COMMAND 스텝이 타임아웃될 때 ``metrics``로 종료 결과가 보고된다."""
+        from simpleclaw.logging.metrics import MetricsCollector
+
+        recipe = RecipeDefinition(
+            name="slow",
+            steps=[
+                RecipeStep(
+                    step_type=StepType.COMMAND,
+                    name="slow-step",
+                    content="sleep 10",
+                ),
+            ],
+        )
+        metrics = MetricsCollector()
+        result = await execute_recipe(recipe, timeout=1, metrics=metrics)
+
+        assert not result.success
+        snap = metrics.get_snapshot()
+        # SIGTERM 또는 SIGKILL 둘 중 하나가 카운트되어야 한다.
+        assert snap.process_kills_sigterm + snap.process_kills_sigkill == 1
+        assert snap.process_group_leaks == 0
