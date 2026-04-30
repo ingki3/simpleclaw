@@ -26,6 +26,11 @@ class MetricsSnapshot:
     active_cron_jobs: int = 0
     sub_agent_spawns: int = 0
     error_rate: float = 0.0
+    # 서브프로세스 종료/좀비 회수 메트릭 — 24/7 데몬에서 PID·메모리 누수 감지에 사용.
+    process_kills_sigterm: int = 0
+    process_kills_sigkill: int = 0
+    process_group_leaks: int = 0
+    zombies_reaped: int = 0
     timestamp: str = ""
 
     def to_dict(self) -> dict:
@@ -39,6 +44,10 @@ class MetricsSnapshot:
             "active_cron_jobs": self.active_cron_jobs,
             "sub_agent_spawns": self.sub_agent_spawns,
             "error_rate": round(self.error_rate, 4),
+            "process_kills_sigterm": self.process_kills_sigterm,
+            "process_kills_sigkill": self.process_kills_sigkill,
+            "process_group_leaks": self.process_group_leaks,
+            "zombies_reaped": self.zombies_reaped,
             "timestamp": self.timestamp,
         }
 
@@ -58,6 +67,11 @@ class MetricsCollector:
         self._total_duration_ms = 0.0
         self._sub_agent_spawns = 0
         self._active_cron_jobs = 0
+        # 서브프로세스 종료 카운터 — 누수 추세 감시에 사용.
+        self._process_kills_sigterm = 0
+        self._process_kills_sigkill = 0
+        self._process_group_leaks = 0
+        self._zombies_reaped = 0
 
     def record_execution(
         self,
@@ -85,6 +99,30 @@ class MetricsCollector:
         with self._lock:
             self._active_cron_jobs = count
 
+    def record_process_kill(
+        self,
+        *,
+        killed: bool,
+        group_alive: bool,
+        reaped_zombies: int,
+    ) -> None:
+        """``kill_process_group`` 결과를 메트릭에 반영한다.
+
+        Args:
+            killed: SIGKILL이 사용되었는지 여부 (강제 종료).
+            group_alive: 종료 시도 후에도 그룹이 잔존하는지 여부 (PID 누수 신호).
+            reaped_zombies: 회수한 좀비 자식 프로세스 수.
+        """
+        with self._lock:
+            if killed:
+                self._process_kills_sigkill += 1
+            else:
+                self._process_kills_sigterm += 1
+            if group_alive:
+                self._process_group_leaks += 1
+            if reaped_zombies > 0:
+                self._zombies_reaped += reaped_zombies
+
     def get_snapshot(self) -> MetricsSnapshot:
         """현재 메트릭의 불변 스냅샷을 반환한다."""
         with self._lock:
@@ -102,6 +140,10 @@ class MetricsCollector:
                 active_cron_jobs=self._active_cron_jobs,
                 sub_agent_spawns=self._sub_agent_spawns,
                 error_rate=error_rate,
+                process_kills_sigterm=self._process_kills_sigterm,
+                process_kills_sigkill=self._process_kills_sigkill,
+                process_group_leaks=self._process_group_leaks,
+                zombies_reaped=self._zombies_reaped,
                 timestamp=datetime.now().isoformat(),
             )
 
@@ -114,3 +156,7 @@ class MetricsCollector:
             self._total_tokens = 0
             self._total_duration_ms = 0.0
             self._sub_agent_spawns = 0
+            self._process_kills_sigterm = 0
+            self._process_kills_sigkill = 0
+            self._process_group_leaks = 0
+            self._zombies_reaped = 0
