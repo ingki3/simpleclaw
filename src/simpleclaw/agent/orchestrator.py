@@ -20,10 +20,15 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from simpleclaw.config import load_agent_config, load_persona_config
+from simpleclaw.config import (
+    load_agent_config,
+    load_memory_config,
+    load_persona_config,
+)
 from simpleclaw.llm.models import LLMRequest, ToolCall
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
@@ -103,6 +108,24 @@ class AgentOrchestrator:
         db_path = Path(agent_config["db_path"])
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._store = ConversationStore(db_path)
+
+        # 시맨틱 메모리(RAG, spec 005 Phase 2) 설정 로드
+        # enabled=False가 기본 — sentence-transformers 미설치 환경에서도 무난하게 동작
+        memory_config = load_memory_config(config_path)
+        rag_cfg = memory_config["rag"]
+        self._rag_enabled: bool = bool(rag_cfg["enabled"])
+        self._rag_top_k: int = int(rag_cfg["top_k"])
+        self._rag_threshold: float = float(rag_cfg["similarity_threshold"])
+        self._embedding_service: EmbeddingService | None = (
+            EmbeddingService(
+                model_name=str(rag_cfg["model"]),
+                enabled=self._rag_enabled,
+            )
+            if self._rag_enabled
+            else None
+        )
+        # 백그라운드 임베딩 태스크 강한 참조 — GC로 인한 task drop 방지
+        self._background_tasks: set = set()
 
         # Skill execution timeout
         self._skill_timeout = skills_config.get("execution_timeout", 60)
@@ -184,35 +207,78 @@ class AgentOrchestrator:
         # /cron 명령어 확인
         cron_result = try_cron_command(text, self._cron_scheduler)
         if cron_result is not None:
-            self._store.add_message(ConversationMessage(
-                role=MessageRole.USER, content=text,
-            ))
-            self._store.add_message(ConversationMessage(
-                role=MessageRole.ASSISTANT, content=cron_result,
-            ))
+            self._save_turn(text, cron_result)
             return cron_result
 
         # /recipe-name 명령어 확인 (e.g. /ai-report)
         recipe_result = await try_recipe_command(text, self._tool_loop)
         if recipe_result is not None:
-            self._store.add_message(ConversationMessage(
-                role=MessageRole.USER, content=text,
-            ))
-            self._store.add_message(ConversationMessage(
-                role=MessageRole.ASSISTANT, content=recipe_result,
-            ))
+            self._save_turn(text, recipe_result)
             return recipe_result
 
         response_text = await self._tool_loop(text)
-
-        self._store.add_message(ConversationMessage(
-            role=MessageRole.USER, content=text,
-        ))
-        self._store.add_message(ConversationMessage(
-            role=MessageRole.ASSISTANT, content=response_text,
-        ))
-
+        self._save_turn(text, response_text)
         return response_text
+
+    # ------------------------------------------------------------------
+    # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
+    # ------------------------------------------------------------------
+
+    def _save_turn(self, user_text: str, assistant_text: str) -> None:
+        """user/assistant 메시지 한 쌍을 저장하고, RAG가 켜져 있으면 임베딩을 백그라운드 부착한다.
+
+        설계 결정:
+        - 임베딩은 fire-and-forget 비동기로 처리하여 응답 레이턴시에 영향을 주지 않는다.
+        - 동일 턴 내 user → assistant 순서로 저장(시간순 보존).
+        - RAG가 비활성이거나 임베딩 서비스가 None이면 저장만 수행한다.
+        """
+        user_id = self._store.add_message(ConversationMessage(
+            role=MessageRole.USER, content=user_text,
+        ))
+        asst_id = self._store.add_message(ConversationMessage(
+            role=MessageRole.ASSISTANT, content=assistant_text,
+        ))
+        self._schedule_embedding(user_id, user_text)
+        self._schedule_embedding(asst_id, assistant_text)
+
+    def _schedule_embedding(self, message_id: int, content: str) -> None:
+        """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.
+
+        실패는 조용히 로그만 남긴다(메시지 자체 저장은 이미 완료되었으므로 RAG만 누락).
+        sentence-transformers 모델은 동기 API라 ``asyncio.to_thread``로 워커 스레드에 위임한다.
+        """
+        if self._embedding_service is None or not self._embedding_service.is_enabled:
+            return
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 호출 컨텍스트에 이벤트 루프가 없으면 임베딩을 건너뛴다(테스트/동기 호출 보호)
+            return
+
+        task = loop.create_task(self._embed_message_async(message_id, content))
+        # 강한 참조 유지 — 완료되면 set에서 제거
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _embed_message_async(self, message_id: int, content: str) -> None:
+        """메시지를 임베딩하고 ConversationStore에 부착한다(워커 스레드 위임).
+
+        모든 단계는 best-effort이며, 어떤 실패도 호출자로 전파되지 않는다.
+        """
+        import asyncio
+        try:
+            assert self._embedding_service is not None  # 호출 전에 확인됨
+            vec = await asyncio.to_thread(
+                self._embedding_service.encode_passage, content
+            )
+            if vec is None:
+                return
+            await asyncio.to_thread(self._store.add_embedding, message_id, vec)
+        except Exception as exc:
+            logger.warning(
+                "Background embedding failed for msg %d: %s", message_id, exc
+            )
 
     # ------------------------------------------------------------------
     # Native Function Calling loop
@@ -231,12 +297,6 @@ class AgentOrchestrator:
             text: 사용자 원본 메시지
             isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등)
         """
-        system_prompt = self._build_system_prompt()
-        tools = build_tool_definitions(
-            self._skills,
-            cron_available=self._cron_scheduler is not None,
-        )
-
         # 현재 시각을 KST로 주입
         from datetime import datetime, timezone, timedelta
         kst = timezone(timedelta(hours=9))
@@ -249,6 +309,7 @@ class AgentOrchestrator:
         # 메시지 구성
         if isolated:
             messages: list[dict] = [{"role": "user", "content": user_content}]
+            rag_context = ""
         else:
             recent = self._store.get_recent(limit=self._history_limit)
             messages = [
@@ -256,6 +317,18 @@ class AgentOrchestrator:
                 for msg in recent
             ]
             messages.append({"role": "user", "content": user_content})
+            # 시맨틱 회상: 최근 윈도우에 포함되지 않은 과거 메시지를 추가 컨텍스트로 회수
+            recent_contents = {msg.content for msg in recent}
+            rag_context = await self._retrieve_relevant_context(
+                text, exclude_contents=recent_contents,
+            )
+
+        # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과
+        system_prompt = self._build_system_prompt(rag_context=rag_context)
+        tools = build_tool_definitions(
+            self._skills,
+            cron_available=self._cron_scheduler is not None,
+        )
 
         for i in range(self._max_tool_iterations):
             try:
@@ -368,11 +441,14 @@ class AgentOrchestrator:
     # Prompt building
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self) -> str:
-        """캐시된 페르소나·스킬 텍스트를 조합하여 시스템 프롬프트를 반환한다.
+    def _build_system_prompt(self, rag_context: str = "") -> str:
+        """캐시된 페르소나·스킬 텍스트와(선택) RAG 회상 블록을 조합하여 시스템 프롬프트를 반환한다.
 
         도구 정의는 API의 tools 파라미터로 별도 전달되므로,
-        여기서는 페르소나 + 스킬 개요 + 간결한 도구 사용 안내만 포함한다.
+        여기서는 페르소나 + 스킬 개요 + 시맨틱 회상 + 간결한 도구 사용 안내만 포함한다.
+
+        Args:
+            rag_context: ``_retrieve_relevant_context()`` 결과. 빈 문자열이면 블록을 생략한다.
         """
         parts = []
 
@@ -382,9 +458,84 @@ class AgentOrchestrator:
         if self._skills_prompt:
             parts.append(self._skills_prompt)
 
+        # RAG 블록은 페르소나 다음, 도구 안내 직전에 위치 — 모델이 회상 정보를 응답 근거로 활용
+        if rag_context:
+            parts.append(rag_context)
+
         parts.append(_TOOL_USAGE_INSTRUCTION)
 
         return "\n\n---\n\n".join(parts)
+
+    async def _retrieve_relevant_context(
+        self,
+        user_text: str,
+        exclude_contents: set[str] | None = None,
+    ) -> str:
+        """사용자 질의와 의미상 가까운 과거 메시지를 회수하여 시스템 프롬프트 블록으로 포맷한다.
+
+        설계 결정:
+        - RAG가 비활성이거나 임베딩 서비스/모델 로드 실패 시 빈 문자열을 반환하여
+          기존 슬라이딩 윈도우 동작으로 자연 fallback 한다(서비스 가용성 보존).
+        - 최근 윈도우(``_history_limit``)에 이미 포함된 메시지는 ``exclude_contents``로 제외하여
+          중복 주입을 방지한다.
+        - 임계값(``_rag_threshold``) 이상 유사도만 채택 — 노이즈 회상으로 인한 오답을 줄인다.
+        - 인코딩은 동기 API이므로 ``asyncio.to_thread``로 워커 스레드에 위임한다.
+
+        Args:
+            user_text: 현재 사용자 메시지 원본.
+            exclude_contents: 이미 ``messages`` 리스트에 들어간 메시지 본문 집합.
+
+        Returns:
+            "## 관련 과거 대화\\n..." 마크다운 블록. 회수 결과가 없으면 빈 문자열.
+        """
+        if self._embedding_service is None or not self._embedding_service.is_enabled:
+            return ""
+
+        import asyncio
+        try:
+            query_vec = await asyncio.to_thread(
+                self._embedding_service.encode_query, user_text
+            )
+        except Exception as exc:
+            logger.warning("RAG query encoding failed: %s", exc)
+            return ""
+        if query_vec is None:
+            return ""
+
+        try:
+            results = await asyncio.to_thread(
+                self._store.search_similar,
+                query_vec,
+                self._rag_top_k,
+            )
+        except Exception as exc:
+            logger.warning("RAG search failed: %s", exc)
+            return ""
+
+        if not results:
+            return ""
+
+        excluded = exclude_contents or set()
+        lines: list[str] = []
+        for msg, score in results:
+            if score < self._rag_threshold:
+                continue
+            if msg.content in excluded:
+                continue
+            ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
+            lines.append(
+                f"- [{ts}] **{msg.role.value}**: {msg.content}"
+            )
+
+        if not lines:
+            return ""
+
+        header = (
+            "## 관련 과거 대화 (시맨틱 회상)\n\n"
+            "아래는 현재 질문과 의미상 유사한 과거 대화입니다. "
+            "최근 메시지 윈도우 밖의 정보일 수 있으니 응답 근거로 활용하세요."
+        )
+        return f"{header}\n\n" + "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Skill execution

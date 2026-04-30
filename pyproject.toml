@@ -19,6 +19,9 @@ dependencies = [
     "apscheduler>=3.10",
     "python-telegram-bot>=21.0",
     "aiohttp>=3.9",
+    "numpy>=1.26",
+    "sqlite-vec>=0.1",
+    "sentence-transformers>=3.0",
 ]
 
 [project.optional-dependencies]
