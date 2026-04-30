@@ -30,8 +30,8 @@
 - [ ] Claude, ChatGPT API 지원 — Claude/ChatGPT를 기본 LLM 백엔드로 실사용 가능하도록 검증 및 보완
 
 ### 시맨틱 메모리 (spec 005, BIZ-12)
-- [>] **Phase 1** — `ConversationStore` 임베딩 저장/검색 API + 단위 테스트 (이 PR)
-- [ ] **Phase 2** — `sentence-transformers` 통합, `_retrieve_relevant_context()` + `_tool_loop()` 하이브리드 회상
+- [>] **Phase 1** — `ConversationStore` 임베딩 저장/검색 API + 단위 테스트 (PR ingki3/simpleclaw#16)
+- [>] **Phase 2** — `EmbeddingService` 통합, `_retrieve_relevant_context()` + `_tool_loop()` 하이브리드 회상 (이 PR)
 - [ ] **Phase 3** — 드리밍 그래프 갱신, `MEMORY.md` 자동 압축, 시맨틱/에피소드 인덱스 분리
 
 ### 스킬

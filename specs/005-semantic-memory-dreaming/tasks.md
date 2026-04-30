@@ -3,38 +3,27 @@
 **Input**: Design documents from `/specs/005-semantic-memory-dreaming/`
 **Prerequisites**: spec.md, plan.md
 
-## Phase 1 — Storage Layer (이 PR 범위)
+## Phase 1 — Storage Layer (PR ingki3/simpleclaw#16)
 
-- [>] T001 `pyproject.toml` 의존성 추가: `numpy>=1.26`, `sqlite-vec>=0.1`
-- [>] T002 `ConversationStore._ensure_schema()` 확장:
-  - 신규 DB는 `embedding BLOB` 컬럼 포함하여 생성
-  - 기존 DB는 `PRAGMA table_info` 검사 후 `ALTER TABLE` 마이그레이션
-  - `PRAGMA journal_mode=WAL` 설정
-- [>] T003 `ConversationStore.add_message()` 시그니처 확장: `-> None` → `-> int` (lastrowid 반환)
-- [>] T004 `ConversationStore.add_embedding(message_id, vector)` 신규 메서드 — float32 BLOB 저장, 존재하지 않는 id 시 ValueError
-- [>] T005 `ConversationStore.search_similar(query_vector, k, since)` 신규 메서드 — numpy 코사인 유사도 상위 K, 차원 불일치/NULL 행 자동 제외
-- [>] T006 `tests/unit/test_conversation_store_vector.py` 작성:
-  - 임베딩 저장 후 검색 라운드트립
-  - 차원 불일치 행 제외
-  - NULL 임베딩 행 제외
-  - `since` 시간 필터 결합
-  - 0 벡터 입력 → ValueError
-  - 존재하지 않는 message_id → ValueError
-  - 빈 DB 검색 → `[]`
-  - 기존 DB 마이그레이션(레거시 컬럼 셋으로 만든 DB에 신규 인스턴스 연결 시 컬럼 자동 추가)
-- [>] T007 `TODO.md` 백로그에 005 시맨틱 메모리 항목 추가 (Phase 2/3 명시)
-- [ ] T008 `pytest tests/unit/` 전체 통과
-- [ ] T009 `ruff check src/` 통과
+- [x] T001 `pyproject.toml` 의존성 추가: `numpy>=1.26`, `sqlite-vec>=0.1`
+- [x] T002 `ConversationStore._ensure_schema()` 확장 (embedding 컬럼 + ALTER 마이그레이션 + WAL)
+- [x] T003 `ConversationStore.add_message()` 시그니처 확장: `-> None` → `-> int`
+- [x] T004 `ConversationStore.add_embedding(message_id, vector)` 신규
+- [x] T005 `ConversationStore.search_similar(query_vector, k, since)` 신규
+- [x] T006 `tests/unit/test_conversation_store_vector.py` 19 tests
+- [x] T007 `TODO.md` 백로그 등록
+- [x] T008 `pytest tests/unit/` 전체 통과 (442/442 시점)
+- [x] T009 `ruff check` 변경 파일 통과
 
-## Phase 2 — Retrieval Integration (별도 PR)
+## Phase 2 — Retrieval Integration (이 PR 범위)
 
-- [ ] P2-T001 `sentence-transformers>=3.0` 의존성 추가
-- [ ] P2-T002 `EmbeddingService` 신규 모듈 — 모델 lazy 로드, `encode(text) -> np.ndarray`
-- [ ] P2-T003 `Orchestrator` 메시지 저장 직후 임베딩 부착(블로킹 또는 비동기)
-- [ ] P2-T004 `_retrieve_relevant_context(user_msg, k)` 메서드 — 임베딩 후 `search_similar` 호출, top-K 메시지를 시스템 프롬프트 섹션으로 포맷
-- [ ] P2-T005 `_tool_loop()`에서 RAG 호출 통합, 기존 `최근 N개`와 결합
-- [ ] P2-T006 `config.yaml`에 임베딩 모델/`k`/유사도 임계값 노출
-- [ ] P2-T007 통합 테스트 + 토큰 절감 측정
+- [x] P2-T001 `sentence-transformers>=3.0` 의존성 추가
+- [x] P2-T002 `EmbeddingService` 신규 모듈 — 모델 lazy 로드, `encode_query` / `encode_passage` (e5 프리픽스), 실패 시 graceful disable
+- [x] P2-T003 `Orchestrator._save_turn` + `_schedule_embedding` — `asyncio.to_thread`로 워커 스레드에서 임베딩, fire-and-forget 백그라운드 태스크
+- [x] P2-T004 `_retrieve_relevant_context(user_text, exclude_contents)` — 임계값 필터 + 최근 윈도우 중복 제거 + "관련 과거 대화" 마크다운 블록 포맷
+- [x] P2-T005 `_tool_loop()`에서 isolated가 아닐 때만 RAG 호출, `_build_system_prompt(rag_context=)`로 시스템 프롬프트에 주입
+- [x] P2-T006 `config.yaml.example`에 `memory.rag.{enabled,model,top_k,similarity_threshold}` 노출, `load_memory_config()` 추가 (기본 enabled=False)
+- [x] P2-T007 단위 테스트 — `test_embedding_service.py` 9 tests + `test_orchestrator_rag.py` 12 tests. 전체 463 tests pass.
 
 ## Phase 3 — Graph-style Dreaming (별도 PR)
 
