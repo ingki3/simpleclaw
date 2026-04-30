@@ -85,3 +85,21 @@ class TestSkillExecutor:
         skill = _make_skill("slow-skill", str(script))
         with pytest.raises(SkillTimeoutError):
             await execute_skill(skill, timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_timeout_records_metrics(self, tmp_path):
+        """타임아웃 시 ``metrics``로 종료 결과가 보고되어야 한다."""
+        from simpleclaw.logging.metrics import MetricsCollector
+
+        script = tmp_path / "slow.py"
+        script.write_text("import time; time.sleep(10)")
+        skill = _make_skill("slow-skill", str(script))
+        metrics = MetricsCollector()
+
+        with pytest.raises(SkillTimeoutError):
+            await execute_skill(skill, timeout=1, metrics=metrics)
+
+        snap = metrics.get_snapshot()
+        # SIGTERM에 정상 응답하는 자식 → sigterm 카운터가 1 증가해야 한다.
+        assert snap.process_kills_sigterm + snap.process_kills_sigkill == 1
+        assert snap.process_group_leaks == 0

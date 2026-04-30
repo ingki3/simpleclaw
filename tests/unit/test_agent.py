@@ -64,6 +64,17 @@ class TestAgentOrchestrator:
         orchestrator = AgentOrchestrator(config_file)
         assert orchestrator._persona_prompt != ""
         assert "SimpleClaw" in orchestrator._persona_prompt
+        # 메트릭은 기본적으로 None이어야 기존 호환성을 유지한다.
+        assert orchestrator._metrics is None
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_init_accepts_metrics(self, config_file):
+        """``metrics`` 인자가 주입되면 오케스트레이터에 보존되어야 한다."""
+        from simpleclaw.logging.metrics import MetricsCollector
+
+        metrics = MetricsCollector()
+        orchestrator = AgentOrchestrator(config_file, metrics=metrics)
+        assert orchestrator._metrics is metrics
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_build_system_prompt(self, config_file):
