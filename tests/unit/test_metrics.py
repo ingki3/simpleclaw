@@ -60,3 +60,36 @@ class TestMetricsCollector:
         assert isinstance(d, dict)
         assert "total_executions" in d
         assert "timestamp" in d
+        # 좀비/누수 메트릭이 직렬화 결과에 포함되어야 한다.
+        assert "process_kills_sigterm" in d
+        assert "process_kills_sigkill" in d
+        assert "process_group_leaks" in d
+        assert "zombies_reaped" in d
+
+    def test_record_process_kill_sigterm(self):
+        """SIGTERM 정상 종료는 sigterm 카운터를 증가시킨다."""
+        collector = MetricsCollector()
+        collector.record_process_kill(killed=False, group_alive=False, reaped_zombies=0)
+        snap = collector.get_snapshot()
+        assert snap.process_kills_sigterm == 1
+        assert snap.process_kills_sigkill == 0
+        assert snap.process_group_leaks == 0
+        assert snap.zombies_reaped == 0
+
+    def test_record_process_kill_sigkill_with_leak(self):
+        """SIGKILL 후에도 그룹이 살아있으면 누수 카운터가 증가한다."""
+        collector = MetricsCollector()
+        collector.record_process_kill(killed=True, group_alive=True, reaped_zombies=3)
+        snap = collector.get_snapshot()
+        assert snap.process_kills_sigkill == 1
+        assert snap.process_group_leaks == 1
+        assert snap.zombies_reaped == 3
+
+    def test_reset_clears_process_metrics(self):
+        collector = MetricsCollector()
+        collector.record_process_kill(killed=True, group_alive=True, reaped_zombies=2)
+        collector.reset()
+        snap = collector.get_snapshot()
+        assert snap.process_kills_sigkill == 0
+        assert snap.process_group_leaks == 0
+        assert snap.zombies_reaped == 0

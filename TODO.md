@@ -15,7 +15,7 @@
 
 ## In Progress
 
-(현재 진행 중인 작업 없음)
+- [x] **BIZ-16: Subprocess 좀비 프로세스 정리 및 타임아웃 보강** — `kill_process_group` SIGKILL 폴백 검증, `waitpid(WNOHANG)` 회수, 그룹 잔존 폴링, 좀비/누수 메트릭, 행 걸린 자식 통합 테스트 (2026-05-01)
 
 ---
 
