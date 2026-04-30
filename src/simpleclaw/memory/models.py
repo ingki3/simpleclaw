@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+import numpy as np
+
 
 class MessageRole(Enum):
     """대화 메시지의 역할(발화자)을 나타내는 열거형."""
@@ -46,6 +48,30 @@ class MemoryEntry:
     summary: str
     created_at: datetime = field(default_factory=datetime.now)
     source: str = ""  # 예: "dreaming_2026-04-17"
+
+
+@dataclass
+class ClusterRecord:
+    """시맨틱 클러스터(주제 묶음)의 영속 표현.
+
+    Phase 3 그래프형 드리밍에서 임베딩 메시지들을 의미 단위로 그룹화한 산출물.
+    centroid는 클러스터 멤버들의 임베딩 평균이며, summary는 LLM이 생성한
+    클러스터 요약(MEMORY.md의 ``<!-- cluster:N -->`` 섹션 본문과 동일)이다.
+
+    Attributes:
+        id: 클러스터 행 id (저장 후 부여, 미저장 상태에서는 0).
+        label: 사람이 읽을 짧은 라벨 (예: "맥북 구매 논의"). LLM이 생성.
+        centroid: float32 평균 벡터(numpy). 멤버 추가 시 incremental mean으로 갱신.
+        summary: LLM이 작성한 누적 요약. MEMORY.md 섹션 본문으로 사용.
+        member_count: 현재 이 클러스터에 속한 메시지 수.
+        updated_at: 마지막 갱신 시각 (요약 갱신 또는 멤버 추가).
+    """
+    id: int
+    label: str
+    centroid: np.ndarray
+    summary: str = ""
+    member_count: int = 0
+    updated_at: datetime = field(default_factory=datetime.now)
 
 
 class MemoryError(Exception):
