@@ -16,6 +16,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from simpleclaw.security import filter_env, get_preexec_fn, kill_process_group
 from simpleclaw.skills.models import (
@@ -26,6 +27,9 @@ from simpleclaw.skills.models import (
     SkillTimeoutError,
 )
 
+if TYPE_CHECKING:
+    from simpleclaw.logging.metrics import MetricsCollector
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +37,8 @@ async def execute_skill(
     skill: SkillDefinition,
     args: list[str] | None = None,
     timeout: int = 60,
+    *,
+    metrics: MetricsCollector | None = None,
 ) -> SkillResult:
     """스킬의 대상 스크립트를 비동기 서브프로세스로 실행한다.
 
@@ -40,6 +46,8 @@ async def execute_skill(
         skill: 실행할 스킬 정의
         args: 스크립트에 전달할 선택적 인자 목록
         timeout: 최대 실행 시간 (초)
+        metrics: 타임아웃 시 ``kill_process_group`` 결과를 누적할 메트릭 수집기.
+            None이면 기록되지 않으며 기존 동작과 호환된다.
 
     Returns:
         출력, 종료 코드, 에러 정보를 포함하는 SkillResult
@@ -78,7 +86,7 @@ async def execute_skill(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        await kill_process_group(process)
+        await kill_process_group(process, metrics=metrics)
         raise SkillTimeoutError(
             f"Skill '{skill.name}' timed out after {timeout}s"
         )

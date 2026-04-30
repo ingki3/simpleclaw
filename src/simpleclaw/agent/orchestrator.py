@@ -56,6 +56,7 @@ from simpleclaw.agent.tool_schemas import build_tool_definitions
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
+    from simpleclaw.logging.metrics import MetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +82,16 @@ class AgentOrchestrator:
     5. 대화 저장
     """
 
-    def __init__(self, config_path: str | Path = "config.yaml") -> None:
+    def __init__(
+        self,
+        config_path: str | Path = "config.yaml",
+        *,
+        metrics: MetricsCollector | None = None,
+    ) -> None:
         self._config_path = Path(config_path)
+        # 메트릭 수집기 — 서브프로세스 종료 결과를 누적하여 누수 추세를 모니터링.
+        # None이면 메트릭이 기록되지 않으며, 기존 동작과 호환된다.
+        self._metrics = metrics
 
         # --- 정적 설정 로드 (리스타트 시에만 갱신) ---
         agent_config = load_agent_config(config_path)
@@ -617,7 +626,7 @@ class AgentOrchestrator:
 
         except asyncio.TimeoutError:
             logger.error("Skill command timed out: %s", command)
-            await kill_process_group(proc)
+            await kill_process_group(proc, metrics=self._metrics)
             return f"Command timed out after {self._skill_timeout}s"
         except Exception as exc:
             logger.error("Skill command error: %s", exc)
@@ -642,7 +651,10 @@ class AgentOrchestrator:
         try:
             args = args_str.split() if args_str else None
             result = await execute_skill(
-                skill, args=args, timeout=self._skill_timeout
+                skill,
+                args=args,
+                timeout=self._skill_timeout,
+                metrics=self._metrics,
             )
             logger.info(
                 "Skill '%s' executed: success=%s", skill_name, result.success
