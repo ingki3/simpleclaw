@@ -2,7 +2,7 @@
 
 **Feature Branch**: `005-semantic-memory-dreaming`
 **Created**: 2026-04-30
-**Status**: Phase 1 In Progress
+**Status**: Phase 1 Complete · Phase 2 In Progress
 **Source Issue**: Multica BIZ-12 — "Vector DB / RAG 시맨틱 메모리"
 **Input**: 현재 SimpleClaw 메모리는 "최근 N개 + 누적 요약 텍스트(MEMORY.md)" 라는 시간순 슬라이딩 윈도우 구조라 시간 경계 밖 회상이 구조적으로 불가능. SQLite 단일 파일 운영을 유지한 채 임베딩 기반 시맨틱 검색을 도입하여 (1) 무한 시간 회상, (2) 호출당 프롬프트 토큰 절감, (3) 교차 대화 연결을 가능케 한다.
 

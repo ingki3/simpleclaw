@@ -20,6 +20,16 @@ agent:
   max_tool_iterations: 5
   workspace_dir: ".agent/workspace"
 
+# 시맨틱 메모리 (RAG, spec 005 Phase 2)
+# enabled: true 로 켜면 sentence-transformers가 첫 메시지에 모델(~500MB)을 다운로드한다.
+# 다운로드 완료 후에는 시간 경계 밖 과거 대화도 의미 기반으로 회상된다.
+memory:
+  rag:
+    enabled: false
+    model: "intfloat/multilingual-e5-small"  # 한/영 동시 지원, 384dim, CPU 50ms
+    top_k: 5                                  # 회상 후보 상위 K개
+    similarity_threshold: 0.5                 # 코사인 유사도 임계값(노이즈 컷)
+
 security:
   command_guard:
     enabled: true
