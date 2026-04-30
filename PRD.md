@@ -17,7 +17,7 @@
 - `USER.md`: 소유자/사용자에 대한 정보와 상호작용 규칙 및 선호도 정의.
 - **대화 원시 로그 (Structured Message History):** 실시간 대화 내역 및 스킬 실행 결과는 휘발성 인메모리가 아닌, 타임스탬프, 역할(Role), 토큰량 등 메타데이터를 포함하여 반정형 파일(`.jsonl`)이나 혹은 로컬 `SQLite` DB에 원형 그대로 구조화하여 저장. (프롬프트에는 이 DB에서 최근 N개의 대화만 슬라이딩 윈도우로 쿼리하여 주입).
 - `MEMORY.md` (Core Memory): 드리밍 프로세스가 LLM을 사용하여 DB의 대화 원시 로그를 분석하고 도출해낸 **"핵심 요약본(완료된 작업, 장기간 유지할 정보)"**만을 텍스트로 깔끔하게 정리하여 보존.
-- **시맨틱 메모리 (RAG):** 단순 텍스트 파일을 넘어 벡터 DB 중심의 검색 증강 생성을 활용해 방대한 양의 과거 이력을 자동 색인하고 문맥에 맞춰 쿼리.
+- **시맨틱 메모리 (RAG):** 단순 텍스트 파일을 넘어 벡터 임베딩 기반 검색 증강 생성을 활용해 방대한 양의 과거 이력을 자동 색인하고 문맥에 맞춰 쿼리. SQLite의 BLOB 컬럼에 float32 벡터를 저장하고 `sentence-transformers` 다국어 모델(`intfloat/multilingual-e5-small`)로 임베딩, numpy 코사인 유사도로 회상하는 zero-dependency 방식 채택. 임베딩이 부착된 메시지는 코사인 유사도 임계값 기반으로 자동 클러스터링되어 주제별 요약을 별도로 보존(그래프형 드리밍).
 - **LLM 기반 드리밍(Dreaming) 및 기억 통합:** 1일 1회 실행을 원칙으로 하며 "마지막 입력 시점에서 2시간 초과 대기" 및 "지정된 심야 시간(예: 03:00) 통과" 조건을 동시 만족 시 동작. **LLM을 사용하여** 대화를 분석하고 두 가지를 추출: (1) 기억 요약(이벤트, 결정사항) → `MEMORY.md`, (2) 사용자 인사이트(선호도, 관심사) → `USER.md`. `AGENT.md`는 드리밍으로 수정되지 않음. 드리밍에 사용할 모델은 `daemon.dreaming.model`로 설정 가능. 실행 전 반드시 `.bak` 백업 파일을 생성해 오염(Hallucination) 시 빠른 수동 롤백을 보장.
 - **Lazy Loading / Hot Reload:** 페르소나 파일(AGENT.md, USER.md, MEMORY.md), 스킬, 레시피를 매 메시지 처리 시 디스크에서 다시 읽어 반영. 파일 변경 시 에이전트 재시작이 필요 없음.
 - `HEARTBEAT.md`: Agent 자율 틱(tick) 기반 백그라운드 상태 모니터링 시스템. 토큰 및 CPU 소모 최적화를 위해 기본 주기는 5분(Config 조절 가능)으로 고정하며, DB 쓰기(Flush)는 기억 데이터의 변동 가능성(Dirty state)이 감지될 시에만 실행.
@@ -105,11 +105,13 @@
   - **연속성 보장 (Persistence)**: `MEMORY.md`, `HEARTBEAT.md`는 SQLite를 접목하거나 버저닝이 자동 적용된 로컬 파일 포맷으로 지속/점진적으로 기록.
 
 ### 4.2. 시맨틱 메모리 및 지식 그래프 운영 방식
-- **데이터베이스 (Backend 인프라):** 무거운 외부 도커 컨테이너(FalkorDB 등) 설치 구성 배제 및 의존성 제로화를 위해, 파이썬 기반 로컬 패키지만으로 경량 구동되는 **Cognee + SQLite 바인딩 Vector DB**를 1순위 구성으로 채택하여 지식 인덱싱 처리.
+- **데이터베이스 (Backend 인프라):** 무거운 외부 도커 컨테이너(FalkorDB 등) 설치 및 추가 임베디드 그래프 DB(Cognee 등) 의존성을 배제하기 위해, **SQLite + numpy + `sentence-transformers`** 조합으로 경량 구동. `messages` 테이블에 `embedding BLOB`(float32) 컬럼을 추가하고, numpy 코사인 유사도로 직접 회상한다. 별도 벡터 DB 패키지 불필요.
 - **지식 파이프라인 프로세스**: 
-  - **추출 (Extraction)**: 메신저 대화, 시스템 활동 로그, 워크플로 실행 결과 등에서 핵심 정보 및 주체 간 관계를 추출해 지식 노드(Knowledge Nodes)로 변환.
-  - **보관 (Storage)**: Heartbeat 틱 발현 시점이나 개별 작업 완료 단계에서 로컬 메모리 DB로 일괄 Flush하여 실시간 색인율 유지.
-  - **검색 및 RAG 활용**: 주 에이전트가 새로운 태스크에 착수하기 전, 연관된 키워드나 작업 맥락을 RAG 시스템에 쿼리하여 `System Prompt` 형태로 Context Window에 자동 로드(프리페치).
+  - **추출 (Extraction)**: 사용자/에이전트 메시지를 `EmbeddingService`(`intfloat/multilingual-e5-small`, lazy-load)로 즉시 벡터화하여 SQLite에 저장. 임베딩 모델 미설치 시 graceful degradation으로 RAG만 비활성.
+  - **클러스터링 (Clustering)**: `IncrementalClusterer`가 새 임베딩을 기존 클러스터 centroid와 코사인 비교(임계값 0.75)하여 부착하거나 새 클러스터 생성. centroid는 멤버 평균으로 누적 갱신. `semantic_clusters` 테이블 + `messages.cluster_id` FK로 영속.
+  - **보관 (Storage)**: 임베딩은 메시지 저장 시점에 동시 기록(즉시 색인). 클러스터 정보는 드리밍 사이클에서 일괄 갱신.
+  - **검색 및 RAG 활용**: 매 사용자 요청마다 오케스트레이터의 `_retrieve_relevant_context()`가 메시지를 임베딩하고 `search_similar(top_k)`로 의미상 가까운 과거 메시지를 회상하여 시스템 프롬프트의 메모리 섹션에 주입(프리페치).
+  - **그래프형 드리밍**: 클러스터별로 LLM 요약을 생성하여 `MEMORY.md`에 `<!-- cluster:N start/end -->` HTML 마커로 분리 보존. 다음 드리밍 시 해당 영역만 in-place 갱신, 에피소드형 메모리는 기존처럼 append. `enable_clusters` 플래그로 점진 도입.
 
 ### 4.3. 기반 기술 및 추가 명확화 사항 (Considerations)
 - **코어 구동 방식 (Daemon & Loop)**: 무거운 작업 큐(Celery 등)의 도입을 지양하고, 시스템 구조를 단순화하기 위해 `asyncio` 이벤트 루프와 강력하고 가벼운 `APScheduler` 기반의 데몬(Daemon)으로 상주.
@@ -142,7 +144,7 @@
 - **Phase 2: Extension & Memory (확장 도구 및 메모리 구조 통합)**
   - 로컬 전용/전역(Global/Local) 스킬 모듈 및 MCP 클라이언트 구현.
   - 전용 디렉토리(`recipes/`) 기반 자동화 Recipe 실행 엔진.
-  - 로컬 벡터 DB 기반 시맨틱 메모리 연동 및 드리밍(1일 1회 백업 기반) 파이프라인 추가.
+  - SQLite 임베딩 컬럼 + numpy 코사인 기반 시맨틱 메모리(RAG) 연동, 자동 증분 클러스터링, 드리밍(1일 1회 백업 기반) 파이프라인 — 클러스터별 그래프형 요약 분리 보존 포함.
 - **Phase 3: Autonomy & Automation (통신 인터페이스와 스케줄링)**
   - 데몬 프로세스 상주: 5분 주기 Heartbeat 상태 모니터링 및 Cron 배포.
   - 서브 에이전트 동적 호출 모델(최소 권한, 최대 풀 제한 적용) 완성.
