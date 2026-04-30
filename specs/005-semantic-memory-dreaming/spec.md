@@ -2,7 +2,7 @@
 
 **Feature Branch**: `005-semantic-memory-dreaming`
 **Created**: 2026-04-30
-**Status**: Phase 1 Complete · Phase 2 In Progress
+**Status**: Phase 1 Complete · Phase 2 Complete · Phase 3 In Progress
 **Source Issue**: Multica BIZ-12 — "Vector DB / RAG 시맨틱 메모리"
 **Input**: 현재 SimpleClaw 메모리는 "최근 N개 + 누적 요약 텍스트(MEMORY.md)" 라는 시간순 슬라이딩 윈도우 구조라 시간 경계 밖 회상이 구조적으로 불가능. SQLite 단일 파일 운영을 유지한 채 임베딩 기반 시맨틱 검색을 도입하여 (1) 무한 시간 회상, (2) 호출당 프롬프트 토큰 절감, (3) 교차 대화 연결을 가능케 한다.
 
@@ -66,10 +66,13 @@
 - **FR-2.2** `_retrieve_relevant_context(user_msg, k)`을 `orchestrator.py`에 신설하고 `_tool_loop()`에서 호출하여 시스템 프롬프트에 RAG 결과를 주입한다.
 - **FR-2.3** `최근 N개 + RAG top-K` 하이브리드. 검색 실패/임베딩 부재 시 슬라이딩 윈도우만으로 fallback.
 
-### Phase 3 (별도 PR)
+### Phase 3 (이 PR 범위)
 
-- **FR-3.1** 드리밍 파이프라인이 누적 텍스트가 아닌 임베딩 클러스터 그래프를 갱신하도록 전환.
-- **FR-3.2** `MEMORY.md` 자동 압축 — 임베딩 그룹별 요약 1건만 유지.
+- **FR-3.1** `semantic_clusters` 테이블 신설 — `(id, label, centroid BLOB, summary, member_count, updated_at)`. `messages.cluster_id` 컬럼 추가(nullable, 정수 참조).
+- **FR-3.2** `IncrementalClusterer` 모듈 — 신규 임베딩 메시지에 대해 가장 가까운 기존 클러스터 centroid를 찾아 임계값 이상이면 부착, 미만이면 새 클러스터 생성. centroid는 incremental mean으로 갱신.
+- **FR-3.3** 드리밍 파이프라인이 미처리 메시지를 시간순이 아닌 클러스터별로 그룹화하여 LLM에 전달하고, 클러스터별 요약을 갱신한다.
+- **FR-3.4** `MEMORY.md` 자동 압축 — 각 클러스터를 `<!-- cluster:N start -->` … `<!-- cluster:N end -->` HTML 주석 마커로 감싼 섹션으로 표현. 드리밍은 영향받은 클러스터 섹션만 upsert. 마커 외부 영역(사용자 수기 메모)은 보존.
+- **FR-3.5** 시맨틱 ↔ 에피소드 분리 — `messages` 테이블은 에피소드(원본 대화), `semantic_clusters` 테이블은 시맨틱 메모리(추상 요약). RAG 회상은 기존대로 messages만 본다(Phase 2 동작 보존).
 
 ---
 
@@ -91,3 +94,8 @@
 - **D2 (2026-04-30)**: 임베딩 모델 = `intfloat/multilingual-e5-small` (118M, 384dim, 한/영 동시 지원, CPU 50ms).
 - **D3 (2026-04-30)**: Phase 1 PR은 저장소 확장만 다루며 `_retrieve_relevant_context()` 통합은 Phase 2 별도 PR에서 진행.
 - **D4 (2026-04-30, 구현 노트)**: Phase 1은 BLOB 컬럼 + numpy 코사인 유사도(인메모리)로 구현. `sqlite-vec`는 의존성으로 추가하되 가상 테이블 마이그레이션은 메시지 수 >10k 임계 도달 시 Phase 2에서 검토.
+- **D5 (2026-04-30, Phase 3)**: 클러스터링 알고리즘 = 순수 numpy 코사인 임계값 기반 응집(agglomerative). 신규 의존성 0. ~수천 메시지까지 충분. 품질 이슈 발생 시 sklearn HDBSCAN 도입 검토(별도 작업).
+- **D6 (2026-04-30, Phase 3)**: 클러스터 영속화 = 별도 `semantic_clusters` 테이블(centroid 저장) + `messages.cluster_id` 컬럼. 안정 식별자가 있어야 신규 메시지 점진 할당과 MEMORY.md upsert가 가능.
+- **D7 (2026-04-30, Phase 3)**: 시맨틱 ↔ 에피소드 분리 형태 = `semantic_clusters` 테이블 자체가 시맨틱 메모리 인덱스. `messages.memory_kind` 같은 추가 컬럼은 도입하지 않음. RAG 회상은 messages만 보고, 클러스터 요약은 MEMORY.md에서 드러남.
+- **D8 (2026-04-30, Phase 3)**: MEMORY.md 자동 압축 형식 = `<!-- cluster:N start --> … <!-- cluster:N end -->` HTML 주석 마커. 마크다운 렌더에 보이지 않고, 사용자 수기 편집과 봇 upsert가 공존 가능(마커 외부 보존, 마커 내부는 다음 드리밍에 재작성).
+- **D9 (2026-04-30, Phase 3)**: 클러스터 할당 정책 = 점진 할당. 기존 centroid 중 max 유사도 ≥ threshold면 부착, 미만이면 새 클러스터 생성. 전면 re-clustering(centroid 드리프트 보정용)은 후속 백로그.

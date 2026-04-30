@@ -6,21 +6,34 @@
 3. LLM에게 대화를 분석시켜 기억 요약(memory)과 사용자 인사이트(user_insights)를 추출한다.
 4. 결과를 각각 MEMORY.md, USER.md에 추가(append)한다.
 
+Phase 3(spec 005): 클러스터링이 활성화되면 MEMORY.md는 시간순 append가 아니라
+ 클러스터별 ``<!-- cluster:N start --> ... <!-- cluster:N end -->`` 섹션 단위로 upsert된다.
+임베딩이 부착된 메시지를 ``IncrementalClusterer``로 그룹핑하고, 영향받은 클러스터마다
+LLM에 (기존 요약 + 신규 메시지)를 보내 새 요약을 받아 ``semantic_clusters`` 테이블과
+MEMORY.md를 함께 갱신한다. USER/SOUL/AGENT 파일은 기존 동작 그대로 유지된다.
+
 설계 결정:
 - LLM 호출 실패 시 단순 텍스트 요약(fallback)으로 대체하여 파이프라인이 중단되지 않도록 한다.
 - 대화 텍스트는 8000자로 잘라 LLM 컨텍스트 초과를 방지한다.
 - 백업 파일명에 타임스탬프를 포함하여 여러 번 드리밍해도 이전 백업이 덮어씌워지지 않는다.
+- 클러스터링이 비활성이거나 임베딩이 전혀 없는 입력일 때는 기존 append 동작으로 자연 fallback 한다.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 
-from simpleclaw.memory.models import DreamingError, MemoryEntry
+from simpleclaw.memory.clustering import IncrementalClusterer
+from simpleclaw.memory.models import (
+    ClusterRecord,
+    ConversationMessage,
+    MemoryEntry,
+)
 from simpleclaw.memory.conversation_store import ConversationStore
 
 logger = logging.getLogger(__name__)
@@ -66,6 +79,35 @@ JSON 형식으로만 응답하세요:
 {{"memory": "## {date}\\n- 항목1\\n- 항목2", "user_insights": "- 새 정보1", "soul_updates": "- 변경1", "agent_updates": "- 변경1"}}"""
 
 
+# Phase 3 — 클러스터별 LLM 요약 프롬프트 (기존 + 신규 메시지를 받아 갱신된 라벨/요약 산출)
+_CLUSTER_SUMMARY_PROMPT = """\
+다음은 한 시맨틱 클러스터(주제 묶음)의 기존 요약과 새 메시지입니다.
+기존 요약을 갱신하여 새 정보를 반영하되, 핵심 사실만 유지하고 중복은 제거하세요.
+요약은 마크다운 bullet point로 작성합니다.
+
+## 기존 라벨
+{existing_label}
+
+## 기존 요약
+{existing_summary}
+
+## 새 메시지(이번 드리밍 회차에 추가된 대화)
+{new_messages}
+
+JSON으로만 응답하세요:
+{{"label": "10자 이내 짧은 한국어 라벨", "summary": "- 핵심 사실 1\\n- 핵심 사실 2\\n- ..."}}"""
+
+
+# Phase 3 — MEMORY.md 클러스터 섹션 마커. 정규식이 아닌 단순 문자열 식별자로 검색.
+_CLUSTER_MARKER_START = "<!-- cluster:{cid} start -->"
+_CLUSTER_MARKER_END = "<!-- cluster:{cid} end -->"
+# 마커 인식용 정규식 — 시작/끝 마커와 cluster_id를 캡처
+_CLUSTER_SECTION_RE = re.compile(
+    r"<!-- cluster:(\d+) start -->\n?(.*?)\n?<!-- cluster:\1 end -->",
+    re.DOTALL,
+)
+
+
 class DreamingPipeline:
     """대화 이력을 분석하여 MEMORY.md, USER.md, SOUL.md, AGENT.md를 갱신하는 파이프라인.
 
@@ -82,6 +124,8 @@ class DreamingPipeline:
         agent_file: str | Path | None = None,
         llm_router=None,
         dreaming_model: str = "",
+        clusterer: IncrementalClusterer | None = None,
+        enable_clusters: bool = False,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -93,6 +137,9 @@ class DreamingPipeline:
             agent_file: AGENT.md 파일 경로. None이면 행동 규칙 갱신을 하지 않는다.
             llm_router: LLM 호출을 위한 라우터. None이면 폴백 요약을 사용한다.
             dreaming_model: 드리밍에 사용할 LLM 모델명. 빈 문자열이면 라우터 기본값 사용.
+            clusterer: ``IncrementalClusterer`` 인스턴스. ``enable_clusters=True``일 때만 사용된다.
+            enable_clusters: True면 Phase 3 그래프형 드리밍(클러스터 기반 MEMORY.md upsert) 사용.
+                False면 기존 append 동작 유지(하위 호환).
         """
         self._store = conversation_store
         self._memory_file = Path(memory_file)
@@ -101,6 +148,9 @@ class DreamingPipeline:
         self._agent_file = Path(agent_file) if agent_file else None
         self._router = llm_router
         self._dreaming_model = dreaming_model or None
+        # Phase 3: 클러스터링이 None이면 enable_clusters 요청도 무시(안전 폴백)
+        self._clusterer = clusterer
+        self._enable_clusters = bool(enable_clusters and clusterer is not None)
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -321,17 +371,272 @@ class DreamingPipeline:
         if self._agent_file:
             self._update_file_section(self._agent_file, updates, "Dreaming Updates")
 
+    # ------------------------------------------------------------------
+    # Phase 3 — 클러스터 기반 그래프형 드리밍
+    # ------------------------------------------------------------------
+
+    def assign_clusters_for_unprocessed(self) -> dict[int, list[ConversationMessage]]:
+        """클러스터링되지 않은 메시지를 점진 할당하고 영향받은 클러스터별 멤버를 반환한다.
+
+        과정:
+        1. ``get_unclustered_with_embeddings()``로 후보 메시지를 얻는다.
+        2. 각 메시지에 대해 ``IncrementalClusterer.find_nearest()`` 실행:
+           - 임계값 이상이면 기존 클러스터에 부착(centroid·member_count incremental update).
+           - 미만이면 신규 클러스터 생성(첫 멤버의 임베딩이 곧 centroid).
+        3. ``messages.cluster_id``를 갱신하고, 영향받은 클러스터별로 그 회차에 새로 들어온 메시지 목록을 모은다.
+
+        Returns:
+            ``{cluster_id: [ConversationMessage, ...]}`` — 이번 회차에 갱신된 클러스터와 멤버.
+            클러스터링이 비활성이거나 처리 대상이 없으면 빈 딕셔너리.
+        """
+        if not self._enable_clusters or self._clusterer is None:
+            return {}
+
+        unprocessed = self._store.get_unclustered_with_embeddings()
+        if not unprocessed:
+            return {}
+
+        # 매 메시지마다 list_clusters를 다시 호출하지 않고 인메모리 캐시를 갱신한다.
+        # 신규 클러스터를 만들면 캐시에도 추가하여 같은 회차의 후속 메시지가 그 클러스터에 부착될 수 있게 한다.
+        clusters_cache: dict[int, ClusterRecord] = {
+            c.id: c for c in self._store.list_clusters()
+        }
+        affected: dict[int, list[ConversationMessage]] = {}
+
+        for mid, msg, embedding in unprocessed:
+            try:
+                assignment = self._clusterer.find_nearest(
+                    embedding, list(clusters_cache.values())
+                )
+            except ValueError as exc:
+                # 0벡터 등 의미 없는 임베딩 — 스킵
+                logger.warning("Skipping message %d: %s", mid, exc)
+                continue
+
+            if assignment.cluster_id is not None:
+                # 기존 클러스터에 부착 — centroid는 누적 평균으로, member_count는 +1
+                cluster = clusters_cache[assignment.cluster_id]
+                new_centroid = self._clusterer.update_centroid(
+                    cluster.centroid, cluster.member_count, embedding
+                )
+                new_count = cluster.member_count + 1
+                self._store.update_cluster(
+                    cluster.id,
+                    centroid=new_centroid,
+                    member_count=new_count,
+                )
+                # 캐시 동기화 — 같은 회차 후속 메시지가 본 centroid 기준으로 비교되도록
+                clusters_cache[cluster.id] = ClusterRecord(
+                    id=cluster.id,
+                    label=cluster.label,
+                    centroid=new_centroid,
+                    summary=cluster.summary,
+                    member_count=new_count,
+                    updated_at=datetime.now(),
+                )
+                cid = cluster.id
+            else:
+                # 신규 클러스터 — 첫 멤버 임베딩을 centroid로
+                cid = self._store.create_cluster(
+                    label="",  # 라벨은 LLM 요약 단계에서 채움
+                    centroid=embedding,
+                    summary="",
+                    member_count=1,
+                )
+                clusters_cache[cid] = ClusterRecord(
+                    id=cid,
+                    label="",
+                    centroid=embedding.copy(),
+                    summary="",
+                    member_count=1,
+                    updated_at=datetime.now(),
+                )
+
+            self._store.assign_cluster(mid, cid)
+            affected.setdefault(cid, []).append(msg)
+
+        return affected
+
+    async def summarize_cluster(
+        self,
+        messages: list[ConversationMessage],
+        existing_label: str = "",
+        existing_summary: str = "",
+    ) -> dict[str, str]:
+        """단일 클러스터의 신규 메시지를 받아 갱신된 라벨·요약을 반환한다.
+
+        LLM 라우터가 없거나 호출이 실패하면 단순 폴백을 사용한다.
+
+        Args:
+            messages: 이번 회차에 이 클러스터에 부착된 메시지들.
+            existing_label: 기존 라벨 (없으면 빈 문자열).
+            existing_summary: 기존 요약 (없으면 빈 문자열).
+
+        Returns:
+            ``{"label": str, "summary": str}`` — 갱신된 라벨과 요약 본문.
+        """
+        if not messages:
+            return {"label": existing_label, "summary": existing_summary}
+
+        if self._router:
+            try:
+                return await self._summarize_cluster_with_llm(
+                    messages, existing_label, existing_summary
+                )
+            except Exception:
+                logger.exception("LLM cluster summarization failed, using fallback")
+
+        return self._summarize_cluster_fallback(
+            messages, existing_label, existing_summary
+        )
+
+    async def _summarize_cluster_with_llm(
+        self,
+        messages: list[ConversationMessage],
+        existing_label: str,
+        existing_summary: str,
+    ) -> dict[str, str]:
+        """LLM에게 클러스터 메시지를 분석시켜 갱신된 라벨/요약을 받는다."""
+        from simpleclaw.llm.models import LLMRequest
+
+        conv_lines = []
+        for msg in messages:
+            role = msg.role.value.upper()
+            ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
+            conv_lines.append(f"[{ts} {role}] {msg.content}")
+        new_block = "\n".join(conv_lines)[:6000]
+
+        prompt = _CLUSTER_SUMMARY_PROMPT.format(
+            existing_label=existing_label or "(없음)",
+            existing_summary=existing_summary or "(없음)",
+            new_messages=new_block,
+        )
+        request = LLMRequest(
+            system_prompt=(
+                "You are a memory clustering assistant. "
+                "Respond with valid JSON only."
+            ),
+            user_message=prompt,
+            backend_name=self._dreaming_model,
+        )
+        response = await self._router.send(request)
+        return self._parse_cluster_result(
+            response.text.strip(), existing_label, existing_summary
+        )
+
+    def _parse_cluster_result(
+        self,
+        raw: str,
+        existing_label: str,
+        existing_summary: str,
+    ) -> dict[str, str]:
+        """LLM 응답 JSON에서 label/summary를 추출한다.
+
+        파싱 실패 시 기존 값을 유지하고 raw 텍스트 앞 200자를 summary로 폴백한다.
+        """
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+
+        try:
+            data = json.loads(raw)
+            label = (data.get("label") or existing_label or "").strip()
+            summary = (data.get("summary") or existing_summary or "").strip()
+            return {"label": label, "summary": summary}
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse cluster JSON: %s", raw[:200])
+            return {
+                "label": existing_label,
+                "summary": existing_summary or raw[:200],
+            }
+
+    def _summarize_cluster_fallback(
+        self,
+        messages: list[ConversationMessage],
+        existing_label: str,
+        existing_summary: str,
+    ) -> dict[str, str]:
+        """LLM 없이 단순 텍스트 기반 클러스터 요약(메시지 첫 줄을 bullet로 나열).
+
+        라벨은 기존값을 우선하며, 비어있으면 첫 메시지의 앞 8글자를 사용한다.
+        """
+        if existing_label:
+            label = existing_label
+        else:
+            first_text = messages[0].content if messages else ""
+            label = first_text[:8].strip() or "untagged"
+
+        bullet_lines: list[str] = []
+        if existing_summary.strip():
+            bullet_lines.append(existing_summary.strip())
+        for msg in messages:
+            snippet = msg.content.replace("\n", " ").strip()[:80]
+            if snippet:
+                bullet_lines.append(f"- {snippet}")
+        summary = "\n".join(bullet_lines)
+        return {"label": label, "summary": summary}
+
+    def upsert_memory_section(
+        self, cluster_id: int, label: str, summary: str
+    ) -> None:
+        """MEMORY.md의 ``<!-- cluster:N -->`` 섹션을 갱신하거나 신규 추가한다.
+
+        규칙:
+        - 마커가 이미 존재하면 그 사이 본문만 교체(외부 영역은 보존).
+        - 마커가 없으면 파일 끝에 새 섹션 append.
+        - 파일이 없으면 ``# Memory`` 헤더와 함께 새로 생성.
+        """
+        self._memory_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing = ""
+        if self._memory_file.is_file():
+            existing = self._memory_file.read_text(encoding="utf-8")
+        if not existing.strip():
+            existing = "# Memory\n"
+        if not existing.endswith("\n"):
+            existing += "\n"
+
+        section_body = self._format_cluster_section_body(cluster_id, label, summary)
+        start_marker = _CLUSTER_MARKER_START.format(cid=cluster_id)
+        end_marker = _CLUSTER_MARKER_END.format(cid=cluster_id)
+        new_block = f"{start_marker}\n{section_body}\n{end_marker}"
+
+        # 정규식 매칭은 동일 cluster_id의 시작/끝 마커 한 쌍을 정확히 잡아낸다.
+        section_re = re.compile(
+            rf"{re.escape(start_marker)}\n?.*?\n?{re.escape(end_marker)}",
+            re.DOTALL,
+        )
+        if section_re.search(existing):
+            updated = section_re.sub(new_block, existing, count=1)
+        else:
+            # 신규 섹션 — 끝에 빈 줄 하나를 두고 append
+            sep = "" if existing.endswith("\n\n") else "\n"
+            updated = f"{existing}{sep}{new_block}\n"
+
+        self._memory_file.write_text(updated, encoding="utf-8")
+        logger.info("Upserted cluster %d in memory file", cluster_id)
+
+    @staticmethod
+    def _format_cluster_section_body(
+        cluster_id: int, label: str, summary: str
+    ) -> str:
+        """클러스터 섹션 본문을 사람이 읽기 좋은 마크다운으로 포맷한다."""
+        header_label = label.strip() or f"cluster {cluster_id}"
+        body = summary.strip() or "(no summary yet)"
+        return f"## {header_label} (cluster {cluster_id})\n\n{body}"
+
     async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
         """전체 드리밍 파이프라인을 실행한다.
 
         1. 미처리 대화 메시지를 수집한다.
         2. 처리할 내용이 있으면 대상 파일들을 백업한다.
-        3. LLM을 통해 요약을 생성한다.
-        4. 각 파일에 해당하는 내용을 추가한다:
-           - MEMORY.md: 오늘의 사실/이벤트
-           - USER.md: 사용자 인사이트
-           - SOUL.md: 성격/말투 변경
-           - AGENT.md: 행동 규칙 변경
+        3. LLM을 통해 요약을 생성한다 (USER/SOUL/AGENT 갱신용).
+        4. ``_enable_clusters=True``면 그래프형 드리밍을 추가로 실행하여
+           MEMORY.md를 시간순 append 대신 클러스터별 마커 섹션 upsert로 갱신한다.
+           False(기본값)면 기존 append 동작을 유지한다.
+        5. USER/SOUL/AGENT 갱신은 두 모드 모두 동일하게 수행한다.
 
         Args:
             last_dreaming: 마지막 드리밍 시각. None이면 최근 메시지를 대상으로 한다.
@@ -359,11 +664,7 @@ class DreamingPipeline:
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
 
-        if not any([memory_summary, user_insights, soul_updates, agent_updates]):
-            return None
-
-        if memory_summary:
-            self.append_to_memory(memory_summary)
+        # USER/SOUL/AGENT는 두 모드 공통으로 갱신
         if user_insights:
             self.update_user_file(user_insights)
         if soul_updates:
@@ -371,7 +672,51 @@ class DreamingPipeline:
         if agent_updates:
             self.update_agent_file(agent_updates)
 
+        # MEMORY.md 갱신은 클러스터 모드 여부에 따라 분기
+        cluster_summary_text = ""
+        if self._enable_clusters:
+            cluster_summary_text = await self._run_cluster_pipeline()
+
+        if not self._enable_clusters and memory_summary:
+            # 레거시 모드: 시간순 append
+            self.append_to_memory(memory_summary)
+
+        # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록)
+        if not any(
+            [memory_summary, user_insights, soul_updates, agent_updates, cluster_summary_text]
+        ):
+            return None
+
+        # MemoryEntry.summary는 호환을 위해 LLM이 만든 memory_summary를 우선 사용하고,
+        # 클러스터 모드에서 memory_summary가 비어있다면 클러스터 요약 통합본을 담는다.
+        entry_summary = memory_summary or cluster_summary_text
         return MemoryEntry(
-            summary=memory_summary,
+            summary=entry_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",
         )
+
+    async def _run_cluster_pipeline(self) -> str:
+        """Phase 3 그래프형 드리밍 — 영향받은 클러스터를 LLM 요약으로 갱신하고 MEMORY.md를 upsert.
+
+        Returns:
+            이번 회차에 갱신된 클러스터 요약을 줄로 합친 텍스트(MemoryEntry용).
+            영향받은 클러스터가 없으면 빈 문자열.
+        """
+        affected = self.assign_clusters_for_unprocessed()
+        if not affected:
+            return ""
+
+        summaries: list[str] = []
+        for cid, msgs in affected.items():
+            cluster = self._store.get_cluster(cid)
+            existing_label = cluster.label if cluster else ""
+            existing_summary = cluster.summary if cluster else ""
+            updated = await self.summarize_cluster(
+                msgs, existing_label, existing_summary
+            )
+            new_label = updated.get("label", existing_label)
+            new_summary = updated.get("summary", existing_summary)
+            self._store.update_cluster(cid, label=new_label, summary=new_summary)
+            self.upsert_memory_section(cid, new_label, new_summary)
+            summaries.append(f"[cluster {cid} · {new_label}]\n{new_summary}")
+        return "\n\n".join(summaries)

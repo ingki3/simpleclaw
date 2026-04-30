@@ -95,14 +95,101 @@ specs/005-semantic-memory-dreaming/  # 본 디렉터리
 
 ## Phase Breakdown
 
-- **Phase 1 (이 PR)**: 저장소 확장 + 단위 테스트 + 의존성. 동작 변경 없음(콜러가 새 API를 호출하기 전까지).
-- **Phase 2 (별도 PR)**: `sentence-transformers` 추가, 메시지 저장 시점 임베딩 부착, `_retrieve_relevant_context()` + `_tool_loop()` 통합, `최근 N개 + RAG top-K` 하이브리드.
-- **Phase 3 (별도 PR)**: 드리밍 그래프 갱신, `MEMORY.md` 자동 압축.
+- **Phase 1 (PR #16, merged)**: 저장소 확장 + 단위 테스트 + 의존성. 동작 변경 없음.
+- **Phase 2 (PR #17, merged into phase1 branch)**: `sentence-transformers` 추가, 메시지 저장 시점 임베딩 부착, `_retrieve_relevant_context()` + `_tool_loop()` 통합. 단, PR #17은 dev가 아닌 phase1 브랜치를 base로 머지되어 Phase 3 PR에 Phase 2 변경분이 함께 포함되는 형태로 dev에 도달함.
+- **Phase 3 (이 PR)**: 드리밍 클러스터 그래프 갱신, MEMORY.md 자동 압축, 시맨틱/에피소드 인덱스 분리(`semantic_clusters` 테이블).
 
-## Risks (Phase 1)
+## Phase 3 — Architecture
+
+### Schema Additions
+
+```sql
+CREATE TABLE IF NOT EXISTS semantic_clusters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT,                  -- 사람이 읽을 짧은 라벨 ("맥북 구매 논의")
+    centroid BLOB NOT NULL,      -- float32 평균 벡터
+    summary TEXT DEFAULT '',     -- LLM 누적 요약 (rolling)
+    member_count INTEGER DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+ALTER TABLE messages ADD COLUMN cluster_id INTEGER;  -- 마이그레이션 멱등
+```
+
+### IncrementalClusterer (numpy 기반)
+
+```python
+class IncrementalClusterer:
+    def __init__(self, threshold: float = 0.75): ...
+    def find_nearest(self, vec, clusters) -> tuple[ClusterRecord | None, float]: ...
+    def update_centroid(self, old_centroid, old_count, new_vec) -> np.ndarray:
+        """incremental mean: (old * n + new) / (n + 1) — 단위 정규화는 검색 시 수행"""
+```
+
+### Dreaming Pipeline 변화
+
+기존 `run()`:
+1. 미처리 메시지 수집 → LLM에 전체 텍스트 → 단일 요약 → MEMORY.md append
+
+신규 `run()`:
+1. 미처리 메시지 수집
+2. 각 메시지 임베딩 조회 → `IncrementalClusterer`로 클러스터 할당(기존 또는 신규)
+3. 영향받은 클러스터 ID 집합 결정 → 클러스터별로 **(기존 summary + 신규 메시지)** 를 LLM에 전달, 새 summary 산출
+4. `semantic_clusters.summary`/`label`/`updated_at` upsert
+5. MEMORY.md 마커 영역만 교체 (`<!-- cluster:N start -->` … `<!-- cluster:N end -->`)
+6. 클러스터화 실패 시 기존 append 동작으로 fallback (하위호환)
+
+### MEMORY.md 형식
+
+```markdown
+# Memory
+
+(사용자 수기 메모는 마커 외부에 자유롭게 작성 가능)
+
+<!-- cluster:1 start -->
+## 맥북 구매 (cluster 1)
+
+- 2026-04-15: 14인치 M3 검토, 240만원 (Apple Care+ 별도)
+- 2026-04-22: "비싸지만 구매 의향" 표명
+<!-- cluster:1 end -->
+
+<!-- cluster:2 start -->
+## 한국시리즈 관전
+...
+<!-- cluster:2 end -->
+```
+
+### Edge Cases
+
+| 상황 | 동작 |
+|------|------|
+| 미처리 메시지에 임베딩이 전혀 없음(RAG 비활성) | 기존 append 폴백 |
+| 임베딩은 있으나 모든 클러스터가 임계값 미달 | 신규 클러스터 N개 생성 |
+| 클러스터 centroid와 신규 메시지 차원 불일치 | 해당 메시지 스킵, 로그 경고 |
+| MEMORY.md에 마커 없음(레거시 파일) | 새 클러스터 섹션을 파일 끝에 append, 다음 회차부터 upsert |
+| 사용자가 마커 내부 본문을 편집 | 다음 드리밍에 LLM이 재작성(경고 없음, 의도된 동작) |
+| LLM 호출 실패 | summary 갱신만 스킵, 클러스터 멤버십은 유지 |
+
+## Project Structure (Phase 3 변경 파일)
+
+```
+src/simpleclaw/memory/
+├── conversation_store.py     # +cluster CRUD, +schema migration
+├── clustering.py             # 신규: IncrementalClusterer
+├── dreaming.py               # cluster 기반 요약 + MEMORY.md 마커 upsert
+└── models.py                 # +ClusterRecord 데이터클래스
+
+tests/unit/
+├── test_clustering.py                  # 신규
+├── test_conversation_store_clusters.py # 신규
+└── test_dreaming_phase3.py             # 신규
+```
+
+## Risks (Phase 3)
 
 | 리스크 | 영향 | 완화 |
 |--------|------|------|
-| 기존 DB 마이그레이션 실패 | 사용자 봇 기동 불가 | `ALTER TABLE` 멱등 처리 + 단위 테스트로 검증 |
-| 대용량 메시지에서 인메모리 코사인 느림 | 검색 레이턴시↑ | 메시지 ≥10k 시 sqlite-vec 가상 테이블 도입(Phase 2/3) |
-| numpy 추가로 인한 설치 시간 | 첫 설치 30s 추가 | 로컬 단일 사용자 도구로 수용 가능 |
+| 기존 DB 마이그레이션 실패 | 봇 기동 불가 | `ALTER TABLE` + `CREATE TABLE IF NOT EXISTS` 멱등, 단위 테스트로 검증 |
+| 클러스터 centroid 드리프트(품질 저하) | 시간 흐름에 따라 클러스터가 모호해짐 | 백로그: 주기적 전면 re-cluster 잡 |
+| 사용자가 마커 내부 메모를 잃음 | 사용자 신뢰 하락 | spec/문서로 "마커 외부 영역만 안전" 명시 |
+| LLM upsert 비용 증가 | 매 드리밍 호출 수↑(클러스터 수만큼) | 영향받은 클러스터만 갱신, 기존 클러스터 요약 그대로 유지 |

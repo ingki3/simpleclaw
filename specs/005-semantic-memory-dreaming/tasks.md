@@ -15,7 +15,7 @@
 - [x] T008 `pytest tests/unit/` 전체 통과 (442/442 시점)
 - [x] T009 `ruff check` 변경 파일 통과
 
-## Phase 2 — Retrieval Integration (이 PR 범위)
+## Phase 2 — Retrieval Integration (PR ingki3/simpleclaw#17)
 
 - [x] P2-T001 `sentence-transformers>=3.0` 의존성 추가
 - [x] P2-T002 `EmbeddingService` 신규 모듈 — 모델 lazy 로드, `encode_query` / `encode_passage` (e5 프리픽스), 실패 시 graceful disable
@@ -25,8 +25,21 @@
 - [x] P2-T006 `config.yaml.example`에 `memory.rag.{enabled,model,top_k,similarity_threshold}` 노출, `load_memory_config()` 추가 (기본 enabled=False)
 - [x] P2-T007 단위 테스트 — `test_embedding_service.py` 9 tests + `test_orchestrator_rag.py` 12 tests. 전체 463 tests pass.
 
-## Phase 3 — Graph-style Dreaming (별도 PR)
+## Phase 3 — Graph-style Dreaming (이 PR 범위)
 
-- [ ] P3-T001 드리밍 입력을 임베딩 클러스터 기준으로 그룹핑
-- [ ] P3-T002 클러스터별 요약 갱신(append → upsert)으로 `MEMORY.md` 자동 압축
-- [ ] P3-T003 시맨틱 ↔ 에피소드 분리 인덱스 도입 (테이블 분리 또는 태그 컬럼)
+- [>] P3-T001 `semantic_clusters` 테이블 + `messages.cluster_id` 컬럼 + 마이그레이션(멱등)
+- [>] P3-T002 `ConversationStore` 클러스터 CRUD: `create_cluster`, `update_cluster`, `assign_cluster`, `list_clusters`, `get_cluster`, `get_messages_for_cluster`
+- [>] P3-T003 `ClusterRecord` 데이터클래스 (`memory/models.py`)
+- [>] P3-T004 `IncrementalClusterer` 신규 모듈 — `find_nearest`, `update_centroid` (numpy)
+- [>] P3-T005 `DreamingPipeline` 갱신: 클러스터별 그룹핑 → 클러스터당 LLM 요약 → `semantic_clusters` upsert
+- [>] P3-T006 MEMORY.md 마커 기반 upsert 헬퍼 (`<!-- cluster:N start --> ... <!-- cluster:N end -->` 영역만 교체)
+- [>] P3-T007 단위 테스트: `test_clustering.py`, `test_conversation_store_clusters.py`, `test_dreaming_phase3.py`
+- [>] P3-T008 `pytest tests/unit/` 전체 통과
+- [>] P3-T009 `ruff check src/simpleclaw/memory/` 통과
+- [>] P3-T010 TODO.md 업데이트, PR 생성
+
+## Phase 3 — Backlog (별도 작업)
+
+- [ ] 주기적 전면 re-clustering 잡 (centroid 드리프트 보정)
+- [ ] MEMORY.md 사용자 수기 메모 보존 정책 docs 문서화
+- [ ] sklearn HDBSCAN 도입 검토 (메시지 ≥ 수만개 시점)
