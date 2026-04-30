@@ -29,6 +29,11 @@
 - [ ] Claude Code CLI 연동 — Claude Code CLI를 SimpleClaw의 백엔드 또는 도구로 활용
 - [ ] Claude, ChatGPT API 지원 — Claude/ChatGPT를 기본 LLM 백엔드로 실사용 가능하도록 검증 및 보완
 
+### 시맨틱 메모리 (spec 005, BIZ-12)
+- [>] **Phase 1** — `ConversationStore` 임베딩 저장/검색 API + 단위 테스트 (이 PR)
+- [ ] **Phase 2** — `sentence-transformers` 통합, `_retrieve_relevant_context()` + `_tool_loop()` 하이브리드 회상
+- [ ] **Phase 3** — 드리밍 그래프 갱신, `MEMORY.md` 자동 압축, 시맨틱/에피소드 인덱스 분리
+
 ### 스킬
 - [ ] us-market-expert 스킬 재구축 — 실행 스크립트 추가 (현재 삭제됨)
 - [ ] 스킬 실행 실패 시 자동 재시도 로직
