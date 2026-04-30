@@ -86,7 +86,13 @@ async def main():
     structured_logger = StructuredLogger()
 
     # Core modules
-    orchestrator = AgentOrchestrator(CONFIG_PATH, metrics=metrics)
+    # structured_logger를 함께 주입하여 RAG 회상(action_type="rag_retrieve") 이벤트를
+    # 일별 JSONL 로그로 적재한다(BIZ-29 토큰 절감 추세 분석 입력).
+    orchestrator = AgentOrchestrator(
+        CONFIG_PATH,
+        metrics=metrics,
+        structured_logger=structured_logger,
+    )
 
     whitelist = tg_config["whitelist"]
     bot = TelegramBot(
@@ -167,6 +173,7 @@ async def main():
         structured_logger=structured_logger,
         host="127.0.0.1",
         port=8081,
+        conversation_store=conv_store,
     )
     try:
         await dashboard.start()
