@@ -50,6 +50,8 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <script>
         async function load() {
             const m = await (await fetch('/api/metrics')).json();
+            // process_group_leaks > 0이면 빨간 카드로 시각적 경고.
+            const leakCls = (m.process_group_leaks > 0) ? 'metric error' : 'metric';
             document.getElementById('metrics').innerHTML = `
                 <div class="metric"><div class="value">${m.total_executions}</div><div class="label">Total Executions</div></div>
                 <div class="metric"><div class="value">${m.successful_executions}</div><div class="label">Successful</div></div>
@@ -58,6 +60,10 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="metric"><div class="value">${m.active_cron_jobs}</div><div class="label">Active Cron Jobs</div></div>
                 <div class="metric"><div class="value">${m.sub_agent_spawns}</div><div class="label">Sub-Agent Spawns</div></div>
                 <div class="metric"><div class="value">${(m.error_rate * 100).toFixed(1)}%</div><div class="label">Error Rate</div></div>
+                <div class="metric"><div class="value">${m.process_kills_sigterm}</div><div class="label">SIGTERM Kills</div></div>
+                <div class="metric"><div class="value">${m.process_kills_sigkill}</div><div class="label">SIGKILL Kills</div></div>
+                <div class="${leakCls}"><div class="value">${m.process_group_leaks}</div><div class="label">Process Group Leaks</div></div>
+                <div class="metric"><div class="value">${m.zombies_reaped}</div><div class="label">Zombies Reaped</div></div>
             `;
             const entries = await (await fetch('/api/logs')).json();
             if (entries.length === 0) {
