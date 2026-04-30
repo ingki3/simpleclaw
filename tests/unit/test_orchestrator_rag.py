@@ -286,3 +286,69 @@ def _msg(content: str, role: MessageRole = MessageRole.USER, ts: datetime | None
         content=content,
         timestamp=ts or datetime.now(),
     )
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+class TestRAGStructuredLogging:
+    """BIZ-29: ``_retrieve_relevant_context`` 호출이 structured_logger에 적재되는지."""
+
+    def _make_logger(self, tmp_path):
+        from simpleclaw.logging.structured_logger import StructuredLogger
+        return StructuredLogger(log_dir=tmp_path / "logs")
+
+    @pytest.mark.asyncio
+    async def test_logs_skipped_when_disabled(self, config_file_rag_off, tmp_path):
+        sl = self._make_logger(tmp_path)
+        orch = AgentOrchestrator(config_file_rag_off, structured_logger=sl)
+        await orch._retrieve_relevant_context("hi")
+        entries = sl.get_entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.action_type == "rag_retrieve"
+        assert e.status == "skipped"
+        assert e.details.get("hit") is False
+        assert e.details.get("error") == "rag_disabled"
+
+    @pytest.mark.asyncio
+    async def test_logs_hit_with_token_sum(self, config_file_rag_on, tmp_path):
+        sl = self._make_logger(tmp_path)
+        orch = AgentOrchestrator(config_file_rag_on, structured_logger=sl)
+
+        # 토큰 카운트가 있는 메시지 시드
+        mid = orch._store.add_message(ConversationMessage(
+            role=MessageRole.ASSISTANT,
+            content="과거 대화 내용",
+            token_count=42,
+        ))
+        orch._store.add_embedding(mid, [1.0, 0.0])
+        orch._embedding_service.encode_query = MagicMock(
+            return_value=np.array([1.0, 0.0], dtype=np.float32)
+        )
+
+        await orch._retrieve_relevant_context("질문")
+        entries = sl.get_entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.status == "success"
+        assert e.details["hit"] is True
+        assert e.details["recalled_messages"] == 1
+        assert e.details["recalled_tokens"] == 42
+        assert e.details["candidates"] == 1
+
+    @pytest.mark.asyncio
+    async def test_logs_miss_when_no_results(self, config_file_rag_on, tmp_path):
+        sl = self._make_logger(tmp_path)
+        orch = AgentOrchestrator(config_file_rag_on, structured_logger=sl)
+        orch._embedding_service.encode_query = MagicMock(
+            return_value=np.array([1.0, 0.0], dtype=np.float32)
+        )
+        # 임베딩이 부착된 메시지가 없으므로 search_similar가 빈 리스트를 반환
+
+        await orch._retrieve_relevant_context("질문")
+        entries = sl.get_entries()
+        assert len(entries) == 1
+        e = entries[0]
+        assert e.status == "success"
+        assert e.details["hit"] is False
+        assert e.details["recalled_messages"] == 0
+        assert e.details["recalled_tokens"] == 0

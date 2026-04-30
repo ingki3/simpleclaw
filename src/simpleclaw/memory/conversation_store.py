@@ -186,6 +186,75 @@ class ConversationStore:
             return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
 
     # ------------------------------------------------------------------
+    # 분포 통계 (BIZ-29) — 임베딩 커버리지/클러스터 분포 모니터링용
+    # ------------------------------------------------------------------
+
+    def count_with_embedding(self) -> int:
+        """임베딩 BLOB이 부착된 메시지 수를 반환한다.
+
+        ``count()``와의 비율이 곧 시맨틱 메모리 커버리지이다.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE embedding IS NOT NULL"
+            ).fetchone()[0]
+
+    def count_clustered(self) -> int:
+        """``cluster_id``가 부착된 메시지 수를 반환한다."""
+        with sqlite3.connect(self._db_path) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM messages WHERE cluster_id IS NOT NULL"
+            ).fetchone()[0]
+
+    def count_unclustered_with_embedding(self) -> int:
+        """임베딩은 있지만 아직 클러스터에 부착되지 않은 메시지 수.
+
+        Phase 3 점진 클러스터링이 처리해야 할 backlog 크기이다.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM messages "
+                "WHERE cluster_id IS NULL AND embedding IS NOT NULL"
+            ).fetchone()[0]
+
+    def embedding_dimension_distribution(self) -> dict[int, int]:
+        """저장된 임베딩의 차원 분포를 ``{dim: count}`` 딕셔너리로 반환한다.
+
+        설계 결정:
+        - BLOB을 디코딩하지 않고 SQL ``length()`` + ``COUNT(*)``로 집계하여
+          대용량 테이블에서도 빠르게 점검할 수 있게 한다.
+        - float32(=4 bytes/dim) 가정. 다른 dtype이 섞이면 차원이 잘못 계산되므로
+          이 결과 자체가 모델 교체/혼재 탐지 신호가 된다.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT length(embedding), COUNT(*) FROM messages "
+                "WHERE embedding IS NOT NULL "
+                "GROUP BY length(embedding)"
+            ).fetchall()
+        distribution: dict[int, int] = {}
+        for byte_len, cnt in rows:
+            if byte_len is None:
+                continue
+            dim = int(byte_len) // 4  # float32 = 4 bytes
+            distribution[dim] = distribution.get(dim, 0) + int(cnt)
+        return distribution
+
+    def cluster_member_counts(self) -> dict[int, int]:
+        """클러스터별 실제 멤버 메시지 수를 ``{cluster_id: count}``로 반환한다.
+
+        ``semantic_clusters.member_count``는 캐시 컬럼이라 갱신 누락이 가능하다.
+        실측치와 비교하여 drift를 탐지하는 용도로 사용한다.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT cluster_id, COUNT(*) FROM messages "
+                "WHERE cluster_id IS NOT NULL "
+                "GROUP BY cluster_id"
+            ).fetchall()
+        return {int(cid): int(cnt) for cid, cnt in rows}
+
+    # ------------------------------------------------------------------
     # 시맨틱 메모리 (spec 005) — Phase 1: 저장소 API
     # ------------------------------------------------------------------
 

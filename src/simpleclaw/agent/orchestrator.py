@@ -57,6 +57,7 @@ from simpleclaw.agent.tool_schemas import build_tool_definitions
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
     from simpleclaw.logging.metrics import MetricsCollector
+    from simpleclaw.logging.structured_logger import StructuredLogger
 
 logger = logging.getLogger(__name__)
 
@@ -87,11 +88,15 @@ class AgentOrchestrator:
         config_path: str | Path = "config.yaml",
         *,
         metrics: MetricsCollector | None = None,
+        structured_logger: StructuredLogger | None = None,
     ) -> None:
         self._config_path = Path(config_path)
         # 메트릭 수집기 — 서브프로세스 종료 결과를 누적하여 누수 추세를 모니터링.
         # None이면 메트릭이 기록되지 않으며, 기존 동작과 호환된다.
         self._metrics = metrics
+        # 구조화 로거 — RAG 회상(action_type="rag_retrieve")과 같은 관찰 가능성 이벤트를 적재.
+        # None이면 로그가 비활성화되며, 기존 동작과 호환된다.
+        self._structured_logger = structured_logger
 
         # --- 정적 설정 로드 (리스타트 시에만 갱신) ---
         agent_config = load_agent_config(config_path)
@@ -489,6 +494,8 @@ class AgentOrchestrator:
           중복 주입을 방지한다.
         - 임계값(``_rag_threshold``) 이상 유사도만 채택 — 노이즈 회상으로 인한 오답을 줄인다.
         - 인코딩은 동기 API이므로 ``asyncio.to_thread``로 워커 스레드에 위임한다.
+        - StructuredLogger가 주입되어 있으면 호출 단위로 ``rag_retrieve`` 액션을 적재해
+          BIZ-29 토큰 절감 추세 분석(``simpleclaw.memory.stats.analyze_rag_logs``)에 사용한다.
 
         Args:
             user_text: 현재 사용자 메시지 원본.
@@ -497,18 +504,62 @@ class AgentOrchestrator:
         Returns:
             "## 관련 과거 대화\\n..." 마크다운 블록. 회수 결과가 없으면 빈 문자열.
         """
+        import asyncio
+        import time
+
+        # RAG 로그는 호출 단위로 1회만 기록한다(상태가 어떻든 추세 분석에 일관된 베이스 제공)
+        start = time.perf_counter()
+
+        def _log(
+            *,
+            status: str,
+            hit: bool,
+            candidates: int = 0,
+            recalled_messages: int = 0,
+            recalled_tokens: int = 0,
+            top_score: float | None = None,
+            error: str | None = None,
+        ) -> None:
+            if self._structured_logger is None:
+                return
+            details: dict = {
+                "hit": hit,
+                "candidates": candidates,
+                "recalled_messages": recalled_messages,
+                "recalled_tokens": recalled_tokens,
+                "top_k": self._rag_top_k,
+                "threshold": self._rag_threshold,
+            }
+            if top_score is not None:
+                details["top_score"] = round(float(top_score), 4)
+            if error is not None:
+                details["error"] = error
+            try:
+                self._structured_logger.log(
+                    action_type="rag_retrieve",
+                    input_summary=user_text,
+                    output_summary=f"recalled={recalled_messages} tokens={recalled_tokens}",
+                    duration_ms=(time.perf_counter() - start) * 1000.0,
+                    status=status,
+                    **details,
+                )
+            except Exception as exc:  # noqa: BLE001 — 로깅 실패가 회상을 막아선 안 됨
+                logger.warning("RAG structured log write failed: %s", exc)
+
         if self._embedding_service is None or not self._embedding_service.is_enabled:
+            _log(status="skipped", hit=False, error="rag_disabled")
             return ""
 
-        import asyncio
         try:
             query_vec = await asyncio.to_thread(
                 self._embedding_service.encode_query, user_text
             )
         except Exception as exc:
             logger.warning("RAG query encoding failed: %s", exc)
+            _log(status="error", hit=False, error=f"encode:{exc}"[:200])
             return ""
         if query_vec is None:
+            _log(status="skipped", hit=False, error="encode_returned_none")
             return ""
 
         try:
@@ -519,13 +570,17 @@ class AgentOrchestrator:
             )
         except Exception as exc:
             logger.warning("RAG search failed: %s", exc)
+            _log(status="error", hit=False, error=f"search:{exc}"[:200])
             return ""
 
         if not results:
+            _log(status="success", hit=False, candidates=0)
             return ""
 
         excluded = exclude_contents or set()
         lines: list[str] = []
+        recalled_tokens = 0
+        recalled_messages = 0
         for msg, score in results:
             if score < self._rag_threshold:
                 continue
@@ -535,9 +590,28 @@ class AgentOrchestrator:
             lines.append(
                 f"- [{ts}] **{msg.role.value}**: {msg.content}"
             )
+            recalled_messages += 1
+            recalled_tokens += int(msg.token_count or 0)
+
+        top_score = results[0][1] if results else None
 
         if not lines:
+            _log(
+                status="success",
+                hit=False,
+                candidates=len(results),
+                top_score=top_score,
+            )
             return ""
+
+        _log(
+            status="success",
+            hit=True,
+            candidates=len(results),
+            recalled_messages=recalled_messages,
+            recalled_tokens=recalled_tokens,
+            top_score=top_score,
+        )
 
         header = (
             "## 관련 과거 대화 (시맨틱 회상)\n\n"
