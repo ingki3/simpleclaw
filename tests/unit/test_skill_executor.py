@@ -103,3 +103,44 @@ class TestSkillExecutor:
         # SIGTERM에 정상 응답하는 자식 → sigterm 카운터가 1 증가해야 한다.
         assert snap.process_kills_sigterm + snap.process_kills_sigkill == 1
         assert snap.process_group_leaks == 0
+
+    @pytest.mark.asyncio
+    async def test_trace_id_passed_to_subprocess_env(self, tmp_path):
+        """현재 컨텍스트의 trace_id가 SIMPLECLAW_TRACE_ID 환경변수로 전달되어야 한다."""
+        from simpleclaw.logging.trace_context import TRACE_ID_ENV_VAR, trace_scope
+
+        script = tmp_path / "echo_trace.py"
+        script.write_text(
+            "import os\n"
+            f"print(os.environ.get({TRACE_ID_ENV_VAR!r}, 'MISSING'))\n"
+        )
+        skill = _make_skill("trace-echo", str(script))
+
+        with trace_scope("test-trace-xyz"):
+            result = await execute_skill(skill)
+        assert result.success
+        assert result.output == "test-trace-xyz"
+
+    @pytest.mark.asyncio
+    async def test_trace_id_absent_when_no_context(self, tmp_path):
+        """trace_id가 미설정이면 환경변수도 주입되지 않아야 한다."""
+        from simpleclaw.logging.trace_context import (
+            TRACE_ID_ENV_VAR,
+            reset_trace_id,
+            set_trace_id,
+        )
+
+        script = tmp_path / "echo_trace.py"
+        script.write_text(
+            "import os\n"
+            f"print(os.environ.get({TRACE_ID_ENV_VAR!r}, 'UNSET'))\n"
+        )
+        skill = _make_skill("trace-echo", str(script))
+
+        token = set_trace_id("")
+        try:
+            result = await execute_skill(skill)
+        finally:
+            reset_trace_id(token)
+        assert result.success
+        assert result.output == "UNSET"

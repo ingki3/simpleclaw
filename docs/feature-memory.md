@@ -73,7 +73,7 @@ memory:
   <!-- cluster:1 end -->
   ```
 - 마커가 있는 영역은 다음 드리밍에서 해당 클러스터 요약으로 in-place 갱신, 그 외 영역(에피소드형 메모리)은 기존처럼 append
-- `enable_clusters` 플래그로 점진 도입 (기본 False — 기존 사용자는 영향 없음)
+- `enable_clusters` 플래그로 점진 도입 (BIZ-28부터 dev/main 기본 True, OFF로 두려면 명시적으로 false 지정)
 
 ## 드리밍 파이프라인
 
@@ -102,7 +102,8 @@ daemon:
     overnight_hour: 3       # 드리밍 실행 시각 (03:00)
     idle_threshold: 7200    # 유휴 판단 기준 (초)
     model: "gemini"         # 드리밍에 사용할 LLM (선택, 미지정 시 기본 LLM 사용)
-    enable_clusters: false  # 시맨틱 클러스터 기반 그래프형 드리밍 활성화
+    enable_clusters: true   # 시맨틱 클러스터 기반 그래프형 드리밍 활성화 (BIZ-28부터 기본 ON)
+    cluster_threshold: 0.75 # 코사인 유사도 임계값 — 낮추면 클러스터가 커지고, 높이면 작아진다
 ```
 
 `dreaming.model`을 지정하면 드리밍 요약에 특정 LLM 백엔드를 사용합니다. 예를 들어 일반 대화는 Claude를 쓰면서 드리밍은 비용이 낮은 Gemini로 처리할 수 있습니다.

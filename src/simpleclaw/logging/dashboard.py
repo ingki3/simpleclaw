@@ -1,9 +1,10 @@
 """에이전트 모니터링용 경량 웹 대시보드.
 
 aiohttp 기반 단일 페이지 대시보드를 제공한다.
-- GET /                  : 대시보드 HTML (메트릭 + 최근 실행 이력 + 메모리 분포)
+- GET /                  : 대시보드 HTML (메트릭 + 최근 실행 이력 + 메모리 분포 + trace 타임라인)
 - GET /api/metrics       : MetricsCollector 스냅샷 JSON
-- GET /api/logs          : StructuredLogger 엔트리 JSON (날짜·건수 필터)
+- GET /api/logs          : StructuredLogger 엔트리 JSON (날짜·건수·trace_id 필터)
+- GET /api/trace         : 단일 trace_id에 속한 로그를 시간 정렬한 타임라인 JSON (BIZ-25)
 - GET /api/memory_stats  : 임베딩/클러스터 분포 + 최근 N일 RAG 회상 집계 JSON (BIZ-29)
 프론트엔드는 10초 주기로 자동 갱신된다.
 """
@@ -41,6 +42,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         th { background: #f8f8f8; font-weight: 600; }
         .status-success { color: #16a34a; }
         .status-failure { color: #dc2626; }
+        .trace-id { font-family: monospace; font-size: 0.85em; color: #6b21a8; cursor: pointer; }
+        .trace-id:hover { text-decoration: underline; }
+        .trace-controls { margin-bottom: 12px; display: flex; gap: 8px; align-items: center; }
+        .trace-controls input { flex: 1; padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; }
+        .trace-controls button { padding: 6px 14px; border: none; border-radius: 4px; background: #2563eb; color: white; cursor: pointer; }
+        .trace-controls button:hover { background: #1d4ed8; }
+        .trace-controls button.secondary { background: #6b7280; }
+        .timeline-step { padding: 8px 12px; margin: 4px 0; border-left: 3px solid #2563eb; background: #f8fafc; }
+        .timeline-step.failure { border-left-color: #dc2626; }
+        .timeline-step .meta { font-size: 0.85em; color: #666; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -49,6 +60,15 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card">
         <h2>Memory Index (BIZ-29)</h2>
         <div id="memory">Loading...</div>
+    </div>
+    <div class="card">
+        <h2>Trace Timeline (BIZ-25)</h2>
+        <div class="trace-controls">
+            <input id="trace-input" type="text" placeholder="trace_id를 입력하거나 아래 표에서 클릭하세요" />
+            <button onclick="loadTrace()">Search</button>
+            <button class="secondary" onclick="clearTrace()">Clear</button>
+        </div>
+        <div id="timeline"><p>trace_id를 입력하면 동일 trace의 로그를 시간순으로 표시합니다.</p></div>
     </div>
     <div class="card">
         <h2>Recent Executions</h2>
@@ -105,13 +125,54 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             if (entries.length === 0) {
                 document.getElementById('executions').innerHTML = '<p>No executions yet.</p>';
             } else {
-                let html = '<table><tr><th>Time</th><th>Action</th><th>Status</th><th>Duration</th></tr>';
+                let html = '<table><tr><th>Time</th><th>Action</th><th>Status</th><th>Duration</th><th>Trace</th></tr>';
                 entries.forEach(e => {
                     const cls = e.status === 'success' ? 'status-success' : 'status-failure';
-                    html += `<tr><td>${e.timestamp.split('T')[1]?.split('.')[0] || ''}</td><td>${e.action_type}</td><td class="${cls}">${e.status}</td><td>${e.duration_ms}ms</td></tr>`;
+                    const t = e.timestamp.split('T')[1]?.split('.')[0] || '';
+                    const tid = e.trace_id || '';
+                    const tidShort = tid ? tid.slice(0, 8) : '–';
+                    const tidCell = tid
+                        ? `<span class="trace-id" onclick="setTrace('${tid}')" title="${tid}">${tidShort}</span>`
+                        : tidShort;
+                    html += `<tr><td>${t}</td><td>${e.action_type}</td><td class="${cls}">${e.status}</td><td>${e.duration_ms}ms</td><td>${tidCell}</td></tr>`;
                 });
                 html += '</table>';
                 document.getElementById('executions').innerHTML = html;
+            }
+        }
+        function setTrace(tid) {
+            document.getElementById('trace-input').value = tid;
+            loadTrace();
+        }
+        function clearTrace() {
+            document.getElementById('trace-input').value = '';
+            document.getElementById('timeline').innerHTML =
+                '<p>trace_id를 입력하면 동일 trace의 로그를 시간순으로 표시합니다.</p>';
+        }
+        async function loadTrace() {
+            const tid = document.getElementById('trace-input').value.trim();
+            const target = document.getElementById('timeline');
+            if (!tid) {
+                target.innerHTML = '<p>trace_id를 입력하세요.</p>';
+                return;
+            }
+            try {
+                const data = await (await fetch('/api/trace?trace_id=' + encodeURIComponent(tid))).json();
+                const steps = data.steps || [];
+                if (steps.length === 0) {
+                    target.innerHTML = `<p>trace_id <code>${tid}</code>에 해당하는 로그가 없습니다.</p>`;
+                    return;
+                }
+                let html = `<p><strong>${steps.length}</strong> steps · trace_id <code>${tid}</code></p>`;
+                steps.forEach(s => {
+                    const cls = s.status === 'success' ? 'timeline-step' : 'timeline-step failure';
+                    const t = s.timestamp.split('T')[1]?.split('.')[0] || s.timestamp;
+                    html += `<div class="${cls}"><strong>${s.action_type}</strong> <span class="${s.status === 'success' ? 'status-success' : 'status-failure'}">${s.status}</span>`;
+                    html += `<div class="meta">${t} · ${s.duration_ms}ms · ${s.input_summary ? s.input_summary.slice(0, 80) : ''}</div></div>`;
+                });
+                target.innerHTML = html;
+            } catch (e) {
+                target.innerHTML = '<p>Trace timeline fetch failed: ' + e + '</p>';
             }
         }
         load();
@@ -156,6 +217,7 @@ class DashboardServer:
         self._app.router.add_get("/", self._handle_dashboard)
         self._app.router.add_get("/api/metrics", self._handle_metrics)
         self._app.router.add_get("/api/logs", self._handle_logs)
+        self._app.router.add_get("/api/trace", self._handle_trace)
         self._app.router.add_get("/api/memory_stats", self._handle_memory_stats)
 
         self._runner = web.AppRunner(self._app)
@@ -186,11 +248,51 @@ class DashboardServer:
         return web.json_response(snapshot.to_dict())
 
     async def _handle_logs(self, request: web.Request) -> web.Response:
-        """구조화된 로그 엔트리를 JSON 배열로 반환한다."""
+        """구조화된 로그 엔트리를 JSON 배열로 반환한다.
+
+        ``trace_id`` 쿼리 파라미터가 주어지면 해당 trace에 속한 항목만 반환한다.
+        """
         date = request.query.get("date")
         limit = int(request.query.get("limit", "50"))
-        entries = self._logger.get_entries(date=date, limit=limit)
+        trace_id = request.query.get("trace_id") or None
+        entries = self._logger.get_entries(date=date, limit=limit, trace_id=trace_id)
         return web.json_response([e.to_dict() for e in entries])
+
+    async def _handle_trace(self, request: web.Request) -> web.Response:
+        """단일 trace_id에 속한 로그를 시간 순서로 정렬해 타임라인 형태로 반환한다.
+
+        파라미터:
+            trace_id (필수): 조회할 trace 식별자.
+            date (선택): YYYYMMDD. 미지정 시 오늘 — 자정 경계에 걸친 trace는 정확히
+                ``date``를 지정해 호출해야 한다.
+            limit (선택): 최대 반환 개수(기본 500).
+
+        ``trace_id``가 비어 있으면 400을 반환한다.
+        """
+        trace_id = (request.query.get("trace_id") or "").strip()
+        if not trace_id:
+            return web.json_response(
+                {"error": "trace_id query parameter is required"},
+                status=400,
+            )
+        date = request.query.get("date")
+        try:
+            limit = int(request.query.get("limit", "500"))
+        except ValueError:
+            limit = 500
+
+        entries = self._logger.get_entries(date=date, limit=limit, trace_id=trace_id)
+        # 파일은 시간순으로 기록되지만, 타임라인 표시 일관성을 위해 timestamp로
+        # 한 번 더 정렬한다(다중 프로세스가 동시 기록할 때 순서가 흔들릴 수 있음).
+        steps = sorted(
+            (e.to_dict() for e in entries),
+            key=lambda d: d.get("timestamp", ""),
+        )
+        return web.json_response({
+            "trace_id": trace_id,
+            "count": len(steps),
+            "steps": steps,
+        })
 
     async def _handle_memory_stats(self, request: web.Request) -> web.Response:
         """임베딩/클러스터 분포 + 최근 N일 RAG 회상 집계를 JSON으로 반환한다.

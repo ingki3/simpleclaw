@@ -222,6 +222,8 @@ daemon:
     overnight_hour: 5
     idle_threshold: 3600
     model: "gpt-4"
+    enable_clusters: true
+    cluster_threshold: 0.6
   wait_state:
     default_timeout: 7200
 """,
@@ -231,7 +233,25 @@ daemon:
         assert result["pid_file"] == "/run/daemon.pid"
         assert result["dreaming"]["overnight_hour"] == 5
         assert result["dreaming"]["model"] == "gpt-4"
+        assert result["dreaming"]["enable_clusters"] is True
+        assert result["dreaming"]["cluster_threshold"] == 0.6
         assert result["wait_state"]["default_timeout"] == 7200
+
+    def test_dreaming_clusters_default_off(self, tmp_path: Path):
+        """``enable_clusters``/``cluster_threshold``가 누락되면 안전한 기본값으로 폴백한다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    overnight_hour: 4
+""",
+        )
+        result = load_daemon_config(cfg)
+        # 기본값은 off, 0.75 — Phase 3 점진 도입 안전선
+        assert result["dreaming"]["enable_clusters"] is False
+        assert result["dreaming"]["cluster_threshold"] == 0.75
 
 
 # ---------------------------------------------------------------------------
