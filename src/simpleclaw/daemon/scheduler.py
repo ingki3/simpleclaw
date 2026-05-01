@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from simpleclaw.daemon.models import (
     ActionType,
+    BackoffStrategy,
     CronJob,
     CronJobExecution,
     CronJobNotFoundError,
@@ -31,6 +33,30 @@ from simpleclaw.daemon.store import DaemonStore
 logger = logging.getLogger(__name__)
 
 _NO_NOTIFY_TOKEN = "[NO_NOTIFY]"
+
+# 재시도 사이 백오프를 실제로 sleep하는 함수 (테스트에서 monkeypatch로 0초화).
+_sleep = asyncio.sleep
+
+
+def _compute_backoff(
+    base_seconds: float, attempt: int, strategy: BackoffStrategy
+) -> float:
+    """재시도 백오프 시간을 계산한다.
+
+    Args:
+        base_seconds: 첫 백오프 간격(초).
+        attempt: 방금 실패한 시도 번호(1부터 시작).
+        strategy: linear 또는 exponential.
+
+    Returns:
+        다음 시도 전 대기 시간(초).
+    """
+    if base_seconds <= 0 or attempt <= 0:
+        return 0.0
+    if strategy == BackoffStrategy.LINEAR:
+        return base_seconds * attempt
+    # 지수형: 60s → 120s → 240s ...
+    return base_seconds * (2 ** (attempt - 1))
 
 
 class CronScheduler:
@@ -87,9 +113,33 @@ class CronScheduler:
         cron_expression: str,
         action_type: ActionType,
         action_reference: str,
+        *,
+        max_attempts: int | None = None,
+        backoff_seconds: float | None = None,
+        backoff_strategy: BackoffStrategy | str | None = None,
+        circuit_break_threshold: int | None = None,
     ) -> CronJob:
-        """새 크론 작업을 생성하고 DB 및 APScheduler에 등록한다."""
+        """새 크론 작업을 생성하고 DB 및 APScheduler에 등록한다.
+
+        재시도 정책 인자는 모두 선택적이며, 미지정 시 ``CronJob`` dataclass의
+        기본값(3회/60s/exponential/threshold=5)을 사용한다.
+        """
         now = datetime.now()
+        # 재시도 파라미터를 명시적으로 전달받았을 때만 dataclass 기본값을 덮어쓴다.
+        kwargs: dict[str, object] = {}
+        if max_attempts is not None:
+            kwargs["max_attempts"] = max_attempts
+        if backoff_seconds is not None:
+            kwargs["backoff_seconds"] = backoff_seconds
+        if backoff_strategy is not None:
+            kwargs["backoff_strategy"] = (
+                backoff_strategy
+                if isinstance(backoff_strategy, BackoffStrategy)
+                else BackoffStrategy(backoff_strategy)
+            )
+        if circuit_break_threshold is not None:
+            kwargs["circuit_break_threshold"] = circuit_break_threshold
+
         job = CronJob(
             name=name,
             cron_expression=cron_expression,
@@ -98,6 +148,7 @@ class CronScheduler:
             enabled=True,
             created_at=now,
             updated_at=now,
+            **kwargs,
         )
         self._store.save_job(job)
         self._register_apscheduler_job(job)
@@ -142,52 +193,180 @@ class CronScheduler:
         return deleted
 
     def enable_job(self, name: str) -> CronJob:
-        """크론 작업을 활성화한다."""
-        return self.update_job(name, enabled=True)
+        """크론 작업을 활성화한다.
+
+        circuit-break로 자동 비활성된 작업을 사용자가 재활성화할 때 누적된
+        실패 카운터도 함께 리셋한다(그렇지 않으면 다음 1회 실패만으로
+        다시 차단된다).
+        """
+        return self.update_job(name, enabled=True, consecutive_failures=0)
 
     def disable_job(self, name: str) -> CronJob:
         """크론 작업을 비활성화한다."""
         return self.update_job(name, enabled=False)
 
     async def execute_job(self, job_name: str) -> CronJobExecution:
-        """크론 작업의 대상 액션을 실행하고 결과를 DB에 기록한다."""
+        """크론 작업의 대상 액션을 실행하고 결과를 DB에 기록한다.
+
+        BIZ-19 — 작업 단위 재시도 + 자동 일시 정지(circuit-break):
+        1. ``max_attempts`` 만큼 액션을 재시도하며, 시도마다 별도의
+           ``cron_executions`` 레코드를 남긴다(``attempt`` 컬럼).
+        2. 성공 시 ``consecutive_failures``를 0으로 리셋하고 마지막 성공
+           실행을 반환한다.
+        3. 모든 시도가 실패하면 ``consecutive_failures`` += 1.
+           ``circuit_break_threshold`` 이상이면 작업을 자동 비활성화하고
+           알림 콜백으로 통지한다.
+        4. LLM API 자체의 재시도와는 책임을 분리한다 — 여기서는 작업의
+           실행 결과(예외 발생 여부)만을 기준으로 한다.
+
+        Returns:
+            마지막 시도(성공 시 그 시도, 모두 실패 시 마지막 실패 시도)의
+            ``CronJobExecution``.
+        """
         job = self._store.get_job(job_name)
         if job is None:
             raise CronJobNotFoundError(f"Cron job '{job_name}' not found")
 
-        execution = CronJobExecution(
-            job_name=job_name,
-            started_at=datetime.now(),
-            status=ExecutionStatus.RUNNING,
-        )
-        exec_id = self._store.log_execution(execution)
+        max_attempts = max(1, int(job.max_attempts))
+        last_execution: CronJobExecution | None = None
+        last_error: str | None = None
 
-        try:
-            result = await self._run_action(job)
+        for attempt in range(1, max_attempts + 1):
+            started = datetime.now()
+            execution = CronJobExecution(
+                job_name=job_name,
+                started_at=started,
+                status=ExecutionStatus.RUNNING,
+                attempt=attempt,
+            )
+            exec_id = self._store.log_execution(execution)
+
+            try:
+                result = await self._run_action(job)
+            except Exception as exc:
+                error_msg = str(exc)
+                finished = datetime.now()
+                self._store.update_execution(
+                    exec_id,
+                    finished_at=finished,
+                    status=ExecutionStatus.FAILURE,
+                    error_details=error_msg[:1000],
+                )
+                execution.id = exec_id
+                execution.finished_at = finished
+                execution.status = ExecutionStatus.FAILURE
+                execution.error_details = error_msg[:1000]
+                last_execution = execution
+                last_error = error_msg
+                logger.warning(
+                    "Cron job '%s' attempt %d/%d failed: %s",
+                    job_name, attempt, max_attempts, error_msg,
+                )
+
+                # 마지막 시도가 아니면 백오프 후 재시도.
+                if attempt < max_attempts:
+                    delay = _compute_backoff(
+                        job.backoff_seconds, attempt, job.backoff_strategy
+                    )
+                    if delay > 0:
+                        logger.info(
+                            "Cron job '%s' backing off %.1fs before retry %d.",
+                            job_name, delay, attempt + 1,
+                        )
+                        await _sleep(delay)
+                continue
+
+            # 성공 — 카운터 리셋 후 즉시 반환.
+            finished = datetime.now()
+            summary = result[:500] if result else ""
             self._store.update_execution(
                 exec_id,
-                finished_at=datetime.now(),
+                finished_at=finished,
                 status=ExecutionStatus.SUCCESS,
-                result_summary=result[:500] if result else "",
+                result_summary=summary,
             )
+            execution.id = exec_id
+            execution.finished_at = finished
             execution.status = ExecutionStatus.SUCCESS
-            execution.result_summary = result[:500] if result else ""
-            logger.info("Cron job '%s' executed successfully.", job_name)
+            execution.result_summary = summary
+            self._reset_consecutive_failures(job)
+            if attempt > 1:
+                logger.info(
+                    "Cron job '%s' succeeded on attempt %d/%d.",
+                    job_name, attempt, max_attempts,
+                )
+            else:
+                logger.info("Cron job '%s' executed successfully.", job_name)
+            return execution
 
-        except Exception as exc:
-            error_msg = str(exc)
-            self._store.update_execution(
-                exec_id,
-                finished_at=datetime.now(),
-                status=ExecutionStatus.FAILURE,
-                error_details=error_msg[:1000],
+        # 모든 시도 실패: circuit-break 평가.
+        await self._record_failure_and_maybe_break(job, last_error or "")
+        assert last_execution is not None  # 루프가 1회 이상 돌았음을 보장
+        return last_execution
+
+    def _reset_consecutive_failures(self, job: CronJob) -> None:
+        """성공 시 누적 실패 카운터를 0으로 리셋한다 (이미 0이면 no-op)."""
+        if job.consecutive_failures == 0:
+            return
+        job.consecutive_failures = 0
+        job.updated_at = datetime.now()
+        self._store.save_job(job)
+
+    async def _record_failure_and_maybe_break(
+        self, job: CronJob, last_error: str
+    ) -> None:
+        """모든 재시도 실패 후 누적 카운터를 증가시키고 임계값 도달 시 차단한다.
+
+        ``circuit_break_threshold`` <= 0 이면 차단 기능 비활성.
+        차단 시 작업을 disabled로 전환하고, 알림 콜백이 있으면 통지를 보낸다.
+        """
+        job.consecutive_failures = (job.consecutive_failures or 0) + 1
+        job.updated_at = datetime.now()
+        threshold = int(job.circuit_break_threshold or 0)
+
+        if threshold > 0 and job.consecutive_failures >= threshold:
+            # 자동 일시 정지: APScheduler에서 해제하고 enabled=False 영속화.
+            job.enabled = False
+            self._store.save_job(job)
+            self._unregister_apscheduler_job(job.name)
+            logger.error(
+                "Cron job '%s' circuit-broken after %d consecutive failures; "
+                "auto-disabled. Last error: %s",
+                job.name, job.consecutive_failures, last_error,
             )
-            execution.status = ExecutionStatus.FAILURE
-            execution.error_details = error_msg[:1000]
-            logger.error("Cron job '%s' failed: %s", job_name, error_msg)
+            await self._send_circuit_break_notification(
+                job, last_error
+            )
+        else:
+            self._store.save_job(job)
+            logger.error(
+                "Cron job '%s' failed after %d retries (consecutive failures: %d).",
+                job.name, max(1, int(job.max_attempts)) - 1,
+                job.consecutive_failures,
+            )
 
-        execution.finished_at = datetime.now()
-        return execution
+    async def _send_circuit_break_notification(
+        self, job: CronJob, last_error: str
+    ) -> None:
+        """circuit-break 발동 시 알림 콜백을 호출한다.
+
+        알림 콜백은 NO_NOTIFY 토큰을 적용하지 않는다 — 차단은 사용자가
+        반드시 인지해야 하는 운영 이벤트이기 때문이다.
+        """
+        if not self._notifier:
+            return
+        message = (
+            f"⚠️ Cron job '{job.name}' auto-disabled after "
+            f"{job.consecutive_failures} consecutive failures.\n"
+            f"Last error: {last_error[:300]}"
+        )
+        try:
+            await self._notifier(job.name, message)
+        except Exception:
+            logger.exception(
+                "Failed to send circuit-break notification for cron '%s'",
+                job.name,
+            )
 
     async def _run_action(self, job: CronJob) -> str:
         """작업의 대상 액션을 실행하고, NO_NOTIFY 필터링 후 알림을 전송한다.

@@ -90,6 +90,17 @@ daemon:
     model: "gemini"
   wait_state:
     default_timeout: 3600
+  # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
+  # 일시적 네트워크/API 과부하에서 자동 복구하기 위한 기본값.
+  # max_attempts=1 이면 재시도 없음. backoff_strategy: linear | exponential.
+  # circuit_break_threshold=0 이면 누적 실패 차단 비활성.
+  # 한 스케줄 트리거의 모든 재시도가 실패하면 누적 카운터가 1 증가하고,
+  # 임계값에 도달하면 작업이 자동 비활성화되며 알림이 발송된다.
+  cron_retry:
+    max_attempts: 3
+    backoff_seconds: 60
+    backoff_strategy: "exponential"
+    circuit_break_threshold: 5
 
 persona:
   token_budget: 4096
