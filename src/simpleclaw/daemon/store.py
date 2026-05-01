@@ -20,6 +20,7 @@ from pathlib import Path
 
 from simpleclaw.daemon.models import (
     ActionType,
+    BackoffStrategy,
     CronJob,
     CronJobExecution,
     ExecutionStatus,
@@ -56,8 +57,11 @@ class DaemonStore:
         """크론 작업을 저장한다 (이미 존재하면 덮어쓰기)."""
         self._conn.execute(
             """INSERT OR REPLACE INTO cron_jobs
-               (name, cron_expression, action_type, action_reference, enabled, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (name, cron_expression, action_type, action_reference, enabled,
+                created_at, updated_at,
+                max_attempts, backoff_seconds, backoff_strategy,
+                circuit_break_threshold, consecutive_failures)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job.name,
                 job.cron_expression,
@@ -66,6 +70,11 @@ class DaemonStore:
                 int(job.enabled),
                 job.created_at.isoformat(),
                 job.updated_at.isoformat(),
+                int(job.max_attempts),
+                float(job.backoff_seconds),
+                job.backoff_strategy.value,
+                int(job.circuit_break_threshold),
+                int(job.consecutive_failures),
             ),
         )
         self._conn.commit()
@@ -96,7 +105,13 @@ class DaemonStore:
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> CronJob:
-        """DB 행을 CronJob 데이터 클래스로 변환한다."""
+        """DB 행을 CronJob 데이터 클래스로 변환한다.
+
+        구버전 DB에서 마이그레이션된 직후의 행은 새 컬럼이 DEFAULT로 채워져 있으므로
+        그대로 매핑하면 된다. 컬럼이 아직 존재하지 않을 가능성을 대비해
+        ``row.keys()`` 검사로 폴백한다.
+        """
+        keys = set(row.keys())
         return CronJob(
             name=row["name"],
             cron_expression=row["cron_expression"],
@@ -105,6 +120,25 @@ class DaemonStore:
             enabled=bool(row["enabled"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            max_attempts=row["max_attempts"] if "max_attempts" in keys else 3,
+            backoff_seconds=(
+                row["backoff_seconds"] if "backoff_seconds" in keys else 60.0
+            ),
+            backoff_strategy=BackoffStrategy(
+                row["backoff_strategy"]
+                if "backoff_strategy" in keys
+                else "exponential"
+            ),
+            circuit_break_threshold=(
+                row["circuit_break_threshold"]
+                if "circuit_break_threshold" in keys
+                else 5
+            ),
+            consecutive_failures=(
+                row["consecutive_failures"]
+                if "consecutive_failures" in keys
+                else 0
+            ),
         )
 
     # --- 크론 실행 로그 ---
@@ -113,8 +147,9 @@ class DaemonStore:
         """실행 기록을 삽입하고 생성된 ID를 반환한다."""
         cursor = self._conn.execute(
             """INSERT INTO cron_executions
-               (job_name, started_at, finished_at, status, result_summary, error_details)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (job_name, started_at, finished_at, status, result_summary,
+                error_details, attempt)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 execution.job_name,
                 execution.started_at.isoformat(),
@@ -122,6 +157,7 @@ class DaemonStore:
                 execution.status.value,
                 execution.result_summary,
                 execution.error_details,
+                int(execution.attempt),
             ),
         )
         self._conn.commit()
@@ -159,6 +195,7 @@ class DaemonStore:
     @staticmethod
     def _row_to_execution(row: sqlite3.Row) -> CronJobExecution:
         """DB 행을 CronJobExecution 데이터 클래스로 변환한다."""
+        keys = set(row.keys())
         return CronJobExecution(
             id=row["id"],
             job_name=row["job_name"],
@@ -171,6 +208,7 @@ class DaemonStore:
             status=ExecutionStatus(row["status"]),
             result_summary=row["result_summary"] or "",
             error_details=row["error_details"] or "",
+            attempt=row["attempt"] if "attempt" in keys else 1,
         )
 
     # --- 대기 상태 ---

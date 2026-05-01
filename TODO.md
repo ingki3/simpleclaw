@@ -48,6 +48,7 @@
 ### Cron
 - [ ] Cron job 실행 히스토리 조회 — 최근 실행 결과 확인 명령어
 - [ ] Cron job 자연어 수정 — "메일 확인 주기를 1시간으로 바꿔줘"
+- [x] **BIZ-19: Cron 작업 실패 시 자동 재시도** — `CronJob`에 작업별 재시도 정책(max_attempts/backoff_seconds/backoff_strategy/circuit_break_threshold) + `consecutive_failures` 카운터, `CronJobExecution.attempt` 컬럼으로 재시도별 실행 기록 분리, `execute_job()` 재시도 루프(linear/exponential 백오프), 누적 실패 임계값 도달 시 자동 비활성+알림 콜백, `enable_job()`이 카운터 리셋 (2026-05-01)
 
 ### 인프라
 - [ ] 프로세스 매니저 도입 — systemd 또는 supervisord로 봇 안정적 운영
