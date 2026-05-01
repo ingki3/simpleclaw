@@ -27,6 +27,7 @@ from simpleclaw.config import (
 )
 from simpleclaw.llm.models import LLMRequest, ToolCall
 from simpleclaw.llm.router import create_router
+from simpleclaw.logging.trace_context import trace_scope
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.models import ConversationMessage, MessageRole
@@ -208,31 +209,45 @@ class AgentOrchestrator:
         """크론 잡 메시지를 격리된 컨텍스트로 처리한다.
 
         대화 이력을 불러오지 않고 공유 대화 DB에 메시지를 저장하지 않는다.
+        진입점이므로 trace_id를 새로 발급해 호출 체인 전체로 전파한다.
         """
-        self._reload_dynamic_files()
-        return await self._tool_loop(text, isolated=True)
+        with trace_scope() as trace_id:
+            logger.info("Cron message received: trace_id=%s", trace_id)
+            self._reload_dynamic_files()
+            return await self._tool_loop(text, isolated=True)
 
     async def process_message(
         self, text: str, user_id: int, chat_id: int
     ) -> str:
-        """수신 메시지를 Native Function Calling 파이프라인으로 처리한다."""
-        self._reload_dynamic_files()
+        """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
-        # /cron 명령어 확인
-        cron_result = try_cron_command(text, self._cron_scheduler)
-        if cron_result is not None:
-            self._save_turn(text, cron_result)
-            return cron_result
+        진입점이므로 trace_id를 새로 발급해 ``contextvars``로 호출 체인
+        (도구 실행, RAG 회상, 백그라운드 임베딩, 서브에이전트/스킬 등) 전체에
+        전파한다. ``trace_scope``는 ``with`` 블록 종료 시 이전 trace_id를
+        복원하므로 동일 프로세스에서 후속 메시지가 깨끗한 컨텍스트로 시작된다.
+        """
+        with trace_scope() as trace_id:
+            logger.info(
+                "Message received: trace_id=%s user=%d chat=%d",
+                trace_id, user_id, chat_id,
+            )
+            self._reload_dynamic_files()
 
-        # /recipe-name 명령어 확인 (e.g. /ai-report)
-        recipe_result = await try_recipe_command(text, self._tool_loop)
-        if recipe_result is not None:
-            self._save_turn(text, recipe_result)
-            return recipe_result
+            # /cron 명령어 확인
+            cron_result = try_cron_command(text, self._cron_scheduler)
+            if cron_result is not None:
+                self._save_turn(text, cron_result)
+                return cron_result
 
-        response_text = await self._tool_loop(text)
-        self._save_turn(text, response_text)
-        return response_text
+            # /recipe-name 명령어 확인 (e.g. /ai-report)
+            recipe_result = await try_recipe_command(text, self._tool_loop)
+            if recipe_result is not None:
+                self._save_turn(text, recipe_result)
+                return recipe_result
+
+            response_text = await self._tool_loop(text)
+            self._save_turn(text, response_text)
+            return response_text
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)

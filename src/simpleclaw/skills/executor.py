@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from simpleclaw.logging.trace_context import inject_trace_id_env
 from simpleclaw.security import filter_env, get_preexec_fn, kill_process_group
 from simpleclaw.skills.models import (
     SkillDefinition,
@@ -71,13 +72,18 @@ async def execute_skill(
     if args:
         cmd.extend(args)
 
+    # filter_env()가 민감 키를 제거한 뒤 trace_id를 주입한다 — 분산 트레이싱
+    # 식별자는 비밀이 아니므로 차단 패턴 대상이 아니지만, 명시적으로 마지막에
+    # 추가하여 환경변수 차단 패턴 변경에도 영향을 받지 않도록 한다.
+    env = inject_trace_id_env(filter_env())
+
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=skill.skill_dir or None,
-            env=filter_env(),
+            env=env,
             preexec_fn=get_preexec_fn(),
         )
 
