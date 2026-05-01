@@ -1,0 +1,45 @@
+name: Auto Tag Release
+
+# main에 새 머지(또는 push)가 들어올 때마다 calver 태그와 GitHub Release를 만든다.
+# 태그 형식: vYYYY.MM.DD (당일 첫 릴리스), vYYYY.MM.DD.N (같은 날 N번째)
+# 릴리스 노트는 GitHub의 generate_release_notes 기능으로 자동 작성된다.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute calver tag
+        id: tag
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y.%m.%d)
+          # 같은 날의 기존 태그 개수를 세어 N을 결정
+          EXISTING=$(git tag -l "v${DATE}" "v${DATE}.*" | wc -l | tr -d ' ')
+          if [ "$EXISTING" -eq 0 ]; then
+            TAG="v${DATE}"
+          else
+            TAG="v${DATE}.${EXISTING}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Computed tag: ${TAG}"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          make_latest: "true"
