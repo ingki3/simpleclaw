@@ -24,6 +24,11 @@ from simpleclaw.agents.models import (
     SubAgentStatus,
 )
 from simpleclaw.agents.pool import ConcurrencyPool
+from simpleclaw.agents.protocol import (
+    SubAgentResponse,
+    ValidationFailure,
+    validate_response,
+)
 from simpleclaw.agents.workspace import WorkspaceManager
 from simpleclaw.logging.trace_context import inject_trace_id_env
 
@@ -155,6 +160,20 @@ class SubAgentSpawner:
         self._running_agents.clear()
         self._processes.clear()
 
+    @staticmethod
+    def _diagnostic_meta(
+        agent_id: str, failure: ValidationFailure
+    ) -> dict:
+        """검증 실패 시 디버깅용 진단 정보를 meta에 담아 반환한다."""
+        return {
+            "agent_id": agent_id,
+            "validation_failure": {
+                "reason": failure.reason,
+                "message": failure.message,
+                "raw": failure.raw,
+            },
+        }
+
     async def _execute(self, agent: SubAgent) -> SubAgentResult:
         """서브에이전트 프로세스를 실행하고 결과를 파싱한다."""
         start_time = datetime.now()
@@ -221,27 +240,29 @@ class SubAgentSpawner:
                     stderr_text[:500],
                 )
 
-                # 실패 시에도 stdout에 JSON이 있으면 파싱 시도
-                try:
-                    parsed = json.loads(stdout_text) if stdout_text else {}
+                # 실패 시에도 stdout에 표준 JSON이 있으면 파싱 시도하되,
+                # 검증 실패는 stderr 기반 에러로 폴백한다.
+                validated = validate_response(stdout_text)
+                if isinstance(validated, SubAgentResponse):
                     return SubAgentResult(
                         agent_id=agent.agent_id,
-                        status=parsed.get("status", "error"),
-                        data=parsed.get("data"),
-                        error=parsed.get("error", stderr_text[:500]),
+                        status=validated.status,
+                        data=validated.data,
+                        error=validated.error_text() or stderr_text[:500] or None,
                         exit_code=proc.returncode,
                         execution_time=elapsed,
+                        meta=validated.meta,
                     )
-                except json.JSONDecodeError:
-                    return SubAgentResult(
-                        agent_id=agent.agent_id,
-                        status="error",
-                        error=stderr_text[:500] or f"Exit code {proc.returncode}",
-                        exit_code=proc.returncode,
-                        execution_time=elapsed,
-                    )
+                return SubAgentResult(
+                    agent_id=agent.agent_id,
+                    status="error",
+                    error=stderr_text[:500] or f"Exit code {proc.returncode}",
+                    exit_code=proc.returncode,
+                    execution_time=elapsed,
+                    meta=self._diagnostic_meta(agent.agent_id, validated),
+                )
 
-            # 성공 경로 — JSON 파싱
+            # 성공 경로 — 표준 스키마로 검증
             if not stdout_text:
                 agent.status = SubAgentStatus.SUCCESS
                 return SubAgentResult(
@@ -252,31 +273,39 @@ class SubAgentSpawner:
                     execution_time=elapsed,
                 )
 
-            try:
-                parsed = json.loads(stdout_text)
-                agent.status = SubAgentStatus.SUCCESS
-                return SubAgentResult(
-                    agent_id=agent.agent_id,
-                    status=parsed.get("status", "success"),
-                    data=parsed.get("data"),
-                    error=parsed.get("error"),
-                    exit_code=0,
-                    execution_time=elapsed,
-                )
-            except json.JSONDecodeError as exc:
+            validated = validate_response(stdout_text)
+            if isinstance(validated, ValidationFailure):
+                # 검증 실패는 안전한 에러 응답으로 변환한다.
                 agent.status = SubAgentStatus.FAILURE
                 logger.error(
-                    "Sub-agent %s produced invalid JSON: %s",
+                    "Sub-agent %s response validation failed (%s): %s",
                     agent.agent_id,
-                    str(exc),
+                    validated.reason,
+                    validated.message,
                 )
                 return SubAgentResult(
                     agent_id=agent.agent_id,
                     status="error",
-                    error=f"Invalid JSON output: {exc}",
+                    error=validated.message,
                     exit_code=0,
                     execution_time=elapsed,
+                    meta=self._diagnostic_meta(agent.agent_id, validated),
                 )
+
+            # 검증 통과 — status 분기에 따라 SubAgent 상태 업데이트
+            if validated.status == "success":
+                agent.status = SubAgentStatus.SUCCESS
+            else:
+                agent.status = SubAgentStatus.FAILURE
+            return SubAgentResult(
+                agent_id=agent.agent_id,
+                status=validated.status,
+                data=validated.data,
+                error=validated.error_text(),
+                exit_code=0,
+                execution_time=elapsed,
+                meta=validated.meta,
+            )
 
         except FileNotFoundError:
             agent.status = SubAgentStatus.FAILURE

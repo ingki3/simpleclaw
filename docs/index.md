@@ -17,6 +17,7 @@ SimpleClaw는 **확장 가능한 개인 비서 AI 에이전트**입니다. Pytho
 - [Cron 스케줄러](feature-cron.md) — 예약 작업, 자동 실행, 알림 제어
 - [텔레그램 봇](feature-telegram.md) — 화이트리스트 인증, 메시지 처리, Cron 알림
 - [보안](feature-security.md) — 위험 명령 감지, 환경변수 필터링, 프로세스 격리
+- [서브에이전트 응답 프로토콜](feature-subagent-protocol.md) — 서브에이전트 stdout JSON 표준 스키마와 검증 규약
 
 ## 아키텍처 개요
 
