@@ -447,16 +447,28 @@ def load_telegram_config(config_path: str | Path) -> dict:
 
 
 # 웹훅 서버 기본 설정값
+# BIZ-24: max_body_size/rate_limit/concurrency 기본값은 공개 엔드포인트에 노출돼도
+# 일반적인 트래픽은 막지 않으면서 명백한 학대성 호출을 차단할 수 있도록 보수적으로 설정.
 _WEBHOOK_DEFAULTS: dict = {
     "enabled": True,
     "host": "127.0.0.1",
     "port": 8080,
     "auth_token": "",
+    "max_body_size": 1_048_576,  # 1MB
+    "rate_limit": 60,             # 윈도우당 요청 수 (0이면 비활성)
+    "rate_limit_window": 60.0,    # 슬라이딩 윈도우(초)
+    "max_concurrent_connections": 32,
+    "queue_size": 64,             # 동시성 cap 초과 시 대기 가능한 요청 수
+    "alert_cooldown": 300.0,      # 동일 알림 키의 최소 발신 간격(초)
 }
 
 
 def load_webhook_config(config_path: str | Path) -> dict:
-    """config.yaml에서 웹훅 서버 설정을 로드한다."""
+    """config.yaml에서 웹훅 서버 설정을 로드한다.
+
+    BIZ-24: 페이로드 크기 상한, 슬라이딩 윈도우 rate limit, 동시성 cap, 알림 쿨다운
+    설정을 읽어들이며, 누락된 키는 보안 기본값으로 채운다.
+    """
     config_path = Path(config_path)
     if not config_path.is_file():
         return dict(_WEBHOOK_DEFAULTS)
@@ -482,6 +494,27 @@ def load_webhook_config(config_path: str | Path) -> dict:
         "host": wh.get("host", _WEBHOOK_DEFAULTS["host"]),
         "port": wh.get("port", _WEBHOOK_DEFAULTS["port"]),
         "auth_token": auth_token,
+        "max_body_size": int(
+            wh.get("max_body_size", _WEBHOOK_DEFAULTS["max_body_size"])
+        ),
+        "rate_limit": int(
+            wh.get("rate_limit", _WEBHOOK_DEFAULTS["rate_limit"])
+        ),
+        "rate_limit_window": float(
+            wh.get("rate_limit_window", _WEBHOOK_DEFAULTS["rate_limit_window"])
+        ),
+        "max_concurrent_connections": int(
+            wh.get(
+                "max_concurrent_connections",
+                _WEBHOOK_DEFAULTS["max_concurrent_connections"],
+            )
+        ),
+        "queue_size": int(
+            wh.get("queue_size", _WEBHOOK_DEFAULTS["queue_size"])
+        ),
+        "alert_cooldown": float(
+            wh.get("alert_cooldown", _WEBHOOK_DEFAULTS["alert_cooldown"])
+        ),
     }
 
 
