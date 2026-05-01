@@ -4,15 +4,20 @@ llm:
     claude:
       type: "api"
       model: "claude-sonnet-4-20250514"
-      api_key: ""  # Anthropic API 키
+      # 시크릿 참조 문법:
+      #   "env:NAME"       — OS 환경변수 NAME에서 읽기
+      #   "keyring:NAME"   — macOS Keychain / Linux Secret Service에서 읽기
+      #   "file:NAME"      — ~/.simpleclaw/secrets.enc 암호화 볼트에서 읽기
+      # 평문 값(예: "sk-...")도 동작하지만 권장하지 않음. 자세한 사항은 README 참조.
+      api_key: "keyring:claude_api_key"
     openai:
       type: "api"
       model: "gpt-4o"
-      api_key: ""  # OpenAI API 키
+      api_key: "keyring:openai_api_key"
     gemini:
       type: "api"
       model: "gemini-3-flash-preview"
-      api_key: ""  # Google AI API 키
+      api_key: "env:GOOGLE_API_KEY"
 
 agent:
   history_limit: 20
@@ -59,7 +64,8 @@ voice:
     max_text_length: 4096
 
 telegram:
-  bot_token: ""  # Telegram Bot Token (@BotFather에서 발급)
+  # Telegram Bot Token (@BotFather 발급) — 시크릿 매니저 참조 권장.
+  bot_token: "keyring:telegram_bot_token"
   whitelist:
     user_ids: []
     chat_ids: []
@@ -68,7 +74,7 @@ webhook:
   enabled: true
   host: "127.0.0.1"
   port: 8080
-  auth_token: ""  # 웹훅 인증 토큰
+  auth_token: "keyring:webhook_auth_token"  # 웹훅 인증 토큰 (시크릿 매니저 참조)
 
 sub_agents:
   max_concurrent: 3

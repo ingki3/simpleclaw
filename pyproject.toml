@@ -23,6 +23,8 @@ dependencies = [
     "sqlite-vec>=0.1",
     "sentence-transformers>=3.0",
     "pydantic>=2.0",
+    "keyring>=24.0",
+    "cryptography>=42.0",
 ]
 
 [project.optional-dependencies]

@@ -19,6 +19,7 @@
 - [x] **BIZ-29: 임베딩/클러스터 색인 분포 모니터링 및 토큰 절감 측정** — `ConversationStore` 분포 헬퍼(`count_with_embedding` / `embedding_dimension_distribution` / `cluster_member_counts` 등), `simpleclaw.memory.stats`(분포·RAG 로그 집계), `scripts/inspect_memory.py` CLI(텍스트/JSON), `_retrieve_relevant_context()` 구조화 로그(`rag_retrieve` action), 대시보드 `/api/memory_stats` + Memory Index 카드 (2026-05-01)
 - [x] **BIZ-25: 구조화 로깅에 Trace ID 도입** — `simpleclaw.logging.trace_context`(contextvars 기반 trace_id 발급/전파/주입), `LogEntry.trace_id` 필수 필드 + 자동 컨텍스트 채택, `process_message`/`process_cron_message` 진입점 발급, 스킬 executor·서브에이전트 spawner의 `SIMPLECLAW_TRACE_ID` 환경변수 전파, 대시보드 `/api/logs?trace_id=…` 필터 + `/api/trace` 타임라인 + Trace Timeline 카드 (2026-05-01)
 - [x] **BIZ-15: DB 스키마 마이그레이션 시스템 구축** — `simpleclaw.db.MigrationRunner`(파일 기반 SQL, schema_version 메타 테이블, 베이스라인 흡수, 적용 전 자동 백업·실패 시 원복), conversations/daemon DB의 베이스라인 0001 마이그레이션 도입, `ConversationStore`/`DaemonStore` `__init__`이 부팅 시 자동 적용, 단위 테스트 16개(`tests/unit/test_db_migrations.py`) + GitHub Actions `unit-tests.yml` CI 워크플로 (2026-05-01)
+- [x] **BIZ-18: `.env` / API 키 시크릿 매니저 통합** — `simpleclaw.security.secrets`(환경변수/OS keyring/Fernet 암호화 파일 백엔드, ``"scheme:name"`` 참조 문법, 마스터 키 자동 생성 0600 권한·`SIMPLECLAW_MASTER_KEY` 우선), `config.py`의 `api_key`/`bot_token`/`auth_token` 자동 해소(레거시 평문 호환 + 경고 로그), 마이그레이션 스크립트(`scripts/migrate_secrets.py`: `.env`→keyring/file 일괄 이전 + config.yaml 자동 치환), `keyring`/`cryptography` 의존성 추가, `config.yaml.example`/README 가이드 갱신, 단위 테스트 41개(`tests/unit/test_secrets.py`) (2026-05-01)
 
 ---
 
