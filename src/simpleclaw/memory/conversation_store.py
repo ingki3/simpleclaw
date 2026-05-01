@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from simpleclaw.db import run_conversations_migrations
 from simpleclaw.memory.models import ClusterRecord, ConversationMessage, MessageRole
 
 logger = logging.getLogger(__name__)
@@ -57,50 +58,50 @@ class ConversationStore:
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        """messages·semantic_clusters 테이블 생성·마이그레이션 + WAL 모드 설정.
+        """레거시 컬럼 정규화 후 마이그레이션 러너에 위임해 스키마를 최신화한다.
 
         설계 결정:
-        - 신규 DB는 처음부터 embedding/cluster_id 컬럼을 포함해 생성한다.
-        - 기존 DB(이전 phase)에는 ALTER TABLE로 누락 컬럼만 추가한다(데이터 보존).
-        - WAL 저널 모드는 영구 적용이며 멱등하므로 매 초기화마다 호출해도 무방하다.
-        - semantic_clusters 테이블은 Phase 3에서 새로 도입되며, 외래 키 제약은 두지 않는다
-          (cluster 삭제 시 messages.cluster_id가 dangling이어도 동작 무관).
+        - 0001_initial.sql이 이전에 in-line으로 생성하던 messages/semantic_clusters
+          테이블을 모두 포함한다. 이후 컬럼·인덱스 변경은 0002_*.sql 이후로 분리한다.
+        - **레거시 정규화**: spec 005 도입 이전(Phase 1 이하) DB는 messages 테이블에
+          embedding/cluster_id 컬럼이 없을 수 있다. 마이그레이션 러너의 베이스라인
+          흡수는 테이블 존재만 검사하므로, 컬럼 누락 상태로 흡수되면 영원히
+          누락된 채 남는다. 이를 막기 위해 러너 호출 전에 PRAGMA table_info로
+          누락 컬럼만 ALTER TABLE로 보충한다(데이터 보존, 멱등).
+        - 마이그레이션 적용 중 실패하면 러너가 백업 파일에서 DB를 원복하고
+          MigrationError를 raise한다. 호출자(__init__)가 이 예외를 그대로 전파해
+          부팅 실패를 명확히 한다.
         """
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._normalize_legacy_columns()
+        run_conversations_migrations(self._db_path)
+
+    def _normalize_legacy_columns(self) -> None:
+        """spec 005 이전 DB의 messages 테이블에 누락 컬럼을 추가한다.
+
+        이미 모든 컬럼이 있거나 messages 테이블이 없으면 아무 일도 하지 않는다.
+        러너 호출 전 1회 실행으로 충분하며, 신규 DB에는 영향이 없다.
+        """
+        if not Path(self._db_path).exists():
+            return
         with sqlite3.connect(self._db_path) as conn:
-            # WAL: reader-writer 동시성 확보(데몬 + 드리밍 동시 쓰기 시 잠금 충돌 완화)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    token_count INTEGER DEFAULT 0,
-                    embedding BLOB,
-                    cluster_id INTEGER
-                )
-            """)
-            # 기존 DB 마이그레이션: 누락 컬럼만 추가(멱등)
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "messages" not in tables:
+                return
+            cols = {
+                row[1] for row in conn.execute(
+                    "PRAGMA table_info(messages)"
+                ).fetchall()
+            }
             if "embedding" not in cols:
                 conn.execute("ALTER TABLE messages ADD COLUMN embedding BLOB")
-                logger.info("Migrated messages table: added embedding column")
+                logger.info("Legacy normalize: added embedding column to messages")
             if "cluster_id" not in cols:
                 conn.execute("ALTER TABLE messages ADD COLUMN cluster_id INTEGER")
-                logger.info("Migrated messages table: added cluster_id column")
-
-            # Phase 3: semantic_clusters 테이블 — 시맨틱 메모리 인덱스
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS semantic_clusters (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    label TEXT NOT NULL DEFAULT '',
-                    centroid BLOB NOT NULL,
-                    summary TEXT NOT NULL DEFAULT '',
-                    member_count INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                )
-            """)
+                logger.info("Legacy normalize: added cluster_id column to messages")
 
     def add_message(self, message: ConversationMessage) -> int:
         """새 대화 메시지를 DB에 저장하고 INSERT된 행 id를 반환한다.
