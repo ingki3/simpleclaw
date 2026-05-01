@@ -119,6 +119,12 @@ _DAEMON_DEFAULTS: dict = {
         "overnight_hour": 3,
         "idle_threshold": 7200,
         "model": "",
+        # Phase 3 그래프형 드리밍 — 기본 False(점진 도입). 켜면 IncrementalClusterer가
+        # 미클러스터 임베딩을 부착하고 MEMORY.md의 ``<!-- cluster:N -->`` 마커 영역만 in-place 갱신한다.
+        "enable_clusters": False,
+        # 클러스터 부착 임계값 — multilingual-e5-small 기준 경험적 컷.
+        # 낮추면 클러스터가 커지고(잡음↑), 높이면 작아진다(파편화↑).
+        "cluster_threshold": 0.75,
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -178,6 +184,18 @@ def load_daemon_config(config_path: str | Path) -> dict:
             "model": dreaming.get(
                 "model",
                 _DAEMON_DEFAULTS["dreaming"]["model"],
+            ),
+            "enable_clusters": bool(
+                dreaming.get(
+                    "enable_clusters",
+                    _DAEMON_DEFAULTS["dreaming"]["enable_clusters"],
+                )
+            ),
+            "cluster_threshold": float(
+                dreaming.get(
+                    "cluster_threshold",
+                    _DAEMON_DEFAULTS["dreaming"]["cluster_threshold"],
+                )
             ),
         },
         "wait_state": {

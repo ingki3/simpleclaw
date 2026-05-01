@@ -29,6 +29,7 @@ from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.logging.dashboard import DashboardServer
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
+from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 
@@ -132,6 +133,16 @@ async def main():
     conv_store = ConversationStore(agent_config["db_path"])
     llm_router = orchestrator._router  # 오케스트레이터의 LLM 라우터 재사용
 
+    # Phase 3 그래프형 드리밍 — enable_clusters=True일 때만 IncrementalClusterer를 주입한다.
+    # threshold는 multilingual-e5-small 경험적 컷(0.75) 기준이며 config로 튜닝 가능.
+    enable_clusters = dreaming_config.get("enable_clusters", False)
+    cluster_threshold = dreaming_config.get("cluster_threshold", 0.75)
+    clusterer = (
+        IncrementalClusterer(threshold=cluster_threshold)
+        if enable_clusters
+        else None
+    )
+
     dreaming_pipeline = DreamingPipeline(
         conversation_store=conv_store,
         memory_file=".agent/MEMORY.md",
@@ -140,6 +151,8 @@ async def main():
         agent_file=".agent/AGENT.md",
         llm_router=llm_router,
         dreaming_model=dreaming_config.get("model", ""),
+        clusterer=clusterer,
+        enable_clusters=enable_clusters,
     )
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,
@@ -161,9 +174,12 @@ async def main():
         _dreaming_check, "interval", minutes=5, id="dreaming-check",
     )
     logger.info(
-        "Dreaming enabled: overnight_hour=%d, idle_threshold=%ds, check every 5min",
+        "Dreaming enabled: overnight_hour=%d, idle_threshold=%ds, check every 5min, "
+        "clusters=%s (threshold=%.2f)",
         dreaming_config.get("overnight_hour", 3),
         dreaming_config.get("idle_threshold", 7200),
+        "on" if enable_clusters else "off",
+        cluster_threshold,
     )
 
     # 대시보드 — 메트릭 스냅샷을 127.0.0.1:8081에 노출.

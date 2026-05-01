@@ -269,7 +269,8 @@ daemon:
     overnight_hour: 3                  # 드리밍 시각 (03:00)
     idle_threshold: 7200               # 드리밍 조건: 유휴 시간 (초)
     model: "gemini"                    # 드리밍 요약에 사용할 LLM (빈 값 = 기본 LLM)
-    enable_clusters: false             # 시맨틱 클러스터 기반 그래프형 드리밍 활성화
+    enable_clusters: true              # 시맨틱 클러스터 기반 그래프형 드리밍 활성화
+    cluster_threshold: 0.75            # 클러스터 부착 임계값(코사인 유사도, 0~1)
 
 memory:
   embeddings:
