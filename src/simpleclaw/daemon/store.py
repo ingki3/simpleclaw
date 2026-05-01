@@ -25,6 +25,7 @@ from simpleclaw.daemon.models import (
     ExecutionStatus,
     WaitState,
 )
+from simpleclaw.db import run_daemon_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -35,54 +36,15 @@ class DaemonStore:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        # 연결을 열기 전에 마이그레이션을 적용한다 — 러너가 자체 연결을 사용하므로
+        # 기존 self._conn과 락이 충돌하지 않는다. 실패 시 MigrationError가
+        # 그대로 전파되어 부팅이 중단된다(일관성 우선).
+        run_daemon_migrations(self._db_path)
         self._conn = sqlite3.connect(
             str(self._db_path),
             detect_types=sqlite3.PARSE_DECLTYPES,
         )
         self._conn.row_factory = sqlite3.Row
-        self._create_tables()
-
-    def _create_tables(self) -> None:
-        """필요한 테이블이 없으면 생성한다."""
-        cursor = self._conn.cursor()
-        cursor.executescript("""
-            CREATE TABLE IF NOT EXISTS cron_jobs (
-                name TEXT PRIMARY KEY,
-                cron_expression TEXT NOT NULL,
-                action_type TEXT NOT NULL,
-                action_reference TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS cron_executions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_name TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT,
-                status TEXT NOT NULL DEFAULT 'running',
-                result_summary TEXT DEFAULT '',
-                error_details TEXT DEFAULT '',
-                FOREIGN KEY (job_name) REFERENCES cron_jobs(name)
-            );
-
-            CREATE TABLE IF NOT EXISTS wait_states (
-                task_id TEXT PRIMARY KEY,
-                serialized_state TEXT NOT NULL,
-                condition_type TEXT NOT NULL,
-                registered_at TEXT NOT NULL,
-                timeout_seconds INTEGER NOT NULL DEFAULT 3600,
-                resolved_at TEXT,
-                resolution TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS daemon_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-        """)
-        self._conn.commit()
 
     def close(self) -> None:
         """DB 연결을 종료한다."""
