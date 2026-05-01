@@ -31,6 +31,10 @@ class MetricsSnapshot:
     process_kills_sigkill: int = 0
     process_group_leaks: int = 0
     zombies_reaped: int = 0
+    # 스킬 실행 재시도 메트릭 — 일시적 장애 회복력/외부 의존 안정성을 모니터링.
+    skill_retries: int = 0           # 자동 재시도 시도 횟수 누적 (재시도 1회당 +1)
+    skill_retry_exhausted: int = 0   # 정책 한도까지 모두 실패해 포기한 스킬 수
+    skill_retry_recovered: int = 0   # 재시도 끝에 성공한 스킬 수
     timestamp: str = ""
 
     def to_dict(self) -> dict:
@@ -48,6 +52,9 @@ class MetricsSnapshot:
             "process_kills_sigkill": self.process_kills_sigkill,
             "process_group_leaks": self.process_group_leaks,
             "zombies_reaped": self.zombies_reaped,
+            "skill_retries": self.skill_retries,
+            "skill_retry_exhausted": self.skill_retry_exhausted,
+            "skill_retry_recovered": self.skill_retry_recovered,
             "timestamp": self.timestamp,
         }
 
@@ -72,6 +79,10 @@ class MetricsCollector:
         self._process_kills_sigkill = 0
         self._process_group_leaks = 0
         self._zombies_reaped = 0
+        # 스킬 재시도 카운터 — 외부 의존 일시 장애 추세와 회복률을 추적.
+        self._skill_retries = 0
+        self._skill_retry_exhausted = 0
+        self._skill_retry_recovered = 0
 
     def record_execution(
         self,
@@ -123,6 +134,21 @@ class MetricsCollector:
             if reaped_zombies > 0:
                 self._zombies_reaped += reaped_zombies
 
+    def record_skill_retry(self) -> None:
+        """스킬 자동 재시도 1회를 기록한다 (재시도 시도 직전 호출)."""
+        with self._lock:
+            self._skill_retries += 1
+
+    def record_skill_retry_recovered(self) -> None:
+        """재시도 끝에 스킬이 성공했음을 기록한다."""
+        with self._lock:
+            self._skill_retry_recovered += 1
+
+    def record_skill_retry_exhausted(self) -> None:
+        """재시도 한도까지 실패해 자동 회복에 실패했음을 기록한다."""
+        with self._lock:
+            self._skill_retry_exhausted += 1
+
     def get_snapshot(self) -> MetricsSnapshot:
         """현재 메트릭의 불변 스냅샷을 반환한다."""
         with self._lock:
@@ -144,6 +170,9 @@ class MetricsCollector:
                 process_kills_sigkill=self._process_kills_sigkill,
                 process_group_leaks=self._process_group_leaks,
                 zombies_reaped=self._zombies_reaped,
+                skill_retries=self._skill_retries,
+                skill_retry_exhausted=self._skill_retry_exhausted,
+                skill_retry_recovered=self._skill_retry_recovered,
                 timestamp=datetime.now().isoformat(),
             )
 
@@ -160,3 +189,6 @@ class MetricsCollector:
             self._process_kills_sigkill = 0
             self._process_group_leaks = 0
             self._zombies_reaped = 0
+            self._skill_retries = 0
+            self._skill_retry_exhausted = 0
+            self._skill_retry_recovered = 0

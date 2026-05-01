@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from simpleclaw.skills.models import SkillDefinition, SkillScope
+from simpleclaw.skills.models import RetryPolicy, SkillDefinition, SkillScope
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
 
     name = ""
     description = ""
+    retry_policy: RetryPolicy | None = None
 
     # YAML frontmatter를 먼저 시도 (---\n...\n---)
     fm_match = re.match(r"^---\s*\n(.+?)\n---\s*\n", content, re.DOTALL)
@@ -119,6 +120,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
             if isinstance(fm, dict):
                 name = fm.get("name", "")
                 description = fm.get("description", "")
+                retry_policy = _parse_retry_policy(fm.get("retry"), skill_md)
         except yaml.YAMLError:
             pass
 
@@ -176,4 +178,70 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
         scope=scope,
         skill_dir=str(skill_md.parent),
         commands=commands,
+        retry_policy=retry_policy,
+    )
+
+
+def _parse_retry_policy(
+    raw: object, skill_md: Path
+) -> RetryPolicy | None:
+    """프론트매터의 ``retry`` 값을 ``RetryPolicy``로 변환한다.
+
+    허용 형식 예::
+
+        retry:
+          max_retries: 3
+          initial_backoff_seconds: 0.5
+          backoff_factor: 2.0
+          max_backoff_seconds: 10
+          idempotent: true
+          retry_on_timeout: false
+
+    모든 필드는 옵션이며, 잘못된 타입은 무시되고 ``RetryPolicy`` 기본값이 적용된다.
+    파싱이 실패하거나 ``raw``가 매핑이 아니면 None을 반환해 정책을 비활성화한다.
+
+    Args:
+        raw: ``retry:`` 키 값 (보통 dict).
+        skill_md: 경고 로그용 스킬 파일 경로.
+
+    Returns:
+        파싱된 ``RetryPolicy`` 또는 None.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        logger.warning(
+            "Invalid 'retry' block in %s: expected mapping, got %s",
+            skill_md, type(raw).__name__,
+        )
+        return None
+
+    defaults = RetryPolicy()
+
+    def _coerce(key: str, default: object, caster):
+        value = raw.get(key, default)
+        try:
+            return caster(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid retry.%s in %s: %r (using default %r)",
+                key, skill_md, value, default,
+            )
+            return default
+
+    return RetryPolicy(
+        max_retries=_coerce("max_retries", defaults.max_retries, int),
+        initial_backoff_seconds=_coerce(
+            "initial_backoff_seconds", defaults.initial_backoff_seconds, float
+        ),
+        backoff_factor=_coerce(
+            "backoff_factor", defaults.backoff_factor, float
+        ),
+        max_backoff_seconds=_coerce(
+            "max_backoff_seconds", defaults.max_backoff_seconds, float
+        ),
+        idempotent=bool(raw.get("idempotent", defaults.idempotent)),
+        retry_on_timeout=bool(
+            raw.get("retry_on_timeout", defaults.retry_on_timeout)
+        ),
     )
