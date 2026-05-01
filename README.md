@@ -108,15 +108,59 @@ pip install -e ".[dev]"
 
 ### 설정
 
-1. API 키를 `.env` 파일에 추가:
+1. `config.yaml.example`을 복사해 `config.yaml`을 만든다:
 
 ```bash
-echo 'GOOGLE_API_KEY=your-gemini-key' >> .env
-# 또는
-echo 'ANTHROPIC_API_KEY=your-claude-key' >> .env
+cp config.yaml.example config.yaml
 ```
 
-2. 페르소나 파일 생성:
+2. API 키 등 시크릿을 등록한다 — **세 가지 방법** 중 환경에 맞는 것을 선택:
+
+   **(A) OS 자격 증명 저장소 (권장: macOS Keychain / Linux Secret Service)**
+
+   ```bash
+   .venv/bin/python -c "
+   from simpleclaw.security.secrets import SecretsManager
+   m = SecretsManager()
+   m.store('keyring', 'claude_api_key', 'sk-ant-...')
+   m.store('keyring', 'openai_api_key', 'sk-...')
+   m.store('keyring', 'telegram_bot_token', '123:ABC...')
+   "
+   ```
+
+   `config.yaml`에는 `api_key: "keyring:claude_api_key"` 형태로 참조만 남긴다.
+
+   **(B) 환경변수 (CI/도커 환경)**
+
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...
+   export GOOGLE_API_KEY=...
+   ```
+
+   `config.yaml`에 `api_key: "env:ANTHROPIC_API_KEY"`로 참조한다.
+
+   **(C) 암호화 파일 (헤드리스 Linux 등 keyring 미가용 환경)**
+
+   `~/.simpleclaw/master.key`(0600)와 `~/.simpleclaw/secrets.enc`에 Fernet으로
+   보호된 시크릿을 보관한다. 마스터 키는 `SIMPLECLAW_MASTER_KEY` 환경변수로도
+   주입할 수 있다.
+
+   ```bash
+   .venv/bin/python -c "
+   from simpleclaw.security.secrets import SecretsManager
+   SecretsManager().store('file', 'claude_api_key', 'sk-ant-...')
+   "
+   ```
+
+   `config.yaml`에 `api_key: "file:claude_api_key"`로 참조한다.
+
+3. **기존 `.env` / 평문 `config.yaml`에서 이전**할 때는 마이그레이션 스크립트:
+
+   ```bash
+   .venv/bin/python scripts/migrate_secrets.py --backend keyring --rewrite-config
+   ```
+
+4. 페르소나 파일 생성:
 
 ```bash
 mkdir -p .agent
@@ -142,16 +186,19 @@ Language: Korean
 
 1. 텔레그램에서 [@BotFather](https://t.me/BotFather)에게 `/newbot`으로 봇 생성
 2. [@userinfobot](https://t.me/userinfobot)에서 본인 User ID 확인
-3. 설정 추가:
+3. 봇 토큰을 시크릿 매니저에 등록 (위 §설정 참고):
 
 ```bash
-echo 'TELEGRAM_BOT_TOKEN=발급받은-토큰' >> .env
+.venv/bin/python -c "
+from simpleclaw.security.secrets import SecretsManager
+SecretsManager().store('keyring', 'telegram_bot_token', '발급받은-토큰')
+"
 ```
 
-`config.yaml`에 User ID 추가:
+`config.yaml`에 참조와 User ID 추가:
 ```yaml
 telegram:
-  bot_token_env: "TELEGRAM_BOT_TOKEN"
+  bot_token: "keyring:telegram_bot_token"
   whitelist:
     user_ids: [본인-User-ID]
 ```
