@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.recipes.loader import discover_recipes, load_recipe
-from simpleclaw.recipes.models import RecipeParseError, StepType
+from simpleclaw.recipes.models import OnErrorPolicy, RecipeParseError, StepType
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "recipes"
 
@@ -54,4 +54,40 @@ class TestRecipeLoader:
         recipe_dir.mkdir()
         (recipe_dir / "recipe.yaml").write_text(": : invalid yaml [[")
         with pytest.raises(RecipeParseError):
+            load_recipe(recipe_dir / "recipe.yaml")
+
+    def test_default_on_error_policy_is_abort(self):
+        """on_error 미지정 레시피는 ABORT 정책을 기본값으로 가진다."""
+        recipe = load_recipe(FIXTURES / "daily-report" / "recipe.yaml")
+        assert recipe.on_error == OnErrorPolicy.ABORT
+
+    def test_on_error_and_rollback_parsed(self, tmp_path):
+        recipe_dir = tmp_path / "with-policy"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: with-policy\n"
+            "on_error: rollback\n"
+            "steps:\n"
+            "  - type: command\n"
+            "    name: A\n"
+            "    content: echo a\n"
+            "    rollback: echo undo-a\n"
+            "  - type: command\n"
+            "    name: B\n"
+            "    content: echo b\n"
+            "    on_error: continue\n"
+        )
+        recipe = load_recipe(recipe_dir / "recipe.yaml")
+        assert recipe.on_error == OnErrorPolicy.ROLLBACK
+        assert recipe.steps[0].rollback == "echo undo-a"
+        assert recipe.steps[0].on_error is None  # 레시피 기본값을 따름
+        assert recipe.steps[1].on_error == OnErrorPolicy.CONTINUE
+
+    def test_invalid_on_error_raises(self, tmp_path):
+        recipe_dir = tmp_path / "bad-policy"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: bad-policy\non_error: maybe\nsteps: []\n"
+        )
+        with pytest.raises(RecipeParseError, match="Invalid on_error"):
             load_recipe(recipe_dir / "recipe.yaml")
