@@ -25,6 +25,7 @@ from simpleclaw.agents.models import (
 )
 from simpleclaw.agents.pool import ConcurrencyPool
 from simpleclaw.agents.workspace import WorkspaceManager
+from simpleclaw.logging.trace_context import inject_trace_id_env
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +159,10 @@ class SubAgentSpawner:
         """서브에이전트 프로세스를 실행하고 결과를 파싱한다."""
         start_time = datetime.now()
 
-        # 환경변수에 권한 범위·에이전트 ID·워크스페이스 경로 주입
-        env = os.environ.copy()
+        # 환경변수에 권한 범위·에이전트 ID·워크스페이스 경로·trace_id 주입.
+        # trace_id는 같은 사용자 메시지에서 출발한 모든 서브에이전트가
+        # 동일 식별자로 로그를 남길 수 있도록 부모 컨텍스트에서 가져온다.
+        env = inject_trace_id_env(os.environ.copy())
         env["AGENT_SCOPE"] = json.dumps(agent.scope.to_dict())
         env["AGENT_ID"] = agent.agent_id
         if agent.workspace_path:

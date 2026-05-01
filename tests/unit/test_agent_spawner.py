@@ -205,3 +205,28 @@ class TestSubAgentSpawner:
         )
         assert result.status == "success"
         assert result.data == {}
+
+    @pytest.mark.asyncio
+    async def test_trace_id_propagated_to_subagent(self, config, tmp_path):
+        """부모 컨텍스트의 trace_id가 SIMPLECLAW_TRACE_ID로 전달되어야 한다."""
+        from simpleclaw.logging.trace_context import (
+            TRACE_ID_ENV_VAR,
+            trace_scope,
+        )
+
+        script = _write_script(tmp_path, "trace_echo.py", f'''
+            import json, os
+            print(json.dumps({{
+                "status": "success",
+                "data": {{"trace": os.environ.get({TRACE_ID_ENV_VAR!r}, "")}},
+            }}))
+        ''')
+        spawner = SubAgentSpawner(config)
+
+        with trace_scope("agent-trace-id"):
+            result = await spawner.spawn(
+                command=[sys.executable, script],
+                task="trace propagation",
+            )
+        assert result.status == "success"
+        assert result.data["trace"] == "agent-trace-id"
