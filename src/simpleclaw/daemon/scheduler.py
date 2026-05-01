@@ -248,17 +248,30 @@ class CronScheduler:
             guard = getattr(self._agent, "_command_guard", None) if self._agent else None
             result = await execute_recipe(recipe, command_guard=guard)
 
+            # 디버그 로그는 사용자 채널이 아닌 운영 로그로만 노출한다.
+            if result.debug_log:
+                logger.debug(
+                    "Recipe '%s' debug log:\n%s",
+                    recipe.name, result.debug_log,
+                )
+
             if self._agent and result.success:
                 prompt_output = "\n".join(
                     sr.output for sr in (result.step_results or [])
-                    if sr.output
+                    if sr.output and sr.success
                 )
                 if prompt_output:
                     return await self._agent.process_cron_message(prompt_output)
 
             succeeded = sum(1 for s in result.step_results if s.success)
             total = len(result.step_results)
-            return f"Recipe completed: {succeeded}/{total} steps succeeded"
+            base = f"Recipe completed: {succeeded}/{total} steps succeeded"
+            if result.error_summary:
+                # 사용자 노출용 요약만 덧붙인다 (debug_log는 위에서 logger로만 처리).
+                base += f"\n{result.error_summary}"
+                if result.resumable_from:
+                    base += f"\n(resume with: resume_from='{result.resumable_from}')"
+            return base
 
         elif job.action_type == ActionType.PROMPT:
             if self._agent:
