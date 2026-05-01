@@ -134,7 +134,7 @@ feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
 ```
 
 ### 규칙
-1. **`main`과 `dev`에 직접 push 금지** — 반드시 PR을 통해서만 merge
+1. **`main`과 `dev`에 직접 push 금지** — 반드시 PR을 통해서만 merge (`main`은 브랜치 보호 규칙으로 강제)
 2. **모든 작업은 feature branch에서 수행**:
    - `dev`에서 분기: `git checkout dev && git checkout -b feature/작업명`
    - 작업 완료 후 `origin`에 push: `git push -u origin feature/작업명`
@@ -143,6 +143,20 @@ feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
    - dev에서 충분히 검증된 후 PR 생성: `dev` → `main`
 4. **커밋 메시지**: 변경 사항을 명확히 요약, 한글 또는 영문
 5. **PR 생성 시**: `gh pr create`로 생성, Summary와 Test plan 포함
+
+### Merge 방식 컨벤션
+경계마다 보존해야 할 정보가 다르므로 머지 방식을 다르게 사용한다.
+
+| 경계 | 방식 | 이유 |
+|---|---|---|
+| `feature/*` → `dev` | **Squash and merge** | 기능 단위 1 커밋으로 dev 히스토리를 깔끔하게 유지 |
+| `dev` → `main` | **Create a merge commit** | 릴리스 1건 = 머지 커밋 1개 — 롤백·릴리스 추적 기준 |
+| `chore/merge-main-into-dev/*` → `dev` | **Create a merge commit** | 충돌 해소 흔적 보존 |
+
+리포지토리 정책으로 `Allow merge commits` + `Allow squash merging`만 허용하고 `Allow rebase merging`은 비활성화. 기본 머지 버튼은 Squash이므로 dev → main 시에는 드롭다운에서 **Create a merge commit**을 선택할 것.
+
+### 릴리스 자동 태깅
+`main`에 머지가 일어나면 `.github/workflows/release-tag.yml`이 calver(`vYYYY.MM.DD[.N]`) 태그와 GitHub Release를 자동 생성한다(자동 릴리스 노트 포함). 태그를 수동으로 만들 필요 없음.
 
 ## graphify 코드 분석 규칙
 
