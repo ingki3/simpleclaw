@@ -684,6 +684,9 @@ class AgentOrchestrator:
 
         logger.info("Executing skill command: %s", command)
         try:
+            # workspace 디렉토리가 삭제되었을 수 있으므로 실행 직전에 보장
+            self._workspace_dir.mkdir(parents=True, exist_ok=True)
+
             env = filter_env(passthrough=self._env_passthrough)
             env["AGENT_WORKSPACE"] = str(self._workspace_dir.resolve())
 
