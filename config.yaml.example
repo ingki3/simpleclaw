@@ -4,15 +4,20 @@ llm:
     claude:
       type: "api"
       model: "claude-sonnet-4-20250514"
-      api_key: ""  # Anthropic API 키
+      # 시크릿 참조 문법:
+      #   "env:NAME"       — OS 환경변수 NAME에서 읽기
+      #   "keyring:NAME"   — macOS Keychain / Linux Secret Service에서 읽기
+      #   "file:NAME"      — ~/.simpleclaw/secrets.enc 암호화 볼트에서 읽기
+      # 평문 값(예: "sk-...")도 동작하지만 권장하지 않음. 자세한 사항은 README 참조.
+      api_key: "keyring:claude_api_key"
     openai:
       type: "api"
       model: "gpt-4o"
-      api_key: ""  # OpenAI API 키
+      api_key: "keyring:openai_api_key"
     gemini:
       type: "api"
       model: "gemini-3-flash-preview"
-      api_key: ""  # Google AI API 키
+      api_key: "env:GOOGLE_API_KEY"
 
 agent:
   history_limit: 20
@@ -59,7 +64,8 @@ voice:
     max_text_length: 4096
 
 telegram:
-  bot_token: ""  # Telegram Bot Token (@BotFather에서 발급)
+  # Telegram Bot Token (@BotFather 발급) — 시크릿 매니저 참조 권장.
+  bot_token: "keyring:telegram_bot_token"
   whitelist:
     user_ids: []
     chat_ids: []
@@ -68,7 +74,22 @@ webhook:
   enabled: true
   host: "127.0.0.1"
   port: 8080
-  auth_token: ""  # 웹훅 인증 토큰
+  auth_token: "keyring:webhook_auth_token"  # 웹훅 인증 토큰 (시크릿 매니저 참조)
+  # BIZ-24 보안 강화 — 페이로드 크기 / Rate Limit / 동시성 cap.
+  # 공개 엔드포인트로 노출할 때는 아래 값을 워크로드에 맞게 조정한다.
+  #   max_body_size: 정상 페이로드 최대 크기(bytes). 초과 시 413.
+  #     기본 1MB는 일반 텍스트/JSON 이벤트엔 충분하며 첨부물은 별도 채널로 받는 것을 권장.
+  #   rate_limit / rate_limit_window: 한 키(인증 시 토큰, 미인증 시 IP)당 윈도우 내 허용 요청 수.
+  #     초과 시 429 + Retry-After. rate_limit=0 이면 비활성.
+  #   max_concurrent_connections: 동시에 처리 가능한 요청 수.
+  #   queue_size: 동시성 cap 초과 시 대기 가능한 요청 수. 큐 포화 시 503 + Retry-After.
+  #   alert_cooldown: 동일 비정상 패턴(연속 차단/IP 폭주/큐 포화)에 대한 알림 발신 최소 간격(초).
+  max_body_size: 1048576
+  rate_limit: 60
+  rate_limit_window: 60.0
+  max_concurrent_connections: 32
+  queue_size: 64
+  alert_cooldown: 300.0
 
 sub_agents:
   max_concurrent: 3
@@ -90,6 +111,17 @@ daemon:
     model: "gemini"
   wait_state:
     default_timeout: 3600
+  # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
+  # 일시적 네트워크/API 과부하에서 자동 복구하기 위한 기본값.
+  # max_attempts=1 이면 재시도 없음. backoff_strategy: linear | exponential.
+  # circuit_break_threshold=0 이면 누적 실패 차단 비활성.
+  # 한 스케줄 트리거의 모든 재시도가 실패하면 누적 카운터가 1 증가하고,
+  # 임계값에 도달하면 작업이 자동 비활성화되며 알림이 발송된다.
+  cron_retry:
+    max_attempts: 3
+    backoff_seconds: 60
+    backoff_strategy: "exponential"
+    circuit_break_threshold: 5
 
 persona:
   token_budget: 4096

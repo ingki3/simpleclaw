@@ -76,7 +76,9 @@ class SubAgent:
 class SubAgentResult:
     """완료된 서브에이전트의 파싱된 출력 결과.
 
-    서브에이전트 stdout의 JSON을 파싱하여 status, data, error를 구조화한다.
+    서브에이전트 stdout의 JSON을 파싱하여 status, data, error, meta를 구조화한다.
+    meta는 서브에이전트가 응답에 첨부한 임의의 메타데이터(version, agent_id 등) 또는
+    spawner가 검증 실패 시 추가하는 진단 정보(reason, raw_stdout 등)를 담는다.
     """
 
     agent_id: str
@@ -85,3 +87,4 @@ class SubAgentResult:
     error: str | None = None
     exit_code: int = 0
     execution_time: float = 0.0
+    meta: dict | None = None
