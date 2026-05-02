@@ -366,8 +366,15 @@
 
 ---
 
-## 8. 부록: admin.pen 변수 매핑
+## 8. 부록 A: admin.pen 변수 매핑 (BIZ-38)
 
 `admin.pen` 의 `Variables` 패널은 §2 토큰을 그대로 들고 있으며, 이름은 *prefix 없이* 그대로 키로 사용한다 (예: `--background`, `--font-primary`). 프론트 구현 시 동일 이름의 CSS 변수로 직결될 것을 가정한다 (Tailwind v4 `@theme` 또는 `:root`).
+
+---
+
+## 9. 부록 C: 데이터 패칭 라이브러리 결정 (BIZ-43)
+
+* **채택: SWR(2.x).** Admin UI는 단일 운영자/단일 워크스페이스이므로 글로벌 캐시·낙관적 업데이트 같은 TanStack Query의 고도 기능보다 *불러오고 재검증(stale-while-revalidate)* 모델이 잘 어울리고, 번들 풋프린트(약 4kB gzip)가 작다. 변이는 `swr/mutation`의 `useSWRMutation`으로 키별 분리.
+* 표준 진입점: `web/admin/src/lib/api/` (fetchAdmin, useAdminQuery, useAdminMutation, dryRun, useUndo). 영역별 화면은 본 모듈의 export만 사용한다.
 
 > 본 문서는 BIZ-38의 산출물이며, BIZ-39 화면 설계와 후속 구현 이슈의 *유일한 비주얼/인터랙션 진실*로 사용된다.

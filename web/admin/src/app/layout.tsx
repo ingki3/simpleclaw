@@ -12,6 +12,7 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/lib/theme";
 import { Shell } from "@/components/layout/Shell";
+import { ToastProvider } from "@/components/primitives";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,7 +29,9 @@ export default function RootLayout({
     <html lang="ko" suppressHydrationWarning>
       <body>
         <ThemeProvider>
-          <Shell>{children}</Shell>
+          <ToastProvider>
+            <Shell>{children}</Shell>
+          </ToastProvider>
         </ThemeProvider>
       </body>
     </html>
