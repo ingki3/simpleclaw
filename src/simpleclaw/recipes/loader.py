@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from simpleclaw.recipes.models import (
+    OnErrorPolicy,
     RecipeDefinition,
     RecipeParameter,
     RecipeParseError,
@@ -29,6 +30,28 @@ from simpleclaw.recipes.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_on_error(value: object, source: Path) -> OnErrorPolicy | None:
+    """``on_error`` 문자열을 ``OnErrorPolicy`` 로 변환한다.
+
+    None/빈 값이면 None을 반환해 호출자가 기본값 결정 책임을 갖게 한다.
+    잘못된 값은 ``RecipeParseError`` 로 즉시 실패시킨다(YAML 오타가 정책처럼
+    런타임에서 무시되어 디버깅이 어려운 상황을 방지).
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise RecipeParseError(
+            f"'on_error' must be a string in {source}, got {type(value).__name__}"
+        )
+    try:
+        return OnErrorPolicy(value)
+    except ValueError as e:
+        valid = ", ".join(p.value for p in OnErrorPolicy)
+        raise RecipeParseError(
+            f"Invalid on_error '{value}' in {source} (expected one of: {valid})"
+        ) from e
 
 
 def discover_recipes(recipes_dir: str | Path) -> list[RecipeDefinition]:
@@ -116,7 +139,14 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
                 step_type=step_type,
                 name=sdata.get("name", ""),
                 content=sdata.get("content", ""),
+                on_error=_parse_on_error(sdata.get("on_error"), recipe_path),
+                rollback=str(sdata.get("rollback") or ""),
             ))
+
+    # 레시피 단위 기본 실패 정책. 미지정 시 기존 동작과 동일한 ABORT.
+    default_on_error = (
+        _parse_on_error(data.get("on_error"), recipe_path) or OnErrorPolicy.ABORT
+    )
 
     return RecipeDefinition(
         name=name,
@@ -125,4 +155,5 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         steps=steps,
         instructions=data.get("instructions", ""),
         recipe_dir=str(recipe_path.parent),
+        on_error=default_on_error,
     )

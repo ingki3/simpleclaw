@@ -207,6 +207,132 @@ class TestSubAgentSpawner:
         assert result.data == {}
 
     @pytest.mark.asyncio
+    async def test_meta_propagated_from_subagent(self, config, tmp_path):
+        """서브에이전트가 응답 meta에 첨부한 정보가 SubAgentResult.meta로 전달되어야 한다."""
+        script = _write_script(tmp_path, "with_meta.py", '''
+            import json
+            print(json.dumps({
+                "status": "success",
+                "data": {"v": 1},
+                "meta": {"agent_id": "abc", "version": "1.0"},
+            }))
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="meta test",
+        )
+        assert result.status == "success"
+        assert result.meta == {"agent_id": "abc", "version": "1.0"}
+
+    @pytest.mark.asyncio
+    async def test_schema_violation_missing_status(self, config, tmp_path):
+        """status 필드가 없는 응답은 안전한 에러로 변환되어야 한다."""
+        script = _write_script(tmp_path, "no_status.py", '''
+            import json
+            print(json.dumps({"data": {"x": 1}}))
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="missing status",
+        )
+        assert result.status == "error"
+        assert result.meta is not None
+        assert result.meta["validation_failure"]["reason"] == "schema_violation"
+
+    @pytest.mark.asyncio
+    async def test_schema_violation_invalid_status(self, config, tmp_path):
+        """알 수 없는 status 값은 schema_violation으로 분류된다."""
+        script = _write_script(tmp_path, "bad_status.py", '''
+            import json
+            print(json.dumps({"status": "weird", "data": {}}))
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="invalid status",
+        )
+        assert result.status == "error"
+        assert result.meta["validation_failure"]["reason"] == "schema_violation"
+
+    @pytest.mark.asyncio
+    async def test_top_level_array_rejected(self, config, tmp_path):
+        """최상위가 객체가 아닌 응답은 거부되어야 한다."""
+        script = _write_script(tmp_path, "array.py", '''
+            import json
+            print(json.dumps([{"status": "success"}]))
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="array output",
+        )
+        assert result.status == "error"
+        assert result.meta["validation_failure"]["reason"] == "schema_violation"
+
+    @pytest.mark.asyncio
+    async def test_logical_error_response_preserved(self, config, tmp_path):
+        """exit=0이지만 status=error인 응답은 그대로 전달되어야 한다."""
+        script = _write_script(tmp_path, "logical_err.py", '''
+            import json
+            print(json.dumps({
+                "status": "error",
+                "error": {"code": "E_INPUT", "message": "bad input"},
+            }))
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="logical error",
+        )
+        assert result.status == "error"
+        assert result.exit_code == 0
+        assert "E_INPUT" in result.error
+        assert "bad input" in result.error
+
+    @pytest.mark.asyncio
+    async def test_failure_path_with_valid_json(self, config, tmp_path):
+        """exit_code != 0이지만 stdout JSON이 유효하면 그 정보를 살린다."""
+        script = _write_script(tmp_path, "exit_with_json.py", '''
+            import json, sys
+            print(json.dumps({
+                "status": "error",
+                "error": "explicit failure",
+            }))
+            sys.exit(2)
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="exit with json",
+        )
+        assert result.status == "error"
+        assert result.exit_code == 2
+        assert result.error == "explicit failure"
+
+    @pytest.mark.asyncio
+    async def test_failure_path_with_invalid_json(self, config, tmp_path):
+        """exit_code != 0이고 stdout이 비유효 JSON이면 stderr 기반 에러로 폴백한다."""
+        script = _write_script(tmp_path, "exit_invalid.py", '''
+            import sys
+            print("not json at all")
+            sys.stderr.write("crash details\\n")
+            sys.exit(3)
+        ''')
+        spawner = SubAgentSpawner(config)
+        result = await spawner.spawn(
+            command=[sys.executable, script],
+            task="exit invalid json",
+        )
+        assert result.status == "error"
+        assert result.exit_code == 3
+        assert "crash details" in result.error
+        # 검증 실패 진단 정보가 meta에 포함되어야 한다.
+        assert result.meta is not None
+        assert result.meta["validation_failure"]["reason"] == "invalid_json"
+
+    @pytest.mark.asyncio
     async def test_trace_id_propagated_to_subagent(self, config, tmp_path):
         """부모 컨텍스트의 trace_id가 SIMPLECLAW_TRACE_ID로 전달되어야 한다."""
         from simpleclaw.logging.trace_context import (

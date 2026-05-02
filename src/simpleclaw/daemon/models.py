@@ -28,6 +28,17 @@ class ExecutionStatus(Enum):
     FAILURE = "failure"
 
 
+class BackoffStrategy(Enum):
+    """재시도 백오프 전략.
+
+    LINEAR: ``backoff_seconds * attempt`` (1, 2, 3 → 60, 120, 180s)
+    EXPONENTIAL: ``backoff_seconds * (2 ** (attempt - 1))`` (1, 2, 3 → 60, 120, 240s)
+    """
+
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
+
+
 class DaemonError(Exception):
     """데몬 관련 연산의 기본 예외 클래스."""
 
@@ -48,10 +59,17 @@ class WaitStateNotFoundError(DaemonError):
 class CronJob:
     """사용자가 정의한 예약 작업.
 
-    name: 작업의 고유 식별자
-    cron_expression: 5필드 크론 표현식 (분 시 일 월 요일)
-    action_type: 실행할 액션 유형 (PROMPT 또는 RECIPE)
-    action_reference: 프롬프트 텍스트 또는 레시피 파일 경로
+    재시도 정책 필드(BIZ-19):
+    - max_attempts: 최대 실행 시도 횟수(1 = 재시도 없음). 기본 3.
+    - backoff_seconds: 첫 백오프 간격(초). 기본 60.
+    - backoff_strategy: ``linear`` | ``exponential``. 기본 exponential.
+    - circuit_break_threshold: 누적 실패 임계값. 0 이면 비활성. 기본 5.
+      한 스케줄 트리거에서 모든 재시도가 실패하면 ``consecutive_failures``가
+      1 증가하고, 임계값 이상이면 작업을 자동 비활성(circuit-break)한다.
+    - consecutive_failures: 연속 실패 카운터. 성공 시 0으로 리셋.
+
+    LLM API 자체의 재시도(별도 이슈)와 책임을 분리한다.
+    여기서는 작업 단위 실패만을 감지하고 다음 시도까지 백오프 후 재실행한다.
     """
 
     name: str
@@ -61,11 +79,20 @@ class CronJob:
     enabled: bool = True
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    max_attempts: int = 3
+    backoff_seconds: float = 60.0
+    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
+    circuit_break_threshold: int = 5
+    consecutive_failures: int = 0
 
 
 @dataclass
 class CronJobExecution:
-    """크론 작업의 단일 실행 기록."""
+    """크론 작업의 단일 실행 기록.
+
+    한 스케줄 트리거 안에서 재시도가 발생하면 시도마다 별도 레코드를 남긴다.
+    ``attempt``는 1부터 시작하며 ``max_attempts``까지 증가할 수 있다.
+    """
 
     job_name: str
     started_at: datetime = field(default_factory=datetime.now)
@@ -74,6 +101,7 @@ class CronJobExecution:
     result_summary: str = ""
     error_details: str = ""
     id: int | None = None
+    attempt: int = 1
 
 
 @dataclass

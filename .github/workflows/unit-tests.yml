@@ -1,0 +1,35 @@
+name: Unit Tests
+
+# 모든 PR과 main/dev 브랜치 push에서 단위 테스트를 실행한다.
+# DB 마이그레이션 적용/롤백 테스트(tests/unit/test_db_migrations.py)도 함께 검증된다.
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install runtime + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run unit tests (incl. DB migration apply/rollback)
+        run: pytest tests/unit/ -v
+
+      - name: Verify DB migration tests specifically
+        # 명시적으로 마이그레이션 테스트만 다시 실행하여 실패 시 즉시 가시화.
+        run: pytest tests/unit/test_db_migrations.py -v

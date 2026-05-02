@@ -2,6 +2,7 @@
 
 from simpleclaw.skills.models import (
     MCPConnectionError,
+    RetryPolicy,
     SkillDefinition,
     SkillError,
     SkillExecutionError,
@@ -47,6 +48,7 @@ def list_all_tools(
 __all__ = [
     "MCPConnectionError",
     "MCPManager",
+    "RetryPolicy",
     "SkillDefinition",
     "SkillError",
     "SkillExecutionError",
