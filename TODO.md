@@ -21,6 +21,7 @@
 - [x] **BIZ-15: DB 스키마 마이그레이션 시스템 구축** — `simpleclaw.db.MigrationRunner`(파일 기반 SQL, schema_version 메타 테이블, 베이스라인 흡수, 적용 전 자동 백업·실패 시 원복), conversations/daemon DB의 베이스라인 0001 마이그레이션 도입, `ConversationStore`/`DaemonStore` `__init__`이 부팅 시 자동 적용, 단위 테스트 16개(`tests/unit/test_db_migrations.py`) + GitHub Actions `unit-tests.yml` CI 워크플로 (2026-05-01)
 - [x] **BIZ-18: `.env` / API 키 시크릿 매니저 통합** — `simpleclaw.security.secrets`(환경변수/OS keyring/Fernet 암호화 파일 백엔드, ``"scheme:name"`` 참조 문법, 마스터 키 자동 생성 0600 권한·`SIMPLECLAW_MASTER_KEY` 우선), `config.py`의 `api_key`/`bot_token`/`auth_token` 자동 해소(레거시 평문 호환 + 경고 로그), 마이그레이션 스크립트(`scripts/migrate_secrets.py`: `.env`→keyring/file 일괄 이전 + config.yaml 자동 치환), `keyring`/`cryptography` 의존성 추가, `config.yaml.example`/README 가이드 갱신, 단위 테스트 41개(`tests/unit/test_secrets.py`) (2026-05-01)
 - [x] **BIZ-24: Webhook 페이로드 크기 제한 및 Rate Limiting** — `WebhookServer`에 `max_body_size`(`Content-Length` 사전 검사 + aiohttp `client_max_size` 이중 안전망, 초과 시 413), 토큰/IP별 슬라이딩 윈도우 rate limit(0이면 비활성, 초과 시 429 + `Retry-After`), `max_concurrent_connections` + `queue_size` 동시성 게이트(포화 시 503 + `Retry-After`) 도입. 비정상 트래픽(연속 차단·단일 IP 폭주·큐 포화)에 대한 알림 콜백 + 쿨다운, `WebhookMetrics` 스냅샷, 차단 사유 `AccessAttempt` 기록 + 선택적 `StructuredLogger` 연계(`webhook_block`/`webhook_alert`). `config.yaml.example`에 신규 키와 튜닝 가이드, 단위 테스트 4종(413/429/503/알림 경로) 추가 (2026-05-01)
+- [x] **BIZ-21: 스킬 실행 실패 시 자동 재시도 정책** — `RetryPolicy`(SKILL.md 프론트매터 `retry:` 블록에서 파싱), 멱등성 가드(`idempotent=True` 필요), 지수 백오프(`initial`/`factor`/`max_backoff_seconds`), 타임아웃 재시도 옵트인(`retry_on_timeout`), `execute_skill`에 재시도 루프 + `SkillResult.attempts`, `MetricsCollector`에 `skill_retries`/`skill_retry_recovered`/`skill_retry_exhausted` 카운터 (2026-05-01)
 
 ---
 
@@ -41,7 +42,6 @@
 
 ### 스킬
 - [ ] us-market-expert 스킬 재구축 — 실행 스크립트 추가 (현재 삭제됨)
-- [ ] 스킬 실행 실패 시 자동 재시도 로직
 
 ### 레시피
 - [ ] 레시피 목록 조회 명령어 (`/recipes`) — 등록된 레시피 목록 확인
