@@ -158,13 +158,18 @@ def _cron_disable(name: str, cron_scheduler: CronScheduler) -> str:
 # /recipe-name commands
 # ------------------------------------------------------------------
 
-async def try_recipe_command(text: str, react_loop_fn) -> str | None:
+async def try_recipe_command(
+    text: str, react_loop_fn
+) -> tuple[str, str] | None:
     """텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.
 
     ``react_loop_fn``은 오케스트레이터의 바인딩된 ``_react_loop`` 메서드이다.
 
     Returns:
-        레시피 실행 결과 텍스트. 레시피 명령이 아니면 *None*.
+        ``(result_text, recipe_name)`` 튜플. 레시피 명령이 아니면 *None*.
+        ``recipe_name`` 은 BIZ-76 에서 추가됨 — 호출자(orchestrator) 가
+        ``ConversationMessage.channel`` 에 ``"recipe:<name>"`` 형식으로
+        붙여 dreaming 자동 트리거 필터가 잡을 수 있게 한다.
     """
     stripped = text.strip()
     if not stripped.startswith("/"):
@@ -204,6 +209,10 @@ async def try_recipe_command(text: str, react_loop_fn) -> str | None:
         from simpleclaw.recipes.executor import render_instructions
         rendered = render_instructions(recipe.instructions, variables=params)
 
-        return await react_loop_fn(rendered)
+        result = await react_loop_fn(rendered)
+        return result, cmd_name
 
-    return f"레시피 '{cmd_name}'에 instructions가 정의되어 있지 않습니다."
+    return (
+        f"레시피 '{cmd_name}'에 instructions가 정의되어 있지 않습니다.",
+        cmd_name,
+    )

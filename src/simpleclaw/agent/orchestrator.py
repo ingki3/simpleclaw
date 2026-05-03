@@ -30,7 +30,12 @@ from simpleclaw.llm.router import create_router
 from simpleclaw.logging.trace_context import trace_scope
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.embedding_service import EmbeddingService
-from simpleclaw.memory.models import ConversationMessage, MessageRole
+from simpleclaw.memory.models import (
+    CHANNEL_CRON_ADMIN,
+    CHANNEL_RECIPE_PREFIX,
+    ConversationMessage,
+    MessageRole,
+)
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.security import (
@@ -236,16 +241,30 @@ class AgentOrchestrator:
             # /cron 명령어 확인
             cron_result = try_cron_command(text, self._cron_scheduler)
             if cron_result is not None:
-                self._save_turn(text, cron_result)
+                # BIZ-76 — cron 관리 명령(/cron list 등) 응답은 자동 트리거
+                # 카테고리로 묶어 dreaming 의 사용자 관심 추론에서 분리한다.
+                self._save_turn(
+                    text, cron_result, channel=CHANNEL_CRON_ADMIN,
+                )
                 return cron_result
 
             # /recipe-name 명령어 확인 (e.g. /ai-report)
-            recipe_result = await try_recipe_command(text, self._tool_loop)
-            if recipe_result is not None:
-                self._save_turn(text, recipe_result)
+            recipe_outcome = await try_recipe_command(text, self._tool_loop)
+            if recipe_outcome is not None:
+                recipe_result, recipe_name = recipe_outcome
+                # BIZ-76 — 레시피 산출물은 사용자 발화가 아니라 자동/명령 트리거
+                # 결과이므로 ``recipe:<name>`` 채널로 태깅한다. dreaming 코퍼스
+                # 로더가 이 prefix 를 보고 분리 또는 가중치 다운한다.
+                self._save_turn(
+                    text,
+                    recipe_result,
+                    channel=f"{CHANNEL_RECIPE_PREFIX}{recipe_name}",
+                )
                 return recipe_result
 
             response_text = await self._tool_loop(text)
+            # 일반 사용자 발화는 채널을 명시하지 않는다(=organic). 이후 BIZ-76
+            # 후속에서 telegram/webhook/console 같은 origin 메타로 확장될 수 있음.
             self._save_turn(text, response_text)
             return response_text
 
@@ -253,19 +272,29 @@ class AgentOrchestrator:
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
     # ------------------------------------------------------------------
 
-    def _save_turn(self, user_text: str, assistant_text: str) -> None:
+    def _save_turn(
+        self,
+        user_text: str,
+        assistant_text: str,
+        *,
+        channel: str | None = None,
+    ) -> None:
         """user/assistant 메시지 한 쌍을 저장하고, RAG가 켜져 있으면 임베딩을 백그라운드 부착한다.
 
         설계 결정:
         - 임베딩은 fire-and-forget 비동기로 처리하여 응답 레이턴시에 영향을 주지 않는다.
         - 동일 턴 내 user → assistant 순서로 저장(시간순 보존).
         - RAG가 비활성이거나 임베딩 서비스가 None이면 저장만 수행한다.
+
+        BIZ-76: ``channel`` 인자가 주어지면 같은 턴의 user/assistant 두 메시지 모두에
+        동일 채널을 부착한다. cron-admin / recipe:<name> 같은 자동·명령 트리거 출처를
+        이후 dreaming 코퍼스 로더가 분리하거나 가중치 다운하기 위한 메타이다.
         """
         user_id = self._store.add_message(ConversationMessage(
-            role=MessageRole.USER, content=user_text,
+            role=MessageRole.USER, content=user_text, channel=channel,
         ))
         asst_id = self._store.add_message(ConversationMessage(
-            role=MessageRole.ASSISTANT, content=assistant_text,
+            role=MessageRole.ASSISTANT, content=assistant_text, channel=channel,
         ))
         self._schedule_embedding(user_id, user_text)
         self._schedule_embedding(asst_id, assistant_text)
