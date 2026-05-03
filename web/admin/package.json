@@ -12,7 +12,8 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lhci": "npx --yes @lhci/cli@0.14.x autorun"
   },
   "dependencies": {
     "next": "^16.0.0",
