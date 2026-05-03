@@ -37,7 +37,7 @@ export function Tabs<T extends string = string>({
       role="tablist"
       aria-label={ariaLabel}
       className={cn(
-        "inline-flex items-center gap-1 rounded-[--radius-m] border border-[--border] bg-[--card] p-1",
+        "inline-flex items-center gap-1 rounded-(--radius-m) border border-(--border) bg-(--card) p-1",
         className,
       )}
     >
@@ -52,20 +52,20 @@ export function Tabs<T extends string = string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onValueChange(item.value)}
             className={cn(
-              "inline-flex items-center gap-2 rounded-[--radius-sm] px-3 py-1.5 text-xs font-medium transition-colors",
+              "inline-flex items-center gap-2 rounded-(--radius-sm) px-3 py-1.5 text-xs font-medium transition-colors",
               selected
-                ? "bg-[--primary] text-[--primary-foreground]"
-                : "text-[--muted-foreground] hover:bg-[--surface]",
+                ? "bg-(--primary) text-(--primary-foreground)"
+                : "text-(--muted-foreground) hover:bg-(--surface)",
             )}
           >
             <span>{item.label}</span>
             {typeof item.count === "number" ? (
               <span
                 className={cn(
-                  "rounded-[--radius-pill] px-1.5 py-0.5 text-[10px]",
+                  "rounded-(--radius-pill) px-1.5 py-0.5 text-[10px]",
                   selected
-                    ? "bg-[--primary-foreground]/15 text-[--primary-foreground]"
-                    : "bg-[--surface] text-[--muted-foreground]",
+                    ? "bg-(--primary-foreground)/15 text-(--primary-foreground)"
+                    : "bg-(--surface) text-(--muted-foreground)",
                 )}
               >
                 {item.count}

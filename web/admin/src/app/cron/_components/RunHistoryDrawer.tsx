@@ -71,9 +71,9 @@ export function RunHistoryDrawer({
       }
     >
       {!job ? null : runs === null ? (
-        <p className="text-sm text-[--muted-foreground]">불러오는 중…</p>
+        <p className="text-sm text-(--muted-foreground)">불러오는 중…</p>
       ) : runs.length === 0 ? (
-        <p className="text-sm text-[--muted-foreground]">
+        <p className="text-sm text-(--muted-foreground)">
           아직 실행된 적이 없어요. ``Run now`` 로 한 번 실행해 결과를 확인해 보세요.
         </p>
       ) : (
@@ -83,12 +83,12 @@ export function RunHistoryDrawer({
             return (
               <li
                 key={run.id}
-                className="rounded-[--radius-m] border border-[--border]"
+                className="rounded-(--radius-m) border border-(--border)"
               >
                 <button
                   type="button"
                   onClick={() => setExpanded(open ? null : run.id)}
-                  className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-[--surface]"
+                  className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-(--surface)"
                   aria-expanded={open}
                 >
                   {open ? (
@@ -99,17 +99,17 @@ export function RunHistoryDrawer({
                   <StatusPill tone={TONE[run.status] ?? "neutral"}>
                     {LABEL[run.status] ?? run.status}
                   </StatusPill>
-                  <span className="font-mono text-xs text-[--muted-foreground]">
+                  <span className="font-mono text-xs text-(--muted-foreground)">
                     {formatTimestamp(run.startedAt)}
                   </span>
                   {run.attempt > 1 ? (
-                    <span className="text-xs text-[--muted-foreground]">
+                    <span className="text-xs text-(--muted-foreground)">
                       재시도 #{run.attempt}
                     </span>
                   ) : null}
                 </button>
                 {open ? (
-                  <div className="border-t border-[--border] bg-[--surface] px-3 py-3 text-xs">
+                  <div className="border-t border-(--border) bg-(--surface) px-3 py-3 text-xs">
                     {run.resultSummary ? (
                       <Section title="결과">
                         <Pre>{run.resultSummary}</Pre>
@@ -121,7 +121,7 @@ export function RunHistoryDrawer({
                       </Section>
                     ) : null}
                     {!run.resultSummary && !run.errorDetails ? (
-                      <p className="text-[--muted-foreground]">스냅샷이 비어 있어요.</p>
+                      <p className="text-(--muted-foreground)">스냅샷이 비어 있어요.</p>
                     ) : null}
                   </div>
                 ) : null}
@@ -137,7 +137,7 @@ export function RunHistoryDrawer({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-2 last:mb-0">
-      <div className="mb-1 text-[--muted-foreground]">{title}</div>
+      <div className="mb-1 text-(--muted-foreground)">{title}</div>
       {children}
     </div>
   );
@@ -153,8 +153,8 @@ function Pre({
   return (
     <pre
       className={
-        "overflow-x-auto whitespace-pre-wrap break-words rounded-[--radius-sm] bg-[--card] px-2 py-2 font-mono text-[--foreground]" +
-        (tone === "error" ? " text-[--color-error]" : "")
+        "overflow-x-auto whitespace-pre-wrap break-words rounded-(--radius-sm) bg-(--card) px-2 py-2 font-mono text-(--foreground)" +
+        (tone === "error" ? " text-(--color-error)" : "")
       }
     >
       {children}

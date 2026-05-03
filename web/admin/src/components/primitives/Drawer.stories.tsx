@@ -15,7 +15,7 @@ type Story = StoryObj<typeof Drawer>;
 function Demo({ args }: { args: Partial<React.ComponentProps<typeof Drawer>> }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background] p-10">
+    <div className="grid min-h-screen place-items-center bg-(--background) p-10">
       <Button onClick={() => setOpen(true)}>Drawer 열기</Button>
       <Drawer
         {...(args as React.ComponentProps<typeof Drawer>)}
@@ -27,10 +27,10 @@ function Demo({ args }: { args: Partial<React.ComponentProps<typeof Drawer>> }) 
           </Button>
         }
       >
-        <p className="text-sm text-[--foreground]">
+        <p className="text-sm text-(--foreground)">
           시크릿/감사/트레이스 같은 *보조 컨텐츠*를 메인을 가리지 않고 띄울 때 사용합니다.
         </p>
-        <ul className="mt-4 space-y-2 text-sm text-[--muted-foreground]">
+        <ul className="mt-4 space-y-2 text-sm text-(--muted-foreground)">
           <li>· 변경 시각: 12:34:56</li>
           <li>· trace_id: 01HW…</li>
           <li>· 영향 모듈: webhook, channels</li>

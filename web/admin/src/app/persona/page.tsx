@@ -318,12 +318,12 @@ export default function PersonaPage() {
 
   if (loading) {
     return (
-      <div className="text-sm text-[--muted-foreground]">불러오는 중…</div>
+      <div className="text-sm text-(--muted-foreground)">불러오는 중…</div>
     );
   }
   if (error || !files) {
     return (
-      <div className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] px-4 py-3 text-sm">
+      <div className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) px-4 py-3 text-sm">
         페르소나 파일을 불러오지 못했습니다: {error}
       </div>
     );
@@ -337,10 +337,10 @@ export default function PersonaPage() {
       {/* 헤더 */}
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-[--foreground-strong]">
+          <h1 className="text-xl font-semibold text-(--foreground-strong)">
             페르소나
           </h1>
-          <p className="mt-1 text-sm text-[--muted-foreground]">
+          <p className="mt-1 text-sm text-(--muted-foreground)">
             SOUL · AGENT · USER · MEMORY 4개 파일을 편집합니다. 저장 즉시
             <span className="ml-1 font-medium">♻ hot-reload</span>되어 다음
             메시지부터 반영돼요.
@@ -368,7 +368,7 @@ export default function PersonaPage() {
       <nav
         role="tablist"
         aria-label="페르소나 파일"
-        className="flex items-center gap-1 border-b border-[--border]"
+        className="flex items-center gap-1 border-b border-(--border)"
       >
         {TABS.map((t) => {
           const active = t.type === activeTab;
@@ -384,15 +384,15 @@ export default function PersonaPage() {
               className={cn(
                 "-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "border-[--primary] text-[--foreground-strong]"
-                  : "border-transparent text-[--muted-foreground] hover:text-[--foreground]",
+                  ? "border-(--primary) text-(--foreground-strong)"
+                  : "border-transparent text-(--muted-foreground) hover:text-(--foreground)",
               )}
             >
               <span>{t.label}</span>
               {dirty ? (
                 <span
                   aria-label="저장되지 않은 변경"
-                  className="inline-block h-1.5 w-1.5 rounded-[--radius-pill] bg-[--color-warning]"
+                  className="inline-block h-1.5 w-1.5 rounded-(--radius-pill) bg-(--color-warning)"
                 />
               ) : null}
               <Badge
@@ -409,7 +409,7 @@ export default function PersonaPage() {
       {overBudget ? (
         <div
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] px-3 py-2 text-xs text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) px-3 py-2 text-xs text-(--color-error)"
         >
           토큰 합산이 한도({tokenBudget})를 초과했습니다. 저장은 가능하지만
           어셈블 시 MEMORY → USER 순으로 절삭됩니다.
@@ -417,7 +417,7 @@ export default function PersonaPage() {
       ) : null}
 
       {/* 메타 + 액션 */}
-      <div className="flex items-center justify-between text-xs text-[--muted-foreground]">
+      <div className="flex items-center justify-between text-xs text-(--muted-foreground)">
         <div className="flex items-center gap-3">
           <span className="font-mono">{activeMeta.filename}</span>
           <span>
@@ -442,7 +442,7 @@ export default function PersonaPage() {
       {/* 에디터 + 미리보기 (좌/우 분할) */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-[--muted-foreground]">
+          <div className="text-xs font-medium uppercase tracking-wide text-(--muted-foreground)">
             편집
           </div>
           <textarea
@@ -452,30 +452,30 @@ export default function PersonaPage() {
             }
             spellCheck={false}
             className={cn(
-              "min-h-[480px] w-full resize-y rounded-[--radius-m] border border-[--border] bg-[--card] p-3 font-mono text-sm leading-6 text-[--foreground] outline-none focus:border-[--primary]",
+              "min-h-[480px] w-full resize-y rounded-(--radius-m) border border-(--border) bg-(--card) p-3 font-mono text-sm leading-6 text-(--foreground) outline-none focus:border-(--primary)",
             )}
             placeholder={`${activeTabDef.filename} 본문을 작성하세요…`}
             aria-label={`${activeTabDef.filename} 편집`}
           />
         </div>
         <div className="flex flex-col gap-2">
-          <div className="text-xs font-medium uppercase tracking-wide text-[--muted-foreground]">
+          <div className="text-xs font-medium uppercase tracking-wide text-(--muted-foreground)">
             미리보기
           </div>
-          <div className="min-h-[480px] rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 overflow-auto">
+          <div className="min-h-[480px] rounded-(--radius-m) border border-(--border) bg-(--surface) p-4 overflow-auto">
             <MarkdownPreview source={currentDraft} />
           </div>
         </div>
       </div>
 
       {/* 하단 액션 바 */}
-      <div className="sticky bottom-0 -mx-8 mt-2 flex items-center justify-between gap-3 border-t border-[--border] bg-[--background] px-8 py-3">
-        <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+      <div className="sticky bottom-0 -mx-8 mt-2 flex items-center justify-between gap-3 border-t border-(--border) bg-(--background) px-8 py-3">
+        <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
           <span
             aria-hidden
             className={cn(
-              "inline-block h-2 w-2 rounded-[--radius-pill]",
-              isCurrentDirty ? "bg-[--color-warning]" : "bg-[--muted-foreground]",
+              "inline-block h-2 w-2 rounded-(--radius-pill)",
+              isCurrentDirty ? "bg-(--color-warning)" : "bg-(--muted-foreground)",
             )}
           />
           <span>
@@ -523,16 +523,16 @@ export default function PersonaPage() {
             if (e.target === e.currentTarget) setResolvePreview(null);
           }}
         >
-          <div className="flex max-h-[80vh] w-full max-w-3xl flex-col rounded-[--radius-l] border border-[--border] bg-[--card] shadow-[--shadow-l]">
-            <header className="flex items-center justify-between border-b border-[--border] px-5 py-3">
+          <div className="flex max-h-[80vh] w-full max-w-3xl flex-col rounded-(--radius-l) border border-(--border) bg-(--card) shadow-(--shadow-l)">
+            <header className="flex items-center justify-between border-b border-(--border) px-5 py-3">
               <div>
                 <h2
                   id="resolver-title"
-                  className="text-base font-semibold text-[--foreground-strong]"
+                  className="text-base font-semibold text-(--foreground-strong)"
                 >
                   Resolver 미리보기 (어셈블된 system prompt)
                 </h2>
-                <div className="mt-1 flex items-center gap-2 text-xs text-[--muted-foreground]">
+                <div className="mt-1 flex items-center gap-2 text-xs text-(--muted-foreground)">
                   <Badge
                     tone={
                       resolvePreview.tokenCount > resolvePreview.tokenBudget
@@ -551,12 +551,12 @@ export default function PersonaPage() {
                 type="button"
                 aria-label="닫기"
                 onClick={() => setResolvePreview(null)}
-                className="rounded-[--radius-sm] p-1 text-[--muted-foreground] hover:bg-[--surface]"
+                className="rounded-(--radius-sm) p-1 text-(--muted-foreground) hover:bg-(--surface)"
               >
                 <X size={16} aria-hidden />
               </button>
             </header>
-            <pre className="overflow-auto px-5 py-4 font-mono text-xs leading-5 text-[--foreground]">
+            <pre className="overflow-auto px-5 py-4 font-mono text-xs leading-5 text-(--foreground)">
               {resolvePreview.assembledText || "(빈 결과)"}
             </pre>
           </div>
@@ -574,14 +574,14 @@ export default function PersonaPage() {
             if (e.target === e.currentTarget) setPendingTab(null);
           }}
         >
-          <div className="w-full max-w-md rounded-[--radius-l] border border-[--border] bg-[--card] p-6 shadow-[--shadow-l]">
+          <div className="w-full max-w-md rounded-(--radius-l) border border-(--border) bg-(--card) p-6 shadow-(--shadow-l)">
             <h2
               id="discard-title"
-              className="text-base font-semibold text-[--foreground-strong]"
+              className="text-base font-semibold text-(--foreground-strong)"
             >
               저장하지 않은 변경이 있어요
             </h2>
-            <p className="mt-2 text-sm text-[--muted-foreground]">
+            <p className="mt-2 text-sm text-(--muted-foreground)">
               <span className="font-mono">{activeTabDef.filename}</span>의 변경
               사항이 저장되지 않았습니다. 다른 탭으로 이동하면 변경 사항이
               사라집니다.
@@ -639,14 +639,14 @@ function TokenSummary({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-[--radius-m] border px-3 py-2 text-xs",
+        "flex items-center gap-2 rounded-(--radius-m) border px-3 py-2 text-xs",
         over
-          ? "border-[--color-error] bg-[--color-error-bg] text-[--color-error]"
-          : "border-[--border] bg-[--card] text-[--muted-foreground]",
+          ? "border-(--color-error) bg-(--color-error-bg) text-(--color-error)"
+          : "border-(--border) bg-(--card) text-(--muted-foreground)",
       )}
       title="합산 토큰 (chars/4 근사 — 백엔드 tiktoken 연동 예정)"
     >
-      <span className="font-medium text-[--foreground]">합산</span>
+      <span className="font-medium text-(--foreground)">합산</span>
       <span className="font-mono">
         {total.toLocaleString()} / {budget.toLocaleString()}
       </span>

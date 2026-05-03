@@ -143,7 +143,7 @@ export function SkillDetailDrawer({
               <Badge tone="info">사용자 호출 가능</Badge>
             ) : null}
             {skill.argument_hint ? (
-              <span className="text-xs text-[--muted-foreground]">
+              <span className="text-xs text-(--muted-foreground)">
                 arg: <code className="font-mono">{skill.argument_hint}</code>
               </span>
             ) : null}
@@ -151,21 +151,21 @@ export function SkillDetailDrawer({
 
           {/* SKILL.md 미리보기 */}
           <section className="flex flex-col gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-(--muted-foreground)">
               SKILL.md
             </h3>
-            <pre className="max-h-[280px] overflow-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]">
+            <pre className="max-h-[280px] overflow-auto rounded-(--radius-m) border border-(--border) bg-(--surface) p-4 font-mono text-xs leading-relaxed text-(--foreground)">
               {skill.skill_md}
             </pre>
           </section>
 
           {/* 재시도 정책 편집 */}
           <section className="flex flex-col gap-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-(--muted-foreground)">
               재시도 정책
             </h3>
             <div className="grid grid-cols-2 gap-3">
-              <label className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
+              <label className="flex flex-col gap-1 text-xs text-(--muted-foreground)">
                 최대 시도 횟수
                 <Input
                   type="number"
@@ -180,7 +180,7 @@ export function SkillDetailDrawer({
                   }
                 />
               </label>
-              <label className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
+              <label className="flex flex-col gap-1 text-xs text-(--muted-foreground)">
                 백오프 (초)
                 <Input
                   type="number"
@@ -198,7 +198,7 @@ export function SkillDetailDrawer({
                   }
                 />
               </label>
-              <label className="col-span-2 flex flex-col gap-1 text-xs text-[--muted-foreground]">
+              <label className="col-span-2 flex flex-col gap-1 text-xs text-(--muted-foreground)">
                 백오프 전략
                 <select
                   value={policy.backoff_strategy}
@@ -209,7 +209,7 @@ export function SkillDetailDrawer({
                         .value as RetryPolicy["backoff_strategy"],
                     })
                   }
-                  className="w-full rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] outline-none focus:border-[--primary]"
+                  className="w-full rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) outline-none focus:border-(--primary)"
                 >
                   {BACKOFF_OPTIONS.map((opt) => (
                     <option key={opt} value={opt}>
@@ -219,7 +219,7 @@ export function SkillDetailDrawer({
                 </select>
               </label>
             </div>
-            <p className="text-[11px] text-[--muted-foreground]">
+            <p className="text-[11px] text-(--muted-foreground)">
               재시도는 BIZ-21에서 도입된 정책과 동일한 의미입니다. ``none``은 즉시 1회만 시도.
             </p>
           </section>
@@ -227,15 +227,15 @@ export function SkillDetailDrawer({
           {/* 실행 로그 (가상 스크롤) */}
           <section className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-(--muted-foreground)">
                 실행 로그 (최근 20)
               </h3>
               {runsLoading ? (
-                <span className="text-[11px] text-[--muted-foreground]">
+                <span className="text-[11px] text-(--muted-foreground)">
                   불러오는 중…
                 </span>
               ) : (
-                <span className="text-[11px] text-[--muted-foreground]">
+                <span className="text-[11px] text-(--muted-foreground)">
                   {runs.length}건
                 </span>
               )}
@@ -247,29 +247,29 @@ export function SkillDetailDrawer({
               getKey={(r) => r.id}
               emptyState={
                 <div className="text-center">
-                  <p className="font-medium text-[--foreground-strong]">
+                  <p className="font-medium text-(--foreground-strong)">
                     아직 실행 이력이 없어요
                   </p>
-                  <p className="mt-1 text-xs text-[--muted-foreground]">
+                  <p className="mt-1 text-xs text-(--muted-foreground)">
                     스킬이 첫 호출되면 여기에 결과가 쌓입니다.
                   </p>
                 </div>
               }
               renderRow={(run) => (
-                <div className="flex h-full items-center gap-3 border-b border-[--border] px-3 text-xs last:border-b-0">
+                <div className="flex h-full items-center gap-3 border-b border-(--border) px-3 text-xs last:border-b-0">
                   <StatusPill tone={STATUS_TONE[run.status]}>
                     {run.status}
                   </StatusPill>
-                  <span className="w-20 shrink-0 text-[--muted-foreground]">
+                  <span className="w-20 shrink-0 text-(--muted-foreground)">
                     {formatRelative(run.started_at)}
                   </span>
                   <code
-                    className="min-w-0 flex-1 truncate font-mono text-[--foreground]"
+                    className="min-w-0 flex-1 truncate font-mono text-(--foreground)"
                     title={run.command}
                   >
                     {run.command}
                   </code>
-                  <span className="shrink-0 text-[--muted-foreground]">
+                  <span className="shrink-0 text-(--muted-foreground)">
                     {Math.round(run.duration_ms)}ms
                   </span>
                   {run.attempt > 1 ? (

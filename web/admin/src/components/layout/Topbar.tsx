@@ -30,10 +30,10 @@ const HEALTH_DOTS = [
 ];
 
 const STATUS_CLASS: Record<"ok" | "warn" | "error" | "unknown", string> = {
-  ok: "bg-[--color-success]",
-  warn: "bg-[--color-warning]",
-  error: "bg-[--color-error]",
-  unknown: "bg-[--muted-foreground]",
+  ok: "bg-(--color-success)",
+  warn: "bg-(--color-warning)",
+  error: "bg-(--color-error)",
+  unknown: "bg-(--muted-foreground)",
 };
 
 export function Topbar() {
@@ -56,9 +56,9 @@ export function Topbar() {
   }, []);
 
   return (
-    <header className="flex h-16 items-center gap-4 border-b border-[--border] bg-[--background] px-8">
+    <header className="flex h-16 items-center gap-4 border-b border-(--border) bg-(--background) px-8">
       {/* 좌: 페이지 타이틀 */}
-      <h1 className="text-xl font-semibold text-[--foreground-strong]">
+      <h1 className="text-xl font-semibold text-(--foreground-strong)">
         {current?.label ?? "SimpleClaw"}
       </h1>
 
@@ -69,13 +69,13 @@ export function Topbar() {
           {HEALTH_DOTS.map((d) => (
             <li
               key={d.key}
-              className="flex items-center gap-1.5 rounded-[--radius-pill] bg-[--card] px-2 py-1 text-xs text-[--muted-foreground]"
+              className="flex items-center gap-1.5 rounded-(--radius-pill) bg-(--card) px-2 py-1 text-xs text-(--muted-foreground)"
               title={`${d.label}: 정상`}
             >
               <span
                 aria-hidden
                 className={cn(
-                  "inline-block h-1.5 w-1.5 rounded-[--radius-pill]",
+                  "inline-block h-1.5 w-1.5 rounded-(--radius-pill)",
                   STATUS_CLASS[d.status],
                 )}
               />
@@ -88,28 +88,28 @@ export function Topbar() {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="flex items-center gap-2 rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-1.5 text-xs text-[--muted-foreground] transition-colors hover:bg-[--surface]"
+          className="flex items-center gap-2 rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-1.5 text-xs text-(--muted-foreground) transition-colors hover:bg-(--surface)"
           aria-label="검색·이동 — 명령 팔레트 열기"
         >
           <Search size={14} aria-hidden />
           <span>검색·이동</span>
-          <kbd className="rounded-[--radius-sm] border border-[--border] bg-[--background] px-1.5 py-0.5 font-mono text-[10px]">
+          <kbd className="rounded-(--radius-sm) border border-(--border) bg-(--background) px-1.5 py-0.5 font-mono text-[10px]">
             ⌘K
           </kbd>
         </button>
 
         {/* 환경 pill — 1차 스캐폴딩이므로 local 고정 */}
-        <span className="rounded-[--radius-pill] border border-[--border] bg-[--card] px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-[--muted-foreground]">
+        <span className="rounded-(--radius-pill) border border-(--border) bg-(--card) px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-(--muted-foreground)">
           local
         </span>
 
         <ThemeToggle />
 
         {/* Actor pill — 단일 운영자 가정 */}
-        <span className="flex items-center gap-2 rounded-[--radius-pill] border border-[--border] bg-[--card] px-2.5 py-1 text-xs text-[--foreground]">
+        <span className="flex items-center gap-2 rounded-(--radius-pill) border border-(--border) bg-(--card) px-2.5 py-1 text-xs text-(--foreground)">
           <span
             aria-hidden
-            className="grid h-5 w-5 place-items-center rounded-[--radius-pill] bg-[--primary] text-[10px] font-semibold text-[--primary-foreground]"
+            className="grid h-5 w-5 place-items-center rounded-(--radius-pill) bg-(--primary) text-[10px] font-semibold text-(--primary-foreground)"
           >
             S
           </span>
@@ -144,7 +144,7 @@ function ThemeToggle() {
       onClick={() => setMode(next[mode])}
       aria-label={`테마: ${label} (클릭으로 전환)`}
       title={`테마: ${label}`}
-      className="grid h-8 w-8 place-items-center rounded-[--radius-m] border border-[--border] bg-[--card] text-[--foreground] transition-colors hover:bg-[--surface]"
+      className="grid h-8 w-8 place-items-center rounded-(--radius-m) border border-(--border) bg-(--card) text-(--foreground) transition-colors hover:bg-(--surface)"
     >
       <Icon size={16} aria-hidden />
     </button>

@@ -205,13 +205,13 @@ export function CommandPalette({
       <div
         // 내부 클릭은 모달 유지를 위해 propagate 방지.
         onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-xl flex-col overflow-hidden rounded-[--radius-l] border border-[--border] bg-[--card-elevated] shadow-[--shadow-l]"
+        className="flex w-full max-w-xl flex-col overflow-hidden rounded-(--radius-l) border border-(--border) bg-(--card-elevated) shadow-(--shadow-l)"
       >
-        <div className="flex items-center gap-3 border-b border-[--border] px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-(--border) px-4 py-3">
           <Search
             size={16}
             aria-hidden
-            className="text-[--muted-foreground]"
+            className="text-(--muted-foreground)"
           />
           <input
             ref={inputRef}
@@ -219,22 +219,22 @@ export function CommandPalette({
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKey}
             placeholder="화면, 설정 키, 시크릿 이름…"
-            className="flex-1 bg-transparent text-sm text-[--foreground] placeholder:text-[--placeholder] outline-none"
+            className="flex-1 bg-transparent text-sm text-(--foreground) placeholder:text-(--placeholder) outline-none"
             aria-label="명령 검색"
           />
-          <kbd className="rounded-[--radius-sm] border border-[--border] bg-[--background] px-1.5 py-0.5 font-mono text-[10px] text-[--muted-foreground]">
+          <kbd className="rounded-(--radius-sm) border border-(--border) bg-(--background) px-1.5 py-0.5 font-mono text-[10px] text-(--muted-foreground)">
             Esc
           </kbd>
         </div>
         <ul className="max-h-[50vh] overflow-y-auto py-1" role="listbox">
           {flatResults.length === 0 ? (
-            <li className="px-4 py-8 text-center text-sm text-[--muted-foreground]">
+            <li className="px-4 py-8 text-center text-sm text-(--muted-foreground)">
               결과가 없어요.
             </li>
           ) : (
             groups.map((g) => (
               <li key={g.kind}>
-                <div className="sticky top-0 z-10 bg-[--card-elevated] px-4 py-1.5 text-[10px] uppercase tracking-wide text-[--muted-foreground]">
+                <div className="sticky top-0 z-10 bg-(--card-elevated) px-4 py-1.5 text-[10px] uppercase tracking-wide text-(--muted-foreground)">
                   {g.label}
                 </div>
                 <ul>
@@ -248,22 +248,22 @@ export function CommandPalette({
                           onMouseEnter={() => setActiveIndex(indexInFlat)}
                           onClick={() => commit(r)}
                           className={cn(
-                            "flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-[--foreground] transition-colors",
+                            "flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-(--foreground) transition-colors",
                             active
-                              ? "bg-[--surface]"
-                              : "hover:bg-[--surface]",
+                              ? "bg-(--surface)"
+                              : "hover:bg-(--surface)",
                           )}
                         >
                           <ResultIcon r={r} />
                           <span className="flex-1 truncate">{r.label}</span>
-                          <span className="ml-auto truncate font-mono text-[11px] text-[--muted-foreground]">
+                          <span className="ml-auto truncate font-mono text-[11px] text-(--muted-foreground)">
                             {r.hint}
                           </span>
                           <ArrowRight
                             size={12}
                             aria-hidden
                             className={cn(
-                              "shrink-0 text-[--muted-foreground] transition-opacity",
+                              "shrink-0 text-(--muted-foreground) transition-opacity",
                               active ? "opacity-100" : "opacity-0",
                             )}
                           />
@@ -288,7 +288,7 @@ function ResultIcon({ r }: { r: Result }) {
       <Icon
         size={16}
         aria-hidden
-        className="shrink-0 text-[--muted-foreground]"
+        className="shrink-0 text-(--muted-foreground)"
       />
     );
   }
@@ -297,7 +297,7 @@ function ResultIcon({ r }: { r: Result }) {
       <SettingsIcon
         size={16}
         aria-hidden
-        className="shrink-0 text-[--muted-foreground]"
+        className="shrink-0 text-(--muted-foreground)"
       />
     );
   }
@@ -305,7 +305,7 @@ function ResultIcon({ r }: { r: Result }) {
     <KeyRound
       size={16}
       aria-hidden
-      className="shrink-0 text-[--muted-foreground]"
+      className="shrink-0 text-(--muted-foreground)"
     />
   );
 }

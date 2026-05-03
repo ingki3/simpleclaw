@@ -374,13 +374,13 @@ export default function ChannelsPage() {
             size={28}
             strokeWidth={1.5}
             aria-hidden
-            className="mt-1 text-[--primary]"
+            className="mt-1 text-(--primary)"
           />
           <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold text-[--foreground-strong]">
+            <h1 className="text-2xl font-semibold text-(--foreground-strong)">
               채널
             </h1>
-            <p className="text-sm text-[--muted-foreground]">
+            <p className="text-sm text-(--muted-foreground)">
               Telegram·Webhook 인입 채널의 활성 상태·시크릿·페이로드 한도를 한
               화면에서 관리합니다. 테스트 발송으로 응답 코드와 지연을 즉시
               확인할 수 있어요.
@@ -401,14 +401,14 @@ export default function ChannelsPage() {
       {error ? (
         <div
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
         >
           채널 설정을 불러오지 못했어요: {error}
         </div>
       ) : null}
 
       {loading || !tgDraft || !whDraft ? (
-        <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-6 text-sm text-[--muted-foreground]">
+        <div className="rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) p-6 text-sm text-(--muted-foreground)">
           채널 설정을 불러오는 중…
         </div>
       ) : (
@@ -577,8 +577,8 @@ function WebhookCard({
       <div className="flex flex-col gap-4">
         <header className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Webhook size={16} className="text-[--muted-foreground]" aria-hidden />
-            <code className="font-mono text-xs text-[--muted-foreground]">
+            <Webhook size={16} className="text-(--muted-foreground)" aria-hidden />
+            <code className="font-mono text-xs text-(--muted-foreground)">
               {url}
             </code>
           </div>
@@ -752,11 +752,11 @@ function SecretBlock({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-[--muted-foreground]">
+        <span className="text-xs font-medium text-(--muted-foreground)">
           {label}
         </span>
         <span
-          className="text-[10px] text-[--muted-foreground]"
+          className="text-[10px] text-(--muted-foreground)"
           title={policyHint}
         >
           {policyLabel}
@@ -770,12 +770,12 @@ function SecretBlock({
         revealTtlMs={5_000}
       />
       {secret?.last_rotated_at ? (
-        <span className="text-[10px] text-[--muted-foreground]">
+        <span className="text-[10px] text-(--muted-foreground)">
           마지막 회전: {new Date(secret.last_rotated_at).toLocaleString("ko-KR")}
         </span>
       ) : null}
       {showRotate ? (
-        <div className="flex flex-col gap-2 rounded-[--radius-m] border border-dashed border-[--border-strong] bg-[--surface] p-3">
+        <div className="flex flex-col gap-2 rounded-(--radius-m) border border-dashed border-(--border-strong) bg-(--surface) p-3">
           <Input
             type="password"
             autoComplete="off"
@@ -831,7 +831,7 @@ function WhitelistEditor({
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
       <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-[--muted-foreground]">
+        <label className="text-xs font-medium text-(--muted-foreground)">
           허용 user_ids (쉼표 구분)
         </label>
         <Input
@@ -842,7 +842,7 @@ function WhitelistEditor({
         />
       </div>
       <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-[--muted-foreground]">
+        <label className="text-xs font-medium text-(--muted-foreground)">
           허용 chat_ids (쉼표 구분)
         </label>
         <Input
@@ -887,7 +887,7 @@ function NumberField({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
-        <label className="text-xs font-medium text-[--muted-foreground]">
+        <label className="text-xs font-medium text-(--muted-foreground)">
           {label}
         </label>
         {badge}
@@ -918,8 +918,8 @@ function MessageCounter({ channel: _channel }: { channel: "telegram" | "webhook"
   // 24h 메시지 카운터 — 데이터 소스가 아직 노출되지 않아 placeholder.
   // BIZ-25 trace 로그/WebhookMetrics 노출 후 본 컴포넌트를 SWR로 교체한다.
   return (
-    <div className="flex items-center gap-3 rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--muted-foreground]">
-      <span className="font-medium text-[--foreground]">최근 24h 메시지</span>
+    <div className="flex items-center gap-3 rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) px-3 py-2 text-xs text-(--muted-foreground)">
+      <span className="font-medium text-(--foreground)">최근 24h 메시지</span>
       <span className="font-mono">— 집계 대기</span>
     </div>
   );
@@ -954,14 +954,14 @@ function CardFooter({
   const testing = busy === "test";
 
   return (
-    <footer className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[--border] pt-3">
+    <footer className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-(--border) pt-3">
       <div className="flex items-center gap-2 text-xs">
         {lastTest ? (
           <span
             className={
               lastTest.ok
-                ? "inline-flex items-center gap-1 text-[--color-success]"
-                : "inline-flex items-center gap-1 text-[--color-error]"
+                ? "inline-flex items-center gap-1 text-(--color-success)"
+                : "inline-flex items-center gap-1 text-(--color-error)"
             }
           >
             {lastTest.ok ? <CheckCircle2 size={12} aria-hidden /> : null}
@@ -971,7 +971,7 @@ function CardFooter({
             </span>
           </span>
         ) : (
-          <span className="text-[--muted-foreground]">테스트 발송 미수행</span>
+          <span className="text-(--muted-foreground)">테스트 발송 미수행</span>
         )}
       </div>
       <div className="flex flex-wrap items-center gap-2">

@@ -25,12 +25,12 @@ export function ListPanel({
   return (
     <section
       className={cn(
-        "flex flex-col rounded-[--radius-l] border border-[--border] bg-[--card]",
+        "flex flex-col rounded-(--radius-l) border border-(--border) bg-(--card)",
         className,
       )}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-[--border] px-4 py-3">
-        <h2 className="text-sm font-semibold text-[--foreground-strong]">
+      <header className="flex items-center justify-between gap-2 border-b border-(--border) px-4 py-3">
+        <h2 className="text-sm font-semibold text-(--foreground-strong)">
           {title}
         </h2>
         {headerRight}
@@ -50,8 +50,8 @@ export function PanelMessage({
 }) {
   const className =
     tone === "error"
-      ? "px-4 py-6 text-sm text-[--color-error]"
-      : "px-4 py-6 text-sm text-[--muted-foreground]";
+      ? "px-4 py-6 text-sm text-(--color-error)"
+      : "px-4 py-6 text-sm text-(--muted-foreground)";
   return (
     <p className={className} role={tone === "error" ? "alert" : undefined}>
       {children}

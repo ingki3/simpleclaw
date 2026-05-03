@@ -195,10 +195,10 @@ export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-3xl font-semibold leading-tight text-[--foreground-strong]">
+        <h1 className="text-3xl font-semibold leading-tight text-(--foreground-strong)">
           대시보드
         </h1>
-        <p className="text-sm text-[--muted-foreground]">
+        <p className="text-sm text-(--muted-foreground)">
           데몬 상태와 최근 변경·에러를 한눈에 본다.
         </p>
       </header>
@@ -266,7 +266,7 @@ export default function DashboardPage() {
           headerRight={
             <Link
               href="/audit"
-              className="text-xs text-[--primary] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded-[--radius-sm]"
+              className="text-xs text-(--primary) hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring) rounded-(--radius-sm)"
             >
               전체 보기
             </Link>
@@ -303,7 +303,7 @@ export default function DashboardPage() {
           headerRight={
             <Link
               href="/logs?level=error"
-              className="text-xs text-[--primary] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded-[--radius-sm]"
+              className="text-xs text-(--primary) hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring) rounded-(--radius-sm)"
             >
               전체 보기
             </Link>
@@ -320,17 +320,17 @@ export default function DashboardPage() {
               {recentLogs.map((entry, idx) => (
                 <li
                   key={`${entry.trace_id ?? "no-trace"}-${idx}`}
-                  className="flex flex-col gap-1 border-b border-[--border] px-4 py-3 last:border-b-0"
+                  className="flex flex-col gap-1 border-b border-(--border) px-4 py-3 last:border-b-0"
                 >
                   <div className="flex items-center gap-2">
                     <Badge tone={entry.level === "error" ? "danger" : "warning"}>
                       {entry.level ?? "log"}
                     </Badge>
-                    <span className="truncate text-sm text-[--foreground-strong]">
+                    <span className="truncate text-sm text-(--foreground-strong)">
                       {entry.message ?? entry.event ?? entry.action_type ?? "(no message)"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+                  <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
                     <span>{formatRelativeTs(entry.ts)}</span>
                     {entry.trace_id ? (
                       <>
@@ -352,7 +352,7 @@ export default function DashboardPage() {
       <section className="flex flex-col gap-3" aria-labelledby="dashboard-quicklinks">
         <h2
           id="dashboard-quicklinks"
-          className="text-sm font-semibold text-[--foreground-strong]"
+          className="text-sm font-semibold text-(--foreground-strong)"
         >
           빠른 진입
         </h2>

@@ -17,12 +17,12 @@ export type BadgeTone =
   | "brand";
 
 const TONE: Record<BadgeTone, string> = {
-  neutral: "bg-[--surface] text-[--muted-foreground] border-[--border]",
-  success: "bg-[--color-success-bg] text-[--color-success] border-transparent",
-  warning: "bg-[--color-warning-bg] text-[--color-warning] border-transparent",
-  danger: "bg-[--color-error-bg] text-[--color-error] border-transparent",
-  info: "bg-[--color-info-bg] text-[--color-info] border-transparent",
-  brand: "bg-[--primary-tint] text-[--primary] border-transparent",
+  neutral: "bg-(--surface) text-(--muted-foreground) border-(--border)",
+  success: "bg-(--color-success-bg) text-(--color-success) border-transparent",
+  warning: "bg-(--color-warning-bg) text-(--color-warning) border-transparent",
+  danger: "bg-(--color-error-bg) text-(--color-error) border-transparent",
+  info: "bg-(--color-info-bg) text-(--color-info) border-transparent",
+  brand: "bg-(--primary-tint) text-(--primary) border-transparent",
 };
 
 export interface BadgeProps {
@@ -35,7 +35,7 @@ export function Badge({ tone = "neutral", children, className }: BadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-[--radius-sm] border px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center rounded-(--radius-sm) border px-2 py-0.5 text-xs font-medium",
         TONE[tone],
         className,
       )}

@@ -158,13 +158,13 @@ export default function SecretsPage() {
             size={28}
             strokeWidth={1.5}
             aria-hidden
-            className="mt-1 text-[--primary]"
+            className="mt-1 text-(--primary)"
           />
           <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold text-[--foreground-strong]">
+            <h1 className="text-2xl font-semibold text-(--foreground-strong)">
               시크릿
             </h1>
-            <p className="text-sm text-[--muted-foreground]">
+            <p className="text-sm text-(--muted-foreground)">
               keyring · env · file 볼트에 등록된 키를 한 곳에서 점검·회전합니다.
               값은 항상 마스킹되며, Reveal은 마지막 4자리만 5초간 표시한 뒤 자동으로 가립니다.
             </p>
@@ -194,7 +194,7 @@ export default function SecretsPage() {
       {error ? (
         <div
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
         >
           시크릿 메타데이터를 불러오지 못했어요: {error}
         </div>
@@ -210,9 +210,9 @@ export default function SecretsPage() {
         }
       >
         {loading && !items ? (
-          <p className="text-sm text-[--muted-foreground]">불러오는 중…</p>
+          <p className="text-sm text-(--muted-foreground)">불러오는 중…</p>
         ) : filteredItems.length === 0 ? (
-          <p className="text-sm text-[--muted-foreground]">
+          <p className="text-sm text-(--muted-foreground)">
             등록된 시크릿이 없어요. 우상단 “신규 추가”로 keyring/env/file 볼트에 키를 등록하세요.
           </p>
         ) : (
@@ -305,7 +305,7 @@ function SecretsTable({
     <div className="overflow-x-auto">
       <table className="w-full border-separate border-spacing-y-1 text-sm">
         <thead>
-          <tr className="text-left text-xs uppercase tracking-wider text-[--muted-foreground]">
+          <tr className="text-left text-xs uppercase tracking-wider text-(--muted-foreground)">
             <th className="px-3 py-2 font-medium">키</th>
             <th className="px-3 py-2 font-medium">출처</th>
             <th className="px-3 py-2 font-medium">마지막 회전</th>
@@ -326,10 +326,10 @@ function SecretsTable({
             return (
               <tr
                 key={key}
-                className="rounded-[--radius-m] bg-[--surface] align-middle"
+                className="rounded-(--radius-m) bg-(--surface) align-middle"
               >
-                <td className="rounded-l-[--radius-m] px-3 py-3">
-                  <code className="font-mono text-sm text-[--foreground-strong]">
+                <td className="rounded-l-(--radius-m) px-3 py-3">
+                  <code className="font-mono text-sm text-(--foreground-strong)">
                     {item.name}
                   </code>
                 </td>
@@ -346,17 +346,17 @@ function SecretsTable({
                   <span
                     aria-label={revealed ? "마지막 4자리" : "마스킹된 시크릿"}
                     className={cn(
-                      "inline-flex items-center rounded-[--radius-sm] px-2 py-1 font-mono text-xs",
+                      "inline-flex items-center rounded-(--radius-sm) px-2 py-1 font-mono text-xs",
                       revealed
-                        ? "bg-[--color-warning-bg] text-[--color-warning]"
-                        : "bg-[--secret-mask-bg] text-[--foreground]",
+                        ? "bg-(--color-warning-bg) text-(--color-warning)"
+                        : "bg-(--secret-mask-bg) text-(--foreground)",
                     )}
                   >
                     {"••••"}
                     {revealed ? revealedLastFour : "••••"}
                   </span>
                 </td>
-                <td className="rounded-r-[--radius-m] px-3 py-3">
+                <td className="rounded-r-(--radius-m) px-3 py-3">
                   <div className="flex justify-end gap-1">
                     <Button
                       variant="ghost"
@@ -401,12 +401,12 @@ function BackendBadge({ backend }: { backend: string }) {
 
 function RotatedAt({ at }: { at: string | null }) {
   if (!at) {
-    return <span className="text-xs text-[--muted-foreground]">기록 없음</span>;
+    return <span className="text-xs text-(--muted-foreground)">기록 없음</span>;
   }
   // ISO 문자열을 그대로 보여주되 사람이 읽기 쉽게 분 단위까지만.
   const trimmed = at.length > 16 ? at.slice(0, 16).replace("T", " ") : at;
   return (
-    <time dateTime={at} className="font-mono text-xs text-[--muted-foreground]">
+    <time dateTime={at} className="font-mono text-xs text-(--muted-foreground)">
       {trimmed}
     </time>
   );
@@ -414,7 +414,7 @@ function RotatedAt({ at }: { at: string | null }) {
 
 function UsageBadges({ refs }: { refs: SecretReference[] }) {
   if (refs.length === 0) {
-    return <span className="text-xs text-[--muted-foreground]">참조 없음</span>;
+    return <span className="text-xs text-(--muted-foreground)">참조 없음</span>;
   }
   // 영역별로 묶어 한 영역당 한 배지 — 회전 시 영향 범위를 빠르게 파악.
   const grouped = new Map<string, number>();
@@ -532,7 +532,7 @@ function RotateSecretModal({
           {errorMsg ? (
             <p
               role="alert"
-              className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-2 text-xs text-[--color-error]"
+              className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-2 text-xs text-(--color-error)"
             >
               {errorMsg}
             </p>
@@ -649,7 +649,7 @@ function AddSecretModal({
         <div className="flex flex-col gap-1">
           <label
             htmlFor={nameId}
-            className="text-xs font-medium text-[--foreground]"
+            className="text-xs font-medium text-(--foreground)"
           >
             키 이름
           </label>
@@ -662,7 +662,7 @@ function AddSecretModal({
             invalid={nameInvalid || undefined}
           />
           {nameInvalid ? (
-            <p className="text-[11px] text-[--color-error]" role="alert">
+            <p className="text-[11px] text-(--color-error)" role="alert">
               {/^[A-Za-z0-9_.-]+$/.test(name)
                 ? `이미 ${backend} 백엔드에 같은 이름이 있어요. 회전을 사용해 주세요.`
                 : "영문·숫자·_-. 만 사용할 수 있어요."}
@@ -672,7 +672,7 @@ function AddSecretModal({
         <div className="flex flex-col gap-1">
           <label
             htmlFor={backendId}
-            className="text-xs font-medium text-[--foreground]"
+            className="text-xs font-medium text-(--foreground)"
           >
             저장 백엔드
           </label>
@@ -680,7 +680,7 @@ function AddSecretModal({
             id={backendId}
             value={backend}
             onChange={(e) => setBackend(e.target.value as SecretBackend)}
-            className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+            className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
           >
             {SECRET_BACKENDS.map((b) => (
               <option key={b} value={b}>
@@ -699,7 +699,7 @@ function AddSecretModal({
         {errorMsg ? (
           <p
             role="alert"
-            className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-2 text-xs text-[--color-error]"
+            className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-2 text-xs text-(--color-error)"
           >
             {errorMsg}
           </p>
@@ -741,7 +741,7 @@ function SecretValueInput({
 }: SecretValueInputProps) {
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-xs font-medium text-[--foreground]">
+      <label htmlFor={id} className="text-xs font-medium text-(--foreground)">
         {label}
       </label>
       <input
@@ -768,9 +768,9 @@ function SecretValueInput({
         spellCheck={false}
         data-form-type="other"
         placeholder="외부 콘솔에서 발급한 토큰을 붙여넣으세요"
-        className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 font-mono text-sm text-[--foreground] outline-none placeholder:text-[--placeholder] focus:border-[--primary]"
+        className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 font-mono text-sm text-(--foreground) outline-none placeholder:text-(--placeholder) focus:border-(--primary)"
       />
-      <p className="text-[11px] text-[--muted-foreground]">
+      <p className="text-[11px] text-(--muted-foreground)">
         값은 화면에 노출되지 않으며, 복사·우클릭이 차단됩니다. 붙여넣기만 가능합니다.
       </p>
     </div>
@@ -790,7 +790,7 @@ interface ImpactSummaryProps {
 function ImpactSummary({ refs, mode, compact = false }: ImpactSummaryProps) {
   if (refs.length === 0) {
     return (
-      <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-3 text-xs text-[--muted-foreground]">
+      <div className="rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) p-3 text-xs text-(--muted-foreground)">
         config.yaml에서 이 시크릿을 참조하는 곳이 없어요.{" "}
         {mode === "rotate"
           ? "회전해도 외부 호출에는 즉시 영향이 가지 않습니다."
@@ -802,20 +802,20 @@ function ImpactSummary({ refs, mode, compact = false }: ImpactSummaryProps) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3",
+        "flex flex-col gap-2 rounded-(--radius-m) border border-(--border) bg-(--surface) p-3",
         compact ? "max-h-32 overflow-y-auto" : undefined,
       )}
     >
-      <p className="text-xs font-medium text-[--foreground]">
+      <p className="text-xs font-medium text-(--foreground)">
         영향 받는 컴포넌트 — {refs.length}곳
       </p>
-      <ul className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
+      <ul className="flex flex-col gap-1 text-xs text-(--muted-foreground)">
         {refs.map((r) => (
           <li
             key={r.path}
-            className="flex items-center justify-between gap-2 rounded-[--radius-sm] bg-[--card] px-2 py-1"
+            className="flex items-center justify-between gap-2 rounded-(--radius-sm) bg-(--card) px-2 py-1"
           >
-            <code className="font-mono text-[11px] text-[--foreground]">
+            <code className="font-mono text-[11px] text-(--foreground)">
               {r.path}
             </code>
             <Badge tone="info">{areaLabel(r.area)}</Badge>

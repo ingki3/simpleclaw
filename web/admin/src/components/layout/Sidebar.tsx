@@ -24,21 +24,21 @@ export function Sidebar() {
   return (
     <aside
       aria-label="주요 영역"
-      className="flex h-screen w-60 shrink-0 flex-col border-r border-[--border] bg-[--surface]"
+      className="flex h-screen w-60 shrink-0 flex-col border-r border-(--border) bg-(--surface)"
     >
       {/* 로고 영역 — 32px 가로 패딩으로 페이지 컨텐츠와 시각적으로 정렬 */}
       <div className="flex h-16 items-center gap-3 px-6">
         <div
           aria-hidden
-          className="grid h-8 w-8 place-items-center rounded-[--radius-m] bg-[--primary] text-[--primary-foreground] font-semibold"
+          className="grid h-8 w-8 place-items-center rounded-(--radius-m) bg-(--primary) text-(--primary-foreground) font-semibold"
         >
           SC
         </div>
         <div className="flex flex-col leading-tight">
-          <span className="text-[16px] font-semibold text-[--foreground-strong]">
+          <span className="text-[16px] font-semibold text-(--foreground-strong)">
             SimpleClaw
           </span>
-          <span className="text-xs text-[--muted-foreground]">Admin</span>
+          <span className="text-xs text-(--muted-foreground)">Admin</span>
         </div>
       </div>
 
@@ -56,10 +56,10 @@ export function Sidebar() {
                   aria-current={active ? "page" : undefined}
                   title={item.description}
                   className={cn(
-                    "flex items-center gap-3 rounded-[--radius-m] px-4 py-2.5 text-sm transition-colors",
+                    "flex items-center gap-3 rounded-(--radius-m) px-4 py-2.5 text-sm transition-colors",
                     active
-                      ? "bg-[--primary-tint] text-[--primary] font-medium"
-                      : "text-[--foreground] hover:bg-[--card]"
+                      ? "bg-(--primary-tint) text-(--primary) font-medium"
+                      : "text-(--foreground) hover:bg-(--card)"
                   )}
                 >
                   <Icon
@@ -76,11 +76,11 @@ export function Sidebar() {
       </nav>
 
       {/* Footer — 데몬 헬스 + 버전. 실제 값은 후속 이슈에서 API 연동. */}
-      <div className="border-t border-[--border] px-4 py-3">
-        <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+      <div className="border-t border-(--border) px-4 py-3">
+        <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
           <span
             aria-hidden
-            className="inline-block h-2 w-2 rounded-[--radius-pill] bg-[--color-success]"
+            className="inline-block h-2 w-2 rounded-(--radius-pill) bg-(--color-success)"
           />
           <span>데몬 정상</span>
           <span className="ml-auto font-mono">v0.1.0</span>

@@ -51,7 +51,7 @@ export function LogFilters({
 }: LogFiltersProps) {
   return (
     <div
-      className="flex flex-wrap items-center gap-3 rounded-[--radius-m] border border-[--border] bg-[--card] p-3"
+      className="flex flex-wrap items-center gap-3 rounded-(--radius-m) border border-(--border) bg-(--card) p-3"
       role="search"
       aria-label="로그 필터"
     >
@@ -64,10 +64,10 @@ export function LogFilters({
           type="button"
           onClick={() => onLevelChange(undefined)}
           className={cn(
-            "rounded-[--radius-sm] border px-2 py-1 text-xs",
+            "rounded-(--radius-sm) border px-2 py-1 text-xs",
             level === undefined
-              ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-              : "border-[--border] text-[--muted-foreground] hover:bg-[--surface]",
+              ? "border-(--primary) bg-(--primary-tint) text-(--primary)"
+              : "border-(--border) text-(--muted-foreground) hover:bg-(--surface)",
           )}
           aria-pressed={level === undefined}
         >
@@ -79,10 +79,10 @@ export function LogFilters({
             type="button"
             onClick={() => onLevelChange(level === tk ? undefined : tk)}
             className={cn(
-              "rounded-[--radius-sm] border px-2 py-1 text-xs",
+              "rounded-(--radius-sm) border px-2 py-1 text-xs",
               level === tk
-                ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                : "border-[--border] text-[--muted-foreground] hover:bg-[--surface]",
+                ? "border-(--primary) bg-(--primary-tint) text-(--primary)"
+                : "border-(--border) text-(--muted-foreground) hover:bg-(--surface)",
             )}
             aria-pressed={level === tk}
           >
@@ -109,7 +109,7 @@ export function LogFilters({
       />
 
       <div className="ml-auto flex items-center gap-3">
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-[--muted-foreground]">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-(--muted-foreground)">
           <Switch
             checked={autoRefresh}
             onCheckedChange={onAutoRefreshChange}

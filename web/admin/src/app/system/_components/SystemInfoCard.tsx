@@ -53,12 +53,12 @@ export function SystemInfoCard({
       {error ? (
         <p
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
         >
           시스템 정보를 가져오지 못했습니다: {error}
         </p>
       ) : !data ? (
-        <p className="text-sm text-[--muted-foreground]">불러오는 중…</p>
+        <p className="text-sm text-(--muted-foreground)">불러오는 중…</p>
       ) : (
         <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
           <Row label="버전" value={data.version} />
@@ -117,14 +117,14 @@ interface RowProps {
 function Row({ label, value, mono, hint, hintTone = "muted" }: RowProps) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-xs uppercase tracking-wide text-[--muted-foreground]">
+      <dt className="text-xs uppercase tracking-wide text-(--muted-foreground)">
         {label}
       </dt>
       <dd
         className={
           mono
-            ? "break-all font-mono text-sm text-[--foreground-strong]"
-            : "text-sm text-[--foreground-strong]"
+            ? "break-all font-mono text-sm text-(--foreground-strong)"
+            : "text-sm text-(--foreground-strong)"
         }
       >
         {value}
@@ -133,8 +133,8 @@ function Row({ label, value, mono, hint, hintTone = "muted" }: RowProps) {
         <p
           className={
             hintTone === "warn"
-              ? "text-xs text-[--color-warning]"
-              : "text-xs text-[--muted-foreground]"
+              ? "text-xs text-(--color-warning)"
+              : "text-xs text-(--muted-foreground)"
           }
         >
           {hint}

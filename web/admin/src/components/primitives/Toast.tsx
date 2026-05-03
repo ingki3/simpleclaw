@@ -71,19 +71,19 @@ const ToastContext = createContext<ToastContextShape | null>(null);
 const TONE_STYLE: Record<ToastTone, { icon: typeof Info; cls: string }> = {
   success: {
     icon: CheckCircle2,
-    cls: "border-[--color-success] bg-[--color-success-bg]",
+    cls: "border-(--color-success) bg-(--color-success-bg)",
   },
   info: {
     icon: Info,
-    cls: "border-[--color-info] bg-[--color-info-bg]",
+    cls: "border-(--color-info) bg-(--color-info-bg)",
   },
   warn: {
     icon: AlertTriangle,
-    cls: "border-[--color-warning] bg-[--color-warning-bg]",
+    cls: "border-(--color-warning) bg-(--color-warning-bg)",
   },
   "destructive-soft": {
     icon: AlertTriangle,
-    cls: "border-[--color-error] bg-[--color-error-bg]",
+    cls: "border-(--color-error) bg-(--color-error-bg)",
   },
 };
 
@@ -227,15 +227,15 @@ function ToastCard({ item, onDismiss }: CardProps) {
       role="status"
       aria-live="polite"
       className={cn(
-        "pointer-events-auto flex items-start gap-3 rounded-[--radius-m] border bg-[--card-elevated] px-4 py-3 text-sm text-[--foreground] shadow-[--shadow-l]",
+        "pointer-events-auto flex items-start gap-3 rounded-(--radius-m) border bg-(--card-elevated) px-4 py-3 text-sm text-(--foreground) shadow-(--shadow-l)",
         tone.cls,
       )}
     >
       <Icon size={16} aria-hidden className="mt-0.5 shrink-0" />
       <div className="flex-1">
-        <div className="font-medium text-[--foreground-strong]">{item.title}</div>
+        <div className="font-medium text-(--foreground-strong)">{item.title}</div>
         {item.description && (
-          <div className="mt-1 text-xs text-[--muted-foreground]">
+          <div className="mt-1 text-xs text-(--muted-foreground)">
             {item.description}
           </div>
         )}
@@ -253,13 +253,13 @@ function ToastCard({ item, onDismiss }: CardProps) {
                   setUndoing(false);
                 }
               }}
-              className="inline-flex items-center gap-1.5 rounded-[--radius-sm] border border-[--border-strong] bg-[--card] px-2.5 py-1 text-xs font-medium text-[--foreground] hover:bg-[--surface] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-(--radius-sm) border border-(--border-strong) bg-(--card) px-2.5 py-1 text-xs font-medium text-(--foreground) hover:bg-(--surface) disabled:opacity-50"
             >
               <Undo2 size={12} aria-hidden />
               <span>{item.undo.label ?? "되돌리기"}</span>
             </button>
             <span
-              className="font-mono text-[10px] text-[--muted-foreground]"
+              className="font-mono text-[10px] text-(--muted-foreground)"
               aria-label={`${remainingS}초 남음`}
             >
               {_fmtMmSs(remainingS)} 남음
@@ -271,7 +271,7 @@ function ToastCard({ item, onDismiss }: CardProps) {
         type="button"
         aria-label="알림 닫기"
         onClick={onDismiss}
-        className="-mr-1 -mt-1 grid h-6 w-6 place-items-center rounded-[--radius-sm] text-[--muted-foreground] hover:bg-[--surface] hover:text-[--foreground]"
+        className="-mr-1 -mt-1 grid h-6 w-6 place-items-center rounded-(--radius-sm) text-(--muted-foreground) hover:bg-(--surface) hover:text-(--foreground)"
       >
         <X size={14} aria-hidden />
       </button>

@@ -2,7 +2,10 @@
  * SimpleClaw Admin — 글로벌 스타일 + 디자인 토큰
  *
  * DESIGN.md §2 Tokens를 Tailwind v4 `@theme`로 1:1 매핑한다.
- * 모든 컴포넌트는 *semantic 토큰만* 참조해야 하며 (예: `bg-[--background]`),
+ * 모든 컴포넌트는 *semantic 토큰만* 참조해야 하며 (예: `bg-(--background)`),
+ * Tailwind v4의 CSS 변수 단축 문법 `(--var)` 만 사용한다 — `[--var]` 는
+ * v3 시절의 잔재로, v4 에서는 `background-color: --var;` 처럼 invalid CSS 로
+ * emit 되어 카드/표면 배경이 transparent 로 떨어진다 (BIZ-82 회귀).
  * 라이트/다크 분기는 본 파일의 `:root` / `.theme-dark` 두 셋으로만 처리한다.
  * 컴포넌트 안에 `dark:` 분기 코드를 두지 않는 것이 본 시스템의 규약이다.
  */

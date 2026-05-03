@@ -146,7 +146,7 @@ export function NewJobModal({ open, onClose, onCreated }: NewJobModalProps) {
             <select
               value={actionType}
               onChange={(e) => setActionType(e.target.value as CronActionType)}
-              className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground]"
+              className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground)"
             >
               <option value="prompt">prompt</option>
               <option value="recipe">recipe</option>
@@ -171,20 +171,20 @@ export function NewJobModal({ open, onClose, onCreated }: NewJobModalProps) {
               onCheckedChange={setEnabled}
               label="저장 후 즉시 활성"
             />
-            <span className="text-sm text-[--muted-foreground]">
+            <span className="text-sm text-(--muted-foreground)">
               {enabled ? "저장 후 즉시 스케줄 등록" : "비활성 상태로 저장"}
             </span>
           </div>
         </Field>
 
         {dryRunResult ? (
-          <div className="rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--foreground]">
+          <div className="rounded-(--radius-m) border border-(--border) bg-(--surface) px-3 py-2 text-xs text-(--foreground)">
             {dryRunResult}
           </div>
         ) : null}
 
         {error ? (
-          <div className="rounded-[--radius-m] border border-transparent bg-[--color-error-bg] px-3 py-2 text-xs text-[--color-error]">
+          <div className="rounded-(--radius-m) border border-transparent bg-(--color-error-bg) px-3 py-2 text-xs text-(--color-error)">
             {error}
           </div>
         ) : null}
@@ -206,12 +206,12 @@ function Field({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-[--foreground-strong]">{label}</label>
+      <label className="text-sm font-medium text-(--foreground-strong)">{label}</label>
       {children}
       {error ? (
-        <span className="text-xs text-[--color-error]">{error}</span>
+        <span className="text-xs text-(--color-error)">{error}</span>
       ) : helper ? (
-        <span className="text-xs text-[--muted-foreground]">{helper}</span>
+        <span className="text-xs text-(--muted-foreground)">{helper}</span>
       ) : null}
     </div>
   );

@@ -76,18 +76,18 @@ export function Drawer({
         aria-label={title}
         tabIndex={-1}
         className={cn(
-          "flex h-full w-[480px] max-w-[100vw] flex-col bg-[--background] shadow-[--shadow-l] outline-none",
+          "flex h-full w-[480px] max-w-[100vw] flex-col bg-(--background) shadow-(--shadow-l) outline-none",
           className,
         )}
         style={{ animation: "drawer-slide-in var(--motion-base)" }}
       >
-        <header className="flex items-start justify-between gap-3 border-b border-[--border] px-6 py-4">
+        <header className="flex items-start justify-between gap-3 border-b border-(--border) px-6 py-4">
           <div className="flex min-w-0 flex-col gap-1">
-            <h2 className="truncate text-lg font-semibold text-[--foreground-strong]">
+            <h2 className="truncate text-lg font-semibold text-(--foreground-strong)">
               {title}
             </h2>
             {subtitle ? (
-              <code className="truncate font-mono text-xs text-[--muted-foreground]">
+              <code className="truncate font-mono text-xs text-(--muted-foreground)">
                 {subtitle}
               </code>
             ) : null}
@@ -98,7 +98,7 @@ export function Drawer({
               type="button"
               aria-label="닫기"
               onClick={onClose}
-              className="grid h-8 w-8 place-items-center rounded-[--radius-m] text-[--muted-foreground] transition-colors hover:bg-[--surface] hover:text-[--foreground]"
+              className="grid h-8 w-8 place-items-center rounded-(--radius-m) text-(--muted-foreground) transition-colors hover:bg-(--surface) hover:text-(--foreground)"
             >
               <X size={16} aria-hidden />
             </button>
@@ -106,7 +106,7 @@ export function Drawer({
         </header>
         <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
         {footer ? (
-          <footer className="flex items-center justify-end gap-2 border-t border-[--border] bg-[--surface] px-6 py-3">
+          <footer className="flex items-center justify-end gap-2 border-t border-(--border) bg-(--surface) px-6 py-3">
             {footer}
           </footer>
         ) : null}

@@ -35,17 +35,17 @@ export function SettingCard({
   return (
     <section
       className={cn(
-        "flex flex-col rounded-[--radius-l] border border-[--border] bg-[--card]",
+        "flex flex-col rounded-(--radius-l) border border-(--border) bg-(--card)",
         className,
       )}
     >
       <header className="flex items-start justify-between gap-4 px-6 pt-6">
         <div className="flex flex-col gap-1">
-          <h2 className="text-lg font-semibold text-[--foreground-strong]">
+          <h2 className="text-lg font-semibold text-(--foreground-strong)">
             {title}
           </h2>
           {description ? (
-            <p className="text-sm text-[--muted-foreground]">{description}</p>
+            <p className="text-sm text-(--muted-foreground)">{description}</p>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -59,7 +59,7 @@ export function SettingCard({
       <div className="flex flex-col gap-4 px-6 py-6">{children}</div>
 
       {footer ? (
-        <footer className="flex items-center justify-end gap-2 rounded-b-[--radius-l] border-t border-[--border] bg-[--surface] px-6 py-3">
+        <footer className="flex items-center justify-end gap-2 rounded-b-(--radius-l) border-t border-(--border) bg-(--surface) px-6 py-3">
           {footer}
         </footer>
       ) : null}
