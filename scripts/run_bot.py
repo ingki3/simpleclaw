@@ -162,6 +162,13 @@ async def main():
         insight_promotion_threshold=dreaming_config.get(
             "insight_promotion_threshold", 3
         ),
+        # BIZ-78: decay/reject 차단 리스트. config 가 None 이면 decay 비활성, reject TTL 영구.
+        decay_archive_after_days=dreaming_config.get("decay", {}).get(
+            "archive_after_days", 30
+        ),
+        reject_default_ttl_days=dreaming_config.get(
+            "reject_blocklist", {}
+        ).get("default_ttl_days"),
     )
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,
