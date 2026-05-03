@@ -41,6 +41,8 @@ security:
     allowlist: []
   env_passthrough:
     - GOOGLE_API_KEY
+    - NAVER_CLIENT_ID
+    - NAVER_CLIENT_SECRET
 
 skills:
   local_dir: ".agent/skills"
