@@ -70,6 +70,28 @@ telegram:
     user_ids: []
     chat_ids: []
 
+# Admin API (BIZ-41 / BIZ-58) — Admin UI 백엔드.
+# 단일 운영자 가정으로 ``127.0.0.1`` 로컬 바인딩만 권장. 토큰은 시크릿 매니저 참조로
+# 두는 것을 권장하며, ``token_secret``이 비어 있으면 봇 부팅 단계에서 즉시 실패한다
+# (silent insecure 운용 방지).
+#
+# 토큰 발급 예시:
+#   .venv/bin/python -c "
+#   import secrets
+#   from simpleclaw.security.secrets import SecretsManager
+#   SecretsManager().store('keyring', 'admin_api_token', secrets.token_urlsafe(32))
+#   "
+#
+# Admin UI(별도 dev 서버) 포트가 다를 경우 ``cors_origins``에 origin을 추가한다.
+admin_api:
+  enabled: true
+  bind_host: "127.0.0.1"
+  bind_port: 8082
+  token_secret: "keyring:admin_api_token"
+  read_timeout_seconds: 30
+  request_max_body_kb: 256
+  cors_origins: []  # 예: ["http://localhost:3100"]
+
 webhook:
   enabled: true
   host: "127.0.0.1"

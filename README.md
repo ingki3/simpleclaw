@@ -213,6 +213,34 @@ telegram:
 nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 ```
 
+### Admin API (BIZ-58)
+
+봇 데몬은 Admin UI 백엔드용 REST 서버를 `127.0.0.1:8082`에 자동 바인딩합니다 (`scripts/run_bot.py` 실행 시). 모든 호출은 Bearer 토큰 인증을 강제합니다.
+
+1. 토큰을 시크릿 매니저에 등록 (한 번만):
+
+```bash
+.venv/bin/python -c "
+import secrets
+from simpleclaw.security.secrets import SecretsManager
+SecretsManager().store('keyring', 'admin_api_token', secrets.token_urlsafe(32))
+"
+```
+
+`config.yaml` 기본 설정은 `token_secret: \"keyring:admin_api_token\"`을 참조하므로 추가 작업이 필요 없습니다. 환경변수 또는 암호화 파일을 쓰려면 참조 문자열을 `env:ADMIN_API_TOKEN` / `file:admin_api_token` 등으로 바꿉니다.
+
+2. 호출 예시:
+
+```bash
+TOKEN=$(.venv/bin/python -c "from simpleclaw.security.secrets import SecretsManager; print(SecretsManager().resolve('keyring:admin_api_token'))")
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8082/admin/v1/health
+```
+
+3. 운영 가드:
+   - **토큰 미설정 시 봇이 부팅하지 않습니다** — silent insecure 운용을 방지합니다. `ERROR: Admin API 부팅 실패 …` 메시지가 출력되면 위 §1 절차로 토큰을 등록하세요.
+   - 개발/CI 환경에서 Admin API가 필요 없다면 `admin_api.enabled: false`로 비활성화합니다.
+   - Admin UI 개발 서버가 별도 포트(예: `http://localhost:3100`)에서 동작하면 `admin_api.cors_origins`에 origin을 추가합니다.
+
 ### 테스트 실행
 
 ```bash
