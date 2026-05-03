@@ -24,6 +24,7 @@ import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { ConfirmGate } from "@/components/primitives/ConfirmGate";
 import { useToast } from "@/components/primitives/Toast";
+import { DreamingObservabilityPanel } from "@/components/domain/DreamingObservabilityPanel";
 import { DreamingProgressCard } from "@/components/domain/DreamingProgressCard";
 import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
 import { MemoryStatsCards } from "@/components/domain/MemoryStatsCards";
@@ -372,12 +373,19 @@ export default function MemoryPage() {
           )}
         </section>
 
+        {/* 우측 1/3 — 드리밍 + 관측성(BIZ-81) + 검토 큐(BIZ-79) + 내보내기 */}
         {/* 우측 1/3 — 드리밍 + 검토 큐(BIZ-79) + 내보내기 */}
         <aside className="flex flex-col gap-4">
           <DreamingProgressCard
             state={data.dreaming}
             onTrigger={handleTriggerDreaming}
             disabled={false}
+          />
+          {/* BIZ-81: 사이클 메트릭 KPI + 진단. 드리밍 종료 시점에 ``data.dreaming.running``
+              가 true → false 로 전이하므로, 그 값을 refreshKey 로 넘기면 패널이
+              자동 재로드된다. (boolean 자체로는 한쪽이 0/1 토글만 발생) */}
+          <DreamingObservabilityPanel
+            refreshKey={data.dreaming.running ? 1 : 0}
           />
           <SuggestionQueuePanel
             disabled={dreamingDisabled}

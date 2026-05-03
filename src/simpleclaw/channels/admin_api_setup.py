@@ -24,6 +24,7 @@ from simpleclaw.channels.admin_api import AdminAPIServer
 from simpleclaw.channels.admin_audit import AuditLog
 from simpleclaw.config import load_admin_api_config
 from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.dreaming_runs import DreamingRunStore
 from simpleclaw.memory.insights import InsightStore
 from simpleclaw.memory.suggestions import BlocklistStore, SuggestionStore
 from simpleclaw.security.secrets import SecretsManager
@@ -50,6 +51,8 @@ def build_admin_api_server(
     suggestion_store: SuggestionStore | None = None,
     blocklist_store: BlocklistStore | None = None,
     suggestion_writer: Callable[[str], None] | None = None,
+    dreaming_run_store: DreamingRunStore | None = None,
+    dreaming_status_provider: Callable[[], dict] | None = None,
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -107,6 +110,10 @@ def build_admin_api_server(
         suggestion_store=suggestion_store,
         blocklist_store=blocklist_store,
         suggestion_writer=suggestion_writer,
+        # BIZ-81 — 드리밍 사이클 메트릭 + 상태 프로바이더 (KPI/진단 응답 입력원).
+        # run_store 미주입 시 /memory/dreaming/runs 가 503, /status 는 metrics_enabled=False.
+        dreaming_run_store=dreaming_run_store,
+        dreaming_status_provider=dreaming_status_provider,
     )
 
 

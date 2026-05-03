@@ -63,6 +63,7 @@ from simpleclaw.channels.admin_policy import (
     validate_patch,
 )
 from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.dreaming_runs import DreamingRunStore
 from simpleclaw.memory.insights import InsightStore
 from simpleclaw.memory.suggestions import (
     BlocklistStore,
@@ -258,6 +259,8 @@ class AdminAPIServer:
         suggestion_store: SuggestionStore | None = None,
         blocklist_store: BlocklistStore | None = None,
         suggestion_writer: Callable[[str], None] | None = None,
+        dreaming_run_store: DreamingRunStore | None = None,
+        dreaming_status_provider: Callable[[], dict] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -303,6 +306,14 @@ class AdminAPIServer:
         self._blocklist_store = blocklist_store
         self._suggestion_writer = suggestion_writer
 
+        # BIZ-81 — 드리밍 메트릭 sidecar + 상태 프로바이더 (last_run, next_run, 운영 진단).
+        # - dreaming_run_store: 사이클 단위 메트릭(JSONL). 미주입 시 503.
+        # - dreaming_status_provider: 데몬에서 만든 상태 dict 를 반환하는 callable.
+        #   포함 키: last_run(iso|None), next_run(iso|None), overnight_hour(int),
+        #   idle_threshold(int), trigger_blockers(list[str]) 등 — 운영 진단 메시지.
+        #   미주입 시 status 응답에 None 으로 비워둔다(엔드포인트 자체는 동작).
+        self._dreaming_run_store = dreaming_run_store
+        self._dreaming_status_provider = dreaming_status_provider
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -414,6 +425,17 @@ class AdminAPIServer:
             self._wrap(self._handle_reject_suggestion),
         )
 
+        # BIZ-81 (K: Dreaming 운영 관측성) — 사이클 메트릭 + 상태 진단.
+        # GET /memory/dreaming/runs?limit=N  — 최근 N건 회차 메트릭 (기본 20).
+        # GET /memory/dreaming/status         — last_run / next_run + 7일 KPI + 진단 메시지.
+        app.router.add_get(
+            f"{prefix}/memory/dreaming/runs",
+            self._wrap(self._handle_list_dreaming_runs),
+        )
+        app.router.add_get(
+            f"{prefix}/memory/dreaming/status",
+            self._wrap(self._handle_dreaming_status),
+        )
         self._app = app
         return app
 
@@ -1689,6 +1711,132 @@ class AdminAPIServer:
             details={"reason": reason or ""},
         )
         return _json_ok(self._serialize_suggestion(result))
+
+    # ------------------------------------------------------------------
+    # BIZ-81 — 드리밍 운영 관측성 핸들러
+    # ------------------------------------------------------------------
+
+    def _serialize_dreaming_run(self, rec) -> dict:
+        """``DreamingRunRecord`` 를 JSON 응답 dict 로 변환.
+
+        UI 가 한 행에서 status/duration 을 즉시 표시할 수 있도록 파생 필드도 포함한다.
+        """
+        return {
+            "id": rec.id,
+            "started_at": rec.started_at.isoformat(),
+            "ended_at": rec.ended_at.isoformat() if rec.ended_at else None,
+            "duration_seconds": rec.duration_seconds,
+            "input_msg_count": rec.input_msg_count,
+            "generated_insight_count": rec.generated_insight_count,
+            "rejected_count": rec.rejected_count,
+            "error": rec.error,
+            "skip_reason": rec.skip_reason,
+            "status": rec.status,
+            "details": rec.details or {},
+        }
+
+    def _suggestion_rejection_rate(self) -> dict:
+        """``SuggestionStore`` 에 누적된 운영자 review 결과로부터 거절률 계산.
+
+        DoD 의 "거절률" KPI 는 dreaming 결과(=suggestion) 에 대한 운영자 리뷰 신호이다
+        (BIZ-66 §3-K: "거절률 KPI는 H의 Admin Review Loop 신호에서 산출"). 따라서
+        suggestion_store 가 비활성이면 ``None`` 을 반환해 UI 가 "측정 불가" 로 표시.
+
+        Returns:
+            ``{"reviewed": int, "rejected": int, "rate": float|None}``.
+            ``reviewed`` 가 0 이면 ``rate`` 는 ``None`` (분모 0).
+        """
+        if self._suggestion_store is None:
+            return {"reviewed": 0, "rejected": 0, "rate": None}
+        reviewed = 0
+        rejected = 0
+        for s in self._suggestion_store.load():
+            if s.status in TERMINAL_STATUSES:
+                reviewed += 1
+                if s.status == "rejected":
+                    rejected += 1
+        rate = (rejected / reviewed) if reviewed > 0 else None
+        return {"reviewed": reviewed, "rejected": rejected, "rate": rate}
+
+    async def _handle_list_dreaming_runs(
+        self, request: web.Request
+    ) -> web.Response:
+        """``GET /admin/v1/memory/dreaming/runs?limit=N``.
+
+        최근 N건의 사이클 메트릭을 최신순으로 반환. ``limit`` 기본 20, 상한 200
+        (sidecar 자체가 200건 정도만 보존).
+
+        Response: ``{"runs": [...], "total": N}``.
+        503 if ``dreaming_run_store`` 미주입.
+        """
+        if self._dreaming_run_store is None:
+            return _json_error(
+                503, "Dreaming run metrics are not configured on this server"
+            )
+        # limit 파라미터 — 정수가 아니면 기본값으로 폴백(검색바 오타 방어).
+        try:
+            limit = int(request.query.get("limit", "20"))
+        except (TypeError, ValueError):
+            limit = 20
+        limit = max(1, min(200, limit))
+
+        rows = self._dreaming_run_store.list_recent(limit=limit)
+        return _json_ok({
+            "runs": [self._serialize_dreaming_run(r) for r in rows],
+            "total": len(rows),
+        })
+
+    async def _handle_dreaming_status(
+        self, request: web.Request
+    ) -> web.Response:
+        """``GET /admin/v1/memory/dreaming/status``.
+
+        Memory 화면의 KPI 패널이 단일 호출로 받아갈 수 있도록 다음을 합쳐 반환:
+        - ``last_run`` / ``last_successful_run``: 가장 최근 회차/성공 회차.
+        - ``next_run``: 데몬에서 추정한 다음 실행 예정 시각(string ISO|None).
+        - ``trigger`` 진단: overnight_hour, idle_threshold, blockers 등 오늘 트리거가
+          왜 (아직) 안 돌았는지 사람이 읽을 수 있는 메시지.
+        - ``kpi_7d``: 7일 윈도우 집계(success/skip/error 카운트, msg/insight totals,
+          skip_breakdown).
+        - ``rejection``: 운영자 리뷰 누적 거절률 (suggestion_store 에서 계산).
+
+        ``dreaming_run_store`` 가 없으면 KPI 와 last_run 을 None 으로 비우되 응답
+        자체는 200 으로 돌려준다 — UI 가 "메트릭 비활성" 안내를 그릴 수 있게.
+        """
+        last_run = None
+        last_successful = None
+        kpi_7d: dict | None = None
+        if self._dreaming_run_store is not None:
+            lr = self._dreaming_run_store.last_run()
+            ls = self._dreaming_run_store.last_successful_run()
+            if lr is not None:
+                last_run = self._serialize_dreaming_run(lr)
+            if ls is not None:
+                last_successful = self._serialize_dreaming_run(ls)
+            kpi_7d = self._dreaming_run_store.kpi_window(days=7)
+
+        # 데몬에서 만든 status 컨텍스트 — 미주입 시 빈 dict 로 폴백(엔드포인트는 동작).
+        provider_state: dict = {}
+        if self._dreaming_status_provider is not None:
+            try:
+                provider_state = dict(self._dreaming_status_provider() or {})
+            except Exception:
+                # provider 실패는 KPI 응답을 막지 않는다 — 진단 가시성이 핵심.
+                logger.exception("dreaming_status_provider raised; returning empty state")
+                provider_state = {}
+
+        return _json_ok({
+            "last_run": last_run,
+            "last_successful_run": last_successful,
+            "next_run": provider_state.get("next_run"),
+            "overnight_hour": provider_state.get("overnight_hour"),
+            "idle_threshold_seconds": provider_state.get("idle_threshold_seconds"),
+            "trigger_blockers": list(provider_state.get("trigger_blockers") or []),
+            "trigger_message": provider_state.get("trigger_message"),
+            "kpi_7d": kpi_7d,
+            "rejection": self._suggestion_rejection_rate(),
+            "metrics_enabled": self._dreaming_run_store is not None,
+        })
 
 
 # ---------------------------------------------------------------------------
