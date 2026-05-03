@@ -37,6 +37,13 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from simpleclaw.memory.active_projects import (
+    ActiveProject,
+    ActiveProjectStore,
+    filter_active,
+    merge_projects,
+    render_section_body as render_active_projects_body,
+)
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.models import (
     ClusterRecord,
@@ -65,11 +72,25 @@ DEFAULT_USER_SECTION = "insights"           # USER.md — dreaming-derived insig
 DEFAULT_SOUL_SECTION = "dreaming-updates"   # SOUL.md — dreaming-suggested 변경
 DEFAULT_AGENT_SECTION = "dreaming-updates"  # AGENT.md — dreaming-suggested 변경
 
+# BIZ-74 — Active Projects 섹션 기본 이름. USER.md 안의 별도 managed 섹션으로 운영.
+# 매 dreaming 사이클에 in-place 갱신되며, 마커 외부는 BIZ-72 가드로 자동 보호된다.
+DEFAULT_ACTIVE_PROJECTS_SECTION = "active-projects"
+
+# 활성 윈도우 기본값(일). config 로 노출. 7일은 "사용자가 한 주 동안 만진 프로젝트"
+# 라는 직관과 일치하며, 5-01~5-03 SimpleClaw/Multica 트랙처럼 며칠 집중하다
+# 다른 일로 옮겨가는 패턴을 자연스럽게 포착한다.
+DEFAULT_ACTIVE_PROJECTS_WINDOW_DAYS = 7
+
 
 # 프롬프트는 LLM에게 마커 자체를 출력하지 말라고 명시 — 출력은 본문 마크다운만이며
 # 본 모듈이 managed 섹션 안쪽으로 안전하게 append한다.
+#
+# BIZ-74 — "active_projects" 필드 추가: 최근 N일 대화에서 사용자가 집중 중인 프로젝트
+# 엔티티(이름, 역할, 최근 활동 요약)를 구조화된 리스트로 추출. 본 모듈이 ``ActiveProject``
+# 객체로 변환하여 sidecar 병합 후 USER.md의 ``managed:dreaming:active-projects``
+# 섹션을 in-place 갱신한다.
 _DREAMING_PROMPT = """\
-다음 대화 내역을 분석하여 네 가지를 JSON으로 추출하세요.
+다음 대화 내역을 분석하여 다섯 가지를 JSON으로 추출하세요.
 
 ⚠️ 출력 규칙(중요): 본문은 SimpleClaw가 USER/MEMORY/AGENT/SOUL 파일의 dreaming
 managed 섹션(`<!-- managed:dreaming:... -->` 마커 내부)에 append됩니다. 응답에
@@ -99,6 +120,20 @@ managed 마커 자체(`<!-- managed:dreaming:... -->`, `<!-- /managed:dreaming:.
    - 기존 AGENT.md 내용과 중복이면 제외
    - 없으면 빈 문자열
 
+5. "active_projects": 사용자가 현재(이번 대화 윈도우 안에서) 집중 중인 "프로젝트" 엔티티 리스트
+   - 프로젝트는 사용자가 빌드/QA/리서치/운영 등 명확한 작업 단위를 가진 대상
+     (예: "SimpleClaw", "Multica", "회사 발표 자료") — 단순 관심사·뉴스 토픽이 아님
+   - 같은 프로젝트는 동일한 표기로 일관되게 출력 (대소문자/표기를 사이클마다 바꾸지 말 것)
+   - 각 항목은 다음 필드를 포함:
+     - "name": 프로젝트 이름 (사람이 읽는 표기, 예: "SimpleClaw")
+     - "role": 사용자의 역할/관계를 한 줄로
+       (예: "솔로 빌더 — 메모리 파이프라인 개선", "플랫폼 빌드/QA 운영자")
+     - "recent_summary": 이번 윈도우의 최근 활동을 한두 문장으로
+       (예: "BIZ-66 평가 후 sub-issue 10건을 분할하고 A·B 머지 리뷰 진행")
+   - 윈도우 안에서 활동이 없는 프로젝트는 출력하지 마세요 (sidecar에 보관된
+     기존 항목은 시스템이 자동으로 윈도우 외 처리합니다).
+   - 없으면 빈 리스트 []
+
 ## 기존 SOUL.md 내용
 {existing_soul_md}
 
@@ -112,7 +147,7 @@ managed 마커 자체(`<!-- managed:dreaming:... -->`, `<!-- /managed:dreaming:.
 {conversations}
 
 JSON 형식으로만 응답하세요:
-{{"memory": "## {date}\\n- 항목1\\n- 항목2", "user_insights": "- 새 정보1", "soul_updates": "- 변경1", "agent_updates": "- 변경1"}}"""
+{{"memory": "## {date}\\n- 항목1\\n- 항목2", "user_insights": "- 새 정보1", "soul_updates": "- 변경1", "agent_updates": "- 변경1", "active_projects": [{{"name": "...", "role": "...", "recent_summary": "..."}}]}}"""
 
 
 # Phase 3 — 클러스터별 LLM 요약 프롬프트 (기존 + 신규 메시지를 받아 갱신된 라벨/요약 산출)
@@ -168,6 +203,9 @@ class DreamingPipeline:
         user_section: str = DEFAULT_USER_SECTION,
         soul_section: str = DEFAULT_SOUL_SECTION,
         agent_section: str = DEFAULT_AGENT_SECTION,
+        active_projects_file: str | Path | None = None,
+        active_projects_section: str = DEFAULT_ACTIVE_PROJECTS_SECTION,
+        active_projects_window_days: int = DEFAULT_ACTIVE_PROJECTS_WINDOW_DAYS,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -187,6 +225,14 @@ class DreamingPipeline:
             user_section: USER.md insight append용 섹션 이름. 기본 ``insights``.
             soul_section: SOUL.md dreaming 변경용 섹션 이름. 기본 ``dreaming-updates``.
             agent_section: AGENT.md dreaming 변경용 섹션 이름. 기본 ``dreaming-updates``.
+            active_projects_file: active-projects sidecar JSONL 경로 (BIZ-74).
+                ``None``이면 active-projects 추출/갱신 자체를 비활성화한다 — 기존
+                테스트·운영 환경 호환성 보장. ``user_file``과 함께 설정되어야 의미가 있다.
+            active_projects_section: USER.md 내 active-projects managed 섹션 이름.
+                기본 ``active-projects``.
+            active_projects_window_days: 활성 윈도우(일). 윈도우 외 sidecar 항목은
+                USER.md 섹션에서 자동으로 사라지지만 sidecar에는 보관된다.
+                기본 7일.
 
         BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
         마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
@@ -207,6 +253,13 @@ class DreamingPipeline:
         self._user_section = user_section
         self._soul_section = soul_section
         self._agent_section = agent_section
+        # BIZ-74: active-projects 갱신은 user_file + active_projects_file 둘 다
+        # 설정되었을 때만 활성화된다. 둘 중 하나라도 없으면 추출/갱신을 건너뛴다.
+        self._active_projects_file = (
+            Path(active_projects_file) if active_projects_file else None
+        )
+        self._active_projects_section = active_projects_section
+        self._active_projects_window_days = active_projects_window_days
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -270,7 +323,7 @@ class DreamingPipeline:
             'memory'와 'user_insights' 키를 포함하는 딕셔너리.
         """
         if not messages:
-            return {"memory": "", "user_insights": ""}
+            return {"memory": "", "user_insights": "", "active_projects": []}
 
         if self._router:
             try:
@@ -278,7 +331,11 @@ class DreamingPipeline:
             except Exception:
                 logger.exception("LLM summarization failed, using fallback")
 
-        return {"memory": self._summarize_fallback(messages), "user_insights": ""}
+        return {
+            "memory": self._summarize_fallback(messages),
+            "user_insights": "",
+            "active_projects": [],
+        }
 
     async def _summarize_with_llm(self, messages: list) -> dict:
         """LLM을 호출하여 대화를 분석하고 memory/user/soul/agent 업데이트를 추출한다."""
@@ -335,15 +392,32 @@ class DreamingPipeline:
 
         try:
             result = json.loads(raw)
+            # BIZ-74: active_projects는 list[dict]로 들어와야 한다. LLM이 잘못된 타입
+            # (문자열, dict 등)으로 반환하면 빈 리스트로 강등 — 본 단계에서 fail하면
+            # 다른 dreaming 산출물(memory/insights)까지 같이 잃는다.
+            raw_projects = result.get("active_projects") or []
+            if not isinstance(raw_projects, list):
+                logger.warning(
+                    "active_projects field is not a list (got %s); ignoring",
+                    type(raw_projects).__name__,
+                )
+                raw_projects = []
             return {
                 "memory": result.get("memory", ""),
                 "user_insights": result.get("user_insights", ""),
                 "soul_updates": result.get("soul_updates", ""),
                 "agent_updates": result.get("agent_updates", ""),
+                "active_projects": raw_projects,
             }
         except json.JSONDecodeError:
             logger.warning("Failed to parse dreaming JSON: %s", raw[:200])
-            return {"memory": raw[:500], "user_insights": "", "soul_updates": "", "agent_updates": ""}
+            return {
+                "memory": raw[:500],
+                "user_insights": "",
+                "soul_updates": "",
+                "agent_updates": "",
+                "active_projects": [],
+            }
 
     def _summarize_fallback(self, messages: list) -> str:
         """LLM 없이 단순 텍스트 기반 요약을 생성한다. 각 메시지의 첫 5단어를 토픽으로 추출."""
@@ -437,6 +511,93 @@ class DreamingPipeline:
             return
         block = self._format_dated_block("Dreaming Updates", updates)
         self._safe_append_in_section(self._agent_file, self._agent_section, block)
+
+    # ------------------------------------------------------------------
+    # BIZ-74 — Active Projects (USER.md managed:dreaming:active-projects)
+    # ------------------------------------------------------------------
+
+    def is_active_projects_enabled(self) -> bool:
+        """active-projects 추출/갱신이 활성화되어 있는지 여부.
+
+        ``user_file`` + ``active_projects_file`` 모두 설정된 경우에만 활성화. 둘 중
+        하나라도 누락이면 본 사이클에서 active-projects 단계는 통째로 건너뛴다
+        (silently — 기존 테스트와 운영 환경에 영향 없음).
+        """
+        return self._user_file is not None and self._active_projects_file is not None
+
+    def update_active_projects(
+        self,
+        observations: list[dict],
+        *,
+        now: datetime | None = None,
+    ) -> list[ActiveProject]:
+        """LLM이 추출한 프로젝트 관측치로 sidecar와 USER.md 섹션을 갱신한다.
+
+        흐름:
+        1. sidecar 로드 (없으면 빈 dict).
+        2. ``observations`` 를 ``ActiveProject`` 로 변환 후 ``merge_projects`` 로 병합
+           (last_seen=now, first_seen 보존).
+        3. 갱신된 sidecar 전량 저장.
+        4. 윈도우 내 프로젝트만 골라 USER.md의 ``active-projects`` 섹션 본문을 교체.
+
+        Args:
+            observations: LLM 응답의 ``active_projects`` 리스트. 각 항목은
+                ``{"name": str, "role": str, "recent_summary": str}`` 형태.
+            now: 명시적 시각(테스트 결정성을 위해). None이면 ``datetime.now()``.
+
+        Returns:
+            이번 사이클 종료 후 USER.md 섹션에 렌더링된 활성 프로젝트 리스트
+            (윈도우 내, last_seen 내림차순). 호출자가 결과 컨텍스트에서 활용 가능.
+
+        Raises:
+            ProtectedSectionError: USER.md에 active-projects managed 섹션이 없거나
+                마커가 잘못된 경우. 호출자(``run()``)가 fail-closed로 처리한다.
+        """
+        if not self.is_active_projects_enabled():
+            return []
+
+        ts = now or datetime.now()
+        store = ActiveProjectStore(self._active_projects_file)
+        existing = store.load()
+
+        new_observations: list[ActiveProject] = []
+        for obs in observations:
+            if not isinstance(obs, dict):
+                continue
+            name = str(obs.get("name", "")).strip()
+            if not name:
+                continue
+            new_observations.append(
+                ActiveProject(
+                    name=name,
+                    role=str(obs.get("role", "")).strip(),
+                    recent_summary=str(obs.get("recent_summary", "")).strip(),
+                    first_seen=ts,
+                    last_seen=ts,
+                )
+            )
+
+        merged = merge_projects(existing, new_observations, now=ts)
+
+        # 관측 자체가 비어 있어도 매 사이클 USER.md를 다시 렌더링한다 — 그래야 윈도우
+        # 외로 빠진 항목이 적시에 섹션에서 사라지고, 사용자가 보는 표시가 자동으로 최신.
+        store.save_all(merged)
+
+        active = filter_active(merged, self._active_projects_window_days, now=ts)
+        body = render_active_projects_body(active)
+
+        existing_text = self._user_file.read_text(encoding="utf-8")
+        new_text = replace_section_body(
+            existing_text, self._active_projects_section, body
+        )
+        if new_text != existing_text:
+            self._user_file.write_text(new_text, encoding="utf-8")
+            logger.info(
+                "Refreshed active-projects section in %s (%d active project(s))",
+                self._user_file,
+                len(active),
+            )
+        return active
 
     # ------------------------------------------------------------------
     # Phase 3 — 클러스터 기반 그래프형 드리밍
@@ -734,6 +895,10 @@ class DreamingPipeline:
         targets.append((self._memory_file, memory_section_name))
         if self._user_file:
             targets.append((self._user_file, self._user_section))
+            # BIZ-74: active-projects 가 활성화된 경우 같은 USER.md 안의
+            # ``active-projects`` 섹션도 사전 검증한다. 누락 시 전체 사이클 abort.
+            if self.is_active_projects_enabled():
+                targets.append((self._user_file, self._active_projects_section))
         if self._soul_file:
             targets.append((self._soul_file, self._soul_section))
         if self._agent_file:
@@ -806,8 +971,12 @@ class DreamingPipeline:
         user_insights = result.get("user_insights", "")
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
+        # BIZ-74: 관측치는 빈 리스트일 수 있다(LLM이 식별 못함). 빈 리스트여도
+        # update_active_projects를 호출해 윈도우 외 항목이 USER.md에서 사라지도록 한다.
+        active_project_obs = result.get("active_projects", []) or []
 
         cluster_summary_text = ""
+        active_projects_rendered: list[ActiveProject] = []
         try:
             # USER/SOUL/AGENT는 두 모드 공통으로 갱신
             if user_insights:
@@ -816,6 +985,14 @@ class DreamingPipeline:
                 self.update_soul_file(soul_updates)
             if agent_updates:
                 self.update_agent_file(agent_updates)
+
+            # BIZ-74: USER.md active-projects 섹션 in-place 갱신.
+            # 활성화돼 있을 때만 호출되며, 빈 관측이어도 실행해 윈도우 외 항목이
+            # 자연스럽게 섹션에서 사라지도록 한다.
+            if self.is_active_projects_enabled():
+                active_projects_rendered = self.update_active_projects(
+                    active_project_obs
+                )
 
             # MEMORY.md 갱신은 클러스터 모드 여부에 따라 분기
             if self._enable_clusters:
@@ -832,9 +1009,18 @@ class DreamingPipeline:
             self._restore_from_backups(backups)
             return None
 
-        # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록)
+        # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록).
+        # active-projects만 갱신된 경우(다른 산출물이 모두 비어 있음)에도 None을 반환하지
+        # 않는다 — sidecar/USER.md 에 의미 있는 변경이 일어났음을 호출자가 인지해야 한다.
         if not any(
-            [memory_summary, user_insights, soul_updates, agent_updates, cluster_summary_text]
+            [
+                memory_summary,
+                user_insights,
+                soul_updates,
+                agent_updates,
+                cluster_summary_text,
+                active_projects_rendered,
+            ]
         ):
             return None
 

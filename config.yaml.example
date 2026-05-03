@@ -133,6 +133,13 @@ daemon:
     overnight_hour: 3
     idle_threshold: 7200
     model: "gemini"
+    # BIZ-74 — USER.md의 ``managed:dreaming:active-projects`` 섹션을 매 사이클
+    # in-place 갱신한다. 새 세션 첫 응답에서 "지금 집중 중인 프로젝트"를 0에서
+    # 시작하지 않도록 하기 위함. 윈도우 외 항목은 sidecar에 남고 섹션에서만 빠진다.
+    active_projects:
+      enabled: true
+      window_days: 7
+      sidecar_path: ".agent/active_projects.jsonl"
   wait_state:
     default_timeout: 3600
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
