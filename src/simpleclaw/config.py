@@ -156,6 +156,10 @@ _DAEMON_DEFAULTS: dict = {
         # 클러스터 부착 임계값 — multilingual-e5-small 기준 경험적 컷.
         # 낮추면 클러스터가 커지고(잡음↑), 높이면 작아진다(파편화↑).
         "cluster_threshold": 0.75,
+        # BIZ-73: 인사이트 승격 임계 관측 횟수. 단발 관측은 항상 confidence ≤ 0.4 로 캡되고,
+        # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
+        # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
+        "insight_promotion_threshold": 3,
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -227,6 +231,17 @@ def load_daemon_config(config_path: str | Path) -> dict:
                     "cluster_threshold",
                     _DAEMON_DEFAULTS["dreaming"]["cluster_threshold"],
                 )
+            ),
+            "insight_promotion_threshold": max(
+                1,
+                int(
+                    dreaming.get(
+                        "insight_promotion_threshold",
+                        _DAEMON_DEFAULTS["dreaming"][
+                            "insight_promotion_threshold"
+                        ],
+                    )
+                ),
             ),
         },
         "wait_state": {
