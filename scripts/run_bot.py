@@ -162,6 +162,13 @@ async def main():
         insight_promotion_threshold=dreaming_config.get(
             "insight_promotion_threshold", 3
         ),
+        # BIZ-78: decay/reject 차단 리스트. config 가 None 이면 decay 비활성, reject TTL 영구.
+        decay_archive_after_days=dreaming_config.get("decay", {}).get(
+            "archive_after_days", 30
+        ),
+        reject_default_ttl_days=dreaming_config.get(
+            "reject_blocklist", {}
+        ).get("default_ttl_days"),
         # BIZ-79: dry-run + admin review 모드. 운영 환경에서는 항상 켜져 있어
         # 추출된 인사이트가 USER.md 에 즉시 쓰이지 않고 review 큐로 들어간다.
         # auto_promote 임계치를 동시에 충족한 항목만 큐 우회.

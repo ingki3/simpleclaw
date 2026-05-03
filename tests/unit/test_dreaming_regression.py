@@ -192,6 +192,9 @@ def workspace(tmp_path):
         agent_file=files["AGENT.md"],
         # insights_file 미지정 → user_file 옆 ``insights.jsonl`` 로 자동 결정.
         insight_promotion_threshold=3,
+        # BIZ-79: 본 회귀 가드는 sidecar 직접 적재 경로를 검증한다. 새 dry_run 기본값을
+        # 회귀 의미와 분리하기 위해 명시적으로 옵트아웃 — dry_run 자체는 별도 모듈에서 검증.
+        dry_run_enabled=False,
     )
     return {
         "tmp_path": tmp_path,
@@ -223,6 +226,8 @@ def cluster_workspace(tmp_path):
         clusterer=clusterer,
         enable_clusters=True,
         insight_promotion_threshold=3,
+        # BIZ-79: cluster 모드도 동일하게 sidecar 직접 적재 경로 가드 — dry_run 옵트아웃.
+        dry_run_enabled=False,
     )
     return {
         "tmp_path": tmp_path,
