@@ -1,0 +1,42 @@
+{
+  "name": "@simpleclaw/admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SimpleClaw Admin UI — 단일 운영자용 데몬 설정 화면",
+  "scripts": {
+    "dev": "node scripts/run-next.mjs dev",
+    "build": "next build",
+    "start": "node scripts/run-next.mjs start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lhci": "npx --yes @lhci/cli@0.14.x autorun"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.460.0",
+    "clsx": "^2.1.1",
+    "swr": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "tailwindcss": "^4.0.0",
+    "@tailwindcss/postcss": "^4.0.0",
+    "postcss": "^8.5.0",
+    "@storybook/nextjs": "^10.3.0",
+    "@storybook/addon-a11y": "^10.3.0",
+    "storybook": "^10.3.0",
+    "vitest": "^2.1.0",
+    "@vitest/ui": "^2.1.0",
+    "jsdom": "^25.0.0",
+    "msw": "^2.7.0"
+  }
+}

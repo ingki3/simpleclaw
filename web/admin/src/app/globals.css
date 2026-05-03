@@ -1,0 +1,270 @@
+/*
+ * SimpleClaw Admin — 글로벌 스타일 + 디자인 토큰
+ *
+ * DESIGN.md §2 Tokens를 Tailwind v4 `@theme`로 1:1 매핑한다.
+ * 모든 컴포넌트는 *semantic 토큰만* 참조해야 하며 (예: `bg-[--background]`),
+ * 라이트/다크 분기는 본 파일의 `:root` / `.theme-dark` 두 셋으로만 처리한다.
+ * 컴포넌트 안에 `dark:` 분기 코드를 두지 않는 것이 본 시스템의 규약이다.
+ */
+
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────
+ * Semantic 토큰 — 라이트 모드 기본
+ * 컴포넌트는 항상 var(--background) 형태로 참조한다.
+ * ───────────────────────────────────────────────────────── */
+:root {
+  /* Primitive — Neutral (light) */
+  --neutral-0: #ffffff;
+  --neutral-50: #f7f8fa;
+  --neutral-100: #eef1f5;
+  --neutral-200: #e2e6ec;
+  --neutral-300: #cbd2da;
+  --neutral-400: #9aa3af;
+  --neutral-500: #6b7280;
+  --neutral-600: #4b5563;
+  --neutral-700: #374151;
+  --neutral-800: #1f2937;
+  --neutral-900: #0b0f14;
+
+  /* Primitive — Brand & State (light) */
+  --brand-50: #eef0ff;
+  --brand-500: #5b6cf6;
+  --brand-600: #4453e0;
+  --success-500: #16a34a;
+  --success-50: #e7f8ee;
+  --warning-500: #d97706;
+  --warning-50: #fff4e5;
+  --danger-500: #dc2626;
+  --danger-50: #fdecec;
+  --info-500: #0284c7;
+  --info-50: #e5f4fb;
+
+  /* Semantic — DESIGN.md §2.3 */
+  --background: var(--neutral-0);
+  --surface: var(--neutral-50);
+  --card: var(--neutral-0);
+  --card-elevated: var(--neutral-0);
+  --border: var(--neutral-200);
+  --border-strong: var(--neutral-300);
+  --foreground: var(--neutral-800);
+  --foreground-strong: var(--neutral-900);
+  --muted-foreground: var(--neutral-600);
+  --placeholder: var(--neutral-500);
+  --primary: var(--brand-500);
+  --primary-foreground: var(--neutral-0);
+  --primary-hover: var(--brand-600);
+  --primary-tint: var(--brand-50);
+  --ring: rgba(91, 108, 246, 0.4);
+  --color-success: var(--success-500);
+  --color-success-bg: var(--success-50);
+  --color-warning: var(--warning-500);
+  --color-warning-bg: var(--warning-50);
+  --color-error: var(--danger-500);
+  --color-error-bg: var(--danger-50);
+  --color-info: var(--info-500);
+  --color-info-bg: var(--info-50);
+  --destructive: var(--danger-500);
+  --destructive-foreground: var(--neutral-0);
+  --secret-mask-bg: var(--neutral-100);
+
+  /* Radius / Shadow — §2.6 */
+  --radius-none: 0;
+  --radius-sm: 4px;
+  --radius-m: 8px;
+  --radius-l: 12px;
+  --radius-pill: 9999px;
+  --shadow-sm: 0 1px 2px rgba(11, 15, 20, 0.06);
+  --shadow-m: 0 4px 16px rgba(11, 15, 20, 0.08);
+  --shadow-l: 0 12px 32px rgba(11, 15, 20, 0.12);
+
+  /* Motion — §2.7 */
+  --motion-fast: 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-base: 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --motion-slow: 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Typography — §2.4 */
+  --font-primary: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-secondary: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  color-scheme: light;
+}
+
+/* ─────────────────────────────────────────────────────────
+ * 다크 모드 — 토큰만 교체. 컴포넌트 분기 0줄.
+ * 적용 경로: <html class="theme-dark"> 또는 prefers-color-scheme
+ * ───────────────────────────────────────────────────────── */
+.theme-dark {
+  --neutral-0: #0b0f14;
+  --neutral-50: #10151b;
+  --neutral-100: #161c24;
+  --neutral-200: #1f2731;
+  --neutral-300: #2a3441;
+  --neutral-400: #3d4a5c;
+  --neutral-500: #5a6779;
+  --neutral-600: #8a95a8;
+  --neutral-700: #b6bfce;
+  --neutral-800: #d6dce6;
+  --neutral-900: #f1f4f9;
+
+  --brand-50: #1a2244;
+  --brand-500: #7c8bff;
+  --brand-600: #5b6cf6;
+  --success-500: #22c55e;
+  --success-50: #0d2b19;
+  --warning-500: #f59e0b;
+  --warning-50: #2a1b05;
+  --danger-500: #ef4444;
+  --danger-50: #2a0f0f;
+  --info-500: #38bdf8;
+  --info-50: #06243a;
+
+  /* Semantic — 다크에서는 card가 neutral-100 (sub-elevation) */
+  --card: var(--neutral-100);
+  --card-elevated: var(--neutral-100);
+  --primary-foreground: var(--neutral-900);
+  --destructive-foreground: var(--neutral-900);
+
+  color-scheme: dark;
+}
+
+/* 시스템 prefers-color-scheme 자동 적용 — 단, 운영자가 수동 override했다면
+ * <html class="theme-light|theme-dark"> 가 우선한다 (theme.tsx 참조). */
+@media (prefers-color-scheme: dark) {
+  :root:not(.theme-light):not(.theme-dark) {
+    --neutral-0: #0b0f14;
+    --neutral-50: #10151b;
+    --neutral-100: #161c24;
+    --neutral-200: #1f2731;
+    --neutral-300: #2a3441;
+    --neutral-400: #3d4a5c;
+    --neutral-500: #5a6779;
+    --neutral-600: #8a95a8;
+    --neutral-700: #b6bfce;
+    --neutral-800: #d6dce6;
+    --neutral-900: #f1f4f9;
+    --brand-50: #1a2244;
+    --brand-500: #7c8bff;
+    --brand-600: #5b6cf6;
+    --success-500: #22c55e;
+    --success-50: #0d2b19;
+    --warning-500: #f59e0b;
+    --warning-50: #2a1b05;
+    --danger-500: #ef4444;
+    --danger-50: #2a0f0f;
+    --info-500: #38bdf8;
+    --info-50: #06243a;
+    --card: var(--neutral-100);
+    --card-elevated: var(--neutral-100);
+    --primary-foreground: var(--neutral-900);
+    --destructive-foreground: var(--neutral-900);
+    color-scheme: dark;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────
+ * Tailwind v4 @theme — 토큰을 utility로 노출한다.
+ * 컴포넌트는 `bg-background`, `text-foreground` 등으로 사용 가능.
+ * ───────────────────────────────────────────────────────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-card-elevated: var(--card-elevated);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-foreground-strong: var(--foreground-strong);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-placeholder: var(--placeholder);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-tint: var(--primary-tint);
+  --color-success: var(--color-success);
+  --color-success-bg: var(--color-success-bg);
+  --color-warning: var(--color-warning);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-error: var(--color-error);
+  --color-error-bg: var(--color-error-bg);
+  --color-info: var(--color-info);
+  --color-info-bg: var(--color-info-bg);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-secret-mask-bg: var(--secret-mask-bg);
+
+  --radius-none: var(--radius-none);
+  --radius-sm: var(--radius-sm);
+  --radius-m: var(--radius-m);
+  --radius-l: var(--radius-l);
+  --radius-pill: var(--radius-pill);
+
+  --font-sans: var(--font-primary);
+  --font-mono: var(--font-mono);
+}
+
+/* ─────────────────────────────────────────────────────────
+ * Base
+ * ───────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-primary);
+  font-size: 14px;
+  line-height: 22px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* DESIGN.md §5 — 모든 인터랙티브 요소의 포커스 링은 절대 제거하지 않는다. */
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* DESIGN.md §2.7 — reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* health flash pulse — §4.5 */
+@keyframes sc-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--ring);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+.sc-pulse {
+  animation: sc-pulse var(--motion-slow) ease-out 1;
+}
+
+/* Logs page — 새 로그 행이 자동 새로고침으로 도착했을 때 페이드인 강조. */
+@keyframes sc-log-fresh {
+  0% {
+    background-color: var(--primary-tint);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.log-row[data-fresh="true"] {
+  animation: sc-log-fresh 600ms ease-out 1;
+}
+

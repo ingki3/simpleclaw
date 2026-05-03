@@ -366,8 +366,66 @@
 
 ---
 
-## 8. 부록: admin.pen 변수 매핑
+## 8. 부록 A: admin.pen 변수 매핑 (BIZ-38)
 
 `admin.pen` 의 `Variables` 패널은 §2 토큰을 그대로 들고 있으며, 이름은 *prefix 없이* 그대로 키로 사용한다 (예: `--background`, `--font-primary`). 프론트 구현 시 동일 이름의 CSS 변수로 직결될 것을 가정한다 (Tailwind v4 `@theme` 또는 `:root`).
+
+---
+
+## 9. 부록 C: 데이터 패칭 라이브러리 결정 (BIZ-43)
+
+* **채택: SWR(2.x).** Admin UI는 단일 운영자/단일 워크스페이스이므로 글로벌 캐시·낙관적 업데이트 같은 TanStack Query의 고도 기능보다 *불러오고 재검증(stale-while-revalidate)* 모델이 잘 어울리고, 번들 풋프린트(약 4kB gzip)가 작다. 변이는 `swr/mutation`의 `useSWRMutation`으로 키별 분리.
+* 표준 진입점: `web/admin/src/lib/api/` (fetchAdmin, useAdminQuery, useAdminMutation, dryRun, useUndo). 영역별 화면은 본 모듈의 export만 사용한다.
+
+---
+
+## 10. 부록 D: a11y · 성능 측정 (BIZ-55)
+
+본 부록은 §5 Accessibility를 *측정 가능*하게 만드는 운영 규약이다. CI에 Lighthouse를 묶어 회귀를 차단한다.
+
+### 10.1 Lighthouse CI
+
+* **워크플로**: `.github/workflows/admin-lighthouse.yml` — `web/admin/**` 변경 PR/푸시에서만 동작. 11개 라우트(대시보드·LLM·페르소나·스킬·Cron·기억·시크릿·채널·로그·감사·시스템) 모두 측정.
+* **설정**: `web/admin/lighthouserc.json` — `treosh/lighthouse-ci-action@v12`가 `lhci autorun` 래퍼로 실행하고 임시 공개 스토리지에 보고서를 업로드해 PR 코멘트로 노출한다.
+* **CI 게이트(BIZ-55 DoD)**:
+  * `categories:accessibility` < 0.95 → **error** (CI 실패)
+  * `categories:performance` < 0.85 → warn (코멘트에만 노출)
+  * `categories:best-practices` < 0.9 → warn
+  * `largest-contentful-paint` > 2500ms → warn (LCP 목표)
+  * `cumulative-layout-shift` > 0.1 → warn (CLS 목표)
+  * `total-blocking-time` > 200ms → warn (INP의 lab proxy)
+* **로컬 실행**: `cd web/admin && npm run build && npm run lhci` — 동일 thresholds로 검증할 수 있다(인터넷 연결 필요, npx로 `@lhci/cli@0.14.x` 가져옴).
+
+### 10.2 키보드 전용 시나리오 (스모크)
+
+키보드만으로 끝까지 도달 가능해야 하는 핵심 흐름. 새 화면이 추가될 때 본 목록에 함께 등록한다.
+
+| 시나리오 | 진입 | 키 | 종료 |
+|---|---|---|---|
+| 영역 점프 | 어떤 화면에서든 ⌘K | 화면명 입력 → ↓/↑ → Enter | 해당 라우트로 이동 |
+| 본문 건너뛰기 | 페이지 로드 직후 Tab 1회 | "본문으로 건너뛰기" 링크 노출 → Enter | `<main>`으로 포커스 이동 |
+| 시크릿 회전 | `/secrets` → 항목 행 | Tab으로 [회전] → Enter → 입력 `ROTATE` → Enter | 결과 토스트 + 5분 Undo 슬롯 |
+| 페르소나 편집 | `/persona` | Tab으로 파일 탭 → Enter → 본문 편집 → Tab → [적용] | dry-run diff 모달 → Enter로 적용 |
+| 크론 잡 추가 | `/cron` → [새 잡] | Tab으로 표현식 → 라벨 → 핸들러 → [저장] | 새 행이 표에 등장 + StatusPill |
+
+* **포커스 가시성**: 전 인터랙티브 요소가 globals.css의 `:focus-visible` 규칙으로 2px 링을 강제. 디자인이 임의로 `outline: none`을 넣으면 PR review에서 reject.
+* **Skip link**: `Shell`이 `<a href="#main-content">`를 첫 자식으로 둔다. `sr-only`로 가려졌다가 포커스 시 좌상단에 노출.
+
+### 10.3 VoiceOver(macOS) 검증 시나리오
+
+운영자가 VoiceOver를 켠 상태에서 다음을 점검한다(릴리스 전 1회).
+
+1. **Sidebar 점프**: VO+U(로터 → Landmarks)에서 "주요 영역" / "설정 영역" / "main-content"가 모두 노출되어야 한다.
+2. **ConfirmGate 알림**: 시크릿 회전 다이얼로그 진입 시 VoiceOver가 *제목 + 설명*을 발화해야 한다(role="alertdialog" + `aria-labelledby`/`aria-describedby`).
+3. **토스트 라이브 리전**: 변경 적용 후 토스트가 자동 발화되어야 한다(`role="status"` + `aria-live="polite"`).
+4. **헬스 상태**: Topbar의 4 dot은 색만이 아니라 `title="데몬: 정상"` 형태의 라벨을 가진다 — VO가 라벨을 읽어야 한다(§5 비텍스트 신호 금지).
+5. **다크 모드 스왑**: 테마 토글 후 페이지를 재진입했을 때 모든 텍스트가 4.5:1 대비를 유지한다(토큰만 교체되므로 시각 변화에 더해 SR 발화는 영향 없음 — 시각 회귀만 확인).
+
+### 10.4 회귀 차단 흐름
+
+1. PR 작성 → `web/admin/**` 변경 감지 → 워크플로 트리거.
+2. `npm ci` → `next build` → `next start --port 3100` → `lhci autorun`.
+3. a11y < 95인 라우트가 1건이라도 있으면 CI 실패. 보고서 링크가 PR 코멘트에 자동 첨부.
+4. 회귀가 검출되면 본 부록의 시나리오 표를 다시 돌리고, 실패한 항목을 §5의 규칙으로 환원해 수정한다.
 
 > 본 문서는 BIZ-38의 산출물이며, BIZ-39 화면 설계와 후속 구현 이슈의 *유일한 비주얼/인터랙션 진실*로 사용된다.

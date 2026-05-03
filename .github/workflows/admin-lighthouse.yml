@@ -1,0 +1,68 @@
+name: Admin UI · Lighthouse
+
+# SimpleClaw Admin (web/admin)의 11개 라우트에 대해 Lighthouse를 실행한다.
+# - a11y 카테고리는 95 미만이면 CI 실패(BIZ-55 DoD).
+# - 성능/베스트 프랙티스는 임계 미달 시 경고(빌드 실패는 아니지만 PR 코멘트에 노출).
+# - 결과는 임시 공개 스토리지에 업로드되어 PR 코멘트로 보고된다.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "web/admin/**"
+      - ".github/workflows/admin-lighthouse.yml"
+  pull_request:
+    paths:
+      - "web/admin/**"
+      - ".github/workflows/admin-lighthouse.yml"
+
+jobs:
+  lighthouse:
+    name: Lighthouse 11 routes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web/admin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/admin/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build admin
+        run: npm run build
+        env:
+          # 빌드 시 토큰이 누락되면 프록시 라우트가 빌드 타임에 실패할 수 있으니 더미 값 주입.
+          # 실제 백엔드 호출은 클라이언트 SWR 시점에만 일어나므로 CI에선 더미로 충분하다.
+          ADMIN_API_TOKEN: ci-lighthouse-dummy
+          ADMIN_API_BASE: http://127.0.0.1:0
+
+      - name: Run Lighthouse CI
+        # treosh/lighthouse-ci-action@v12 — lhci autorun 래퍼.
+        # configPath로 web/admin/lighthouserc.json을 사용.
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: ./web/admin/lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+        env:
+          ADMIN_API_TOKEN: ci-lighthouse-dummy
+          ADMIN_API_BASE: http://127.0.0.1:0
+
+      - name: Print Lighthouse summary on failure
+        if: failure()
+        run: |
+          echo "Lighthouse 어설션이 실패했어요. 자세한 결과는 위 'Run Lighthouse CI' 단계의 보고서 링크를 확인해 주세요."
+          if [ -d ".lighthouseci" ]; then
+            ls -la .lighthouseci || true
+          fi
