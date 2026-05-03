@@ -946,3 +946,167 @@ class TestInsightSources:
         assert resp.status == 200
         body = await resp.json()
         assert body["start_msg_id"] == id1
+
+
+# ---------------------------------------------------------------------------
+# BIZ-79 — Dreaming Dry-run + Admin Review Loop (suggestion queue endpoints)
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestionQueueEndpoints:
+    """``/admin/v1/memory/insights/suggestions`` 4종 엔드포인트 검증.
+
+    핵심 흐름 (DoD §B):
+    1. dreaming 결과가 큐로 적재된다 (이 테스트는 미리 시드)
+    2. 운영자가 list/accept/edit/reject 액션을 호출한다
+    3. accept → sidecar 등재, reject → blocklist 등재 + status 변경
+    4. blocklist 가 차단 신호를 다음 사이클에 노출한다 (별도 E2E 에서 검증)
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_dependencies_missing(self, client):
+        resp = await client.get(
+            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+        )
+        assert resp.status == 503
+
+    @pytest_asyncio.fixture
+    async def queue_client(self, tmp_state, tmp_path, aiohttp_client):
+        """SuggestionStore + InsightBlocklist + InsightStore 가 주입된 client.
+
+        2건 pending 시드 — 운영자 검수 시나리오의 시작 상태.
+        """
+        from simpleclaw.memory.insights import InsightStore
+        from simpleclaw.memory.suggestions import (
+            InsightBlocklist,
+            SuggestionItem,
+            SuggestionStore,
+        )
+
+        suggestions = SuggestionStore(tmp_path / "insight_suggestions.jsonl")
+        blocklist = InsightBlocklist(tmp_path / "insight_blocklist.jsonl")
+        insights = InsightStore(tmp_path / "insights.jsonl")
+
+        # 시드: 두 개의 pending 제안 (정치뉴스 — 운영자가 reject 할 후보,
+        # 맥북에어 — 운영자가 accept 할 후보).
+        suggestions.upsert_pending(
+            SuggestionItem(
+                topic="정치뉴스",
+                text="정치 뉴스 1회 관측",
+                evidence_count=1,
+                confidence=0.4,
+                source_msg_ids=[10],
+                start_msg_id=10,
+                end_msg_id=10,
+            )
+        )
+        suggestions.upsert_pending(
+            SuggestionItem(
+                topic="맥북에어",
+                text="맥북 에어 가격 조회",
+                evidence_count=2,
+                confidence=0.55,
+                source_msg_ids=[20, 21],
+                start_msg_id=20,
+                end_msg_id=21,
+            )
+        )
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            insight_store=insights,
+            suggestion_store=suggestions,
+            insight_blocklist=blocklist,
+        )
+        c = await aiohttp_client(srv.get_app())
+        return c, suggestions, blocklist, insights
+
+    @pytest.mark.asyncio
+    async def test_list_returns_pending_items(self, queue_client):
+        client, _, _, _ = queue_client
+        resp = await client.get(
+            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 2
+        topics = {item["topic"] for item in body["items"]}
+        assert topics == {"정치뉴스", "맥북에어"}
+
+    @pytest.mark.asyncio
+    async def test_accept_promotes_to_sidecar_and_marks_accepted(self, queue_client):
+        client, suggestions, _, insights = queue_client
+        resp = await client.post(
+            "/admin/v1/memory/insights/suggestions/맥북에어/accept",
+            headers=HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["promoted"] is True
+        # sidecar 에 적재됨
+        assert insights.find_by_topic("맥북에어") is not None
+        # 큐 status 변경
+        item = suggestions.find_by_topic("맥북에어")
+        assert item is not None
+        assert item.status == "accepted"
+        # default list 에서 사라짐 (pending 만 노출)
+        list_resp = await client.get(
+            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+        )
+        list_body = await list_resp.json()
+        topics = {item["topic"] for item in list_body["items"]}
+        assert "맥북에어" not in topics
+
+    @pytest.mark.asyncio
+    async def test_edit_updates_text_keeps_pending(self, queue_client):
+        client, suggestions, _, _ = queue_client
+        resp = await client.post(
+            "/admin/v1/memory/insights/suggestions/맥북에어/edit",
+            headers=HEADERS,
+            json={"text": "맥북 에어 M3 가격 비교"},
+        )
+        assert resp.status == 200
+        item = suggestions.find_by_topic("맥북에어")
+        assert item.text == "맥북 에어 M3 가격 비교"
+        assert item.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_edit_rejects_empty_text(self, queue_client):
+        client, _, _, _ = queue_client
+        resp = await client.post(
+            "/admin/v1/memory/insights/suggestions/맥북에어/edit",
+            headers=HEADERS,
+            json={"text": "   "},
+        )
+        assert resp.status == 422
+
+    @pytest.mark.asyncio
+    async def test_reject_adds_to_blocklist_and_marks_rejected(self, queue_client):
+        client, suggestions, blocklist, _ = queue_client
+        resp = await client.post(
+            "/admin/v1/memory/insights/suggestions/정치뉴스/reject",
+            headers=HEADERS,
+            json={"reason": "out_of_scope"},
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["blocked"] is True
+        # blocklist 등재 — 정규형으로도 조회 가능
+        assert blocklist.is_blocked("정치뉴스") is True
+        assert blocklist.is_blocked("정치 뉴스") is True
+        # 큐 status 변경
+        item = suggestions.find_by_topic("정치뉴스")
+        assert item.status == "rejected"
+
+    @pytest.mark.asyncio
+    async def test_unknown_topic_returns_404(self, queue_client):
+        client, _, _, _ = queue_client
+        resp = await client.post(
+            "/admin/v1/memory/insights/suggestions/없는토픽/accept",
+            headers=HEADERS,
+        )
+        assert resp.status == 404

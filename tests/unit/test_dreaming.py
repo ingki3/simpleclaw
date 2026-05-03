@@ -41,7 +41,11 @@ class TestDreamingPipeline:
             "<!-- managed:dreaming:insights -->\n"
             "<!-- /managed:dreaming:insights -->\n"
         )
-        pipeline = DreamingPipeline(store, memory_file, user_file=user_file)
+        # BIZ-79: 새 기본은 dry_run(큐로 적재). 본 모듈의 기존 테스트들은 sidecar 직접
+        # 적재 경로(legacy)를 가드하므로 명시적으로 dry_run_enabled=False 로 옵트아웃한다.
+        pipeline = DreamingPipeline(
+            store, memory_file, user_file=user_file, dry_run_enabled=False
+        )
         return store, pipeline, memory_file, user_file
 
     def test_create_backup(self, setup):
