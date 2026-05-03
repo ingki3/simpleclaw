@@ -89,7 +89,7 @@ export function Topbar() {
           type="button"
           onClick={() => setPaletteOpen(true)}
           className="flex items-center gap-2 rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-1.5 text-xs text-[--muted-foreground] transition-colors hover:bg-[--surface]"
-          aria-label="명령 팔레트 열기"
+          aria-label="검색·이동 — 명령 팔레트 열기"
         >
           <Search size={14} aria-hidden />
           <span>검색·이동</span>

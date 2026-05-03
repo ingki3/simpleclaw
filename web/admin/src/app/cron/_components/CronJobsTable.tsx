@@ -111,7 +111,9 @@ function CronJobsTableRow({
       onClick={() => onSelect(job)}
       className={cn(
         "h-12 cursor-pointer border-t border-[--border] transition-colors hover:bg-[--surface]",
-        !job.enabled && "opacity-60",
+        // 비활성 잡은 흐리게 보여주되, 텍스트 명도/대비를 망가뜨리지 않도록
+        // ``opacity-80``까지만 적용한다(WCAG AA 4.5:1 준수 — Lighthouse a11y).
+        !job.enabled && "opacity-80",
       )}
     >
       <td className="px-3">

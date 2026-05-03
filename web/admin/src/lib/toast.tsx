@@ -137,6 +137,7 @@ function ToastViewport({
 }) {
   return (
     <div
+      role="region"
       aria-label="알림"
       className="pointer-events-none fixed bottom-6 right-6 z-50 flex w-[360px] max-w-[calc(100vw-32px)] flex-col gap-2"
     >
