@@ -52,6 +52,13 @@ from simpleclaw.memory.insights import (
     merge_insights,
     normalize_topic,
 )
+from simpleclaw.memory.language_policy import (
+    LanguagePolicy,
+    filter_active_projects,
+    filter_meta_items,
+    filter_text_to_primary,
+    language_instruction_block,
+)
 from simpleclaw.memory.models import (
     ClusterRecord,
     ConversationMessage,
@@ -134,6 +141,11 @@ _VALID_AUTO_TRIGGER_MODES = frozenset({
 
 # 프롬프트는 LLM에게 마커 자체를 출력하지 말라고 명시 — 출력은 본문 마크다운만이며
 # 본 모듈이 managed 섹션 안쪽으로 안전하게 append한다.
+#
+# BIZ-80: ``{language_instruction}`` placeholder 는 ``DreamingPipeline._build_prompt``
+# 가 채운다. 정책이 비활성(primary=None) 이면 빈 문자열로 대체되어 프롬프트에 어떤
+# 언어 강제도 들어가지 않는다(레거시 호환). 정책이 활성이면 출력 본문이 어떤 언어로
+# 적혀야 하는지(파일별 override 포함) 명시된다.
 _DREAMING_PROMPT = """\
 다음 대화 내역을 분석하여 다섯 가지를 JSON으로 추출하세요.
 
@@ -142,6 +154,7 @@ managed 섹션(`<!-- managed:dreaming:... -->` 마커 내부)에 append됩니다
 managed 마커 자체(`<!-- managed:dreaming:... -->`, `<!-- /managed:dreaming:... -->`)를
 포함하지 마세요. 본문 텍스트만 작성하세요. 마커 외부에는 절대 쓰지 않으므로,
 정체성·캘린더 매핑·디렉토리 규약 같은 보호 영역을 갱신하려 하지 마세요.
+{language_instruction}
 
 1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
    - 날짜 헤더 포함 (## {date} 형식)
@@ -273,6 +286,7 @@ class DreamingPipeline:
         active_projects_window_days: int = DEFAULT_ACTIVE_PROJECTS_WINDOW_DAYS,
         runs_file: str | Path | None = None,
         runs_max_records: int = DreamingRunStore.DEFAULT_MAX_RECORDS,
+        language_policy: LanguagePolicy | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -340,6 +354,14 @@ class DreamingPipeline:
             active_projects_window_days: 활성 윈도우(일). 윈도우 외 sidecar 항목은
                 USER.md 섹션에서 자동으로 사라지지만 sidecar에는 보관된다.
                 기본 7일.
+            language_policy: BIZ-80 1차 언어 정책 (USER/MEMORY/AGENT 등 dreaming-managed
+                섹션의 출력 언어). ``None`` 이면 기본값(``LanguagePolicy()`` — 한국어)을
+                사용하므로 영어 입력에서도 USER.md 인사이트가 한국어로 적힌다. 정책의
+                ``primary`` 를 ``None`` 으로 두면 검사를 끄고 출력을 그대로 통과시킨다
+                (레거시 호환). 정책은 (1) dreaming 프롬프트에 1차 언어 강제 지시문을
+                추가하고, (2) 추출된 결과(memory bullet, user_insights, meta items,
+                active_projects role/recent_summary, soul/agent updates)에서 비-1차
+                언어 항목을 자동 드롭한다.
 
         BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
         마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
@@ -450,6 +472,15 @@ class DreamingPipeline:
         # 한 회차 내에서 apply_insight_meta 가 차단·필터한 관측 수.
         # run() 이 메트릭에 기록하기 위해 사용. apply_insight_meta 호출 직전 0으로 초기화.
         self._last_rejected_count: int = 0
+
+        # BIZ-80: 1차 언어 정책. ``None`` (기본) 이면 enforcement 없이 LLM 출력을
+        # 그대로 통과시켜 기존 테스트/배포 fixture 가 그대로 동작한다 (BIZ-80 이전
+        # 동작과 byte-for-byte 동일). 운영 환경 (``scripts/run_bot.py``) 은 명시적으로
+        # ``LanguagePolicy()`` (primary=ko) 를 주입해 enforcement 를 켠다.
+        self._language_policy = (
+            language_policy if language_policy is not None
+            else LanguagePolicy(primary=None)
+        )
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -634,9 +665,13 @@ class DreamingPipeline:
 
         if self._router:
             try:
-                return await self._summarize_with_llm(messages)
+                result = await self._summarize_with_llm(messages)
             except Exception:
                 logger.exception("LLM summarization failed, using fallback")
+            else:
+                # BIZ-80: LLM 산출물에 1차 언어 정책을 강제 적용. 정책이 비활성이면
+                # 입력을 그대로 반환한다(레거시 테스트 fixture 와 동일 동작).
+                return self._enforce_language_policy(result)
 
         return {
             "memory": self._summarize_fallback(messages),
@@ -669,12 +704,16 @@ class DreamingPipeline:
         conversations = "\n".join(conv_lines)[:8000]
 
         date_str = datetime.now().strftime("%Y-%m-%d")
+        # BIZ-80: 정책이 활성이면 ``language_instruction_block`` 이 한 단락의 한국어
+        # 강제 지시문을 만들어 프롬프트 본문에 끼워 넣는다. 비활성이면 빈 문자열.
+        language_instruction = language_instruction_block(self._language_policy)
         prompt = _DREAMING_PROMPT.format(
             existing_soul_md=existing_soul_md or "(없음)",
             existing_agent_md=existing_agent_md or "(없음)",
             existing_user_md=existing_user_md or "(없음)",
             conversations=conversations,
             date=date_str,
+            language_instruction=language_instruction,
         )
 
         request = LLMRequest(
@@ -741,6 +780,113 @@ class DreamingPipeline:
                 "agent_updates": "",
                 "active_projects": [],
             }
+
+    def _enforce_language_policy(self, result: dict) -> dict:
+        """BIZ-80 — 추출된 dreaming 산출물에 1차 언어 정책을 적용한다.
+
+        파일별 1차 언어와 다른 본문은 *드롭* 한다 (``LanguagePolicy.drop_on_violation``
+        기본 True). 자동 번역은 본 단계에서 하지 않는다 — 번역은 결정성/재현성이
+        떨어지고 LLM 호출 비용이 두 배로 든다. 운영자가 1회성으로 기존 파일을
+        한국어로 통일하고 싶을 때는 ``scripts/migrate_dreaming_language.py`` 를 쓴다.
+
+        파일별 매핑:
+        - ``memory`` → MEMORY.md (file_kind=``"memory"``)
+        - ``user_insights`` / ``user_insights_meta`` → USER.md (file_kind=``"user"``)
+        - ``soul_updates`` → SOUL.md (file_kind=``"soul"``)
+        - ``agent_updates`` → AGENT.md (file_kind=``"agent"``)
+        - ``active_projects`` → USER.md active-projects 섹션 (file_kind=``"user"``)
+        """
+        policy = self._language_policy
+        if policy.primary is None:
+            return result
+
+        new_result = dict(result)
+        ratio = policy.min_ratio
+
+        # MEMORY.md (시간순 journal) — bullet 단위 필터.
+        memory_lang = policy.language_for("memory")
+        if memory_lang and result.get("memory"):
+            kept, dropped = filter_text_to_primary(
+                result["memory"], memory_lang, min_ratio=ratio
+            )
+            if dropped:
+                logger.info(
+                    "Language policy: dropped %d non-%s memory bullet(s): %s",
+                    len(dropped), memory_lang, dropped,
+                )
+            new_result["memory"] = kept
+
+        user_lang = policy.language_for("user")
+
+        # USER.md user_insights — bullet 단위 필터.
+        if user_lang and result.get("user_insights"):
+            kept, dropped = filter_text_to_primary(
+                result["user_insights"], user_lang, min_ratio=ratio
+            )
+            if dropped:
+                logger.info(
+                    "Language policy: dropped %d non-%s user_insights bullet(s): %s",
+                    len(dropped), user_lang, dropped,
+                )
+            new_result["user_insights"] = kept
+
+        # USER.md user_insights_meta — sidecar 추적용 구조화 입력. topic/text 둘 다 검사.
+        meta_items = result.get("user_insights_meta") or []
+        if user_lang and meta_items:
+            kept_meta, dropped_meta = filter_meta_items(
+                meta_items, user_lang, min_ratio=ratio
+            )
+            if dropped_meta:
+                logger.info(
+                    "Language policy: dropped %d non-%s insight meta item(s): %s",
+                    len(dropped_meta),
+                    user_lang,
+                    [d.get("topic") for d in dropped_meta],
+                )
+            new_result["user_insights_meta"] = kept_meta
+
+        # USER.md active-projects — role/recent_summary 검사. name 은 고유명사일 수
+        # 있으므로 검사하지 않는다.
+        projects = result.get("active_projects") or []
+        if user_lang and projects:
+            kept_projects, dropped_projects = filter_active_projects(
+                projects, user_lang, min_ratio=ratio
+            )
+            if dropped_projects:
+                logger.info(
+                    "Language policy: dropped %d non-%s active project(s): %s",
+                    len(dropped_projects),
+                    user_lang,
+                    [p.get("name") for p in dropped_projects],
+                )
+            new_result["active_projects"] = kept_projects
+
+        # SOUL.md / AGENT.md updates — bullet 단위 필터(자유 텍스트일 수도 있음).
+        soul_lang = policy.language_for("soul")
+        if soul_lang and result.get("soul_updates"):
+            kept, dropped = filter_text_to_primary(
+                result["soul_updates"], soul_lang, min_ratio=ratio
+            )
+            if dropped:
+                logger.info(
+                    "Language policy: dropped %d non-%s soul_updates bullet(s): %s",
+                    len(dropped), soul_lang, dropped,
+                )
+            new_result["soul_updates"] = kept
+
+        agent_lang = policy.language_for("agent")
+        if agent_lang and result.get("agent_updates"):
+            kept, dropped = filter_text_to_primary(
+                result["agent_updates"], agent_lang, min_ratio=ratio
+            )
+            if dropped:
+                logger.info(
+                    "Language policy: dropped %d non-%s agent_updates bullet(s): %s",
+                    len(dropped), agent_lang, dropped,
+                )
+            new_result["agent_updates"] = kept
+
+        return new_result
 
     def _summarize_fallback(self, messages: list) -> str:
         """LLM 없이 단순 텍스트 기반 요약을 생성한다. 각 메시지의 첫 5단어를 토픽으로 추출."""
