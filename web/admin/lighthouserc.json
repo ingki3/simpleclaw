@@ -2,7 +2,7 @@
   "$schema": "https://googlechrome.github.io/lighthouse-ci/configuration",
   "ci": {
     "collect": {
-      "startServerCommand": "npm run start -- --port 3100",
+      "startServerCommand": "npm --prefix web/admin run start -- --port 3100",
       "startServerReadyPattern": "Ready in",
       "startServerReadyTimeout": 60000,
       "url": [
