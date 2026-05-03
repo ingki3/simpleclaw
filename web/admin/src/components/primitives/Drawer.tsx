@@ -106,12 +106,12 @@ export function Drawer({
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
         className={cn(
-          "flex h-full max-w-full flex-col border-l border-[--border] bg-[--card-elevated] shadow-[--shadow-l] outline-none motion-safe:animate-[drawer-in_180ms_cubic-bezier(.2,.8,.2,1)]",
+          "flex h-full max-w-full flex-col border-l border-[--border-divider] bg-[--card-elevated] shadow-[--shadow-l] outline-none motion-safe:animate-[drawer-in_180ms_cubic-bezier(.2,.8,.2,1)]",
           WIDTH[size],
           className,
         )}
       >
-        <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-[--border] bg-[--card-elevated] px-5 py-4">
+        <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-[--border-divider] bg-[--card-elevated] px-5 py-4">
           <div className="flex-1">
             {title && (
               <h2
@@ -143,7 +143,7 @@ export function Drawer({
           {children}
         </div>
         {footer && (
-          <footer className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[--border] bg-[--card-elevated] px-5 py-4">
+          <footer className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[--border-divider] bg-[--card-elevated] px-5 py-4">
             {footer}
           </footer>
         )}

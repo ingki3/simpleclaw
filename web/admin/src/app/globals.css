@@ -46,6 +46,7 @@
   --card: var(--neutral-0);
   --card-elevated: var(--neutral-0);
   --border: var(--neutral-200);
+  --border-divider: var(--neutral-200);
   --border-strong: var(--neutral-300);
   --foreground: var(--neutral-800);
   --foreground-strong: var(--neutral-900);
@@ -128,11 +129,18 @@
 
   /* BIZ-64 — 다크 전용 가시성 보강 (BIZ-42 결정)
    * - --secret-mask-bg: 카드(neutral-100=#161c24)와 분리되도록 더 어둡게
-   * - --primary-hover : 다크 base(brand-500=#7c8bff)보다 밝게 → hover UX 일관
-   * - --border       : elevated 표면에서 보더 가시성 보강 */
+   * - --primary-hover : 다크 base(brand-500=#7c8bff)보다 밝게 → hover UX 일관 */
   --secret-mask-bg: #0e1218;
   --primary-hover: #a0aaff;
-  --border: #232c38;
+
+  /* BIZ-65 — 다크 보더 stacking 재설계
+   * 문제: BIZ-64의 `--border: #232c38`은 page bg(#0b0f14)·card(#161c24)·surface(#10151b)
+   *       세 표면 모두보다 밝아 1px 라인이 Mach band 효과로 "발광하는 흰 선"처럼 인식됨.
+   * 해결: `--border`는 page bg에 가까운 recessed 톤(#0b1117)으로 되돌리고,
+   *       카드 내부 row/section 구분에는 별도 `--border-divider`(neutral-200=#1f2731)를 사용해
+   *       inner 사용처에서만 가시성을 유지한다. */
+  --border: #0b1117;
+  --border-divider: var(--neutral-200);
 
   color-scheme: dark;
 }
@@ -167,10 +175,11 @@
     --card-elevated: var(--neutral-100);
     --primary-foreground: var(--neutral-900);
     --destructive-foreground: var(--neutral-900);
-    /* BIZ-64 — .theme-dark 블록과 동기 유지 (다크 전용 override) */
+    /* BIZ-64 / BIZ-65 — .theme-dark 블록과 동기 유지 (다크 전용 override) */
     --secret-mask-bg: #0e1218;
     --primary-hover: #a0aaff;
-    --border: #232c38;
+    --border: #0b1117;
+    --border-divider: var(--neutral-200);
     color-scheme: dark;
   }
 }
@@ -185,6 +194,7 @@
   --color-card: var(--card);
   --color-card-elevated: var(--card-elevated);
   --color-border: var(--border);
+  --color-border-divider: var(--border-divider);
   --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
   --color-foreground-strong: var(--foreground-strong);

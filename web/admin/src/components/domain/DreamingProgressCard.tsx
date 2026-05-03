@@ -92,7 +92,7 @@ export function DreamingProgressCard({
                   ? "border-[--color-success] bg-[--color-success-bg] text-[--color-success]"
                   : isActive
                     ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                    : "border-[--border] bg-[--surface]",
+                    : "border-[--border-divider] bg-[--surface]",
               )}
               aria-current={isActive ? "step" : undefined}
             >

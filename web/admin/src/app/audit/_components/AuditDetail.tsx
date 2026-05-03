@@ -64,7 +64,7 @@ export function AuditDetail({
     <div className="flex flex-col gap-5">
       <section
         aria-label="메타"
-        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3"
+        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-3"
       >
         <div className="flex flex-wrap items-center gap-2">
           <History size={14} aria-hidden className="text-[--muted-foreground]" />
@@ -146,7 +146,7 @@ export function AuditDetail({
 
       <section
         aria-label="되돌리기"
-        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3"
+        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-3"
       >
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-[--foreground-strong]">

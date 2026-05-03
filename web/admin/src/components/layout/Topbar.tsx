@@ -56,7 +56,7 @@ export function Topbar() {
   }, []);
 
   return (
-    <header className="flex h-16 items-center gap-4 border-b border-[--border] bg-[--background] px-8">
+    <header className="flex h-16 items-center gap-4 border-b border-[--border-divider] bg-[--background] px-8">
       {/* 좌: 페이지 타이틀 */}
       <h1 className="text-xl font-semibold text-[--foreground-strong]">
         {current?.label ?? "SimpleClaw"}
@@ -93,7 +93,7 @@ export function Topbar() {
         >
           <Search size={14} aria-hidden />
           <span>검색·이동</span>
-          <kbd className="rounded-[--radius-sm] border border-[--border] bg-[--background] px-1.5 py-0.5 font-mono text-[10px]">
+          <kbd className="rounded-[--radius-sm] border border-[--border-divider] bg-[--background] px-1.5 py-0.5 font-mono text-[10px]">
             ⌘K
           </kbd>
         </button>

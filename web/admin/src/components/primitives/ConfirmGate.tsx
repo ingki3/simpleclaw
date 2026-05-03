@@ -105,7 +105,7 @@ export function ConfirmGate({
       {children && <div className="mb-4">{children}</div>}
       <label className="block text-xs text-[--muted-foreground]">
         계속하려면{" "}
-        <code className="rounded-[--radius-sm] border border-[--border] bg-[--surface] px-1 py-0.5 font-mono text-[11px] text-[--foreground]">
+        <code className="rounded-[--radius-sm] border border-[--border-divider] bg-[--surface] px-1 py-0.5 font-mono text-[11px] text-[--foreground]">
           {confirmation}
         </code>
         를 그대로 입력해 주세요.

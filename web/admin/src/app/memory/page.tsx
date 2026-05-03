@@ -334,7 +334,7 @@ export default function MemoryPage() {
                     "inline-flex items-center gap-2 rounded-[--radius-pill] border px-2.5 py-1 text-xs font-medium transition-colors",
                     active
                       ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                      : "border-[--border] bg-[--surface] text-[--muted-foreground] hover:text-[--foreground]",
+                      : "border-[--border-divider] bg-[--surface] text-[--muted-foreground] hover:text-[--foreground]",
                   )}
                 >
                   <span>{f.label}</span>
@@ -346,7 +346,7 @@ export default function MemoryPage() {
 
           {/* 항목 리스트 */}
           {filtered.length === 0 ? (
-            <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] px-4 py-8 text-center text-xs text-[--muted-foreground]">
+            <div className="rounded-[--radius-m] border border-dashed border-[--border-divider] bg-[--surface] px-4 py-8 text-center text-xs text-[--muted-foreground]">
               {data.entries.length === 0
                 ? "아직 MEMORY.md 항목이 없어요. 드리밍을 한 번 돌려 봐요."
                 : "필터에 해당하는 항목이 없어요."}
@@ -357,7 +357,7 @@ export default function MemoryPage() {
               estimatedRowHeight={72}
               threshold={100}
               maxHeight={560}
-              className="rounded-[--radius-m] border border-[--border] bg-[--surface]"
+              className="rounded-[--radius-m] border border-[--border-divider] bg-[--surface]"
               renderItem={(entry) => (
                 <MemoryEntryRow
                   key={entry.id}
@@ -404,7 +404,7 @@ export default function MemoryPage() {
         onConfirm={handleConfirmDelete}
       >
         {pendingDelete ? (
-          <div className="rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--foreground]">
+          <div className="rounded-[--radius-m] border border-[--border-divider] bg-[--surface] px-3 py-2 text-xs text-[--foreground]">
             <div className="text-[10px] font-mono text-[--muted-foreground]">
               {pendingDelete.section} · {pendingDelete.id}
             </div>

@@ -790,7 +790,7 @@ interface ImpactSummaryProps {
 function ImpactSummary({ refs, mode, compact = false }: ImpactSummaryProps) {
   if (refs.length === 0) {
     return (
-      <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-3 text-xs text-[--muted-foreground]">
+      <div className="rounded-[--radius-m] border border-dashed border-[--border-divider] bg-[--surface] p-3 text-xs text-[--muted-foreground]">
         config.yaml에서 이 시크릿을 참조하는 곳이 없어요.{" "}
         {mode === "rotate"
           ? "회전해도 외부 호출에는 즉시 영향이 가지 않습니다."
@@ -802,7 +802,7 @@ function ImpactSummary({ refs, mode, compact = false }: ImpactSummaryProps) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3",
+        "flex flex-col gap-2 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-3",
         compact ? "max-h-32 overflow-y-auto" : undefined,
       )}
     >

@@ -24,7 +24,7 @@ export function Sidebar() {
   return (
     <aside
       aria-label="주요 영역"
-      className="flex h-screen w-60 shrink-0 flex-col border-r border-[--border] bg-[--surface]"
+      className="flex h-screen w-60 shrink-0 flex-col border-r border-[--border-divider] bg-[--surface]"
     >
       {/* 로고 영역 — 32px 가로 패딩으로 페이지 컨텐츠와 시각적으로 정렬 */}
       <div className="flex h-16 items-center gap-3 px-6">
@@ -76,7 +76,7 @@ export function Sidebar() {
       </nav>
 
       {/* Footer — 데몬 헬스 + 버전. 실제 값은 후속 이슈에서 API 연동. */}
-      <div className="border-t border-[--border] px-4 py-3">
+      <div className="border-t border-[--border-divider] px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
           <span
             aria-hidden

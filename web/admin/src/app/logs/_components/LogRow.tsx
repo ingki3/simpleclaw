@@ -72,7 +72,7 @@ export function LogRow({ entry, onSelect, isFresh }: LogRowProps) {
       onClick={onSelect}
       title={entry.timestamp ?? undefined}
       className={cn(
-        "log-row flex h-[44px] w-full items-center gap-3 border-b border-[--border] px-4 text-left text-sm",
+        "log-row flex h-[44px] w-full items-center gap-3 border-b border-[--border-divider] px-4 text-left text-sm",
         "hover:bg-[--surface] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
       )}
     >

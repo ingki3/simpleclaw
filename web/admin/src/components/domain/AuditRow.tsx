@@ -37,7 +37,7 @@ export interface AuditRowProps {
 
 export function AuditRow({ entry, onUndo, onViewTrace }: AuditRowProps) {
   return (
-    <li className="flex flex-col gap-1 border-b border-[--border] px-3 py-3 text-sm last:border-b-0">
+    <li className="flex flex-col gap-1 border-b border-[--border-divider] px-3 py-3 text-sm last:border-b-0">
       <div className="flex items-center gap-2">
         <History
           size={14}

@@ -153,7 +153,7 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
               복사
             </Button>
           </div>
-          <pre className="max-h-[420px] overflow-auto rounded-[--radius-sm] border border-[--border] bg-[--surface] p-3 font-mono text-xs leading-relaxed text-[--foreground]">
+          <pre className="max-h-[420px] overflow-auto rounded-[--radius-sm] border border-[--border-divider] bg-[--surface] p-3 font-mono text-xs leading-relaxed text-[--foreground]">
             <code>{detailJson || "{}"}</code>
           </pre>
         </div>

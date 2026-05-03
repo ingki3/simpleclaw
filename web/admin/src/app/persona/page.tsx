@@ -368,7 +368,7 @@ export default function PersonaPage() {
       <nav
         role="tablist"
         aria-label="페르소나 파일"
-        className="flex items-center gap-1 border-b border-[--border]"
+        className="flex items-center gap-1 border-b border-[--border-divider]"
       >
         {TABS.map((t) => {
           const active = t.type === activeTab;
@@ -462,14 +462,14 @@ export default function PersonaPage() {
           <div className="text-xs font-medium uppercase tracking-wide text-[--muted-foreground]">
             미리보기
           </div>
-          <div className="min-h-[480px] rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 overflow-auto">
+          <div className="min-h-[480px] rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-4 overflow-auto">
             <MarkdownPreview source={currentDraft} />
           </div>
         </div>
       </div>
 
       {/* 하단 액션 바 */}
-      <div className="sticky bottom-0 -mx-8 mt-2 flex items-center justify-between gap-3 border-t border-[--border] bg-[--background] px-8 py-3">
+      <div className="sticky bottom-0 -mx-8 mt-2 flex items-center justify-between gap-3 border-t border-[--border-divider] bg-[--background] px-8 py-3">
         <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
           <span
             aria-hidden
@@ -524,7 +524,7 @@ export default function PersonaPage() {
           }}
         >
           <div className="flex max-h-[80vh] w-full max-w-3xl flex-col rounded-[--radius-l] border border-[--border] bg-[--card] shadow-[--shadow-l]">
-            <header className="flex items-center justify-between border-b border-[--border] px-5 py-3">
+            <header className="flex items-center justify-between border-b border-[--border-divider] px-5 py-3">
               <div>
                 <h2
                   id="resolver-title"

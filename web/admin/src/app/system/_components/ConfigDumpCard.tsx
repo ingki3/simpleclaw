@@ -101,7 +101,7 @@ export function ConfigDumpCard({
       ) : (
         <pre
           aria-label="config.yaml 덤프 (시크릿 마스킹)"
-          className="max-h-[28rem] overflow-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]"
+          className="max-h-[28rem] overflow-auto rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]"
         >
           {text}
         </pre>

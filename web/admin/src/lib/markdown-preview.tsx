@@ -177,7 +177,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <pre
                 key={idx}
-                className="overflow-x-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-3 font-mono text-xs"
+                className="overflow-x-auto rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-3 font-mono text-xs"
               >
                 <code>{b.text}</code>
               </pre>
@@ -200,7 +200,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <hr
                 key={idx}
-                className="my-4 border-0 border-t border-[--border]"
+                className="my-4 border-0 border-t border-[--border-divider]"
               />
             );
           default:
