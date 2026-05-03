@@ -157,6 +157,11 @@ async def main():
         dreaming_model=dreaming_config.get("model", ""),
         clusterer=clusterer,
         enable_clusters=enable_clusters,
+        # BIZ-73: 인사이트 메타 sidecar — USER.md 옆에 두어 운영자 검수가 쉽도록.
+        insights_file=".agent/insights.jsonl",
+        insight_promotion_threshold=dreaming_config.get(
+            "insight_promotion_threshold", 3
+        ),
     )
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,
