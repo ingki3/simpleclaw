@@ -949,68 +949,83 @@ class TestInsightSources:
 
 
 # ---------------------------------------------------------------------------
-# BIZ-79 — Dreaming Dry-run + Admin Review Loop (suggestion queue endpoints)
+# BIZ-79 — pending suggestion 큐 + accept/edit/reject + blocklist
 # ---------------------------------------------------------------------------
 
 
-class TestSuggestionQueueEndpoints:
-    """``/admin/v1/memory/insights/suggestions`` 4종 엔드포인트 검증.
+class TestSuggestionQueue:
+    """``/admin/v1/memory/suggestions/...`` 라우트 검증.
 
-    핵심 흐름 (DoD §B):
-    1. dreaming 결과가 큐로 적재된다 (이 테스트는 미리 시드)
-    2. 운영자가 list/accept/edit/reject 액션을 호출한다
-    3. accept → sidecar 등재, reject → blocklist 등재 + status 변경
-    4. blocklist 가 차단 신호를 다음 사이클에 노출한다 (별도 E2E 에서 검증)
+    DoD 회귀:
+    - 의존성 (suggestion_store/blocklist_store/writer) 미주입 → 503
+    - GET /memory/suggestions — pending 목록
+    - accept → writer 호출, 행 status=accepted, terminal 재호출 시 409
+    - edit → writer 호출 (edited_text 사용), 행 status=edited
+    - reject → blocklist add, 행 status=rejected, 다음 사이클 차단
     """
 
     @pytest.mark.asyncio
-    async def test_returns_503_when_dependencies_missing(self, client):
+    async def test_returns_503_when_suggestion_store_missing(self, client):
+        """기본 server 픽스처는 큐를 주입하지 않으므로 503."""
         resp = await client.get(
-            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+            "/admin/v1/memory/suggestions", headers=HEADERS
         )
         assert resp.status == 503
 
     @pytest_asyncio.fixture
-    async def queue_client(self, tmp_state, tmp_path, aiohttp_client):
-        """SuggestionStore + InsightBlocklist + InsightStore 가 주입된 client.
+    async def suggestion_client(self, tmp_state, tmp_path, aiohttp_client):
+        """SuggestionStore + BlocklistStore + writer 가 주입된 클라이언트.
 
-        2건 pending 시드 — 운영자 검수 시나리오의 시작 상태.
+        대화 메시지 1건 + pending suggestion 2건을 미리 적재한다 (1건은 USER.md
+        accept 검증용, 1건은 reject 검증용).
         """
-        from simpleclaw.memory.insights import InsightStore
+        from simpleclaw.memory.conversation_store import ConversationStore
+        from simpleclaw.memory.insights import InsightMeta
+        from simpleclaw.memory.models import ConversationMessage, MessageRole
         from simpleclaw.memory.suggestions import (
-            InsightBlocklist,
-            SuggestionItem,
+            BlocklistStore,
             SuggestionStore,
         )
 
-        suggestions = SuggestionStore(tmp_path / "insight_suggestions.jsonl")
-        blocklist = InsightBlocklist(tmp_path / "insight_blocklist.jsonl")
-        insights = InsightStore(tmp_path / "insights.jsonl")
+        conv = ConversationStore(tmp_path / "conv.db")
+        mid = conv.add_message(
+            ConversationMessage(
+                role=MessageRole.USER,
+                content="정치 뉴스 보여줘",
+                channel="cli",
+            )
+        )
 
-        # 시드: 두 개의 pending 제안 (정치뉴스 — 운영자가 reject 할 후보,
-        # 맥북에어 — 운영자가 accept 할 후보).
-        suggestions.upsert_pending(
-            SuggestionItem(
-                topic="정치뉴스",
-                text="정치 뉴스 1회 관측",
-                evidence_count=1,
-                confidence=0.4,
-                source_msg_ids=[10],
-                start_msg_id=10,
-                end_msg_id=10,
-            )
+        sugg_path = tmp_path / "sugg.jsonl"
+        sugg_store = SuggestionStore(sugg_path)
+        m1 = InsightMeta(
+            topic="정치뉴스",
+            text="정치 뉴스에 관심",
+            evidence_count=1,
+            confidence=0.4,
+            source_msg_ids=[mid],
         )
-        suggestions.upsert_pending(
-            SuggestionItem(
-                topic="맥북에어",
-                text="맥북 에어 가격 조회",
-                evidence_count=2,
-                confidence=0.55,
-                source_msg_ids=[20, 21],
-                start_msg_id=20,
-                end_msg_id=21,
-            )
+        m1.recompute_id_range()
+        s1 = sugg_store.upsert_pending(m1)
+
+        m2 = InsightMeta(
+            topic="스팸토픽",
+            text="스팸 데이터",
+            evidence_count=1,
+            confidence=0.4,
+            source_msg_ids=[mid],
         )
+        m2.recompute_id_range()
+        s2 = sugg_store.upsert_pending(m2)
+
+        bl_path = tmp_path / "bl.jsonl"
+        bl_store = BlocklistStore(bl_path)
+
+        # USER.md writer — 호출 인자를 캡처해 검증할 수 있게 list 에 누적.
+        applied_calls: list[str] = []
+
+        def writer(text: str) -> None:
+            applied_calls.append(text)
 
         srv = AdminAPIServer(
             auth_token="test-token",
@@ -1018,95 +1033,114 @@ class TestSuggestionQueueEndpoints:
             audit_log=AuditLog(tmp_state["audit_dir"]),
             secrets_manager=_make_secrets_manager(),
             admin_state_dir=tmp_state["state_dir"],
-            insight_store=insights,
-            suggestion_store=suggestions,
-            insight_blocklist=blocklist,
+            conversation_store=conv,
+            suggestion_store=sugg_store,
+            blocklist_store=bl_store,
+            suggestion_writer=writer,
         )
-        c = await aiohttp_client(srv.get_app())
-        return c, suggestions, blocklist, insights
+        client = await aiohttp_client(srv.get_app())
+        return client, sugg_store, bl_store, applied_calls, s1.id, s2.id, mid
 
     @pytest.mark.asyncio
-    async def test_list_returns_pending_items(self, queue_client):
-        client, _, _, _ = queue_client
+    async def test_list_pending(self, suggestion_client):
+        client, _, _, _, s1_id, s2_id, _ = suggestion_client
         resp = await client.get(
-            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+            "/admin/v1/memory/suggestions", headers=HEADERS
         )
         assert resp.status == 200
         body = await resp.json()
         assert body["total"] == 2
-        topics = {item["topic"] for item in body["items"]}
-        assert topics == {"정치뉴스", "맥북에어"}
+        assert body["pending_count"] == 2
+        ids = {s["id"] for s in body["suggestions"]}
+        assert ids == {s1_id, s2_id}
 
     @pytest.mark.asyncio
-    async def test_accept_promotes_to_sidecar_and_marks_accepted(self, queue_client):
-        client, suggestions, _, insights = queue_client
+    async def test_accept_appends_text_and_marks_terminal(
+        self, suggestion_client
+    ):
+        """accept → writer 호출, 행 status=accepted, 재호출 시 409."""
+        client, sugg_store, _, applied, s1_id, _, _ = suggestion_client
         resp = await client.post(
-            "/admin/v1/memory/insights/suggestions/맥북에어/accept",
-            headers=HEADERS,
+            f"/admin/v1/memory/suggestions/{s1_id}/accept", headers=HEADERS
         )
         assert resp.status == 200
         body = await resp.json()
-        assert body["promoted"] is True
-        # sidecar 에 적재됨
-        assert insights.find_by_topic("맥북에어") is not None
-        # 큐 status 변경
-        item = suggestions.find_by_topic("맥북에어")
-        assert item is not None
-        assert item.status == "accepted"
-        # default list 에서 사라짐 (pending 만 노출)
-        list_resp = await client.get(
-            "/admin/v1/memory/insights/suggestions", headers=HEADERS
+        assert body["status"] == "accepted"
+        assert applied == ["정치 뉴스에 관심"]
+
+        # 재호출 시 409 (terminal).
+        resp2 = await client.post(
+            f"/admin/v1/memory/suggestions/{s1_id}/accept", headers=HEADERS
         )
-        list_body = await list_resp.json()
-        topics = {item["topic"] for item in list_body["items"]}
-        assert "맥북에어" not in topics
+        assert resp2.status == 409
 
     @pytest.mark.asyncio
-    async def test_edit_updates_text_keeps_pending(self, queue_client):
-        client, suggestions, _, _ = queue_client
+    async def test_edit_uses_supplied_text(self, suggestion_client):
+        """edit → body.text 가 USER.md 에 적용된다."""
+        client, _, _, applied, s1_id, _, _ = suggestion_client
         resp = await client.post(
-            "/admin/v1/memory/insights/suggestions/맥북에어/edit",
+            f"/admin/v1/memory/suggestions/{s1_id}/edit",
             headers=HEADERS,
-            json={"text": "맥북 에어 M3 가격 비교"},
+            json={"text": "정치 뉴스 — 사용자 보정"},
         )
         assert resp.status == 200
-        item = suggestions.find_by_topic("맥북에어")
-        assert item.text == "맥북 에어 M3 가격 비교"
-        assert item.status == "pending"
+        body = await resp.json()
+        assert body["status"] == "edited"
+        assert body["edited_text"] == "정치 뉴스 — 사용자 보정"
+        assert applied == ["정치 뉴스 — 사용자 보정"]
 
     @pytest.mark.asyncio
-    async def test_edit_rejects_empty_text(self, queue_client):
-        client, _, _, _ = queue_client
+    async def test_edit_requires_text_field(self, suggestion_client):
+        client, _, _, _, s1_id, _, _ = suggestion_client
         resp = await client.post(
-            "/admin/v1/memory/insights/suggestions/맥북에어/edit",
+            f"/admin/v1/memory/suggestions/{s1_id}/edit",
             headers=HEADERS,
-            json={"text": "   "},
+            json={"text": "  "},
         )
         assert resp.status == 422
 
     @pytest.mark.asyncio
-    async def test_reject_adds_to_blocklist_and_marks_rejected(self, queue_client):
-        client, suggestions, blocklist, _ = queue_client
+    async def test_reject_adds_to_blocklist(self, suggestion_client):
+        """reject → blocklist 에 토픽 추가 + suggestion status=rejected."""
+        client, sugg_store, bl_store, applied, _, s2_id, _ = suggestion_client
         resp = await client.post(
-            "/admin/v1/memory/insights/suggestions/정치뉴스/reject",
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
             headers=HEADERS,
-            json={"reason": "out_of_scope"},
+            json={"reason": "스팸"},
         )
         assert resp.status == 200
         body = await resp.json()
-        assert body["blocked"] is True
-        # blocklist 등재 — 정규형으로도 조회 가능
-        assert blocklist.is_blocked("정치뉴스") is True
-        assert blocklist.is_blocked("정치 뉴스") is True
-        # 큐 status 변경
-        item = suggestions.find_by_topic("정치뉴스")
-        assert item.status == "rejected"
+        assert body["status"] == "rejected"
+        assert body["reject_reason"] == "스팸"
+        # writer 는 호출되지 않는다.
+        assert applied == []
+        # blocklist 에 추가됐다.
+        assert bl_store.is_blocked("스팸토픽")
+        # suggestion 행도 rejected.
+        s = sugg_store.get(s2_id)
+        assert s is not None and s.status == "rejected"
 
     @pytest.mark.asyncio
-    async def test_unknown_topic_returns_404(self, queue_client):
-        client, _, _, _ = queue_client
+    async def test_get_sources_returns_messages(self, suggestion_client):
+        """suggestion 의 source_msg_ids 가 가리키는 메시지를 응답에 포함."""
+        client, _, _, _, s1_id, _, mid = suggestion_client
+        resp = await client.get(
+            f"/admin/v1/memory/suggestions/{s1_id}/sources",
+            headers=HEADERS,
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["suggestion"]["id"] == s1_id
+        assert len(body["sources"]) == 1
+        assert body["sources"][0]["id"] == mid
+        assert body["sources"][0]["content"] == "정치 뉴스 보여줘"
+
+    @pytest.mark.asyncio
+    async def test_unknown_id_returns_404(self, suggestion_client):
+        client, *_ = suggestion_client
         resp = await client.post(
-            "/admin/v1/memory/insights/suggestions/없는토픽/accept",
+            "/admin/v1/memory/suggestions/no-such-id/accept",
             headers=HEADERS,
         )
         assert resp.status == 404
+

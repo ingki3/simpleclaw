@@ -169,18 +169,17 @@ async def main():
         reject_default_ttl_days=dreaming_config.get(
             "reject_blocklist", {}
         ).get("default_ttl_days"),
-        # BIZ-79: Dry-run + Admin Review Loop. 기본은 dry_run=true 로 모든 새 인사이트가
-        # 큐(insight_suggestions.jsonl)에 적재되며, auto_promote 두 조건을 동시에 만족하면
-        # 자동 승격된다. 큐와 blocklist 도 .agent/ 하위에 둔다 — 운영자 검수 산출물.
-        dry_run_enabled=dreaming_config.get("dry_run", True),
-        auto_promote_confidence=dreaming_config.get("auto_promote", {}).get(
-            "confidence", 0.7
-        ),
-        auto_promote_evidence_count=dreaming_config.get("auto_promote", {}).get(
-            "evidence_count", 3
-        ),
-        suggestions_file=".agent/insight_suggestions.jsonl",
+        # BIZ-79: dry-run + admin review 모드. 운영 환경에서는 항상 켜져 있어
+        # 추출된 인사이트가 USER.md 에 즉시 쓰이지 않고 review 큐로 들어간다.
+        # auto_promote 임계치를 동시에 충족한 항목만 큐 우회.
+        suggestions_file=".agent/suggestions.jsonl",
         blocklist_file=".agent/insight_blocklist.jsonl",
+        auto_promote_confidence=dreaming_config.get(
+            "auto_promote_confidence", 0.7
+        ),
+        auto_promote_evidence_count=dreaming_config.get(
+            "auto_promote_evidence_count", 3
+        ),
     )
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,
@@ -252,10 +251,12 @@ async def main():
             # 쓰므로 동일 InsightStore 를 공유한다.
             conversation_store=conv_store,
             insight_store=dreaming_pipeline.insight_store,
-            # BIZ-79 — Dreaming Dry-run + Admin Review Loop. 큐/blocklist 도 같은
-            # 인스턴스를 공유해 admin 액션이 다음 dreaming 사이클에 즉시 반영되도록.
+            # BIZ-79 — pending suggestion 큐 + reject 블록리스트 + USER.md writer.
+            # accept/edit 핸들러가 dreaming_pipeline 의 ``append_insight_to_user_file``
+            # 을 호출해 single-bullet 을 USER.md insights 섹션에 안전하게 append.
             suggestion_store=dreaming_pipeline.suggestion_store,
-            insight_blocklist=dreaming_pipeline.blocklist,
+            blocklist_store=dreaming_pipeline.blocklist_store,
+            suggestion_writer=dreaming_pipeline.append_insight_to_user_file,
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.

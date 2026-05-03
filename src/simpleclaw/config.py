@@ -170,6 +170,11 @@ _DAEMON_DEFAULTS: dict = {
         "reject_blocklist": {
             "default_ttl_days": None,
         },
+        # BIZ-79: dry-run + admin review 모드. 추출된 인사이트는 USER.md 에 즉시
+        # 쓰지 않고 review 큐(.agent/suggestions.jsonl)에 적재된다. auto_promote
+        # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
+        "auto_promote_confidence": 0.7,
+        "auto_promote_evidence_count": 3,
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -310,6 +315,24 @@ def load_daemon_config(config_path: str | Path) -> dict:
                     )
                 ),
             },
+            # BIZ-79: dry-run + admin review 모드.
+            "auto_promote_confidence": float(
+                dreaming.get(
+                    "auto_promote_confidence",
+                    _DAEMON_DEFAULTS["dreaming"]["auto_promote_confidence"],
+                )
+            ),
+            "auto_promote_evidence_count": max(
+                1,
+                int(
+                    dreaming.get(
+                        "auto_promote_evidence_count",
+                        _DAEMON_DEFAULTS["dreaming"][
+                            "auto_promote_evidence_count"
+                        ],
+                    )
+                ),
+            ),
         },
         "wait_state": {
             "default_timeout": wait_state.get(
