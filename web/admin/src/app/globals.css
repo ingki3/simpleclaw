@@ -254,3 +254,17 @@ body {
 .sc-pulse {
   animation: sc-pulse var(--motion-slow) ease-out 1;
 }
+
+/* Logs page — 새 로그 행이 자동 새로고침으로 도착했을 때 페이드인 강조. */
+@keyframes sc-log-fresh {
+  0% {
+    background-color: var(--primary-tint);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.log-row[data-fresh="true"] {
+  animation: sc-log-fresh 600ms ease-out 1;
+}
+
