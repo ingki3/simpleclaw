@@ -1144,3 +1144,260 @@ class TestSuggestionQueue:
         )
         assert resp.status == 404
 
+
+# ---------------------------------------------------------------------------
+# BIZ-81 — 드리밍 운영 관측성 (/memory/dreaming/runs, /memory/dreaming/status)
+# ---------------------------------------------------------------------------
+
+
+class TestDreamingObservability:
+    """Admin API 의 dreaming 메트릭/상태 엔드포인트.
+
+    검증:
+    - dreaming_run_store 미주입 → /runs 가 503 (운영자가 disabled 사실 인지 가능).
+    - 메트릭이 적재되면 최신순으로 limit 적용해 반환.
+    - /status 가 last_run / last_successful_run / 7일 KPI / rejection rate 를
+      한 호출에 모아서 응답 (UI 가 호출 1회로 KPI 패널을 그릴 수 있어야).
+    - status_provider 의 next_run / blockers 가 그대로 응답에 들어간다.
+    - run_store 가 None 이어도 /status 자체는 200 (metrics_enabled=False 로 표시).
+    """
+
+    @pytest_asyncio.fixture
+    async def runs_client(self, tmp_state, tmp_path, aiohttp_client):
+        """DreamingRunStore + status provider 가 주입된 클라이언트.
+
+        4건의 메트릭 행을 미리 적재 (success / skip / error / 윈도우 밖) — KPI 집계
+        검증용.
+        """
+        from datetime import datetime, timedelta
+
+        from simpleclaw.memory.dreaming_runs import (
+            SKIP_NO_MESSAGES,
+            DreamingRunRecord,
+            DreamingRunStore,
+        )
+
+        runs_path = tmp_path / "runs.jsonl"
+        run_store = DreamingRunStore(runs_path)
+        now = datetime.now()
+        # 행은 chronological(오래된 → 최신) 으로 append — store 는 파일 순서를 시간순으로 가정.
+        # 윈도우 밖 (8일 전) — 7일 KPI 에서 제외되어야 한다.
+        run_store.append(
+            DreamingRunRecord(
+                started_at=now - timedelta(days=8),
+                ended_at=now - timedelta(days=8, seconds=-1),
+                input_msg_count=99,
+            )
+        )
+        run_store.append(
+            DreamingRunRecord(
+                started_at=now - timedelta(days=2),
+                ended_at=now - timedelta(days=2, seconds=-1),
+                error="boom",
+            )
+        )
+        run_store.append(
+            DreamingRunRecord(
+                started_at=now - timedelta(days=1),
+                ended_at=now - timedelta(days=1, seconds=-1),
+                skip_reason=SKIP_NO_MESSAGES,
+            )
+        )
+        run_store.append(
+            DreamingRunRecord(
+                started_at=now - timedelta(hours=2),
+                ended_at=now - timedelta(hours=2, seconds=-3),
+                input_msg_count=12,
+                generated_insight_count=2,
+                rejected_count=0,
+            )
+        )
+
+        next_run_iso = (now + timedelta(hours=14)).isoformat()
+
+        def status_provider() -> dict:
+            return {
+                "next_run": next_run_iso,
+                "overnight_hour": 3,
+                "idle_threshold_seconds": 7200,
+                "trigger_blockers": ["오늘 이미 실행됨"],
+                "trigger_message": "오늘 03:00 이후 한 번 실행됐습니다.",
+            }
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dreaming_run_store=run_store,
+            dreaming_status_provider=status_provider,
+        )
+        client = await aiohttp_client(srv.get_app())
+        return client, run_store, next_run_iso
+
+    @pytest.mark.asyncio
+    async def test_runs_returns_503_when_run_store_missing(self, client):
+        """기본 fixture 는 run_store 미주입 — 명시적 503 응답."""
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/runs", headers=HEADERS
+        )
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_runs_returns_recent_records_newest_first(self, runs_client):
+        client, _, _ = runs_client
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/runs?limit=2", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 2
+        # 최신 (2시간 전 success) 가 첫 번째.
+        assert body["runs"][0]["status"] == "success"
+        assert body["runs"][0]["input_msg_count"] == 12
+        # 두 번째는 1일 전 skip.
+        assert body["runs"][1]["status"] == "skip"
+        assert body["runs"][1]["skip_reason"] == "no_messages"
+
+    @pytest.mark.asyncio
+    async def test_runs_limit_clamped(self, runs_client):
+        client, _, _ = runs_client
+        # limit=999 → 최대 200 으로 클램프, 가용 4건 모두 반환.
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/runs?limit=999", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 4
+
+    @pytest.mark.asyncio
+    async def test_runs_invalid_limit_falls_back_to_default(self, runs_client):
+        client, _, _ = runs_client
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/runs?limit=abc", headers=HEADERS
+        )
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_status_aggregates_kpi_and_provider_state(self, runs_client):
+        """/status 가 KPI + last_run + provider 상태를 한 응답으로 합쳐야 한다."""
+        client, _, next_run_iso = runs_client
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/status", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["metrics_enabled"] is True
+
+        # last_run = 가장 최근 (2시간 전 success)
+        assert body["last_run"] is not None
+        assert body["last_run"]["status"] == "success"
+        # last_successful_run 도 같은 행 (다른 행이 모두 success 가 아님).
+        assert body["last_successful_run"] is not None
+        assert body["last_successful_run"]["input_msg_count"] == 12
+
+        # next_run / blockers — provider 가 준 값이 그대로.
+        assert body["next_run"] == next_run_iso
+        assert body["overnight_hour"] == 3
+        assert body["idle_threshold_seconds"] == 7200
+        assert "오늘 이미 실행됨" in body["trigger_blockers"]
+        assert body["trigger_message"]
+
+        # 7일 KPI — 4건 중 3건이 윈도우 안 (success 1, skip 1, error 1).
+        kpi = body["kpi_7d"]
+        assert kpi is not None
+        assert kpi["total_runs"] == 3
+        assert kpi["success"] == 1
+        assert kpi["skip"] == 1
+        assert kpi["error"] == 1
+        assert kpi["input_msg_total"] == 12  # 윈도우 밖 99 제외
+        assert kpi["skip_breakdown"] == {"no_messages": 1}
+
+        # rejection rate — suggestion_store 미주입 → reviewed=0, rate=None.
+        assert body["rejection"]["reviewed"] == 0
+        assert body["rejection"]["rate"] is None
+
+    @pytest.mark.asyncio
+    async def test_status_works_without_run_store(self, client):
+        """run_store 없어도 /status 는 200 반환 (UI 가 disabled 안내를 그리도록)."""
+        resp = await client.get(
+            "/admin/v1/memory/dreaming/status", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["metrics_enabled"] is False
+        assert body["last_run"] is None
+        assert body["kpi_7d"] is None
+        # provider 도 없으면 next_run 도 None.
+        assert body["next_run"] is None
+
+    @pytest.mark.asyncio
+    async def test_status_includes_rejection_rate_from_suggestions(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        """suggestion_store 가 있으면 rejection rate 가 누적 데이터로 계산되어야 한다."""
+        from simpleclaw.memory.dreaming_runs import DreamingRunStore
+        from simpleclaw.memory.insights import InsightMeta
+        from simpleclaw.memory.suggestions import SuggestionStore
+
+        sugg_store = SuggestionStore(tmp_path / "sugg.jsonl")
+        # 3건 적재 — accepted 1, rejected 2 → reviewed=3, rejected=2, rate≈0.667.
+        for i, status in enumerate(("accepted", "rejected", "rejected")):
+            m = InsightMeta(
+                topic=f"topic{i}",
+                text=f"text{i}",
+                evidence_count=1,
+                confidence=0.4,
+                source_msg_ids=[],
+            )
+            s = sugg_store.upsert_pending(m)
+            sugg_store.update_status(s.id, status)
+
+        run_store = DreamingRunStore(tmp_path / "runs.jsonl")
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dreaming_run_store=run_store,
+            suggestion_store=sugg_store,
+        )
+        c = await aiohttp_client(srv.get_app())
+        resp = await c.get("/admin/v1/memory/dreaming/status", headers=HEADERS)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["rejection"]["reviewed"] == 3
+        assert body["rejection"]["rejected"] == 2
+        assert abs(body["rejection"]["rate"] - 2 / 3) < 1e-6
+
+    @pytest.mark.asyncio
+    async def test_status_provider_exception_does_not_500(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        """provider 가 예외를 던져도 /status 응답은 200 — KPI/last_run 정상 노출."""
+        from simpleclaw.memory.dreaming_runs import DreamingRunStore
+
+        run_store = DreamingRunStore(tmp_path / "runs.jsonl")
+
+        def boom() -> dict:
+            raise RuntimeError("provider down")
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dreaming_run_store=run_store,
+            dreaming_status_provider=boom,
+        )
+        c = await aiohttp_client(srv.get_app())
+        resp = await c.get("/admin/v1/memory/dreaming/status", headers=HEADERS)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["metrics_enabled"] is True
+        assert body["next_run"] is None
+        assert body["trigger_blockers"] == []
+

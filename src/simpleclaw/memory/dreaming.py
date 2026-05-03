@@ -67,6 +67,13 @@ from simpleclaw.memory.protected_section import (
     has_managed_section,
     replace_section_body,
 )
+from simpleclaw.memory.dreaming_runs import (
+    SKIP_EMPTY_RESULTS,
+    SKIP_MIDWRITE_ABORTED,
+    SKIP_NO_MESSAGES,
+    SKIP_PREFLIGHT_FAILED,
+    DreamingRunStore,
+)
 from simpleclaw.memory.reject_blocklist import RejectBlocklistStore
 from simpleclaw.memory.suggestions import (
     BlocklistStore,
@@ -264,6 +271,8 @@ class DreamingPipeline:
         active_projects_file: str | Path | None = None,
         active_projects_section: str = DEFAULT_ACTIVE_PROJECTS_SECTION,
         active_projects_window_days: int = DEFAULT_ACTIVE_PROJECTS_WINDOW_DAYS,
+        runs_file: str | Path | None = None,
+        runs_max_records: int = DreamingRunStore.DEFAULT_MAX_RECORDS,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -430,6 +439,18 @@ class DreamingPipeline:
         self._active_projects_section = active_projects_section
         self._active_projects_window_days = active_projects_window_days
 
+        # BIZ-81: 드리밍 사이클 메트릭 sidecar.
+        # - runs_file 가 None 이면 메트릭 기록을 건너뛴다(테스트/레거시 호환).
+        # - 운영(scripts/run_bot.py)에서는 항상 주입한다 — Admin UI 의 KPI/진단 입력원.
+        self._runs_store: DreamingRunStore | None = (
+            DreamingRunStore(runs_file, max_records=runs_max_records)
+            if runs_file
+            else None
+        )
+        # 한 회차 내에서 apply_insight_meta 가 차단·필터한 관측 수.
+        # run() 이 메트릭에 기록하기 위해 사용. apply_insight_meta 호출 직전 0으로 초기화.
+        self._last_rejected_count: int = 0
+
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
 
@@ -587,6 +608,15 @@ class DreamingPipeline:
     def auto_promote_thresholds(self) -> tuple[float, int]:
         """``(confidence_floor, evidence_count_floor)`` 쌍 — 운영 가시성용."""
         return self._auto_promote_confidence, self._auto_promote_evidence_count
+
+    @property
+    def runs_store(self) -> DreamingRunStore | None:
+        """드리밍 사이클 메트릭 sidecar (BIZ-81). Admin API 가 KPI 계산에 사용.
+
+        ``runs_file`` 인자가 None 이면 메트릭 기록이 비활성. Admin API 의
+        ``/memory/dreaming/runs`` / ``/status`` 는 None 일 때 503 disabled 응답.
+        """
+        return self._runs_store
 
     async def summarize(self, messages: list) -> dict:
         """LLM을 사용하여 대화 요약을 생성한다.
@@ -836,6 +866,8 @@ class DreamingPipeline:
             - promoted: 자동 적용 대상 — 호출자가 USER.md 본문에 반영해야 하는 항목.
             sidecar 저장소가 비활성이거나 입력이 비어있으면 (빈 리스트, 빈 리스트).
         """
+        # BIZ-81: 사이클당 차단된 관측 수 카운터를 0으로 리셋. run() 이 메트릭으로 읽는다.
+        self._last_rejected_count = 0
         if not self._insights_store or not meta_items:
             return [], []
 
@@ -858,6 +890,7 @@ class DreamingPipeline:
             # BIZ-78: reject_store 기반 차단 (legacy TTL 기반)
             if blocklist and normalize_topic(topic) in blocklist:
                 blocked_topics_seen.append(topic)
+                self._last_rejected_count += 1
                 continue
             # BIZ-79: 블록리스트 토픽은 merge 이전에 drop — 같은 인사이트 재추출 차단.
             # ``BlocklistStore`` 가 주입되지 않은 경우(레거시) 차단 없이 통과.
@@ -868,6 +901,7 @@ class DreamingPipeline:
                     "Skipping blocklisted insight topic: %r",
                     normalize_topic(topic),
                 )
+                self._last_rejected_count += 1
                 continue
             observations.append(
                 InsightMeta(
@@ -1600,15 +1634,31 @@ class DreamingPipeline:
             생성된 MemoryEntry 객체. 처리할 메시지가 없거나, fail-closed로 abort됐거나,
             결과가 비어있으면 None.
         """
+        # BIZ-81: 사이클 시작 시점에 메트릭 행을 만든다 — 도중에 크래시해도 운영자가
+        # "마지막 시도 시각" 을 알 수 있다. ``runs_store`` 가 None 이면 메트릭 기록 비활성.
+        run_record = (
+            self._runs_store.begin() if self._runs_store is not None else None
+        )
+
         # BIZ-77 — 메시지를 id 와 함께 수집한다. 분석 자체는 message 객체만 쓰지만
         # 인사이트 source 역추적을 위해 rowid 를 sidecar 에 기록해야 하기 때문이다.
         id_pairs = self.collect_unprocessed_with_ids(last_dreaming)
         if not id_pairs:
             logger.info("No new messages to process for dreaming.")
+            if run_record is not None and self._runs_store is not None:
+                self._runs_store.finish(
+                    run_record,
+                    input_msg_count=0,
+                    skip_reason=SKIP_NO_MESSAGES,
+                )
             return None
 
         source_msg_ids = [mid for mid, _ in id_pairs]
         messages = [msg for _, msg in id_pairs]
+        if run_record is not None and self._runs_store is not None:
+            # 메시지 수가 확정되는 즉시 행에 반영(중도 크래시 시에도 보이도록).
+            run_record.input_msg_count = len(id_pairs)
+            self._runs_store.update(run_record)
 
         # BIZ-72: 쓰기 시작 전 Protected Section 사전 검증. 실패 시 어떤 파일도
         # 백업조차 만들지 않고 즉시 종료(불필요한 디스크 I/O 방지).
@@ -1619,9 +1669,51 @@ class DreamingPipeline:
                 "Dreaming aborted (preflight): %s. 파일은 변경되지 않았습니다.",
                 exc,
             )
+            if run_record is not None and self._runs_store is not None:
+                self._runs_store.finish(
+                    run_record,
+                    input_msg_count=len(id_pairs),
+                    skip_reason=SKIP_PREFLIGHT_FAILED,
+                    details={"message": str(exc)},
+                )
             return None
 
-        # 처리할 메시지가 있고 사전 검증 통과 — 백업 생성 후 본격 작업
+        # 처리할 메시지가 있고 사전 검증 통과 — 백업 생성 후 본격 작업.
+        # BIZ-81: 이후의 모든 예외는 finally 에서 메트릭 행에 error 로 반영된다.
+        try:
+            return await self._run_after_preflight(
+                run_record=run_record,
+                id_pairs=id_pairs,
+                source_msg_ids=source_msg_ids,
+                messages=messages,
+            )
+        except Exception as exc:
+            # 예측 못한 모든 예외(LLM 라우터 5xx, 디스크 OSError, programming bug)를 행에 남긴다.
+            # 호출자(트리거)는 동일하게 None 반환을 받지만, 운영자는 stale 한 last_dreaming
+            # 만 보는 게 아니라 *왜* 실패했는지 즉시 확인 가능.
+            logger.exception("Dreaming cycle raised unexpected error")
+            if run_record is not None and self._runs_store is not None:
+                self._runs_store.finish(
+                    run_record,
+                    input_msg_count=len(id_pairs),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            # 의도적으로 raise 하지 않는다 — 트리거 루프가 다음 사이클을 정상 시도해야 한다.
+            return None
+
+    async def _run_after_preflight(
+        self,
+        *,
+        run_record,
+        id_pairs,
+        source_msg_ids,
+        messages,
+    ):
+        """preflight 통과 이후의 사이클 본문. ``run`` 에서 호출되며 메트릭은 호출자에서 처리.
+
+        반환값/None 의미는 ``run`` 과 동일. 메트릭 finish 는 정상 종료 경로(이 함수 내부)
+        와 예외 경로(``run`` 의 try/except)에서 각자 책임진다.
+        """
         backups: list[tuple[Path, Path | None]] = []
         backups.append((self._memory_file, self.create_backup(self._memory_file)))
         if self._user_file:
@@ -1662,8 +1754,9 @@ class DreamingPipeline:
         # 어떤 markdown 파일도 아직 변경되지 않았다(preflight 통과 직후). sidecar 자체는
         # JSONL atomic-rename 으로 항상 일관된 상태가 보장된다.
         promoted_meta: list[InsightMeta] = []
+        changed_meta: list[InsightMeta] = []
         if user_insights_meta and self._insights_store:
-            _, promoted_meta = self.apply_insight_meta(
+            changed_meta, promoted_meta = self.apply_insight_meta(
                 user_insights_meta, source_msg_ids=source_msg_ids
             )
 
@@ -1708,6 +1801,15 @@ class DreamingPipeline:
                 "Dreaming aborted (mid-write): %s. 백업에서 복원합니다.", exc
             )
             self._restore_from_backups(backups)
+            if run_record is not None and self._runs_store is not None:
+                self._runs_store.finish(
+                    run_record,
+                    input_msg_count=len(source_msg_ids),
+                    generated_insight_count=len(changed_meta),
+                    rejected_count=self._last_rejected_count,
+                    skip_reason=SKIP_MIDWRITE_ABORTED,
+                    details={"message": str(exc)},
+                )
             return None
 
         # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록).
@@ -1717,11 +1819,27 @@ class DreamingPipeline:
             [memory_summary, user_insights, soul_updates, agent_updates,
              cluster_summary_text, active_projects_rendered]
         ):
+            if run_record is not None and self._runs_store is not None:
+                self._runs_store.finish(
+                    run_record,
+                    input_msg_count=len(source_msg_ids),
+                    generated_insight_count=len(changed_meta),
+                    rejected_count=self._last_rejected_count,
+                    skip_reason=SKIP_EMPTY_RESULTS,
+                )
             return None
 
         # MemoryEntry.summary는 호환을 위해 LLM이 만든 memory_summary를 우선 사용하고,
         # 클러스터 모드에서 memory_summary가 비어있다면 클러스터 요약 통합본을 담는다.
         entry_summary = memory_summary or cluster_summary_text
+        if run_record is not None and self._runs_store is not None:
+            # 정상 종료 — 메트릭 행을 success 로 마감.
+            self._runs_store.finish(
+                run_record,
+                input_msg_count=len(source_msg_ids),
+                generated_insight_count=len(changed_meta),
+                rejected_count=self._last_rejected_count,
+            )
         return MemoryEntry(
             summary=entry_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",

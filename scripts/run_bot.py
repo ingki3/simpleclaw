@@ -27,7 +27,7 @@ from simpleclaw.channels.admin_api_setup import (
 )
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.config import load_daemon_config, load_llm_config, load_telegram_config
-from simpleclaw.daemon.dreaming_trigger import DreamingTrigger
+from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.logging.dashboard import DashboardServer
@@ -196,14 +196,96 @@ async def main():
         # BIZ-74: Active Projects
         active_projects_file=active_projects_file,
         active_projects_window_days=active_projects_window_days,
+        # BIZ-81: 사이클 메트릭 sidecar — Admin UI Memory 화면의 KPI/진단 입력원.
+        # 별도 .agent/ 파일에 적재하여 grep/diff 친화적이고 운영자 수기 검토 가능.
+        runs_file=".agent/dreaming_runs.jsonl",
     )
+    overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
+    idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,
         dreaming_pipeline=dreaming_pipeline,
         daemon_store=daemon_store,
-        overnight_hour=dreaming_config.get("overnight_hour", 3),
-        idle_threshold=dreaming_config.get("idle_threshold", 7200),
+        overnight_hour=overnight_hour_cfg,
+        idle_threshold=idle_threshold_cfg,
     )
+
+    def _dreaming_status_provider() -> dict:
+        """Admin API ``/memory/dreaming/status`` 가 호출하는 상태 컨텍스트 프로바이더 (BIZ-81).
+
+        반환 dict 키:
+        - ``next_run``: 다음 트리거 예상 시각(ISO). 오늘 이미 실행했으면 내일 overnight_hour,
+          아니면 오늘 overnight_hour. 정확한 idle 조건은 사용자 활동에 의존하므로 *최선 추정*.
+        - ``overnight_hour``, ``idle_threshold_seconds``: 운영자 진단용 현재 설정값.
+        - ``trigger_blockers``: 지금 트리거가 막혀 있는 사유 (오늘 이미 실행/야간 시간 미도래/
+          사용자가 활성/메시지 없음).
+        - ``trigger_message``: 사람이 읽을 수 있는 한 줄 진단.
+
+        예외는 흡수해 호출 측이 status 응답 자체를 잃지 않게 한다 — provider 가 실패하면
+        admin_api 가 빈 dict 로 폴백한다.
+        """
+        from datetime import datetime, timedelta
+
+        now = datetime.now()
+        last_iso = daemon_store.get_state(LAST_DREAMING_KEY)
+        last_dt: datetime | None = None
+        if last_iso:
+            try:
+                last_dt = datetime.fromisoformat(last_iso)
+            except ValueError:
+                last_dt = None
+
+        # 다음 시각 추정: 오늘 이미 실행했으면 내일 overnight_hour, 아니면 오늘 overnight_hour
+        # (이미 그 시간이 지났다면 다음 날). 실제 트리거는 idle 조건도 봐야 하지만, "언제부터
+        # 실행 가능 시점인지" 만 알려도 운영자에게 충분한 정보가 된다.
+        target = now.replace(
+            hour=overnight_hour_cfg, minute=0, second=0, microsecond=0
+        )
+        if last_dt and last_dt.date() == now.date():
+            next_dt = (target + timedelta(days=1))
+        elif now < target:
+            next_dt = target
+        else:
+            # 오늘 야간 시간은 이미 지났는데 아직 실행 안 됨 → 곧 다음 5분 체크에서 시도.
+            next_dt = now
+
+        # 진단 메시지 — 왜 지금/곧 실행될지 한 줄로.
+        blockers: list[str] = []
+        if last_dt and last_dt.date() == now.date():
+            blockers.append(f"오늘({now:%Y-%m-%d}) 이미 1회 실행됨")
+        if now.hour < overnight_hour_cfg:
+            blockers.append(
+                f"야간 시간({overnight_hour_cfg:02d}:00) 미도래"
+            )
+        # 메시지가 한 건도 없으면 트리거 자체가 안 돈다 — 운영자가 즉시 인지하도록.
+        try:
+            recent = conv_store.get_recent(limit=1)
+            if not recent:
+                blockers.append("처리 가능한 메시지가 없음")
+            else:
+                last_input = recent[-1].timestamp
+                if last_input is not None:
+                    idle = (now - last_input).total_seconds()
+                    if idle < idle_threshold_cfg:
+                        blockers.append(
+                            f"사용자 활동 후 {int(idle)}초 경과 (필요: {idle_threshold_cfg}초)"
+                        )
+        except Exception:  # noqa: BLE001 — 진단용이므로 어떤 실패도 응답을 막지 않는다.
+            pass
+
+        msg = (
+            f"다음 시도 예정: {next_dt:%Y-%m-%d %H:%M}"
+            if not blockers
+            else " / ".join(blockers)
+        )
+
+        return {
+            "next_run": next_dt.isoformat(),
+            "overnight_hour": overnight_hour_cfg,
+            "idle_threshold_seconds": idle_threshold_cfg,
+            "trigger_blockers": blockers,
+            "trigger_message": msg,
+        }
 
     async def _dreaming_check():
         """APScheduler interval job: 드리밍 조건 체크 및 실행."""
@@ -273,6 +355,12 @@ async def main():
             suggestion_store=dreaming_pipeline.suggestion_store,
             blocklist_store=dreaming_pipeline.blocklist_store,
             suggestion_writer=dreaming_pipeline.append_insight_to_user_file,
+            # BIZ-81 — 드리밍 사이클 메트릭 sidecar + 진단 컨텍스트 프로바이더.
+            # runs_store 가 None 이면 ``/memory/dreaming/runs`` 가 503,
+            # status_provider 가 None 이면 ``/memory/dreaming/status`` 가
+            # last_run/KPI만 반환한다. dreaming_pipeline 와 동일한 sidecar 를 공유.
+            dreaming_run_store=dreaming_pipeline.runs_store,
+            dreaming_status_provider=_dreaming_status_provider,
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
