@@ -11,6 +11,7 @@
 
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/lib/theme";
+import { ToastProvider } from "@/lib/toast";
 import { Shell } from "@/components/layout/Shell";
 import "./globals.css";
 
@@ -28,7 +29,9 @@ export default function RootLayout({
     <html lang="ko" suppressHydrationWarning>
       <body>
         <ThemeProvider>
-          <Shell>{children}</Shell>
+          <ToastProvider>
+            <Shell>{children}</Shell>
+          </ToastProvider>
         </ThemeProvider>
       </body>
     </html>
