@@ -64,6 +64,11 @@ from simpleclaw.channels.admin_policy import (
 )
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.insights import InsightStore
+from simpleclaw.memory.suggestions import (
+    SUGGESTION_STATUS_REJECTED,
+    InsightBlocklist,
+    SuggestionStore,
+)
 from simpleclaw.security.secrets import (
     EncryptedFileBackend,
     SecretBackend,
@@ -250,6 +255,8 @@ class AdminAPIServer:
         request_max_body_bytes: int | None = None,
         conversation_store: ConversationStore | None = None,
         insight_store: InsightStore | None = None,
+        suggestion_store: SuggestionStore | None = None,
+        insight_blocklist: InsightBlocklist | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -284,6 +291,12 @@ class AdminAPIServer:
         # disabled 사실을 명시적으로 알리는 편이 404 보다 운영 진단에 유리하다.)
         self._conversation_store = conversation_store
         self._insight_store = insight_store
+
+        # BIZ-79 — Dreaming Dry-run + Admin Review Loop. 둘 다 dreaming pipeline 과
+        # 같은 sidecar 파일을 공유한다 (insight_suggestions.jsonl, insight_blocklist.jsonl).
+        # 미주입 상태에서 큐 엔드포인트를 호출하면 503 으로 disabled 사실을 알린다.
+        self._suggestion_store = suggestion_store
+        self._insight_blocklist = insight_blocklist
 
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
@@ -367,6 +380,25 @@ class AdminAPIServer:
         app.router.add_get(
             f"{prefix}/memory/insights/{{topic}}/sources",
             self._wrap(self._handle_get_insight_sources),
+        )
+
+        # BIZ-79 (Dreaming Dry-run + Admin Review Loop) — 큐 적재된 제안에 대한
+        # 운영자 검수 4종 액션. accept/edit/reject 는 로그 감사 대상.
+        app.router.add_get(
+            f"{prefix}/memory/insights/suggestions",
+            self._wrap(self._handle_list_suggestions),
+        )
+        app.router.add_post(
+            f"{prefix}/memory/insights/suggestions/{{topic}}/accept",
+            self._wrap(self._handle_accept_suggestion),
+        )
+        app.router.add_post(
+            f"{prefix}/memory/insights/suggestions/{{topic}}/edit",
+            self._wrap(self._handle_edit_suggestion),
+        )
+        app.router.add_post(
+            f"{prefix}/memory/insights/suggestions/{{topic}}/reject",
+            self._wrap(self._handle_reject_suggestion),
         )
 
         self._app = app
@@ -1368,6 +1400,152 @@ class AdminAPIServer:
             "end_msg_id": meta.end_msg_id,
             "source_msg_ids": list(meta.source_msg_ids),
             "sources": sources,
+        })
+
+    # ------------------------------------------------------------------
+    # BIZ-79 (Dreaming Dry-run + Admin Review Loop) — 제안 큐 검수
+    # ------------------------------------------------------------------
+
+    def _suggestion_to_payload(self, item) -> dict:
+        """SuggestionItem 을 Admin UI 가 그릴 수 있는 dict 로 직렬화."""
+        return {
+            "topic": item.topic,
+            "text": item.text,
+            "evidence_count": item.evidence_count,
+            "confidence": item.confidence,
+            "source_msg_ids": list(item.source_msg_ids),
+            "start_msg_id": item.start_msg_id,
+            "end_msg_id": item.end_msg_id,
+            "status": item.status,
+            "suggested_at": item.suggested_at.isoformat(),
+            "first_seen": item.first_seen.isoformat(),
+            "last_seen": item.last_seen.isoformat(),
+        }
+
+    async def _handle_list_suggestions(
+        self, request: web.Request
+    ) -> web.Response:
+        """``GET /admin/v1/memory/insights/suggestions``.
+
+        pending 상태의 제안만 반환 — accept/reject 결정된 항목은 audit 으로 sidecar 에
+        남지만 검수 화면 default 에는 노출하지 않는다.
+        """
+        if self._suggestion_store is None:
+            return _json_error(
+                503, "Suggestion queue is not configured on this server"
+            )
+        items = self._suggestion_store.list_pending()
+        return _json_ok({
+            "items": [self._suggestion_to_payload(item) for item in items],
+            "total": len(items),
+        })
+
+    async def _handle_accept_suggestion(
+        self, request: web.Request
+    ) -> web.Response:
+        """``POST /admin/v1/memory/insights/suggestions/{topic}/accept``.
+
+        제안을 즉시 승격 — sidecar(insights.jsonl) 에 등록하고 status=accepted 로
+        마킹한다. USER.md 반영은 다음 dreaming 사이클에서 자동으로 일어난다 (sidecar
+        가 이미 truth source 이므로). 이미 accepted 상태인 항목은 멱등 처리 (200).
+        """
+        if self._suggestion_store is None or self._insight_store is None:
+            return _json_error(
+                503, "Suggestion queue is not configured on this server"
+            )
+        topic_param = (request.match_info.get("topic") or "").strip()
+        if not topic_param:
+            return _json_error(422, "topic path parameter is required")
+
+        item = self._suggestion_store.find_by_topic(topic_param)
+        if item is None:
+            return _json_error(404, f"Suggestion not found: {topic_param}")
+
+        meta = item.to_insight()
+        # sidecar 에 upsert — 같은 정규형 키가 이미 있으면 운영자 결정으로 덮어쓴다.
+        # InsightStore 는 save_all(dict) 형태이므로 load → 갱신 → save_all 패턴.
+        from simpleclaw.memory.insights import normalize_topic
+        existing = self._insight_store.load()
+        existing[normalize_topic(meta.topic)] = meta
+        self._insight_store.save_all(existing)
+        result = self._suggestion_store.mark_status(topic_param, "accepted")
+        return _json_ok({
+            "ok": True,
+            "topic": topic_param,
+            "promoted": True,
+            "item": self._suggestion_to_payload(result) if result else None,
+        })
+
+    async def _handle_edit_suggestion(
+        self, request: web.Request
+    ) -> web.Response:
+        """``POST /admin/v1/memory/insights/suggestions/{topic}/edit``.
+
+        body: ``{"text": "..."}``. 본문만 갱신하며 status 는 pending 유지 — 운영자가
+        문장만 다듬고 다음 검수 라운드에서 accept/reject 를 결정할 수 있도록.
+        """
+        if self._suggestion_store is None:
+            return _json_error(
+                503, "Suggestion queue is not configured on this server"
+            )
+        topic_param = (request.match_info.get("topic") or "").strip()
+        if not topic_param:
+            return _json_error(422, "topic path parameter is required")
+
+        try:
+            body = await request.json()
+        except Exception:
+            return _json_error(400, "Request body must be JSON")
+        text = (body or {}).get("text", "")
+        if not isinstance(text, str) or not text.strip():
+            return _json_error(422, "'text' is required and must be a non-empty string")
+
+        result = self._suggestion_store.update_text(topic_param, text.strip())
+        if result is None:
+            return _json_error(404, f"Suggestion not found: {topic_param}")
+        return _json_ok({
+            "ok": True,
+            "topic": topic_param,
+            "item": self._suggestion_to_payload(result),
+        })
+
+    async def _handle_reject_suggestion(
+        self, request: web.Request
+    ) -> web.Response:
+        """``POST /admin/v1/memory/insights/suggestions/{topic}/reject``.
+
+        topic 을 blocklist 에 추가해 다음 dreaming 사이클이 같은 topic 을 재추출하지
+        않게 한다 (DoD §B). 큐 항목의 status 는 rejected 로 마킹 — audit 용으로 보존.
+        body 는 선택적으로 ``{"reason": "..."}`` 를 받아 blocklist row 에 기록한다.
+        """
+        if self._suggestion_store is None or self._insight_blocklist is None:
+            return _json_error(
+                503, "Suggestion queue is not configured on this server"
+            )
+        topic_param = (request.match_info.get("topic") or "").strip()
+        if not topic_param:
+            return _json_error(422, "topic path parameter is required")
+
+        item = self._suggestion_store.find_by_topic(topic_param)
+        if item is None:
+            return _json_error(404, f"Suggestion not found: {topic_param}")
+
+        # 선택적 reason — 없으면 user_rejected default.
+        try:
+            body = await request.json() if request.can_read_body else {}
+        except Exception:
+            body = {}
+        reason = (body or {}).get("reason") or "user_rejected"
+
+        self._insight_blocklist.add(topic_param, reason=reason)
+        result = self._suggestion_store.mark_status(
+            topic_param, SUGGESTION_STATUS_REJECTED
+        )
+        return _json_ok({
+            "ok": True,
+            "topic": topic_param,
+            "blocked": True,
+            "item": self._suggestion_to_payload(result) if result else None,
         })
 
 

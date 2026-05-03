@@ -60,6 +60,12 @@ from simpleclaw.memory.protected_section import (
     replace_section_body,
 )
 from simpleclaw.memory.reject_blocklist import RejectBlocklistStore
+from simpleclaw.memory.suggestions import (
+    AutoPromotePolicy,
+    InsightBlocklist,
+    SuggestionItem,
+    SuggestionStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +202,12 @@ class DreamingPipeline:
         reject_blocklist_file: str | Path | None = None,
         decay_archive_after_days: int | None = 30,
         reject_default_ttl_days: int | None = None,
+        # BIZ-79 — Dreaming Dry-run + Admin Review Loop
+        dry_run_enabled: bool = True,
+        auto_promote_confidence: float = 0.7,
+        auto_promote_evidence_count: int = 3,
+        suggestions_file: str | Path | None = None,
+        blocklist_file: str | Path | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -233,6 +245,20 @@ class DreamingPipeline:
             reject_default_ttl_days: ``register_reject`` 호출 시 ttl 인자 미지정 시
                 사용할 기본 TTL(일). ``None`` 이면 영구 차단(가장 흔한 케이스). 기본
                 ``None``.
+            dry_run_enabled: BIZ-79. True 면 dreaming 출력은 기본 \"제안(pending)\" 상태로
+                ``SuggestionStore`` 에 큐잉되고, ``auto_promote_confidence`` AND
+                ``auto_promote_evidence_count`` 동시 충족 항목만 자동으로 USER.md 본
+                sidecar(``insights.jsonl``) + USER.md managed 섹션에 반영된다. False 면
+                BIZ-73/77 시점의 동작(모든 인사이트 즉시 sidecar 저장 + 승격 시 USER.md
+                노출) 유지.
+            auto_promote_confidence: BIZ-79. 자동 승격 신뢰도 임계. 기본 0.7.
+            auto_promote_evidence_count: BIZ-79. 자동 승격 누적 관측 임계. 기본 3.
+            suggestions_file: BIZ-79. 제안 큐 sidecar(JSONL) 경로. None 이면 USER.md
+                옆 ``insight_suggestions.jsonl`` 로 자동 결정. ``user_file`` 도 None 이면
+                큐가 비활성 (dry_run 도 무의미하므로 자동으로 False 처리).
+            blocklist_file: BIZ-79. reject blocklist sidecar(JSONL) 경로. None 이면
+                USER.md 옆 ``insight_blocklist.jsonl`` 로 자동 결정. ``user_file`` 도
+                None 이면 blocklist 비활성 (reject 도 큐 의미가 없는 환경).
 
         BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
         마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
@@ -291,6 +317,39 @@ class DreamingPipeline:
             int(reject_default_ttl_days)
             if reject_default_ttl_days is not None
             else None
+        )
+
+        # BIZ-79: 제안 큐 + reject blocklist. user_file 이 없으면 두 sidecar 도 끈다 —
+        # 검수 화면이 보여줄 출력 자리(USER.md)가 없으면 큐의 의미도 없다.
+        if suggestions_file is not None:
+            self._suggestions_store: SuggestionStore | None = SuggestionStore(
+                suggestions_file
+            )
+        elif self._user_file is not None:
+            self._suggestions_store = SuggestionStore(
+                self._user_file.parent / "insight_suggestions.jsonl"
+            )
+        else:
+            self._suggestions_store = None
+
+        if blocklist_file is not None:
+            self._blocklist: InsightBlocklist | None = InsightBlocklist(blocklist_file)
+        elif self._user_file is not None:
+            self._blocklist = InsightBlocklist(
+                self._user_file.parent / "insight_blocklist.jsonl"
+            )
+        else:
+            self._blocklist = None
+
+        # 큐 sidecar 가 비활성이면 dry_run 도 자동으로 무력화 — 검수 흐름 자체가 없으므로
+        # 인사이트를 \"보류\" 시켜 둘 곳이 없다. 운영자가 명시적으로 dry_run=True 를
+        # 줬어도 이 경우엔 silently False 로 되돌린다(아무 곳에도 저장되지 않는 게 더 위험).
+        self._dry_run_enabled = bool(
+            dry_run_enabled and self._suggestions_store is not None
+        )
+        self._auto_promote_policy = AutoPromotePolicy(
+            confidence=float(auto_promote_confidence),
+            evidence_count=max(1, int(auto_promote_evidence_count)),
         )
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
@@ -363,6 +422,31 @@ class DreamingPipeline:
         ``None``. Admin API 라우팅은 None 일 때 503 으로 명시 disabled 응답.
         """
         return self._insights_store
+
+    @property
+    def suggestion_store(self) -> SuggestionStore | None:
+        """제안 큐 저장소 (BIZ-79). Admin API 가 accept/edit/reject 핸들러에서 공유."""
+        return self._suggestions_store
+
+    @property
+    def blocklist(self) -> InsightBlocklist | None:
+        """reject blocklist (BIZ-79). Admin API 가 reject 처리 시 add 호출."""
+        return self._blocklist
+
+    @property
+    def auto_promote_policy(self) -> AutoPromotePolicy:
+        """자동 승격 정책 (BIZ-79). Admin API 가 \"이 제안은 왜 큐에 있는지\" 진단 응답에 사용."""
+        return self._auto_promote_policy
+
+    @property
+    def dry_run_enabled(self) -> bool:
+        """현재 사이클이 dry-run 모드인지 여부 (BIZ-79). config 진단 / 헬스체크용."""
+        return self._dry_run_enabled
+
+    @property
+    def insight_promotion_threshold(self) -> int:
+        """BIZ-73 승격 임계 — Admin UI 에서 큐 항목 진척도(\"3회 중 1회 누적\") 표시에 사용."""
+        return self._insight_promotion_threshold
 
     async def summarize(self, messages: list) -> dict:
         """LLM을 사용하여 대화 요약을 생성한다.
@@ -574,6 +658,19 @@ class DreamingPipeline:
     ) -> tuple[list[InsightMeta], list[InsightMeta]]:
         """이번 회차의 인사이트 메타를 sidecar 와 병합·저장한다.
 
+        BIZ-79 dry-run 모드:
+        - ``dry_run_enabled=True`` (기본) 면 모든 신규/갱신 인사이트는 우선
+          ``SuggestionStore`` 큐에 ``status=pending`` 으로 기록된다.
+        - ``AutoPromotePolicy`` 동시 충족(``confidence>=X`` AND ``evidence_count>=Y``)
+          항목만 본 sidecar(``insights.jsonl``) 에 즉시 반영되며 USER.md 갱신
+          후보(promoted) 로 반환된다.
+        - 큐에만 들어간 항목은 changed 에는 포함되지만 promoted 에서는 제외된다.
+          호출자가 ``promoted`` 만 USER.md 본문에 표기하므로, 큐 항목은 자연스럽게
+          USER.md 에 새지 않는다.
+        - 추가로 ``InsightBlocklist`` 에 등록된 topic 은 sidecar 진입 자체에서
+          drop 된다 — 운영자가 reject 한 인사이트가 다음 사이클에 다시 USER.md
+          에 새지 않게 하는 핵심 가드.
+
         Args:
             meta_items: ``[{"topic": ..., "text": ...}, ...]`` 형태의 LLM 추출물.
             source_msg_ids: 이번 회차에 분석한 메시지 rowid 목록(F: source linkage 의 1차 입력).
@@ -581,8 +678,9 @@ class DreamingPipeline:
 
         Returns:
             (changed, promoted)
-            - changed: 이번 회차에 추가/갱신된 인사이트 (모두).
-            - promoted: 그 중 ``is_promoted == True`` 인 항목들 (USER.md 노출 대상).
+            - changed: 이번 회차에 추가/갱신된 인사이트 (큐만 들어간 항목 포함).
+            - promoted: USER.md 본문에 노출되어야 하는 항목들. dry_run 모드에서는
+              auto-promote 정책 통과 항목만 포함된다.
             sidecar 저장소가 비활성이거나 입력이 비어있으면 (빈 리스트, 빈 리스트).
         """
         if not self._insights_store or not meta_items:
@@ -597,14 +695,23 @@ class DreamingPipeline:
         )
         blocked_topics_seen: list[str] = []
         observations: list[InsightMeta] = []
+        # BIZ-79 — blocklist 사전 필터. 이미 reject 된 topic 은 sidecar 에 진입하지 않는다.
+        # blocklist 가 비활성(None) 이면 모든 관측을 통과시킨다.
         for item in meta_items:
             topic = (item.get("topic") or "").strip()
             text = (item.get("text") or "").strip()
             if not topic or not text:
                 continue
+            # BIZ-78: reject_store 기반 차단 (legacy TTL 기반)
             if blocklist and normalize_topic(topic) in blocklist:
-                # 사용자가 거부한 topic 의 재추출 — drop 하고 로깅(다음 회차 진단용).
                 blocked_topics_seen.append(topic)
+                continue
+            # BIZ-79: InsightBlocklist 기반 차단 (Admin Review Loop)
+            if self._blocklist is not None and self._blocklist.is_blocked(topic):
+                logger.info(
+                    "Skipping blocked insight topic (BIZ-79 reject blocklist): %s",
+                    topic,
+                )
                 continue
             observations.append(
                 InsightMeta(
@@ -628,19 +735,83 @@ class DreamingPipeline:
         if not observations:
             return [], []
 
-        existing = self._insights_store.load()
-        merged, changed = merge_insights(
-            existing, observations, self._insight_promotion_threshold
-        )
-        self._insights_store.save_all(merged)
+        if not self._dry_run_enabled:
+            # 레거시 경로(dry_run 비활성) — BIZ-73 시점 동작 그대로.
+            existing = self._insights_store.load()
+            merged, changed = merge_insights(
+                existing, observations, self._insight_promotion_threshold
+            )
+            self._insights_store.save_all(merged)
+            promoted = [
+                m for m in changed
+                if is_promoted(m, self._insight_promotion_threshold)
+            ]
+            logger.info(
+                "Insights updated (dry_run=off): %d changed, %d promoted (threshold=%d)",
+                len(changed), len(promoted), self._insight_promotion_threshold,
+            )
+            return changed, promoted
 
-        promoted = [
-            m for m in changed
-            if is_promoted(m, self._insight_promotion_threshold)
-        ]
+        # BIZ-79 dry-run 경로.
+        #
+        # 1. \"가상\" merge: 기존 sidecar 와 신규 관측을 메모리에서 병합하여 각 인사이트의
+        #    누적 evidence_count / confidence 를 계산한다. 이 단계에선 sidecar 디스크
+        #    상태는 변경되지 않는다.
+        # 2. 자동 승격 정책에 통과한 항목만 sidecar 에 실제 저장하고 promoted 로 반환.
+        # 3. 그 외 모든 변경 항목은 ``SuggestionStore`` 에 pending 으로 upsert.
+        # 4. 같은 topic 의 \"이전 회차에 큐잉됐다가 이번 회차로 임계 도달\" 케이스도
+        #    자연스럽게 처리된다 — 가상 병합 단계에서 evidence_count 가 누적되므로.
+        existing = self._insights_store.load()
+        # merge_insights 는 dict 를 in-place 수정하므로 깊은 복사로 분리해야 한다.
+        # InsightMeta 의 가변 필드는 source_msg_ids 뿐이므로 얕은 복사 + list 복사로 충분.
+        sandbox: dict[str, InsightMeta] = {}
+        for k, v in existing.items():
+            sandbox[k] = InsightMeta(
+                topic=v.topic,
+                text=v.text,
+                evidence_count=v.evidence_count,
+                confidence=v.confidence,
+                first_seen=v.first_seen,
+                last_seen=v.last_seen,
+                source_msg_ids=list(v.source_msg_ids),
+                start_msg_id=v.start_msg_id,
+                end_msg_id=v.end_msg_id,
+            )
+        _, changed = merge_insights(
+            sandbox, observations, self._insight_promotion_threshold
+        )
+
+        # 자동 승격 정책 적용
+        promoted: list[InsightMeta] = []
+        queued: list[InsightMeta] = []
+        for meta in changed:
+            if self._auto_promote_policy.should_auto_promote(meta):
+                promoted.append(meta)
+            else:
+                queued.append(meta)
+
+        # 본 sidecar 에는 promoted 만 반영. 큐로 보낸 항목은 sidecar 에 저장하지 않으므로
+        # \"제안 단계에선 USER.md/MEMORY.md 에 새지 않는다\" 는 DoD 가 자연 충족된다.
+        if promoted:
+            promoted_keys = {normalize_topic(m.topic) for m in promoted}
+            persisted = dict(existing)
+            for key, meta in sandbox.items():
+                if key in promoted_keys:
+                    persisted[key] = meta
+            self._insights_store.save_all(persisted)
+
+        # 큐 upsert. 큐 sidecar 가 비활성이면(이론상 dry_run=off 와 동치) skip.
+        if queued and self._suggestions_store is not None:
+            for meta in queued:
+                self._suggestions_store.upsert_pending(SuggestionItem.from_insight(meta))
+
         logger.info(
-            "Insights updated: %d changed, %d promoted (threshold=%d)",
-            len(changed), len(promoted), self._insight_promotion_threshold,
+            "Insights dry-run cycle: %d changed, %d auto-promoted, %d queued "
+            "(promote_conf=%.2f, promote_evidence=%d, threshold=%d)",
+            len(changed), len(promoted), len(queued),
+            self._auto_promote_policy.confidence,
+            self._auto_promote_policy.evidence_count,
+            self._insight_promotion_threshold,
         )
         return changed, promoted
 

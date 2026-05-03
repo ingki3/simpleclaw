@@ -148,6 +148,17 @@ daemon:
     # 항목별 override 는 Admin Review Loop(H, BIZ-79) 에서 가능.
     reject_blocklist:
       default_ttl_days: null
+    # BIZ-79: Dry-run + Admin Review Loop.
+    # dry_run=true 면 dreaming 이 발견한 인사이트는 곧바로 USER.md 에 반영되지 않고
+    # ``insight_suggestions.jsonl`` 큐로 들어가 운영자 검수(Memory 화면)를 거친 뒤
+    # accept/reject 된다. dry_run=false 는 BIZ-79 이전 동작(즉시 sidecar/USER.md 반영).
+    # 단, ``auto_promote`` 두 조건(confidence AND evidence_count)을 동시 만족하는 항목은
+    # dry_run 중에도 자동 승격되어 큐를 거치지 않는다 — 이미 충분히 강한 시그널의 경우
+    # 운영자가 매번 반복 승인할 필요가 없도록.
+    dry_run: true
+    auto_promote:
+      confidence: 0.7
+      evidence_count: 3
   wait_state:
     default_timeout: 3600
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
