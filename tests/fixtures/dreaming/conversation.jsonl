@@ -1,0 +1,6 @@
+{"role": "user", "content": "오늘 정치 뉴스 한번 요약해줘."}
+{"role": "assistant", "content": "오늘 주요 정치 뉴스 5건 요약합니다: ..."}
+{"role": "user", "content": "맥북에어 15인치 가격 좀 비교해봐. M2/M4/M5."}
+{"role": "assistant", "content": "M2: 1599$, M4: 1799$, M5: 1899$ 입니다."}
+{"role": "user", "content": "BIZ-72 PR 리뷰해 줄래?"}
+{"role": "assistant", "content": "PR diff 분석 후 코멘트 드릴게요."}
