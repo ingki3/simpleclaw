@@ -29,11 +29,17 @@ class ConversationMessage:
         content: 메시지 텍스트 내용.
         timestamp: 메시지 생성 시각. 기본값은 현재 시각.
         token_count: 메시지의 토큰 수. 프롬프트 버짓 관리에 사용된다.
+        channel: 메시지가 들어온 채널 식별자(예: "telegram", "webhook",
+            "console", "cron"). BIZ-77(F)에서 인사이트 source 역추적 + Admin
+            UI 노출에 사용된다. ``None``이면 채널 정보가 기록되지 않은 메시지
+            (마이그레이션 0002 이전 데이터 또는 producer가 미지정)이며 UI에서는
+            "unknown" 으로 표시된다. 후속 BIZ-76(E) 가 cron/recipe 태깅을 채운다.
     """
     role: MessageRole
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
     token_count: int = 0
+    channel: str | None = None
 
 
 @dataclass

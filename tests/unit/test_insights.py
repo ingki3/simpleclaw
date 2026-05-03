@@ -4,6 +4,10 @@ DoD 회귀 가드:
 1. 단발 관측 confidence 는 0.4 를 초과하지 않는다.
 2. promotion_threshold 회 누적 시 승격선(0.7)에 도달한다.
 3. 같은 topic 으로 다시 관측되면 evidence_count 가 가산되고 last_seen / source_msg_ids 가 갱신된다.
+
+BIZ-77 (F: Source Linkage) 회귀 가드:
+4. ``InsightMeta`` 에 ``start_msg_id`` / ``end_msg_id`` 매핑이 존재하고 ``source_msg_ids`` 의 min/max 와 일치한다.
+5. 구버전 sidecar (start/end 필드 없음) 도 ``source_msg_ids`` 로부터 자동 보강된다.
 """
 
 from __future__ import annotations
@@ -347,3 +351,136 @@ class TestMigrationScript:
             # 마이그레이션 시점은 모두 단발 관측 → 0.4 캡.
             assert meta.evidence_count == 1
             assert meta.confidence == 0.4
+
+
+# ----------------------------------------------------------------------
+# BIZ-77 — start_msg_id / end_msg_id 매핑 (DoD #1, #4, #5)
+# ----------------------------------------------------------------------
+
+class TestSourceIdRange:
+    def test_recompute_id_range_from_source_msg_ids(self):
+        """``source_msg_ids`` 의 min/max 가 그대로 ``start_msg_id`` / ``end_msg_id`` 가 된다."""
+        meta = InsightMeta(
+            topic="t", text="x", source_msg_ids=[42, 7, 19, 100, 3]
+        )
+        meta.recompute_id_range()
+        assert meta.start_msg_id == 3
+        assert meta.end_msg_id == 100
+
+    def test_recompute_id_range_empty(self):
+        meta = InsightMeta(topic="t", text="x")
+        meta.recompute_id_range()
+        assert meta.start_msg_id is None
+        assert meta.end_msg_id is None
+
+    def test_merge_assigns_id_range_for_new_topic(self):
+        """신규 인사이트는 관측 시 message id 범위가 함께 부착된다 (DoD #1 매핑 저장)."""
+        merged, changed = merge_insights(
+            existing={},
+            new_observations=[
+                InsightMeta(
+                    topic="새주제",
+                    text="첫 관측",
+                    source_msg_ids=[10, 11, 13],
+                )
+            ],
+            promotion_threshold=3,
+        )
+        meta = merged["새주제"]
+        assert meta.start_msg_id == 10
+        assert meta.end_msg_id == 13
+        assert changed[0].start_msg_id == 10
+        assert changed[0].end_msg_id == 13
+
+    def test_merge_extends_id_range_on_reinforcement(self):
+        """재관측 시 새 message id 가 더 크면 end 가, 더 작으면 start 가 갱신된다."""
+        existing = {
+            "주제": InsightMeta(
+                topic="주제",
+                text="기존",
+                evidence_count=1,
+                source_msg_ids=[20, 25],
+                start_msg_id=20,
+                end_msg_id=25,
+            )
+        }
+        # 새 관측이 기존 범위 양쪽으로 확장되는 케이스.
+        merged, _ = merge_insights(
+            existing,
+            [InsightMeta(topic="주제", text="다시", source_msg_ids=[5, 30])],
+            promotion_threshold=3,
+        )
+        meta = merged["주제"]
+        # 누적 후: [20, 25, 5, 30] → min/max
+        assert meta.start_msg_id == 5
+        assert meta.end_msg_id == 30
+        # source_msg_ids 자체도 누적되었는지 다시 한 번 확인 (BIZ-73 회귀).
+        assert sorted(meta.source_msg_ids) == [5, 20, 25, 30]
+
+    def test_serialization_roundtrip_preserves_id_range(self, tmp_path: Path):
+        path = tmp_path / "insights.jsonl"
+        store = InsightStore(path)
+        meta = InsightMeta(
+            topic="x",
+            text="y",
+            source_msg_ids=[1, 2, 3],
+            start_msg_id=1,
+            end_msg_id=3,
+        )
+        store.save_all({normalize_topic(meta.topic): meta})
+
+        loaded = store.load()["x"]
+        assert loaded.start_msg_id == 1
+        assert loaded.end_msg_id == 3
+
+    def test_legacy_sidecar_without_id_range_is_backfilled(self, tmp_path: Path):
+        """DoD #5: BIZ-73 시점의 sidecar (start/end 필드 없음) 도 그대로 읽힌다.
+
+        파일에 명시 필드가 없어도 ``source_msg_ids`` 로부터 자동 보강된다 —
+        마이그레이션 없이 바로 BIZ-77 endpoints 가 동작하도록.
+        """
+        path = tmp_path / "insights.jsonl"
+        path.write_text(
+            json.dumps(
+                {
+                    "topic": "구버전",
+                    "text": "구 sidecar",
+                    "evidence_count": 2,
+                    "confidence": 0.55,
+                    "first_seen": "2026-04-28T10:00:00",
+                    "last_seen": "2026-04-29T10:00:00",
+                    "source_msg_ids": [7, 19, 42],
+                    # start_msg_id / end_msg_id 키 자체가 없음.
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        loaded = InsightStore(path).load()["구버전"]
+        # source_msg_ids 의 min/max 가 자동 보강되어야 한다.
+        assert loaded.start_msg_id == 7
+        assert loaded.end_msg_id == 42
+
+    def test_find_by_topic_normalizes(self, tmp_path: Path):
+        """원문 / 정규형 어느 형태로 조회해도 같은 행을 반환."""
+        store = InsightStore(tmp_path / "insights.jsonl")
+        meta = InsightMeta(
+            topic="맥북에어 가격",
+            text="조회",
+            source_msg_ids=[1],
+        )
+        meta.recompute_id_range()
+        store.save_all({normalize_topic(meta.topic): meta})
+
+        # 정규형 키.
+        got1 = store.find_by_topic("맥북에어가격")
+        # 원문 (공백/구두점 차이) — 같은 행.
+        got2 = store.find_by_topic("  맥북에어 가격! ")
+        assert got1 is not None
+        assert got2 is not None
+        assert got1.text == got2.text == "조회"
+
+    def test_find_by_topic_missing_returns_none(self, tmp_path: Path):
+        store = InsightStore(tmp_path / "insights.jsonl")
+        assert store.find_by_topic("없음") is None
+        assert store.find_by_topic("") is None
