@@ -374,6 +374,7 @@ export default function MemoryPage() {
         </section>
 
         {/* 우측 1/3 — 드리밍 + 관측성(BIZ-81) + 검토 큐(BIZ-79) + 내보내기 */}
+        {/* 우측 1/3 — 드리밍 + 검토 큐(BIZ-79) + 내보내기 */}
         <aside className="flex flex-col gap-4">
           <DreamingProgressCard
             state={data.dreaming}

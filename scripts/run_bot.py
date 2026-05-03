@@ -36,6 +36,7 @@ from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
+from simpleclaw.memory.language_policy import LanguagePolicy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,6 +161,16 @@ async def main():
         active_projects_cfg.get("window_days", 7)
     )
 
+    # BIZ-80: 1차 언어 정책. config.dreaming.language 가 없거나 primary=null 이면
+    # enforcement 가 꺼져 있어 LLM 출력이 그대로 통과한다(레거시 호환). 기본값은
+    # 한국어 — 영어 입력에서도 USER/MEMORY/AGENT dreaming 산출물이 한국어로 통일.
+    language_cfg = dreaming_config.get("language", {}) or {}
+    language_policy = LanguagePolicy(
+        primary=language_cfg.get("primary"),
+        min_ratio=float(language_cfg.get("min_ratio", 0.3)),
+        per_file=dict(language_cfg.get("per_file", {}) or {}),
+    )
+
     dreaming_pipeline = DreamingPipeline(
         conversation_store=conv_store,
         memory_file=".agent/MEMORY.md",
@@ -199,6 +210,8 @@ async def main():
         # BIZ-81: 사이클 메트릭 sidecar — Admin UI Memory 화면의 KPI/진단 입력원.
         # 별도 .agent/ 파일에 적재하여 grep/diff 친화적이고 운영자 수기 검토 가능.
         runs_file=".agent/dreaming_runs.jsonl",
+        # BIZ-80: 1차 언어 정책 (USER/MEMORY/AGENT/SOUL = ko 기본).
+        language_policy=language_policy,
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))

@@ -175,6 +175,16 @@ _DAEMON_DEFAULTS: dict = {
         # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
         "auto_promote_confidence": 0.7,
         "auto_promote_evidence_count": 3,
+        # BIZ-80: dreaming 산출물의 1차 언어 정책. ``primary`` 는 USER/MEMORY/AGENT/SOUL
+        # dreaming-managed 섹션의 출력 언어 — 기본 "ko" 로 영어 입력에서도 인사이트가
+        # 한국어로 통일된다. None 으로 두면 enforcement 없이 LLM 출력을 그대로 통과
+        # (BIZ-80 이전 동작). ``min_ratio`` 는 한글/라틴 비율 임계치(0.0~1.0).
+        # ``per_file`` 은 파일별 override (예: {"agent": "en"} → AGENT.md 만 영어).
+        "language": {
+            "primary": "ko",
+            "min_ratio": 0.3,
+            "per_file": {},
+        },
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -205,6 +215,45 @@ def _coerce_default_ttl_days(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n > 0 else None
+
+
+def _coerce_language_policy(raw: dict) -> dict:
+    """BIZ-80 — dreaming.language 설정을 정규화한다.
+
+    - ``primary``: 빈 문자열/None 이면 None(=enforcement 비활성). 그 외는 그대로.
+      알 수 없는 코드(예: "fr") 도 그대로 통과시킨다 — 휴리스틱이 보수적으로
+      통과시키므로 실수로 모든 출력이 잘리는 사고는 일어나지 않는다.
+    - ``min_ratio``: float 캐스팅 후 [0.0, 1.0] 으로 클램프. 파싱 실패 시 기본 0.3.
+    - ``per_file``: dict[str, str] 만 허용. 그 외는 빈 dict.
+    """
+    default = _DAEMON_DEFAULTS["dreaming"]["language"]
+    primary = raw.get("primary", default["primary"])
+    if primary == "" or primary is None:
+        primary = None
+    else:
+        primary = str(primary)
+
+    try:
+        min_ratio = float(raw.get("min_ratio", default["min_ratio"]))
+    except (TypeError, ValueError):
+        min_ratio = float(default["min_ratio"])
+    min_ratio = max(0.0, min(1.0, min_ratio))
+
+    per_file_raw = raw.get("per_file", {})
+    if isinstance(per_file_raw, dict):
+        per_file = {
+            str(k): str(v)
+            for k, v in per_file_raw.items()
+            if isinstance(k, str) and isinstance(v, str) and v
+        }
+    else:
+        per_file = {}
+
+    return {
+        "primary": primary,
+        "min_ratio": min_ratio,
+        "per_file": per_file,
+    }
 
 
 def load_daemon_config(config_path: str | Path) -> dict:
@@ -242,6 +291,10 @@ def load_daemon_config(config_path: str | Path) -> dict:
     reject = dreaming.get("reject_blocklist", {})
     if not isinstance(reject, dict):
         reject = {}
+    # BIZ-80: language 정책. dict 가 아니면 빈 dict 로 떨어뜨려 아래에서 기본값으로 채운다.
+    language = dreaming.get("language", {})
+    if not isinstance(language, dict):
+        language = {}
 
     wait_state = daemon.get("wait_state", {})
     if not isinstance(wait_state, dict):
@@ -333,6 +386,10 @@ def load_daemon_config(config_path: str | Path) -> dict:
                     )
                 ),
             ),
+            # BIZ-80: language 정책. ``primary=None`` 이면 enforcement 비활성, 그 외
+            # 코드("ko"/"en") 면 dreaming 출력을 해당 언어로 강제. ``min_ratio`` 는
+            # 0.0~1.0 으로 클램프. ``per_file`` 은 파일 식별자→언어 코드 dict 만 허용.
+            "language": _coerce_language_policy(language),
         },
         "wait_state": {
             "default_timeout": wait_state.get(

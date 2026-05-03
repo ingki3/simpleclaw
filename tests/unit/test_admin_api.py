@@ -1400,4 +1400,3 @@ class TestDreamingObservability:
         assert body["metrics_enabled"] is True
         assert body["next_run"] is None
         assert body["trigger_blockers"] == []
-

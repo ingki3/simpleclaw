@@ -314,7 +314,6 @@ class AdminAPIServer:
         #   미주입 시 status 응답에 None 으로 비워둔다(엔드포인트 자체는 동작).
         self._dreaming_run_store = dreaming_run_store
         self._dreaming_status_provider = dreaming_status_provider
-
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -437,7 +436,6 @@ class AdminAPIServer:
             f"{prefix}/memory/dreaming/status",
             self._wrap(self._handle_dreaming_status),
         )
-
         self._app = app
         return app
 
