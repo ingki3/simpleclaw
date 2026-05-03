@@ -13,7 +13,7 @@ const meta: Meta<typeof CronJobRow> = {
   // 행 단위 컴포넌트라 table wrapper가 필요하다.
   decorators: [
     (Story) => (
-      <table className="w-full border border-[--border] bg-[--card]">
+      <table className="w-full border border-(--border) bg-(--card)">
         <tbody>
           <Story />
         </tbody>

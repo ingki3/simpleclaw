@@ -12,7 +12,7 @@ const meta: Meta<typeof AuditRow> = {
   },
   decorators: [
     (Story) => (
-      <ul className="w-full max-w-xl rounded-[--radius-l] border border-[--border] bg-[--card]">
+      <ul className="w-full max-w-xl rounded-(--radius-l) border border-(--border) bg-(--card)">
         <Story />
       </ul>
     ),

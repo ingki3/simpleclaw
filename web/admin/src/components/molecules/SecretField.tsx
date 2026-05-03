@@ -69,18 +69,18 @@ export function SecretField({
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2",
+        "flex items-center gap-3 rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2",
         className,
       )}
     >
-      <code className="font-mono text-xs text-[--muted-foreground]">{name}</code>
+      <code className="font-mono text-xs text-(--muted-foreground)">{name}</code>
       <span
         aria-label={revealed ? "노출된 시크릿" : "마스킹된 시크릿"}
         className={cn(
-          "ml-auto flex items-center gap-1 rounded-[--radius-sm] px-2 py-1 font-mono text-xs",
+          "ml-auto flex items-center gap-1 rounded-(--radius-sm) px-2 py-1 font-mono text-xs",
           revealed
-            ? "bg-[--color-warning-bg] text-[--color-warning]"
-            : "bg-[--secret-mask-bg] text-[--foreground]",
+            ? "bg-(--color-warning-bg) text-(--color-warning)"
+            : "bg-(--secret-mask-bg) text-(--foreground)",
         )}
       >
         {revealed ?? `••••${lastFour}`}

@@ -37,13 +37,13 @@ export function StatusCard({
   return (
     <section
       className={cn(
-        "flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-6",
+        "flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-6",
         className,
       )}
       aria-busy={isLoading || undefined}
     >
       <header className="flex items-start justify-between gap-2">
-        <h2 className="text-sm font-medium text-[--muted-foreground]">
+        <h2 className="text-sm font-medium text-(--muted-foreground)">
           {title}
         </h2>
         {status ? (
@@ -51,21 +51,21 @@ export function StatusCard({
         ) : null}
       </header>
       {error ? (
-        <p className="text-sm text-[--color-error]" role="alert">
+        <p className="text-sm text-(--color-error)" role="alert">
           {error}
         </p>
       ) : isLoading && value === null ? (
         <div
           aria-hidden
-          className="h-8 w-24 animate-pulse rounded-[--radius-sm] bg-[--surface]"
+          className="h-8 w-24 animate-pulse rounded-(--radius-sm) bg-(--surface)"
         />
       ) : (
-        <p className="text-3xl font-semibold leading-none text-[--foreground-strong]">
+        <p className="text-3xl font-semibold leading-none text-(--foreground-strong)">
           {value === null || value === undefined ? "—" : value}
         </p>
       )}
       {hint && !error ? (
-        <p className="text-xs text-[--muted-foreground]">{hint}</p>
+        <p className="text-xs text-(--muted-foreground)">{hint}</p>
       ) : null}
     </section>
   );

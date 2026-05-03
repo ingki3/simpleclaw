@@ -73,7 +73,7 @@ export function VirtualLogList<T>({
     return (
       <div
         className={cn(
-          "flex items-center justify-center rounded-[--radius-m] border border-dashed border-[--border-strong] bg-[--surface] text-sm text-[--muted-foreground]",
+          "flex items-center justify-center rounded-(--radius-m) border border-dashed border-(--border-strong) bg-(--surface) text-sm text-(--muted-foreground)",
           className,
         )}
         style={{ height }}
@@ -91,7 +91,7 @@ export function VirtualLogList<T>({
       ref={containerRef}
       onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
       className={cn(
-        "relative overflow-y-auto rounded-[--radius-m] border border-[--border] bg-[--card]",
+        "relative overflow-y-auto rounded-(--radius-m) border border-(--border) bg-(--card)",
         className,
       )}
       style={{ height }}

@@ -50,14 +50,14 @@ export function Drawer({
         onClick={onClose}
         className="absolute inset-0 bg-black/30"
       />
-      <aside className="relative z-10 flex h-full w-full max-w-lg flex-col border-l border-[--border] bg-[--card] shadow-[--shadow-l]">
-        <header className="flex items-start justify-between gap-4 border-b border-[--border] px-6 py-4">
+      <aside className="relative z-10 flex h-full w-full max-w-lg flex-col border-l border-(--border) bg-(--card) shadow-(--shadow-l)">
+        <header className="flex items-start justify-between gap-4 border-b border-(--border) px-6 py-4">
           <div className="flex flex-col gap-1">
-            <h2 className="text-base font-semibold text-[--foreground-strong]">
+            <h2 className="text-base font-semibold text-(--foreground-strong)">
               {title}
             </h2>
             {description ? (
-              <p className="text-sm text-[--muted-foreground]">{description}</p>
+              <p className="text-sm text-(--muted-foreground)">{description}</p>
             ) : null}
           </div>
           <Button

@@ -363,7 +363,7 @@ function ListSkeleton() {
         <div
           key={i}
           aria-hidden
-          className="h-[140px] animate-pulse rounded-[--radius-l] border border-[--border] bg-[--surface]"
+          className="h-[140px] animate-pulse rounded-(--radius-l) border border-(--border) bg-(--surface)"
         />
       ))}
     </div>
@@ -382,17 +382,17 @@ function EmptyCard({
   actionHref?: string;
 }) {
   return (
-    <section className="mx-auto flex max-w-[480px] flex-col items-center gap-3 rounded-[--radius-l] border border-dashed border-[--border-strong] bg-[--card] px-8 py-16 text-center">
+    <section className="mx-auto flex max-w-[480px] flex-col items-center gap-3 rounded-(--radius-l) border border-dashed border-(--border-strong) bg-(--card) px-8 py-16 text-center">
       <Wrench
         size={32}
         strokeWidth={1.5}
         aria-hidden
-        className="text-[--muted-foreground]"
+        className="text-(--muted-foreground)"
       />
-      <h2 className="text-xl font-semibold text-[--foreground-strong]">
+      <h2 className="text-xl font-semibold text-(--foreground-strong)">
         {title}
       </h2>
-      <p className="text-sm text-[--muted-foreground]">{description}</p>
+      <p className="text-sm text-(--muted-foreground)">{description}</p>
       {actionLabel && actionHref ? (
         <a href={actionHref} target="_blank" rel="noreferrer">
           <Button variant="outline" size="sm">

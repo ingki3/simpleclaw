@@ -54,16 +54,16 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value, hint }: StatCardProps) {
   return (
-    <div className="rounded-[--radius-l] border border-[--border] bg-[--card] p-4">
-      <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+    <div className="rounded-(--radius-l) border border-(--border) bg-(--card) p-4">
+      <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
         {icon}
         <span>{label}</span>
       </div>
-      <div className="mt-2 font-mono text-xl font-semibold text-[--foreground-strong]">
+      <div className="mt-2 font-mono text-xl font-semibold text-(--foreground-strong)">
         {value}
       </div>
       {hint ? (
-        <div className="mt-1 text-[11px] text-[--muted-foreground]">{hint}</div>
+        <div className="mt-1 text-[11px] text-(--muted-foreground)">{hint}</div>
       ) : null}
     </div>
   );

@@ -92,16 +92,16 @@ export function ConfigDumpCard({
       {error ? (
         <p
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
         >
           설정을 가져오지 못했습니다: {error}
         </p>
       ) : !config ? (
-        <p className="text-sm text-[--muted-foreground]">불러오는 중…</p>
+        <p className="text-sm text-(--muted-foreground)">불러오는 중…</p>
       ) : (
         <pre
           aria-label="config.yaml 덤프 (시크릿 마스킹)"
-          className="max-h-[28rem] overflow-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]"
+          className="max-h-[28rem] overflow-auto rounded-(--radius-m) border border-(--border) bg-(--surface) p-4 font-mono text-xs leading-relaxed text-(--foreground)"
         >
           {text}
         </pre>

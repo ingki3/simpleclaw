@@ -164,18 +164,18 @@ export function Modal({
         onKeyDown={handleKeyDown}
         tabIndex={-1}
         className={cn(
-          "relative flex w-full flex-col rounded-[--radius-l] border border-[--border] bg-[--card-elevated] shadow-[--shadow-l] outline-none",
+          "relative flex w-full flex-col rounded-(--radius-l) border border-(--border) bg-(--card-elevated) shadow-(--shadow-l) outline-none",
           SIZE[size],
           className,
         )}
       >
         {(title || dismissible) && (
-          <header className="flex items-start gap-3 border-b border-[--border] px-6 py-4">
+          <header className="flex items-start gap-3 border-b border-(--border) px-6 py-4">
             <div className="flex-1">
               {title && (
                 <h2
                   id={titleId}
-                  className="text-md font-semibold text-[--foreground-strong]"
+                  className="text-md font-semibold text-(--foreground-strong)"
                 >
                   {title}
                 </h2>
@@ -183,7 +183,7 @@ export function Modal({
               {description && (
                 <p
                   id={descriptionId}
-                  className="mt-1 text-sm text-[--muted-foreground]"
+                  className="mt-1 text-sm text-(--muted-foreground)"
                 >
                   {description}
                 </p>
@@ -194,18 +194,18 @@ export function Modal({
                 type="button"
                 aria-label="닫기"
                 onClick={() => onOpenChange(false)}
-                className="-mr-1 grid h-8 w-8 place-items-center rounded-[--radius-m] text-[--muted-foreground] hover:bg-[--surface] hover:text-[--foreground]"
+                className="-mr-1 grid h-8 w-8 place-items-center rounded-(--radius-m) text-(--muted-foreground) hover:bg-(--surface) hover:text-(--foreground)"
               >
                 <X size={16} aria-hidden />
               </button>
             )}
           </header>
         )}
-        <div className="flex-1 px-6 py-5 text-sm text-[--foreground]">
+        <div className="flex-1 px-6 py-5 text-sm text-(--foreground)">
           {children}
         </div>
         {footer && (
-          <footer className="flex items-center justify-end gap-2 border-t border-[--border] px-6 py-4">
+          <footer className="flex items-center justify-end gap-2 border-t border-(--border) px-6 py-4">
             {footer}
           </footer>
         )}

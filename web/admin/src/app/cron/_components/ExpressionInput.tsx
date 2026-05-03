@@ -72,18 +72,18 @@ export function ExpressionInput({
       />
       <div id="cron-expr-helper" className="min-h-[1.25rem] text-xs">
         {!showHelper ? (
-          <span className="text-[--muted-foreground]">
+          <span className="text-(--muted-foreground)">
             5필드 cron 문법 (분 시 일 월 요일).
           </span>
         ) : validation.valid ? (
-          <span className="text-[--color-success]">{validation.description}</span>
+          <span className="text-(--color-success)">{validation.description}</span>
         ) : (
-          <span className="text-[--color-error]">{validation.error}</span>
+          <span className="text-(--color-error)">{validation.error}</span>
         )}
       </div>
       {nextRuns.length > 0 ? (
-        <ul className="flex flex-col gap-1 rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--muted-foreground]">
-          <li className="font-medium text-[--foreground]">
+        <ul className="flex flex-col gap-1 rounded-(--radius-m) border border-(--border) bg-(--surface) px-3 py-2 text-xs text-(--muted-foreground)">
+          <li className="font-medium text-(--foreground)">
             다음 5회 예상 실행
           </li>
           {nextRuns.map((d) => (

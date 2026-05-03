@@ -39,12 +39,12 @@ const CIRCUIT_TONE: Record<CronJob["circuit"], "success" | "warning" | "danger">
 
 export function CronJobRow({ job, onTogglePause, onDelete }: CronJobRowProps) {
   return (
-    <tr className="h-11 border-b border-[--border] text-sm last:border-b-0">
-      <td className="px-3 font-medium text-[--foreground-strong]">{job.name}</td>
-      <td className="px-3 font-mono text-xs text-[--muted-foreground]">
+    <tr className="h-11 border-b border-(--border) text-sm last:border-b-0">
+      <td className="px-3 font-medium text-(--foreground-strong)">{job.name}</td>
+      <td className="px-3 font-mono text-xs text-(--muted-foreground)">
         {job.schedule}
       </td>
-      <td className="px-3 text-[--muted-foreground]">{job.nextRun}</td>
+      <td className="px-3 text-(--muted-foreground)">{job.nextRun}</td>
       <td className="px-3">
         <StatusPill tone={job.status.tone}>{job.status.label}</StatusPill>
       </td>

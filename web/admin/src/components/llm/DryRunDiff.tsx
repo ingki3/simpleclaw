@@ -96,7 +96,7 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
     return (
       <div
         className={cn(
-          "rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
+          "rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) p-4 text-sm text-(--muted-foreground)",
           className,
         )}
       >
@@ -109,7 +109,7 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
     return (
       <div
         className={cn(
-          "rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
+          "rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) p-4 text-sm text-(--muted-foreground)",
           className,
         )}
       >
@@ -124,12 +124,12 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 rounded-[--radius-m] border border-[--border] bg-[--card] p-4",
+        "flex flex-col gap-3 rounded-(--radius-m) border border-(--border) bg-(--card) p-4",
         className,
       )}
     >
       <header className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-[--foreground-strong]">
+        <span className="text-sm font-medium text-(--foreground-strong)">
           Dry-run 결과
         </span>
         <PolicyPill level={policyLevel} />
@@ -153,31 +153,31 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
           {lines.map((l) => (
             <li
               key={`${l.op}-${l.key}`}
-              className="flex flex-wrap items-baseline gap-2 rounded-[--radius-sm] bg-[--surface] px-2 py-1"
+              className="flex flex-wrap items-baseline gap-2 rounded-(--radius-sm) bg-(--surface) px-2 py-1"
             >
               <span
                 aria-hidden
                 className={cn(
-                  "inline-flex h-4 w-4 items-center justify-center rounded-[--radius-sm] text-[10px] font-bold",
+                  "inline-flex h-4 w-4 items-center justify-center rounded-(--radius-sm) text-[10px] font-bold",
                   l.op === "+"
-                    ? "bg-[--color-success-bg] text-[--color-success]"
+                    ? "bg-(--color-success-bg) text-(--color-success)"
                     : l.op === "-"
-                    ? "bg-[--color-error-bg] text-[--color-error]"
-                    : "bg-[--color-warning-bg] text-[--color-warning]",
+                    ? "bg-(--color-error-bg) text-(--color-error)"
+                    : "bg-(--color-warning-bg) text-(--color-warning)",
                 )}
               >
                 {l.op}
               </span>
-              <span className="text-[--muted-foreground]">{l.key}</span>
+              <span className="text-(--muted-foreground)">{l.key}</span>
               {l.op !== "+" ? (
-                <span className="text-[--color-error]">{fmt(l.before)}</span>
+                <span className="text-(--color-error)">{fmt(l.before)}</span>
               ) : null}
               {l.op !== "-" ? (
                 <>
-                  <span className="text-[--muted-foreground]" aria-hidden>
+                  <span className="text-(--muted-foreground)" aria-hidden>
                     →
                   </span>
-                  <span className="text-[--color-success]">{fmt(l.after)}</span>
+                  <span className="text-(--color-success)">{fmt(l.after)}</span>
                 </>
               ) : null}
             </li>

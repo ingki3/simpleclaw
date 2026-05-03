@@ -38,14 +38,14 @@ export function ProviderCard({
   return (
     <article
       className={cn(
-        "flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-5",
+        "flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-5",
         className,
       )}
     >
       <header className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <h3 className="text-md font-semibold text-[--foreground-strong]">
+            <h3 className="text-md font-semibold text-(--foreground-strong)">
               {name}
             </h3>
             {role === "primary" ? (
@@ -56,7 +56,7 @@ export function ProviderCard({
               <Badge tone="neutral">Fallback</Badge>
             )}
           </div>
-          <code className="font-mono text-xs text-[--muted-foreground]">
+          <code className="font-mono text-xs text-(--muted-foreground)">
             {model}
           </code>
         </div>
@@ -66,7 +66,7 @@ export function ProviderCard({
           label={`${name} 활성`}
         />
       </header>
-      <div className="flex items-center justify-between text-xs text-[--muted-foreground]">
+      <div className="flex items-center justify-between text-xs text-(--muted-foreground)">
         <StatusPill tone={health.tone}>{health.label}</StatusPill>
       </div>
     </article>
