@@ -336,14 +336,23 @@ class TestPackagedHelpers:
             """)
 
         applied = run_conversations_migrations(db)
-        assert applied == []  # 베이스라인 흡수 → SQL 실행 안 됨
+        # 베이스라인(0001) 은 흡수되어 SQL 실행 없이 기록만 되고, 그 위에 도입된
+        # 0002(BIZ-77 channel 컬럼 추가) 는 실제로 ALTER 가 실행된다.
+        assert applied == [2]
 
         with sqlite3.connect(db) as conn:
             row = conn.execute(
                 "SELECT content FROM messages WHERE role='user'"
             ).fetchone()
             assert row[0] == "legacy hello"
+            # channel 컬럼이 0002 로 추가되어야 한다 — 흡수 직후 보강 누락 방지.
+            cols = {
+                r[1] for r in conn.execute(
+                    "PRAGMA table_info(messages)"
+                ).fetchall()
+            }
+            assert "channel" in cols
             ver = conn.execute(
                 "SELECT MAX(version) FROM schema_version"
             ).fetchone()[0]
-            assert ver == 1
+            assert ver == 2

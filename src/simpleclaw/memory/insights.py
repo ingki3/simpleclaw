@@ -37,6 +37,10 @@ class InsightMeta:
 
     같은 topic 의 인사이트는 하나의 행으로 합쳐진다(병합 시 evidence_count++,
     last_seen 갱신, source_msg_ids 누적, text 는 최신 관측으로 갱신).
+
+    BIZ-77 (F: Source Linkage) 가 ``source_msg_ids`` 를 실 message rowid 로
+    채우고, 파생값 ``start_msg_id`` / ``end_msg_id`` (=min/max) 를 함께 보관해
+    Admin UI 에서 "이 인사이트의 근거 보기" 가 한 쌍의 ID 로 즉시 가능하다.
     """
 
     topic: str
@@ -46,6 +50,22 @@ class InsightMeta:
     first_seen: datetime = field(default_factory=datetime.now)
     last_seen: datetime = field(default_factory=datetime.now)
     source_msg_ids: list[int] = field(default_factory=list)
+    # BIZ-77 — message id 범위 매핑. source_msg_ids 가 비어 있으면 둘 다 None.
+    # 매핑은 ``recompute_id_range`` 가 갱신한다.
+    start_msg_id: int | None = None
+    end_msg_id: int | None = None
+
+    def recompute_id_range(self) -> None:
+        """``source_msg_ids`` 로부터 ``start_msg_id`` / ``end_msg_id`` 를 갱신.
+
+        빈 리스트면 둘 다 None 으로 남는다(레거시/source 미보유 인사이트).
+        """
+        if self.source_msg_ids:
+            self.start_msg_id = min(self.source_msg_ids)
+            self.end_msg_id = max(self.source_msg_ids)
+        else:
+            self.start_msg_id = None
+            self.end_msg_id = None
 
     def to_dict(self) -> dict:
         """JSONL 직렬화용 dict 로 변환 (datetime → ISO 문자열)."""
@@ -56,9 +76,32 @@ class InsightMeta:
 
     @classmethod
     def from_dict(cls, d: dict) -> InsightMeta:
-        """JSONL 역직렬화. 누락 필드는 합리적 기본값으로 보강."""
+        """JSONL 역직렬화. 누락 필드는 합리적 기본값으로 보강.
+
+        구버전 sidecar (start_msg_id/end_msg_id 가 없는 BIZ-73 시점 파일) 도
+        그대로 읽힌다 — 누락이면 ``source_msg_ids`` 로부터 자동 보강한다.
+        """
         first_seen = d.get("first_seen")
         last_seen = d.get("last_seen")
+        source_msg_ids = list(d.get("source_msg_ids") or [])
+        # 구버전 호환: start/end 가 명시되어 있지 않으면 source_msg_ids 로 derive.
+        # (BIZ-73 sidecar 는 source_msg_ids 자체도 비어 있어 None 이 정확하다.)
+        raw_start = d.get("start_msg_id")
+        raw_end = d.get("end_msg_id")
+        start_msg_id: int | None
+        end_msg_id: int | None
+        if raw_start is None and source_msg_ids:
+            start_msg_id = min(source_msg_ids)
+        elif raw_start is None:
+            start_msg_id = None
+        else:
+            start_msg_id = int(raw_start)
+        if raw_end is None and source_msg_ids:
+            end_msg_id = max(source_msg_ids)
+        elif raw_end is None:
+            end_msg_id = None
+        else:
+            end_msg_id = int(raw_end)
         return cls(
             topic=str(d.get("topic", "")),
             text=str(d.get("text", "")),
@@ -74,7 +117,9 @@ class InsightMeta:
                 if isinstance(last_seen, str)
                 else datetime.now()
             ),
-            source_msg_ids=list(d.get("source_msg_ids") or []),
+            source_msg_ids=source_msg_ids,
+            start_msg_id=start_msg_id,
+            end_msg_id=end_msg_id,
         )
 
 
@@ -205,6 +250,19 @@ class InsightStore:
             out[key] = meta
         return out
 
+    def find_by_topic(self, topic: str) -> InsightMeta | None:
+        """주어진 topic(원문 또는 정규형) 에 일치하는 인사이트를 1건 조회한다.
+
+        BIZ-77 Admin API 가 ``GET /memory/insights/{id}/sources`` 핸들러에서
+        URL path 의 topic id 로 sidecar 를 조회할 때 사용한다. 정규화된 키로
+        비교하므로 사용자가 "맥북에어 가격" / "맥북에어가격" 어느 형태로 보내도
+        같은 행을 가리킨다.
+        """
+        key = normalize_topic(topic)
+        if not key:
+            return None
+        return self.load().get(key)
+
     def save_all(self, insights: dict[str, InsightMeta]) -> None:
         """모든 인사이트를 JSONL 로 원자적으로 다시 쓴다.
 
@@ -274,6 +332,9 @@ def merge_insights(
             cur.confidence = compute_confidence(
                 cur.evidence_count, promotion_threshold
             )
+            # BIZ-77 — id 범위 매핑 갱신. 새 관측 메시지가 더 이전이면 start 를
+            # 끌어내리고, 더 최신이면 end 를 끌어올린다.
+            cur.recompute_id_range()
             changed.append(cur)
         else:
             # 신규 topic — 단발 관측이므로 confidence 는 0.4 캡.
@@ -286,6 +347,7 @@ def merge_insights(
                 last_seen=obs.last_seen or now,
                 source_msg_ids=list(obs.source_msg_ids),
             )
+            new_meta.recompute_id_range()
             merged[key] = new_meta
             changed.append(new_meta)
 

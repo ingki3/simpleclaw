@@ -62,6 +62,8 @@ from simpleclaw.channels.admin_policy import (
     classify_keys,
     validate_patch,
 )
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.insights import InsightStore
 from simpleclaw.security.secrets import (
     EncryptedFileBackend,
     SecretBackend,
@@ -246,6 +248,8 @@ class AdminAPIServer:
         channel_test_callback: ChannelTestCallback | None = None,
         cors_origins: list[str] | None = None,
         request_max_body_bytes: int | None = None,
+        conversation_store: ConversationStore | None = None,
+        insight_store: InsightStore | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -273,6 +277,13 @@ class AdminAPIServer:
         self._structured = structured_logger
         self._health_provider = health_provider
         self._channel_test_cb = channel_test_callback
+
+        # BIZ-77 — 인사이트 source 역추적 엔드포인트가 사용하는 의존성. 둘 중
+        # 하나라도 None 이면 ``/memory/insights/{id}/sources`` 가 503 으로 응답한다.
+        # (테스트 편의/주입 안 한 환경에서 라우트는 등록하되 핸들러가 503 으로
+        # disabled 사실을 명시적으로 알리는 편이 404 보다 운영 진단에 유리하다.)
+        self._conversation_store = conversation_store
+        self._insight_store = insight_store
 
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
@@ -348,6 +359,14 @@ class AdminAPIServer:
         app.router.add_post(
             f"{prefix}/channels/{{name}}/test",
             self._wrap(self._handle_test_channel),
+        )
+
+        # BIZ-77 (F: Insight Source Linkage) — 인사이트 → 근거 메시지 역추적.
+        # 토픽 키(원문 또는 정규형)를 path 로 받는다. 한국어 토픽은 URL 인코딩되어
+        # 들어와도 aiohttp 가 자동 디코딩한다.
+        app.router.add_get(
+            f"{prefix}/memory/insights/{{topic}}/sources",
+            self._wrap(self._handle_get_insight_sources),
         )
 
         self._app = app
@@ -1288,6 +1307,68 @@ class AdminAPIServer:
         return await _http_test_send(
             str(target), payload, target=str(target), headers=headers
         )
+
+    # ------------------------------------------------------------------
+    # BIZ-77 (F: Insight Source Linkage) — 인사이트 → 근거 메시지 역추적
+    # ------------------------------------------------------------------
+
+    async def _handle_get_insight_sources(
+        self, request: web.Request
+    ) -> web.Response:
+        """``GET /admin/v1/memory/insights/{topic}/sources``.
+
+        주어진 topic (원문 또는 정규형) 의 인사이트 메타를 sidecar 에서 찾고,
+        ``source_msg_ids`` 가 가리키는 메시지를 ``ConversationStore`` 에서 조회해
+        Admin UI 에 노출할 형태로 반환한다.
+
+        실패 응답:
+        - 503: ``conversation_store`` 또는 ``insight_store`` 가 주입되지 않음
+          (Admin API 가 메모리 스택 없이 부팅된 환경 — silent 404 보다 명시적인
+          503 이 운영 진단에 유리하다).
+        - 404: 해당 topic 의 인사이트가 sidecar 에 없음.
+        - 422: topic path 가 비어 있거나 정규화 후 빈 문자열.
+        """
+        if self._conversation_store is None or self._insight_store is None:
+            return _json_error(
+                503,
+                "Insight source linkage is not configured on this server",
+            )
+
+        # match_info 는 aiohttp 가 URL 디코딩한 값을 돌려준다. 양 끝 공백 트림.
+        topic_param = (request.match_info.get("topic") or "").strip()
+        if not topic_param:
+            return _json_error(422, "topic path parameter is required")
+
+        meta = self._insight_store.find_by_topic(topic_param)
+        if meta is None:
+            return _json_error(404, f"Insight not found for topic: {topic_param}")
+
+        # source 메시지가 없으면 빈 배열을 반환 — UI 에서 "근거 메시지 없음" 처리.
+        rows = self._conversation_store.get_messages_by_ids(meta.source_msg_ids)
+        sources = [
+            {
+                "id": mid,
+                "role": msg.role.value,
+                "content": msg.content,
+                "timestamp": msg.timestamp.isoformat(),
+                "channel": msg.channel,
+                "token_count": msg.token_count,
+            }
+            for mid, msg in rows
+        ]
+
+        return _json_ok({
+            "topic": meta.topic,
+            "text": meta.text,
+            "evidence_count": meta.evidence_count,
+            "confidence": meta.confidence,
+            "first_seen": meta.first_seen.isoformat(),
+            "last_seen": meta.last_seen.isoformat(),
+            "start_msg_id": meta.start_msg_id,
+            "end_msg_id": meta.end_msg_id,
+            "source_msg_ids": list(meta.source_msg_ids),
+            "sources": sources,
+        })
 
 
 # ---------------------------------------------------------------------------

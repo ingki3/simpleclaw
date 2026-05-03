@@ -228,6 +228,11 @@ async def main():
             CONFIG_PATH,
             structured_logger=structured_logger,
             health_provider=_admin_health,
+            # BIZ-77 — 인사이트 source 역추적 엔드포인트(/memory/insights/{id}/sources)
+            # 가 두 의존성을 모두 사용한다. dreaming_pipeline 가 같은 sidecar 경로를
+            # 쓰므로 동일 InsightStore 를 공유한다.
+            conversation_store=conv_store,
+            insight_store=dreaming_pipeline.insight_store,
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
