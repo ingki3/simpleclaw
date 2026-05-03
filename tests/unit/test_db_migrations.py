@@ -270,6 +270,57 @@ class TestBackupAndRollback:
         backups = list(db_path.parent.glob("test.db.backup-0002-*"))
         assert len(backups) == 1, f"expected 1 backup, found {backups}"
 
+    def test_backup_tolerates_wal_sidecar_disappearing_mid_copy(
+        self, db_path: Path, migrations_dir: Path, monkeypatch
+    ) -> None:
+        """WAL/SHM 사이드카가 exists() 검사 직후 사라져도 백업이 실패하지 않는다.
+
+        SQLite WAL 모드에서는 마지막 connection close 시 사이드카가
+        truncate/삭제되는 race 가 있다. 사이드카가 없는 상황은 정상이며,
+        백업은 메인 DB 파일만으로도 일관성 있게 복원 가능해야 한다.
+        """
+        # 0001 — WAL 모드 + 테이블 (실 ConversationStore 0001 과 동일한 패턴)
+        _write_migration(
+            migrations_dir, 1, "init",
+            "PRAGMA journal_mode = WAL;\nCREATE TABLE t1 (id INTEGER PRIMARY KEY);",
+        )
+        MigrationRunner(db_path, migrations_dir).run()
+
+        # 0002 — race 를 강제 시뮬레이션할 마이그레이션
+        _write_migration(
+            migrations_dir, 2, "add_col",
+            "ALTER TABLE t1 ADD COLUMN extra TEXT;",
+        )
+
+        # shutil.copy2 를 가로채 *.db-wal/*.db-shm 사본 호출 시
+        # 항상 FileNotFoundError 를 raise — exists() 검사 직후 사라진 케이스.
+        import shutil as _shutil
+        from simpleclaw.db import migrations as _migrations_mod
+        original_copy2 = _shutil.copy2
+
+        def _raise_for_sidecar(src, dst, *args, **kwargs):
+            src_str = str(src)
+            if src_str.endswith("-wal") or src_str.endswith("-shm"):
+                raise FileNotFoundError(2, "vanished mid-copy", src_str)
+            return original_copy2(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(_migrations_mod.shutil, "copy2", _raise_for_sidecar)
+
+        # 사이드카가 사라져도 백업·마이그레이션 적용은 정상 완료되어야 한다.
+        MigrationRunner(db_path, migrations_dir).run()
+
+        with sqlite3.connect(db_path) as conn:
+            cols = {
+                r[1] for r in conn.execute("PRAGMA table_info(t1)").fetchall()
+            }
+            assert "extra" in cols
+            versions = {
+                r[0] for r in conn.execute(
+                    "SELECT version FROM schema_version"
+                ).fetchall()
+            }
+            assert versions == {1, 2}
+
 
 class TestPackagedHelpers:
     """패키지 내장 마이그레이션 헬퍼가 실제 SQL 파일을 적용하는지 확인."""
