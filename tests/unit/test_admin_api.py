@@ -665,3 +665,164 @@ class TestLogs:
         data = await resp.json()
         assert len(data["entries"]) == 1
         assert data["entries"][0]["level"] == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# 채널 테스트 발송 — POST /admin/v1/channels/{name}/test
+# ---------------------------------------------------------------------------
+
+
+class TestChannelTest:
+    """``channel_test_callback``을 주입해 외부 네트워크 의존을 끊고 검증한다."""
+
+    @pytest.mark.asyncio
+    async def test_telegram_callback_returns_status_and_audit(
+        self, tmp_state, aiohttp_client
+    ):
+        captured: list[tuple[str, dict]] = []
+
+        async def fake_cb(name: str, options: dict) -> dict:
+            captured.append((name, options))
+            return {
+                "ok": True,
+                "status_code": 200,
+                "latency_ms": 42,
+                "target": "12345",
+            }
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            channel_test_callback=fake_cb,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        resp = await c.post(
+            "/admin/v1/channels/telegram/test",
+            headers=HEADERS,
+            json={"message": "ping"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["ok"] is True
+        assert data["status_code"] == 200
+        assert data["latency_ms"] == 42
+        assert data["target"] == "12345"
+        assert "audit_id" in data
+
+        # 콜백에 채널명과 옵션이 정확히 전달되었는지.
+        assert captured == [("telegram", {"message": "ping"})]
+
+        # 감사 엔트리가 ``channel.test`` action으로 기록됐는지.
+        audit = AuditLog(tmp_state["audit_dir"])
+        entries = audit.search()
+        assert len(entries) == 1
+        assert entries[0].action == "channel.test"
+        assert entries[0].area == "channels"
+        assert entries[0].target == "telegram"
+        assert entries[0].outcome == "applied"
+
+    @pytest.mark.asyncio
+    async def test_unknown_channel_returns_404(self, client):
+        resp = await client.post(
+            "/admin/v1/channels/discord/test",
+            headers=HEADERS,
+            json={"message": "ping"},
+        )
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_default_message_when_body_missing(
+        self, tmp_state, aiohttp_client
+    ):
+        seen: dict = {}
+
+        def sync_cb(name: str, options: dict) -> dict:
+            seen.update(options)
+            return {"ok": True, "status_code": 200, "latency_ms": 1}
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            channel_test_callback=sync_cb,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        # 본문 없이 호출 → 기본 메시지가 사용돼야 한다.
+        resp = await c.post(
+            "/admin/v1/channels/webhook/test",
+            headers=HEADERS,
+        )
+        assert resp.status == 200
+        assert seen.get("message") == "Hello from admin"
+
+    @pytest.mark.asyncio
+    async def test_callback_failure_records_rejected_audit(
+        self, tmp_state, aiohttp_client
+    ):
+        async def failing_cb(name: str, options: dict) -> dict:
+            return {
+                "ok": False,
+                "status_code": 502,
+                "latency_ms": 100,
+                "error": "bad gateway",
+            }
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            channel_test_callback=failing_cb,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        resp = await c.post(
+            "/admin/v1/channels/webhook/test",
+            headers=HEADERS,
+            json={"message": "x"},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["ok"] is False
+        assert data["status_code"] == 502
+        assert data["error"] == "bad gateway"
+
+        audit = AuditLog(tmp_state["audit_dir"])
+        entries = audit.search()
+        assert len(entries) == 1
+        assert entries[0].outcome == "rejected"
+        assert entries[0].reason == "bad gateway"
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_normalized(self, tmp_state, aiohttp_client):
+        async def boom_cb(name: str, options: dict) -> dict:
+            raise RuntimeError("boom")
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            channel_test_callback=boom_cb,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        resp = await c.post(
+            "/admin/v1/channels/telegram/test",
+            headers=HEADERS,
+            json={"message": "x"},
+        )
+        # 콜백 예외는 200 응답에 ``ok=False`` + ``error``로 정규화된다.
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["ok"] is False
+        assert "boom" in (data.get("error") or "")
