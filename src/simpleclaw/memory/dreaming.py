@@ -43,6 +43,7 @@ from simpleclaw.memory.insights import (
     InsightStore,
     is_promoted,
     merge_insights,
+    normalize_topic,
 )
 from simpleclaw.memory.models import (
     ClusterRecord,
@@ -56,6 +57,10 @@ from simpleclaw.memory.protected_section import (
     append_to_section,
     get_section_body,
     replace_section_body,
+)
+from simpleclaw.memory.suggestions import (
+    BlocklistStore,
+    SuggestionStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,6 +189,10 @@ class DreamingPipeline:
         agent_section: str = DEFAULT_AGENT_SECTION,
         insights_file: str | Path | None = None,
         insight_promotion_threshold: int = 3,
+        suggestions_file: str | Path | None = None,
+        blocklist_file: str | Path | None = None,
+        auto_promote_confidence: float = 0.7,
+        auto_promote_evidence_count: int | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -209,6 +218,21 @@ class DreamingPipeline:
             insight_promotion_threshold: 인사이트 승격 임계 관측 횟수 (BIZ-73). 단발 관측은
                 항상 confidence ≤ 0.4 로 캡되고, 이 횟수에 도달해야 승격선(0.7)에 진입한다.
                 기본 3회.
+            suggestions_file: BIZ-79 — pending suggestion sidecar(JSONL) 경로. 지정되면
+                "dry-run + admin review" 모드가 활성화되어 추출된 인사이트가 USER.md 에
+                즉시 쓰이지 않고 review 큐에 적재된다 (auto-promote 임계치를 동시에
+                충족한 항목만 큐를 우회). None 이면 레거시 동작(추출 즉시 USER.md
+                bullet append) 유지.
+            blocklist_file: BIZ-79 — reject 시 누적되는 토픽 블록리스트 sidecar 경로.
+                None 이면 블록리스트 기능 비활성. ``suggestions_file`` 가 지정될 때
+                보통 함께 지정한다 — 그래야 reject → 재추출 차단 루프가 닫힌다.
+            auto_promote_confidence: BIZ-79 — 큐를 우회해 즉시 USER.md 에 적용할
+                confidence 하한 (기본 0.7 = 승격선). 이 값과 ``auto_promote_evidence_count``
+                를 **동시에** 만족해야 자동 적용된다. 한쪽만 만족하면 큐로 보낸다.
+            auto_promote_evidence_count: BIZ-79 — 자동 적용에 필요한 evidence_count
+                하한. ``None`` 이면 ``insight_promotion_threshold`` 와 같은 값을 사용한다.
+                "단발 고신뢰" 가짜 일반화를 막기 위해 confidence 만이 아니라 누적 관측
+                수도 함께 본다.
 
         BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
         마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
@@ -242,6 +266,25 @@ class DreamingPipeline:
         else:
             self._insights_store = None
         self._insight_promotion_threshold = max(1, int(insight_promotion_threshold))
+
+        # BIZ-79: pending suggestion 큐 + reject 블록리스트.
+        # - suggestions_file 가 None 이면 큐가 꺼져 있어 추출된 인사이트는 즉시
+        #   USER.md 에 적용된다(레거시 호환).
+        # - blocklist_file 가 None 이면 차단 기능이 꺼져 있어 reject 후에도 같은
+        #   topic 이 다음 사이클에서 다시 추출될 수 있다 — 통합 테스트는 두 가지를
+        #   함께 켜서 reject → 재추출 차단 루프를 검증한다.
+        self._suggestion_store: SuggestionStore | None = (
+            SuggestionStore(suggestions_file) if suggestions_file else None
+        )
+        self._blocklist_store: BlocklistStore | None = (
+            BlocklistStore(blocklist_file) if blocklist_file else None
+        )
+        self._auto_promote_confidence = float(auto_promote_confidence)
+        self._auto_promote_evidence_count = (
+            int(auto_promote_evidence_count)
+            if auto_promote_evidence_count is not None
+            else self._insight_promotion_threshold
+        )
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -313,6 +356,25 @@ class DreamingPipeline:
         ``None``. Admin API 라우팅은 None 일 때 503 으로 명시 disabled 응답.
         """
         return self._insights_store
+
+    @property
+    def suggestion_store(self) -> SuggestionStore | None:
+        """Pending suggestion 큐 (BIZ-79). Admin API 가 같은 sidecar 를 공유.
+
+        None 이면 dry-run 모드가 꺼져 있어 추출된 인사이트가 즉시 USER.md 에
+        반영된다 — Admin API 의 ``/memory/suggestions/...`` 엔드포인트는 503 응답.
+        """
+        return self._suggestion_store
+
+    @property
+    def blocklist_store(self) -> BlocklistStore | None:
+        """Reject 누적 블록리스트 (BIZ-79). Admin API reject 액션이 같은 store 에 add."""
+        return self._blocklist_store
+
+    @property
+    def auto_promote_thresholds(self) -> tuple[float, int]:
+        """``(confidence_floor, evidence_count_floor)`` 쌍 — 운영 가시성용."""
+        return self._auto_promote_confidence, self._auto_promote_evidence_count
 
     async def summarize(self, messages: list) -> dict:
         """LLM을 사용하여 대화 요약을 생성한다.
@@ -515,15 +577,29 @@ class DreamingPipeline:
     ) -> tuple[list[InsightMeta], list[InsightMeta]]:
         """이번 회차의 인사이트 메타를 sidecar 와 병합·저장한다.
 
+        BIZ-79 dry-run 모드 (``suggestion_store`` 가 주입된 경우):
+        1. 블록리스트에 등록된 토픽 관측은 merge 전에 필터링한다 — 같은 인사이트가
+           재추출되는 것을 차단한다(거부 → 차단 루프의 한 끝).
+        2. 병합 후, 변경된 각 인사이트를 두 갈래로 라우팅:
+           - 자동 적용(auto-promote): ``confidence`` 와 ``evidence_count`` 가
+             동시에 임계치를 충족하면 ``promoted`` 로 반환 — 호출자가 USER.md 에
+             즉시 append.
+           - 큐 적재: 그 외 모든 변경은 pending suggestion 으로 큐에 들어간다.
+             기존 pending 행이 있으면 in-place 갱신 (한 토픽당 1행 보장).
+
+        레거시 모드 (``suggestion_store`` 미주입):
+        ``promoted`` 는 ``is_promoted`` 기준 — 호출자(``run``)가 별도 로직 없이
+        그대로 동작한다.
+
         Args:
             meta_items: ``[{"topic": ..., "text": ...}, ...]`` 형태의 LLM 추출물.
-            source_msg_ids: 이번 회차에 분석한 메시지 rowid 목록(F: source linkage 의 1차 입력).
-                None 이면 빈 리스트로 처리. 이 회차에 신규/갱신된 모든 인사이트에 동일하게 부착된다.
+            source_msg_ids: 이번 회차에 분석한 메시지 rowid 목록 (BIZ-77 source linkage).
+                None 이면 빈 리스트로 처리. 신규/강화된 모든 인사이트에 동일 부착.
 
         Returns:
             (changed, promoted)
-            - changed: 이번 회차에 추가/갱신된 인사이트 (모두).
-            - promoted: 그 중 ``is_promoted == True`` 인 항목들 (USER.md 노출 대상).
+            - changed: 이번 회차에 추가/갱신된 인사이트 (블록리스트로 필터된 것 제외).
+            - promoted: 자동 적용 대상 — 호출자가 USER.md 본문에 반영해야 하는 항목.
             sidecar 저장소가 비활성이거나 입력이 비어있으면 (빈 리스트, 빈 리스트).
         """
         if not self._insights_store or not meta_items:
@@ -536,6 +612,16 @@ class DreamingPipeline:
             topic = (item.get("topic") or "").strip()
             text = (item.get("text") or "").strip()
             if not topic or not text:
+                continue
+            # BIZ-79: 블록리스트 토픽은 merge 이전에 drop — 같은 인사이트 재추출 차단.
+            # ``BlocklistStore`` 가 주입되지 않은 경우(레거시) 차단 없이 통과.
+            if self._blocklist_store is not None and self._blocklist_store.is_blocked(
+                topic
+            ):
+                logger.info(
+                    "Skipping blocklisted insight topic: %r",
+                    normalize_topic(topic),
+                )
                 continue
             observations.append(
                 InsightMeta(
@@ -558,15 +644,91 @@ class DreamingPipeline:
         )
         self._insights_store.save_all(merged)
 
-        promoted = [
-            m for m in changed
-            if is_promoted(m, self._insight_promotion_threshold)
-        ]
-        logger.info(
-            "Insights updated: %d changed, %d promoted (threshold=%d)",
-            len(changed), len(promoted), self._insight_promotion_threshold,
-        )
+        # BIZ-79: 변경 항목을 자동 적용 vs 큐 적재로 라우팅.
+        promoted: list[InsightMeta] = []
+        if self._suggestion_store is not None:
+            queued = 0
+            for meta in changed:
+                if self._meets_auto_promote(meta):
+                    promoted.append(meta)
+                    # auto-promote 가 발동된 토픽이 이전 사이클에서 큐에 남아 있었다면
+                    # 자동으로 accepted 처리한다 — USER.md 에 이미 들어갈 내용을
+                    # 운영자가 다시 보지 않게 정리.
+                    existing = self._suggestion_store.find_pending_by_topic(
+                        meta.topic
+                    )
+                    if existing is not None:
+                        self._suggestion_store.update_status(
+                            existing.id, "accepted"
+                        )
+                    continue
+                # pending 큐에 적재 (한 토픽당 1행 보장 — 같은 토픽 반복 강화는
+                # in-place 갱신).
+                self._suggestion_store.upsert_pending(meta)
+                queued += 1
+            logger.info(
+                "Insights updated: %d changed, %d auto-applied, %d queued "
+                "(promote_conf>=%.2f & ev>=%d, sidecar_threshold=%d)",
+                len(changed), len(promoted), queued,
+                self._auto_promote_confidence,
+                self._auto_promote_evidence_count,
+                self._insight_promotion_threshold,
+            )
+        else:
+            # 레거시 모드: ``is_promoted`` 기준 (BIZ-73 호환).
+            promoted = [
+                m for m in changed
+                if is_promoted(m, self._insight_promotion_threshold)
+            ]
+            logger.info(
+                "Insights updated: %d changed, %d promoted (threshold=%d)",
+                len(changed), len(promoted), self._insight_promotion_threshold,
+            )
         return changed, promoted
+
+    def _meets_auto_promote(self, meta: InsightMeta) -> bool:
+        """자동 적용 조건 — confidence/evidence_count 가 **동시에** 임계치 이상.
+
+        한쪽만 만족하는 경우(예: 단발 고신뢰)는 큐로 보내 운영자 검수에 맡긴다 —
+        BIZ-79 DoD §1 "confidence ≥ X AND evidence_count ≥ Y simultaneously".
+        """
+        return (
+            meta.confidence >= self._auto_promote_confidence
+            and meta.evidence_count >= self._auto_promote_evidence_count
+        )
+
+    @staticmethod
+    def _format_auto_applied_bullets(items: list[InsightMeta]) -> str:
+        """자동 적용 인사이트들의 ``text`` 를 USER.md 용 bullet 텍스트로 합친다.
+
+        각 ``text`` 는 보통 이미 "- " 접두 없이 한 줄. 빈 줄/중복은 제거하여
+        깔끔한 bullet 블록을 만든다. 빈 입력이면 빈 문자열 반환.
+        """
+        seen: set[str] = set()
+        bullets: list[str] = []
+        for meta in items:
+            text = (meta.text or "").strip()
+            if not text:
+                continue
+            # 이미 사용자가 적은 prefix 가 있는 경우 그대로 유지.
+            line = text if text.startswith(("-", "*")) else f"- {text}"
+            if line in seen:
+                continue
+            seen.add(line)
+            bullets.append(line)
+        return "\n".join(bullets)
+
+    def append_insight_to_user_file(self, text: str) -> None:
+        """단일 인사이트(또는 사용자 편집본)를 USER.md insights 섹션에 append.
+
+        Admin API 의 accept / edit 핸들러가 사용한다. 빈 텍스트는 무시.
+        """
+        text = (text or "").strip()
+        if not text or not self._user_file:
+            return
+        line = text if text.startswith(("-", "*")) else f"- {text}"
+        block = self._format_dated_block("Dreaming Insights", line)
+        self._safe_append_in_section(self._user_file, self._user_section, block)
 
     def update_soul_file(self, updates: str) -> None:
         """에이전트 성격/말투 변경을 SOUL.md의 managed:dreaming:dreaming-updates에 추가한다."""
@@ -972,8 +1134,17 @@ class DreamingPipeline:
 
         cluster_summary_text = ""
         try:
-            # USER/SOUL/AGENT는 두 모드 공통으로 갱신
-            if user_insights:
+            # USER/SOUL/AGENT는 두 모드 공통으로 갱신.
+            # BIZ-79: dry-run 모드(suggestion_store 활성)에서는 LLM 의 user_insights
+            # 블록을 통째로 USER.md 에 쓰지 않는다 — 큐를 우회하면 review 의미가
+            # 사라지기 때문이다. 대신 ``apply_insight_meta`` 가 자동 적용 대상으로
+            # 분류한 ``promoted_meta`` 만 한 줄씩 bullet 으로 append 한다.
+            # 레거시 모드(suggestion_store 미주입)에서는 기존 동작 유지.
+            if self._suggestion_store is not None:
+                auto_text = self._format_auto_applied_bullets(promoted_meta)
+                if auto_text:
+                    self.update_user_file(auto_text)
+            elif user_insights:
                 self.update_user_file(user_insights)
             if soul_updates:
                 self.update_soul_file(soul_updates)

@@ -27,6 +27,7 @@ import { useToast } from "@/components/primitives/Toast";
 import { DreamingProgressCard } from "@/components/domain/DreamingProgressCard";
 import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
 import { MemoryStatsCards } from "@/components/domain/MemoryStatsCards";
+import { SuggestionQueuePanel } from "@/components/domain/SuggestionQueuePanel";
 import { VirtualList } from "@/components/domain/VirtualList";
 import {
   type DreamingState,
@@ -371,12 +372,16 @@ export default function MemoryPage() {
           )}
         </section>
 
-        {/* 우측 1/3 — 드리밍 + 내보내기 */}
+        {/* 우측 1/3 — 드리밍 + 검토 큐(BIZ-79) + 내보내기 */}
         <aside className="flex flex-col gap-4">
           <DreamingProgressCard
             state={data.dreaming}
             onTrigger={handleTriggerDreaming}
             disabled={false}
+          />
+          <SuggestionQueuePanel
+            disabled={dreamingDisabled}
+            onChanged={() => void refresh()}
           />
           <ExportCard
             range={exportRange}

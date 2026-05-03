@@ -160,6 +160,16 @@ _DAEMON_DEFAULTS: dict = {
         # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
         # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
         "insight_promotion_threshold": 3,
+        # BIZ-79: dry-run + admin review 모드. 추출된 인사이트는 USER.md 에 즉시
+        # 쓰지 않고 review 큐(.agent/suggestions.jsonl)에 적재된다. auto_promote
+        # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
+        # 운영자는 Admin UI 에서 accept/edit/reject 로 처리하며, reject 한 토픽은
+        # 다음 사이클부터 차단(.agent/insight_blocklist.jsonl).
+        "auto_promote_confidence": 0.7,
+        # None 이면 ``insight_promotion_threshold`` 와 같은 값을 사용 — config 에
+        # 명시할 수도 있다. 단발 고신뢰 가짜 일반화를 막기 위해 confidence 만이
+        # 아니라 누적 관측 수도 함께 본다.
+        "auto_promote_evidence_count": 3,
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -239,6 +249,24 @@ def load_daemon_config(config_path: str | Path) -> dict:
                         "insight_promotion_threshold",
                         _DAEMON_DEFAULTS["dreaming"][
                             "insight_promotion_threshold"
+                        ],
+                    )
+                ),
+            ),
+            # BIZ-79: dry-run + admin review 모드.
+            "auto_promote_confidence": float(
+                dreaming.get(
+                    "auto_promote_confidence",
+                    _DAEMON_DEFAULTS["dreaming"]["auto_promote_confidence"],
+                )
+            ),
+            "auto_promote_evidence_count": max(
+                1,
+                int(
+                    dreaming.get(
+                        "auto_promote_evidence_count",
+                        _DAEMON_DEFAULTS["dreaming"][
+                            "auto_promote_evidence_count"
                         ],
                     )
                 ),
