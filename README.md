@@ -217,15 +217,16 @@ nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 
 봇 데몬은 Admin UI 백엔드용 REST 서버를 `127.0.0.1:8082`에 자동 바인딩합니다 (`scripts/run_bot.py` 실행 시). 모든 호출은 Bearer 토큰 인증을 강제합니다.
 
-1. 토큰을 시크릿 매니저에 등록 (한 번만):
+1. 토큰 발급 + Admin UI 환경 동기화 (한 번만):
 
 ```bash
-.venv/bin/python -c "
-import secrets
-from simpleclaw.security.secrets import SecretsManager
-SecretsManager().store('keyring', 'admin_api_token', secrets.token_urlsafe(32))
-"
+.venv/bin/python scripts/setup_admin_api.py
 ```
+
+위 스크립트는 idempotent하게 다음을 처리합니다:
+- keyring `admin_api_token` 발급(있으면 재사용, `--force` 시 재발급)
+- `web/admin/.env.local` 의 `ADMIN_API_TOKEN`/`ADMIN_API_BASE` 라인 갱신
+- `config.yaml` 의 `admin_api` 블록 보강(없을 때만), `cors_origins`에 `http://localhost:3100` 추가
 
 `config.yaml` 기본 설정은 `token_secret: \"keyring:admin_api_token\"`을 참조하므로 추가 작업이 필요 없습니다. 환경변수 또는 암호화 파일을 쓰려면 참조 문자열을 `env:ADMIN_API_TOKEN` / `file:admin_api_token` 등으로 바꿉니다.
 
