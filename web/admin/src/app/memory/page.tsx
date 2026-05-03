@@ -27,6 +27,7 @@ import { useToast } from "@/components/primitives/Toast";
 import { DreamingProgressCard } from "@/components/domain/DreamingProgressCard";
 import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
 import { MemoryStatsCards } from "@/components/domain/MemoryStatsCards";
+import { SuggestionQueuePanel } from "@/components/domain/SuggestionQueuePanel";
 import { VirtualList } from "@/components/domain/VirtualList";
 import {
   type DreamingState,
@@ -371,13 +372,16 @@ export default function MemoryPage() {
           )}
         </section>
 
-        {/* 우측 1/3 — 드리밍 + 내보내기 */}
+        {/* 우측 1/3 — 드리밍 + 검수 큐 + 내보내기 */}
         <aside className="flex flex-col gap-4">
           <DreamingProgressCard
             state={data.dreaming}
             onTrigger={handleTriggerDreaming}
             disabled={false}
           />
+          {/* BIZ-79 — Dry-run 큐 검수. accept 후 인덱스 영향이 다음 dreaming
+              사이클에서 일어나므로 onMutated 로 인덱스를 즉시 새로고침하지는 않음. */}
+          <SuggestionQueuePanel onMutated={() => void refresh()} />
           <ExportCard
             range={exportRange}
             onChange={setExportRange}

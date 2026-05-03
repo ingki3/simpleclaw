@@ -25,6 +25,7 @@ from simpleclaw.channels.admin_audit import AuditLog
 from simpleclaw.config import load_admin_api_config
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.insights import InsightStore
+from simpleclaw.memory.suggestions import InsightBlocklist, SuggestionStore
 from simpleclaw.security.secrets import SecretsManager
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,8 @@ def build_admin_api_server(
     admin_state_dir: str | Path | None = None,
     conversation_store: ConversationStore | None = None,
     insight_store: InsightStore | None = None,
+    suggestion_store: SuggestionStore | None = None,
+    insight_blocklist: InsightBlocklist | None = None,
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -97,6 +100,10 @@ def build_admin_api_server(
         # 둘 중 하나라도 None 이면 핸들러가 503 으로 명시적 disabled 응답.
         conversation_store=conversation_store,
         insight_store=insight_store,
+        # BIZ-79 — Dreaming Dry-run + Admin Review Loop. dreaming pipeline 과 동일
+        # 객체를 공유해 큐 변경을 즉시 다음 dreaming 사이클이 보게 한다.
+        suggestion_store=suggestion_store,
+        insight_blocklist=insight_blocklist,
     )
 
 
