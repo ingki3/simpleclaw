@@ -518,6 +518,80 @@ def load_webhook_config(config_path: str | Path) -> dict:
     }
 
 
+# Admin API 서버 기본 설정값 (BIZ-58)
+# 단일 운영자 가정의 로컬 백오피스 API. enabled=True가 기본이지만 토큰이 없으면
+# 부팅 단계에서 명시적으로 실패하여 silent insecure 운용을 방지한다.
+# bind_host는 ``127.0.0.1`` 고정 권장 — 외부 노출 시 mTLS 등 추가 가드가 필요하다.
+_ADMIN_API_DEFAULTS: dict = {
+    "enabled": True,
+    "bind_host": "127.0.0.1",
+    "bind_port": 8082,
+    # 시크릿 참조 권장: ``"keyring:admin_api_token"`` 등.
+    "token_secret": "keyring:admin_api_token",
+    "read_timeout_seconds": 30,
+    # 256 KiB — 설정 PATCH 페이로드 상한. yaml 한 영역 머지에 충분.
+    "request_max_body_kb": 256,
+    # CORS 허용 origin 목록 — Admin UI dev 서버 등. 빈 리스트면 CORS 헤더 미부착(=동일 origin만).
+    "cors_origins": [],
+}
+
+
+def load_admin_api_config(config_path: str | Path) -> dict:
+    """config.yaml에서 Admin API 서버 설정을 로드한다.
+
+    ``token_secret``은 시크릿 매니저를 통해 해소된다 — keyring/file/env 어디든 가능.
+    파일이 없거나 admin_api 키가 없으면 기본값을 반환한다(여전히 enabled=True인 점에
+    주의 — 토큰이 비어 있으면 호출자가 부팅 단계에서 명시적으로 실패해야 한다).
+    """
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return _admin_api_with_defaults({})
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return _admin_api_with_defaults({})
+
+    if not isinstance(data, dict):
+        return _admin_api_with_defaults({})
+
+    admin = data.get("admin_api", {})
+    if not isinstance(admin, dict):
+        admin = {}
+    return _admin_api_with_defaults(admin)
+
+
+def _admin_api_with_defaults(admin: dict) -> dict:
+    """Admin API 설정 dict를 기본값으로 보강하고 시크릿 참조를 해소해 반환."""
+    cors = admin.get("cors_origins", _ADMIN_API_DEFAULTS["cors_origins"])
+    if not isinstance(cors, list):
+        cors = []
+    # token_secret은 참조 문자열일 수 있으므로 항상 시크릿 매니저를 거쳐 해소한다.
+    token = _resolve_secret_field(
+        admin.get("token_secret", _ADMIN_API_DEFAULTS["token_secret"])
+    )
+    return {
+        "enabled": bool(admin.get("enabled", _ADMIN_API_DEFAULTS["enabled"])),
+        "bind_host": admin.get("bind_host", _ADMIN_API_DEFAULTS["bind_host"]),
+        "bind_port": int(admin.get("bind_port", _ADMIN_API_DEFAULTS["bind_port"])),
+        "token_secret": token,
+        "read_timeout_seconds": int(
+            admin.get(
+                "read_timeout_seconds",
+                _ADMIN_API_DEFAULTS["read_timeout_seconds"],
+            )
+        ),
+        "request_max_body_kb": int(
+            admin.get(
+                "request_max_body_kb",
+                _ADMIN_API_DEFAULTS["request_max_body_kb"],
+            )
+        ),
+        "cors_origins": [str(o) for o in cors],
+    }
+
+
 # 서브 에이전트 기본 설정값
 _SUB_AGENTS_DEFAULTS: dict = {
     "max_concurrent": 3,
