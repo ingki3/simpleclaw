@@ -47,6 +47,7 @@
   --card-elevated: var(--neutral-0);
   --border: var(--neutral-200);
   --border-strong: var(--neutral-300);
+  --nav-active-bg: var(--primary-tint);
   --foreground: var(--neutral-800);
   --foreground-strong: var(--neutral-900);
   --muted-foreground: var(--neutral-600);
@@ -120,11 +121,25 @@
   --info-500: #38bdf8;
   --info-50: #06243a;
 
-  /* Semantic — 다크에서는 card가 neutral-100 (sub-elevation) */
-  --card: var(--neutral-100);
-  --card-elevated: var(--neutral-100);
+  /* Semantic — BIZ-67 (admin.pen BIZ-63 frame 가설 B 채택)
+   * background → surface → card → card-elevated 4단계 모두 가독되도록
+   * 다크 전용으로 surface 계층의 luminance 격차를 확대한다. light 무영향.
+   *  - --card        : surface(#10151b) +9 — BIZ-63 §09 검증 12.4:1 ✓ AAA
+   *  - --card-elevated: card(#1a2230)   +11 — BIZ-63 §09 검증 10.7:1 ✓ AAA
+   * 이 결정으로 1px `--border` 라인이 카드 위 강세선이 아니라
+   * 카드 내부 레이어로 읽혀 "발광하는 흰 선" 인식이 구조적으로 사라진다. */
+  --card: #1a2230;
+  --card-elevated: #252f3d;
   --primary-foreground: var(--neutral-900);
   --destructive-foreground: var(--neutral-900);
+
+  /* BIZ-64 — 다크 전용 가시성 보강 (BIZ-42 결정 일부 유지)
+   *  - --secret-mask-bg: 카드와 분리되도록 더 어둡게
+   *  - --primary-hover : 다크 base(brand-500=#7c8bff)보다 밝게 → hover UX 일관
+   * BIZ-67 — `--border`는 BIZ-63 §09 표대로 neutral-200(=#1f2731) 유지.
+   *          BIZ-64 의 #232c38, BIZ-65 의 #0b1117 모두 회수. */
+  --secret-mask-bg: #0e1218;
+  --primary-hover: #a0aaff;
 
   color-scheme: dark;
 }
@@ -155,10 +170,13 @@
     --danger-50: #2a0f0f;
     --info-500: #38bdf8;
     --info-50: #06243a;
-    --card: var(--neutral-100);
-    --card-elevated: var(--neutral-100);
+    /* BIZ-67 — .theme-dark 블록과 동기 유지 (admin.pen BIZ-63 §09 가설 B) */
+    --card: #1a2230;
+    --card-elevated: #252f3d;
     --primary-foreground: var(--neutral-900);
     --destructive-foreground: var(--neutral-900);
+    --secret-mask-bg: #0e1218;
+    --primary-hover: #a0aaff;
     color-scheme: dark;
   }
 }
@@ -174,6 +192,7 @@
   --color-card-elevated: var(--card-elevated);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
+  --color-nav-active-bg: var(--nav-active-bg);
   --color-foreground: var(--foreground);
   --color-foreground-strong: var(--foreground-strong);
   --color-muted-foreground: var(--muted-foreground);
