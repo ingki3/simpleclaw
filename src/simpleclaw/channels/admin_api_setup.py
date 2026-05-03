@@ -23,6 +23,9 @@ from typing import Callable
 from simpleclaw.channels.admin_api import AdminAPIServer
 from simpleclaw.channels.admin_audit import AuditLog
 from simpleclaw.config import load_admin_api_config
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.insights import InsightStore
+from simpleclaw.memory.suggestions import BlocklistStore, SuggestionStore
 from simpleclaw.security.secrets import SecretsManager
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,11 @@ def build_admin_api_server(
     restart_callback: Callable[[dict], object] | None = None,
     reload_callback: Callable[[str, dict], object] | None = None,
     admin_state_dir: str | Path | None = None,
+    conversation_store: ConversationStore | None = None,
+    insight_store: InsightStore | None = None,
+    suggestion_store: SuggestionStore | None = None,
+    blocklist_store: BlocklistStore | None = None,
+    suggestion_writer: Callable[[str], None] | None = None,
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -89,6 +97,16 @@ def build_admin_api_server(
         health_provider=health_provider,
         cors_origins=cfg["cors_origins"],
         request_max_body_bytes=cfg["request_max_body_kb"] * 1024,
+        # BIZ-77 — 인사이트 source 역추적 엔드포인트가 사용하는 의존성.
+        # 둘 중 하나라도 None 이면 핸들러가 503 으로 명시적 disabled 응답.
+        conversation_store=conversation_store,
+        insight_store=insight_store,
+        # BIZ-79 — pending suggestion 큐 + reject 블록리스트 + USER.md writer.
+        # 셋 다 주입되어야 ``/memory/suggestions/...`` 가 의미 있게 동작.
+        # 부재 시에는 각 핸들러가 503 으로 disabled 사실을 명시한다.
+        suggestion_store=suggestion_store,
+        blocklist_store=blocklist_store,
+        suggestion_writer=suggestion_writer,
     )
 
 

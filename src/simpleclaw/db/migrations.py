@@ -336,10 +336,17 @@ class MigrationRunner:
         )
         shutil.copy2(db_file, backup)
         # WAL/SHM 사이드카도 함께 백업하여 일관성 있는 복원 가능하게 한다.
+        # 단, 마지막 connection 이 닫힐 때 SQLite 가 사이드카를 truncate/삭제할
+        # 수 있어 exists() 와 copy2() 사이에서 파일이 사라지는 race 가 있다.
+        # exists() 를 빼고 EAFP 로 잡아 누락을 무해 처리한다 — 사이드카가 없으면
+        # 백업할 데이터도 없으므로(이미 메인 DB 파일에 fsync 됨) 일관성 손실이
+        # 없다.
         for suffix in ("-wal", "-shm"):
             sidecar = db_file.with_name(db_file.name + suffix)
-            if sidecar.exists():
+            try:
                 shutil.copy2(sidecar, Path(str(backup) + suffix))
+            except FileNotFoundError:
+                continue
         logger.info("Backed up DB to %s before migration %04d",
                     backup, migration.version)
         return backup

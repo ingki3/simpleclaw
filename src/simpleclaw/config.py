@@ -156,11 +156,55 @@ _DAEMON_DEFAULTS: dict = {
         # 클러스터 부착 임계값 — multilingual-e5-small 기준 경험적 컷.
         # 낮추면 클러스터가 커지고(잡음↑), 높이면 작아진다(파편화↑).
         "cluster_threshold": 0.75,
+        # BIZ-73: 인사이트 승격 임계 관측 횟수. 단발 관측은 항상 confidence ≤ 0.4 로 캡되고,
+        # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
+        # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
+        "insight_promotion_threshold": 3,
+        # BIZ-78: decay 정책. ``last_seen`` 기준 N일 이상 reinforcement 가 없는 인사이트는
+        # archive 처리(USER.md 의 archive 섹션 + sidecar archived_at). null 이면 비활성.
+        "decay": {
+            "archive_after_days": 30,
+        },
+        # BIZ-78: reject 차단 리스트. 사용자 거부 신호의 기본 TTL. null 이면 영구.
+        # 항목별 override 는 Admin Review Loop(H, BIZ-79) 에서 가능.
+        "reject_blocklist": {
+            "default_ttl_days": None,
+        },
+        # BIZ-79: dry-run + admin review 모드. 추출된 인사이트는 USER.md 에 즉시
+        # 쓰지 않고 review 큐(.agent/suggestions.jsonl)에 적재된다. auto_promote
+        # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
+        "auto_promote_confidence": 0.7,
+        "auto_promote_evidence_count": 3,
     },
     "wait_state": {
         "default_timeout": 3600,
     },
 }
+
+
+def _coerce_archive_after_days(value: object) -> int | None:
+    """archive_after_days 입력을 정규화. 양수만 활성, 그 외(None/0/음수/파싱불가)는 None.
+
+    None 의미: decay 비활성 — apply_decay 가 즉시 noop 으로 종료한다.
+    """
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _coerce_default_ttl_days(value: object) -> int | None:
+    """reject TTL 기본값 입력을 정규화. 양수만 활성, 그 외는 None(영구 차단)."""
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 
 def load_daemon_config(config_path: str | Path) -> dict:
@@ -189,6 +233,15 @@ def load_daemon_config(config_path: str | Path) -> dict:
     dreaming = daemon.get("dreaming", {})
     if not isinstance(dreaming, dict):
         dreaming = {}
+
+    # BIZ-78: dreaming.decay / dreaming.reject_blocklist 는 dict 인 경우만 사용한다.
+    # 누락되거나 타입이 깨졌으면 빈 dict 로 떨어뜨려 아래에서 기본값으로 채운다.
+    decay = dreaming.get("decay", {})
+    if not isinstance(decay, dict):
+        decay = {}
+    reject = dreaming.get("reject_blocklist", {})
+    if not isinstance(reject, dict):
+        reject = {}
 
     wait_state = daemon.get("wait_state", {})
     if not isinstance(wait_state, dict):
@@ -227,6 +280,58 @@ def load_daemon_config(config_path: str | Path) -> dict:
                     "cluster_threshold",
                     _DAEMON_DEFAULTS["dreaming"]["cluster_threshold"],
                 )
+            ),
+            "insight_promotion_threshold": max(
+                1,
+                int(
+                    dreaming.get(
+                        "insight_promotion_threshold",
+                        _DAEMON_DEFAULTS["dreaming"][
+                            "insight_promotion_threshold"
+                        ],
+                    )
+                ),
+            ),
+            # BIZ-78: decay 정책. archive_after_days 가 None/0/음수면 비활성(=archive 단계 skip).
+            # 양수만 의미 있는 값 — int 캐스팅 실패 시 기본값으로 fallback.
+            "decay": {
+                "archive_after_days": _coerce_archive_after_days(
+                    decay.get(
+                        "archive_after_days",
+                        _DAEMON_DEFAULTS["dreaming"]["decay"][
+                            "archive_after_days"
+                        ],
+                    )
+                ),
+            },
+            # BIZ-78: reject 차단 리스트 기본 TTL(일). None/0/음수면 영구 차단(현재 흔한 케이스).
+            "reject_blocklist": {
+                "default_ttl_days": _coerce_default_ttl_days(
+                    reject.get(
+                        "default_ttl_days",
+                        _DAEMON_DEFAULTS["dreaming"]["reject_blocklist"][
+                            "default_ttl_days"
+                        ],
+                    )
+                ),
+            },
+            # BIZ-79: dry-run + admin review 모드.
+            "auto_promote_confidence": float(
+                dreaming.get(
+                    "auto_promote_confidence",
+                    _DAEMON_DEFAULTS["dreaming"]["auto_promote_confidence"],
+                )
+            ),
+            "auto_promote_evidence_count": max(
+                1,
+                int(
+                    dreaming.get(
+                        "auto_promote_evidence_count",
+                        _DAEMON_DEFAULTS["dreaming"][
+                            "auto_promote_evidence_count"
+                        ],
+                    )
+                ),
             ),
         },
         "wait_state": {

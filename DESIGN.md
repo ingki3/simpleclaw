@@ -432,7 +432,7 @@
 ### 10.4 회귀 차단 흐름
 
 1. PR 작성 → `web/admin/**` 변경 감지 → 워크플로 트리거.
-2. `npm ci` → `next build` → `next start --port 3100` → `lhci autorun`.
+2. `npm ci` → `next build` → `next start --port 8088` → `lhci autorun`.
 3. a11y < 95인 라우트가 1건이라도 있으면 CI 실패. 보고서 링크가 PR 코멘트에 자동 첨부.
 4. 회귀가 검출되면 본 부록의 시나리오 표를 다시 돌리고, 실패한 항목을 §5의 규칙으로 환원해 수정한다.
 

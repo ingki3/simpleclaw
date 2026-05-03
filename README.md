@@ -226,7 +226,7 @@ nohup .venv/bin/python scripts/run_bot.py > .agent/bot.log 2>&1 &
 위 스크립트는 idempotent하게 다음을 처리합니다:
 - keyring `admin_api_token` 발급(있으면 재사용, `--force` 시 재발급)
 - `web/admin/.env.local` 의 `ADMIN_API_TOKEN`/`ADMIN_API_BASE` 라인 갱신
-- `config.yaml` 의 `admin_api` 블록 보강(없을 때만), `cors_origins`에 `http://localhost:3100` 추가
+- `config.yaml` 의 `admin_api` 블록 보강(없을 때만), `cors_origins`에 `http://localhost:8088` 추가
 
 `config.yaml` 기본 설정은 `token_secret: \"keyring:admin_api_token\"`을 참조하므로 추가 작업이 필요 없습니다. 환경변수 또는 암호화 파일을 쓰려면 참조 문자열을 `env:ADMIN_API_TOKEN` / `file:admin_api_token` 등으로 바꿉니다.
 
@@ -240,7 +240,7 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8082/admin/v1/health
 3. 운영 가드:
    - **토큰 미설정 시 봇이 부팅하지 않습니다** — silent insecure 운용을 방지합니다. `ERROR: Admin API 부팅 실패 …` 메시지가 출력되면 위 §1 절차로 토큰을 등록하세요.
    - 개발/CI 환경에서 Admin API가 필요 없다면 `admin_api.enabled: false`로 비활성화합니다.
-   - Admin UI 개발 서버가 별도 포트(예: `http://localhost:3100`)에서 동작하면 `admin_api.cors_origins`에 origin을 추가합니다.
+   - Admin UI 개발 서버가 별도 포트(예: `http://localhost:8088`)에서 동작하면 `admin_api.cors_origins`에 origin을 추가합니다.
 
 ### 테스트 실행
 

@@ -92,7 +92,7 @@ admin_api:
   token_secret: "keyring:admin_api_token"
   read_timeout_seconds: 30
   request_max_body_kb: 256
-  cors_origins: []  # 예: ["http://localhost:3100"]
+  cors_origins: []  # 예: ["http://localhost:8088"]
 
 webhook:
   enabled: true
@@ -133,6 +133,32 @@ daemon:
     overnight_hour: 3
     idle_threshold: 7200
     model: "gemini"
+    # BIZ-73: 인사이트 승격 임계 관측 횟수. 단발 관측은 항상 confidence ≤ 0.4 로 캡되고,
+    # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
+    # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
+    insight_promotion_threshold: 3
+    # BIZ-78: 인사이트 decay 정책. last_seen 기준으로 N 일 이상 reinforcement 가
+    # 없는 인사이트는 archive 처리되어 USER.md 의 archive 섹션으로 이동하고
+    # sidecar 의 archived_at 이 기록된다. 같은 topic 이 다시 관측되면 자동 부활.
+    # null/0/음수면 decay 비활성(모든 인사이트 유지). 기본 30일.
+    decay:
+      archive_after_days: 30
+    # BIZ-78: 사용자가 reject 한 topic 의 재학습 차단 리스트.
+    # default_ttl_days null 이면 영구 차단(가장 흔한 케이스). 양수면 N 일 후 자동 해제.
+    # 항목별 override 는 Admin Review Loop(H, BIZ-79) 에서 가능.
+    reject_blocklist:
+      default_ttl_days: null
+    # BIZ-79: Dry-run + Admin Review Loop.
+    # dry_run=true 면 dreaming 이 발견한 인사이트는 곧바로 USER.md 에 반영되지 않고
+    # ``insight_suggestions.jsonl`` 큐로 들어가 운영자 검수(Memory 화면)를 거친 뒤
+    # accept/reject 된다. dry_run=false 는 BIZ-79 이전 동작(즉시 sidecar/USER.md 반영).
+    # 단, ``auto_promote`` 두 조건(confidence AND evidence_count)을 동시 만족하는 항목은
+    # dry_run 중에도 자동 승격되어 큐를 거치지 않는다 — 이미 충분히 강한 시그널의 경우
+    # 운영자가 매번 반복 승인할 필요가 없도록.
+    dry_run: true
+    auto_promote:
+      confidence: 0.7
+      evidence_count: 3
     # BIZ-74 — USER.md의 ``managed:dreaming:active-projects`` 섹션을 매 사이클
     # in-place 갱신한다. 새 세션 첫 응답에서 "지금 집중 중인 프로젝트"를 0에서
     # 시작하지 않도록 하기 위함. 윈도우 외 항목은 sidecar에 남고 섹션에서만 빠진다.
