@@ -235,6 +235,66 @@ class TestDreamingPipeline:
         assert loaded["정치뉴스"].confidence == pytest.approx(0.55)
 
     @pytest.mark.asyncio
+    async def test_run_records_source_msg_ids_for_new_and_reinforced_insights(
+        self, setup
+    ):
+        """BIZ-77 DoD #3 — 신규/재강화 인사이트 모두에 대해 source 가 누락 없이 기록된다.
+
+        회차 1: 메시지 1건만 있는 상태에서 신규 인사이트가 생성되면 그 메시지의
+        rowid 가 ``source_msg_ids`` 와 ``start_msg_id``/``end_msg_id`` 에 그대로 들어간다.
+
+        회차 2: 같은 topic 으로 재강화되면 새 메시지의 rowid 가 누적되고 범위가
+        넓어진다(end_msg_id 가 새 메시지 id 로 끌어올려진다). 회차별로 source 가
+        분실되거나 덮어써지지 않아야 한다 — 이 테스트의 핵심.
+        """
+        from simpleclaw.memory.insights import InsightStore
+
+        store, pipeline, _, user_file = setup
+
+        mock_response = MagicMock()
+        mock_response.text = (
+            '{"memory": "## d\\n- x", "user_insights": "- 정치 뉴스 관심", '
+            '"user_insights_meta": [{"topic": "정치뉴스", "text": "정치 뉴스 관심"}], '
+            '"soul_updates": "", "agent_updates": ""}'
+        )
+        mock_router = MagicMock()
+        mock_router.send = AsyncMock(return_value=mock_response)
+        pipeline._router = mock_router
+
+        # 회차 1 — 메시지 1건, 신규 인사이트.
+        first_id = store.add_message(
+            ConversationMessage(role=MessageRole.USER, content="뉴스 보여줘")
+        )
+        await pipeline.run()
+
+        sidecar = InsightStore(user_file.parent / "insights.jsonl")
+        loaded = sidecar.load()
+        assert "정치뉴스" in loaded
+        meta = loaded["정치뉴스"]
+        # 신규 인사이트 → 이번 회차의 모든 메시지 id 가 source 로 박힌다.
+        assert meta.source_msg_ids == [first_id]
+        # 단일 메시지이므로 start == end == first_id.
+        assert meta.start_msg_id == first_id
+        assert meta.end_msg_id == first_id
+
+        # 회차 2 — 새 메시지 1건이 더 추가되면 같은 topic 이 reinforce 되고
+        # source_msg_ids 에 둘 다 들어가야 한다(첫 회차 source 가 분실되면 안 됨).
+        second_id = store.add_message(
+            ConversationMessage(role=MessageRole.USER, content="정치 더 알려줘")
+        )
+        assert second_id > first_id  # rowid 단조 증가 가정.
+        await pipeline.run()
+
+        loaded = sidecar.load()
+        meta = loaded["정치뉴스"]
+        assert meta.evidence_count == 2
+        # 두 회차의 source 가 모두 보존되고, 범위는 첫 메시지 ~ 두 번째 메시지.
+        assert first_id in meta.source_msg_ids
+        assert second_id in meta.source_msg_ids
+        assert meta.start_msg_id == first_id
+        assert meta.end_msg_id == second_id
+
+    @pytest.mark.asyncio
     async def test_backup_both_files(self, setup):
         """Both MEMORY.md and USER.md are backed up."""
         store, pipeline, memory_file, user_file = setup

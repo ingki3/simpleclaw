@@ -826,3 +826,123 @@ class TestChannelTest:
         data = await resp.json()
         assert data["ok"] is False
         assert "boom" in (data.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# BIZ-77 — 인사이트 source 역추적 엔드포인트
+# ---------------------------------------------------------------------------
+
+
+class TestInsightSources:
+    """``GET /admin/v1/memory/insights/{topic}/sources`` 동작 검증.
+
+    핵심 케이스:
+    - 의존성(conversation_store/insight_store) 미주입 → 503 (silent 404 보다 명시적).
+    - 빈 topic → 422.
+    - 미존재 topic → 404.
+    - 정상 → 200, sources 배열에 메시지 id/role/content/timestamp/channel 포함.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_dependencies_missing(self, client):
+        """기본 server 픽스처는 두 의존성을 주입하지 않으므로 503 이어야 한다."""
+        resp = await client.get(
+            "/admin/v1/memory/insights/anytopic/sources", headers=HEADERS
+        )
+        assert resp.status == 503
+        body = await resp.json()
+        assert "not configured" in body["error"]
+
+    @pytest_asyncio.fixture
+    async def insight_client(self, tmp_state, tmp_path, aiohttp_client):
+        """InsightStore + ConversationStore 가 주입된 server 클라이언트.
+
+        sidecar 1건과 메시지 2건을 미리 적재해 happy-path 검증에 사용한다.
+        """
+        from simpleclaw.memory.conversation_store import ConversationStore
+        from simpleclaw.memory.insights import InsightMeta, InsightStore
+        from simpleclaw.memory.models import ConversationMessage, MessageRole
+
+        conv = ConversationStore(tmp_path / "conv.db")
+        # 두 채널에서 들어온 메시지 — 응답에 channel 필드가 그대로 노출되는지 확인.
+        id1 = conv.add_message(
+            ConversationMessage(
+                role=MessageRole.USER, content="뉴스 보여줘", channel="telegram",
+            )
+        )
+        id2 = conv.add_message(
+            ConversationMessage(
+                role=MessageRole.ASSISTANT,
+                content="네, 정치 뉴스를 알려드릴게요.",
+                channel="telegram",
+            )
+        )
+        # 인사이트 메타: 두 메시지가 source.
+        sidecar_path = tmp_path / "insights.jsonl"
+        insights = InsightStore(sidecar_path)
+        meta = InsightMeta(
+            topic="정치뉴스",
+            text="정치 뉴스 관심",
+            evidence_count=2,
+            confidence=0.55,
+            source_msg_ids=[id1, id2],
+        )
+        meta.recompute_id_range()
+        insights.save_all({"정치뉴스": meta})
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            conversation_store=conv,
+            insight_store=insights,
+        )
+        client = await aiohttp_client(srv.get_app())
+        return client, id1, id2
+
+    @pytest.mark.asyncio
+    async def test_returns_404_for_unknown_topic(self, insight_client):
+        client, _, _ = insight_client
+        resp = await client.get(
+            "/admin/v1/memory/insights/없는토픽/sources", headers=HEADERS
+        )
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_returns_sources_for_existing_topic(self, insight_client):
+        client, id1, id2 = insight_client
+        resp = await client.get(
+            "/admin/v1/memory/insights/정치뉴스/sources", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["topic"] == "정치뉴스"
+        assert body["evidence_count"] == 2
+        assert body["start_msg_id"] == id1
+        assert body["end_msg_id"] == id2
+        assert body["source_msg_ids"] == [id1, id2]
+
+        sources = body["sources"]
+        assert len(sources) == 2
+        # 시간순(id 오름차순) 정렬을 가정.
+        assert sources[0]["id"] == id1
+        assert sources[0]["role"] == "user"
+        assert sources[0]["content"] == "뉴스 보여줘"
+        assert sources[0]["channel"] == "telegram"
+        assert "timestamp" in sources[0]
+        assert sources[1]["id"] == id2
+        assert sources[1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_normalized_topic_resolves_same_row(self, insight_client):
+        """원문/정규형 어느 쪽으로 와도 같은 행을 가리켜야 한다."""
+        client, id1, _ = insight_client
+        # 정규화 후 같은 키가 되도록 공백/구두점만 다르게.
+        resp = await client.get(
+            "/admin/v1/memory/insights/정치 뉴스!/sources", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["start_msg_id"] == id1

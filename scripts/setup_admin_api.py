@@ -10,7 +10,7 @@
    기존 파일은 키 단위로 보존하면서 토큰 라인만 갱신해 운영자 로컬 커스텀이 사라지지
    않도록 한다.
 3. **``config.yaml``에 ``admin_api`` 블록 보강** — 키가 누락된 경우에만 기본값을 추가
-   하고 ``cors_origins``에 Admin UI dev 서버 origin(``http://localhost:3100``)을 합친다.
+   하고 ``cors_origins``에 Admin UI dev 서버 origin(``http://localhost:8088``)을 합친다.
    이미 사용자가 작성한 값이 있으면 건드리지 않는다.
 
 설계 결정:
@@ -47,7 +47,7 @@ DEFAULT_ENV_EXAMPLE_PATH = REPO_ROOT / "web" / "admin" / ".env.local.example"
 
 ADMIN_TOKEN_KEY = "admin_api_token"
 DEFAULT_ADMIN_BASE = "http://127.0.0.1:8082"
-ADMIN_UI_ORIGIN = "http://localhost:3100"
+ADMIN_UI_ORIGIN = "http://localhost:8088"
 
 
 def ensure_token(*, force: bool = False) -> tuple[str, bool]:
@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     print("다음 단계:")
     print("  1) 데몬 재기동: .venv/bin/python scripts/run_bot.py")
     print("  2) Admin UI dev 재기동(.env.local 변경 시 필수): cd web/admin && npm run dev")
-    print("  3) 헬스 확인: curl -sS http://localhost:3100/api/admin/health")
+    print("  3) 헬스 확인: curl -sS http://localhost:8088/api/admin/health")
     return 0
 
 

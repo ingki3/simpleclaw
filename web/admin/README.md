@@ -9,18 +9,18 @@ React로 구현한 1차 스캐폴딩이다.
 ```bash
 cd web/admin
 npm install
-npm run dev          # http://localhost:3100
+npm run dev          # http://localhost:8088
 npm run storybook    # http://localhost:6006
 npm test             # vitest run (API 클라이언트 + MSW)
 ```
 
 > **포트 정책** — 동일 머신에서 **Multica 웹 앱이 `localhost:3000`을 점유**하므로,
-> SimpleClaw Admin은 기본 포트를 `3100`으로 고정한다. Storybook은 기본값(`6006`)을 그대로 사용한다.
+> SimpleClaw Admin은 기본 포트를 `8088`로 고정한다. Storybook은 기본값(`6006`)을 그대로 사용한다.
 > 다른 포트를 쓰려면 `PORT` 환경변수로 오버라이드하면 된다.
 >
 > ```bash
-> PORT=3200 npm run dev     # http://localhost:3200
-> PORT=3200 npm start       # 빌드 결과를 :3200에서 서빙
+> PORT=8200 npm run dev     # http://localhost:8200
+> PORT=8200 npm start       # 빌드 결과를 :8200에서 서빙
 > ```
 >
 > 포트 분리 로직은 `scripts/run-next.mjs`에서 처리하며, macOS/Linux/Windows에서 동일하게 동작한다.
@@ -45,8 +45,8 @@ cp .env.local.example .env.local
 ```
 
 ```bash
-# 기본 포트(3100) 외 다른 포트를 쓰고 싶을 때만 설정한다.
-# PORT=3200
+# 기본 포트(8088) 외 다른 포트를 쓰고 싶을 때만 설정한다.
+# PORT=8200
 
 # 데몬에서 발급받아 keyring에 저장된 admin_api_token을 그대로 옮긴다.
 # 클라이언트 번들에는 절대 포함되지 않으며, /api/admin/[...path] 프록시에서만 사용된다.
@@ -60,7 +60,7 @@ ADMIN_API_BASE=http://127.0.0.1:8082
 > 재시작해야 새 토큰이 프록시 라우트(`/api/admin/[...path]`)에 반영된다.
 
 > **백엔드 CORS 정합** — Admin Backend(`AdminAPIServer`, BIZ-58)는 `cors_origins`에
-> `http://localhost:3100`을 기본 포함해야 한다. 위 스크립트는 `config.yaml` 에 이
+> `http://localhost:8088`을 기본 포함해야 한다. 위 스크립트는 `config.yaml` 에 이
 > origin이 빠져 있으면 자동으로 추가한다. 다른 포트로 운영할 경우 백엔드 설정의
 > `cors_origins`도 함께 추가한다.
 
@@ -68,9 +68,9 @@ ADMIN_API_BASE=http://127.0.0.1:8082
 
 ```bash
 # 데몬: scripts/run_bot.py 가 admin_api 를 :8082 에 띄운다.
-curl -sS http://localhost:3100/api/admin/health        | head -c 200
-curl -sS http://localhost:3100/api/admin/config/llm    | head -c 200
-curl -sS http://localhost:3100/api/admin/config/persona | head -c 200
+curl -sS http://localhost:8088/api/admin/health        | head -c 200
+curl -sS http://localhost:8088/api/admin/config/llm    | head -c 200
+curl -sS http://localhost:8088/api/admin/config/persona | head -c 200
 ```
 
 세 호출 모두 200 + JSON이면 11개 화면이 실데이터로 렌더된다.

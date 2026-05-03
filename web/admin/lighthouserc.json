@@ -2,21 +2,21 @@
   "$schema": "https://googlechrome.github.io/lighthouse-ci/configuration",
   "ci": {
     "collect": {
-      "startServerCommand": "npm --prefix web/admin run start -- --port 3100",
+      "startServerCommand": "npm --prefix web/admin run start -- --port 8088",
       "startServerReadyPattern": "Ready in",
       "startServerReadyTimeout": 60000,
       "url": [
-        "http://localhost:3100/dashboard",
-        "http://localhost:3100/llm",
-        "http://localhost:3100/persona",
-        "http://localhost:3100/skills",
-        "http://localhost:3100/cron",
-        "http://localhost:3100/memory",
-        "http://localhost:3100/secrets",
-        "http://localhost:3100/channels",
-        "http://localhost:3100/logs",
-        "http://localhost:3100/audit",
-        "http://localhost:3100/system"
+        "http://localhost:8088/dashboard",
+        "http://localhost:8088/llm",
+        "http://localhost:8088/persona",
+        "http://localhost:8088/skills",
+        "http://localhost:8088/cron",
+        "http://localhost:8088/memory",
+        "http://localhost:8088/secrets",
+        "http://localhost:8088/channels",
+        "http://localhost:8088/logs",
+        "http://localhost:8088/audit",
+        "http://localhost:8088/system"
       ],
       "numberOfRuns": 1,
       "settings": {

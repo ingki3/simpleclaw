@@ -293,6 +293,27 @@ class DreamingPipeline:
             return self._store.get_since(last_dreaming)
         return self._store.get_recent(limit=50)
 
+    def collect_unprocessed_with_ids(
+        self, last_dreaming: datetime | None = None
+    ) -> list[tuple[int, ConversationMessage]]:
+        """``collect_unprocessed`` 의 id-bearing 변형 (BIZ-77).
+
+        인사이트 source 역추적을 위해 메시지 rowid 를 함께 수집해야 한다.
+        반환 순서는 시간순 (id 오름차순) 으로 일관된다.
+        """
+        if last_dreaming:
+            return self._store.get_since_with_ids(last_dreaming)
+        return self._store.get_recent_with_ids(limit=50)
+
+    @property
+    def insight_store(self) -> InsightStore | None:
+        """인사이트 sidecar 저장소 (BIZ-73). Admin API 가 같은 sidecar 를 공유한다.
+
+        ``insights_file`` 인자나 ``user_file`` 옆 자동 결정 경로가 둘 다 없으면
+        ``None``. Admin API 라우팅은 None 일 때 503 으로 명시 disabled 응답.
+        """
+        return self._insights_store
+
     async def summarize(self, messages: list) -> dict:
         """LLM을 사용하여 대화 요약을 생성한다.
 
@@ -898,10 +919,15 @@ class DreamingPipeline:
             생성된 MemoryEntry 객체. 처리할 메시지가 없거나, fail-closed로 abort됐거나,
             결과가 비어있으면 None.
         """
-        messages = self.collect_unprocessed(last_dreaming)
-        if not messages:
+        # BIZ-77 — 메시지를 id 와 함께 수집한다. 분석 자체는 message 객체만 쓰지만
+        # 인사이트 source 역추적을 위해 rowid 를 sidecar 에 기록해야 하기 때문이다.
+        id_pairs = self.collect_unprocessed_with_ids(last_dreaming)
+        if not id_pairs:
             logger.info("No new messages to process for dreaming.")
             return None
+
+        source_msg_ids = [mid for mid, _ in id_pairs]
+        messages = [msg for _, msg in id_pairs]
 
         # BIZ-72: 쓰기 시작 전 Protected Section 사전 검증. 실패 시 어떤 파일도
         # 백업조차 만들지 않고 즉시 종료(불필요한 디스크 I/O 방지).
@@ -931,16 +957,17 @@ class DreamingPipeline:
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
 
-        # BIZ-73: 인사이트 메타 sidecar 갱신 — USER.md 본문 append 보다 먼저 실행하여
-        # 어떤 항목이 "승격" 됐는지(USER.md에 high-confidence 표시 가능) 사전 판단할 수 있게 한다.
-        # 후속 BIZ-77(F: source linkage) 가 source_msg_ids 를 풍부하게 채울 예정.
+        # BIZ-73 + BIZ-77: 인사이트 메타 sidecar 갱신 — USER.md 본문 append 보다 먼저
+        # 실행하여 어떤 항목이 "승격" 됐는지(USER.md에 high-confidence 표시 가능)
+        # 사전 판단할 수 있게 한다. BIZ-77 부터는 이번 회차에 분석된 모든 메시지의
+        # rowid 를 신규/강화된 모든 인사이트에 부착한다 — Admin "근거 보기" 의 입력.
         # 주의: sidecar 갱신은 try 바깥에서 수행하지만, fail-closed 의미를 깨지 않기 위해
         # 어떤 markdown 파일도 아직 변경되지 않았다(preflight 통과 직후). sidecar 자체는
         # JSONL atomic-rename 으로 항상 일관된 상태가 보장된다.
         promoted_meta: list[InsightMeta] = []
         if user_insights_meta and self._insights_store:
             _, promoted_meta = self.apply_insight_meta(
-                user_insights_meta, source_msg_ids=[]
+                user_insights_meta, source_msg_ids=source_msg_ids
             )
 
         cluster_summary_text = ""
