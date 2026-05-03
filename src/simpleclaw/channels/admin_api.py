@@ -16,6 +16,7 @@ aiohttp 기반의 로컬 HTTP 서버로, ``127.0.0.1:8082`` 기본 바인딩이�
 - ``POST   /admin/v1/audit/{id}/undo``        — 변경 되돌리기
 - ``GET    /admin/v1/logs``                   — 구조화 로그 검색
 - ``GET    /admin/v1/health``                 — 헬스 스냅샷
+- ``GET    /admin/v1/system/info``            — 버전·PID·uptime·디스크·DB 경로 등 진단 정보
 - ``POST   /admin/v1/system/restart``         — 데몬 재시작 요청
 
 설계 결정:
@@ -36,7 +37,10 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import secrets
+import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -305,6 +309,9 @@ class AdminAPIServer:
         )
         app.router.add_get(f"{prefix}/logs", self._wrap(self._handle_search_logs))
         app.router.add_get(f"{prefix}/health", self._wrap(self._handle_health))
+        app.router.add_get(
+            f"{prefix}/system/info", self._wrap(self._handle_system_info)
+        )
         app.router.add_post(
             f"{prefix}/system/restart", self._wrap(self._handle_system_restart)
         )
@@ -926,6 +933,80 @@ class AdminAPIServer:
                     snapshot.update(extra)
             except Exception:  # noqa: BLE001
                 logger.exception("health_provider failed")
+        return _json_ok(snapshot)
+
+    async def _handle_system_info(self, request: web.Request) -> web.Response:
+        """진단 정보 — 버전·PID·uptime·DB 경로·디스크 사용량을 반환한다.
+
+        UI(System 화면) 좌측 카드의 정적 데이터원이며, 헬스 폴링과 분리해 1회만
+        조회한다. 외부 부수효과가 없는 read-only 핸들러로 별도 감사 로그를
+        남기지 않는다.
+        """
+        # 버전 정보 — pyproject.toml의 단일 소스를 importlib.metadata로 조회.
+        version = "unknown"
+        try:
+            from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+            try:
+                version = _pkg_version("simpleclaw")
+            except PackageNotFoundError:
+                version = "unknown"
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 빌드 해시 — 환경변수(SIMPLECLAW_BUILD_SHA)가 있으면 사용. 운영자가
+        # 명시 주입하지 않으면 None으로 둔다(수동 git 호출은 의도적으로 회피).
+        build_sha = os.environ.get("SIMPLECLAW_BUILD_SHA") or None
+
+        # config.yaml에서 daemon.db_path를 우선 채택 — 없으면 admin_state_dir의
+        # 형제 conversations.db를 폴백으로 노출(파일 존재 여부도 함께 응답).
+        cfg = self._read_yaml()
+        db_path_str = (
+            _get_dotted(cfg, "agent.db_path")
+            or _get_dotted(cfg, "daemon.db_path")
+            or ".agent/conversations.db"
+        )
+        db_path = Path(str(db_path_str)).expanduser()
+        db_size = None
+        db_exists = db_path.is_file()
+        if db_exists:
+            try:
+                db_size = db_path.stat().st_size
+            except OSError:
+                db_size = None
+
+        # 디스크 사용량 — config.yaml이 있는 디렉토리(워크스페이스 루트로 간주)를
+        # 기준으로 한 번만 측정. 컨테이너/원격 마운트에서는 데몬 위치가 더 의미 있다.
+        disk = None
+        try:
+            target = self._config_path.parent if self._config_path.parent.exists() else Path.cwd()
+            usage = shutil.disk_usage(target)
+            disk = {
+                "path": str(target),
+                "total_bytes": usage.total,
+                "used_bytes": usage.used,
+                "free_bytes": usage.free,
+            }
+        except OSError:
+            disk = None
+
+        snapshot: dict[str, Any] = {
+            "version": version,
+            "build_sha": build_sha,
+            "python_version": sys.version.split()[0],
+            "platform": sys.platform,
+            "pid": os.getpid(),
+            "uptime_seconds": int(time.time() - self._started_at)
+            if self._started_at
+            else 0,
+            "config_path": str(self._config_path),
+            "db_path": str(db_path),
+            "db_exists": db_exists,
+            "db_size_bytes": db_size,
+            "disk": disk,
+            "host": self._host,
+            "port": self._port,
+        }
         return _json_ok(snapshot)
 
     async def _handle_system_restart(self, request: web.Request) -> web.Response:
