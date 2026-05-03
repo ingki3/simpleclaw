@@ -1,10 +1,24 @@
 # User Profile
 
+<!--
+이 파일은 SimpleClaw 사용자 프로필이다. 두 영역으로 구성된다:
+
+1. 마커 외부 영역(이 파일에서 ## Preferences 와 같은 자유 섹션):
+   - 사용자가 직접 작성하고 관리한다.
+   - 드리밍 파이프라인은 절대 손대지 않는다 (BIZ-72 Protected Section 모델).
+
+2. <!-- managed:dreaming:insights --> ~ <!-- /managed:dreaming:insights -->:
+   - 드리밍이 자동으로 추가하는 사용자 인사이트 영역이다.
+   - 이 마커 안쪽에서만 dreaming의 추가가 허용된다.
+   - 마커 자체를 삭제하면 드리밍이 fail-closed로 중단된다 (사용자 콘텐츠 보호 보장).
+-->
+
 ## Preferences
 - Primary language: Korean (한국어)
 - Communication style: Casual, direct
 - Prefers concise answers over verbose explanations
 
+<!-- managed:dreaming:insights -->
 ## Dreaming Insights (2026-04-28)
 - 정치 뉴스와 시사 안보 이슈에 지속적인 관심을 보임
 - 크론(Cron) 작업을 설정하여 이메일 확인 및 AI 리포트 수신을 자동화하여 사용함
@@ -15,3 +29,4 @@
 ## Dreaming Insights (2026-04-29)
 - 발생한 문제를 스스로 해결하려는 자기 주도적 성향을 보임
 - '형님'과 같은 친근한 호칭을 사용하는 대화 방식에 거부감이 없음
+<!-- /managed:dreaming:insights -->
