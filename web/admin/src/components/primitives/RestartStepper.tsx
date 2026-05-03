@@ -114,7 +114,7 @@ export function RestartStepper({
     >
       <ol
         aria-label="재시작 진행 단계"
-        className="mb-5 flex items-center gap-2 text-xs text-[--muted-foreground]"
+        className="mb-5 flex items-center gap-2 text-xs text-(--muted-foreground)"
       >
         {STEPS.map((s, i) => {
           const state =
@@ -128,16 +128,16 @@ export function RestartStepper({
             >
               <span
                 className={cn(
-                  "grid h-6 w-6 place-items-center rounded-[--radius-pill] border text-[10px] font-medium",
+                  "grid h-6 w-6 place-items-center rounded-(--radius-pill) border text-[10px] font-medium",
                   state === "done" &&
                     !isFailedDone &&
-                    "border-[--color-success] bg-[--color-success-bg] text-[--color-success]",
+                    "border-(--color-success) bg-(--color-success-bg) text-(--color-success)",
                   state === "active" &&
-                    "border-[--primary] bg-[--card] text-[--primary]",
+                    "border-(--primary) bg-(--card) text-(--primary)",
                   state === "todo" &&
-                    "border-[--border] bg-[--surface] text-[--muted-foreground]",
+                    "border-(--border) bg-(--surface) text-(--muted-foreground)",
                   isFailedDone &&
-                    "border-[--color-error] bg-[--color-error-bg] text-[--color-error]",
+                    "border-(--color-error) bg-(--color-error-bg) text-(--color-error)",
                 )}
               >
                 {state === "active" && step === "applying" ? (
@@ -153,8 +153,8 @@ export function RestartStepper({
               <span
                 className={cn(
                   "truncate",
-                  state === "active" && "font-medium text-[--foreground]",
-                  isFailedDone && "text-[--color-error]",
+                  state === "active" && "font-medium text-(--foreground)",
+                  isFailedDone && "text-(--color-error)",
                 )}
               >
                 {s.label}
@@ -165,8 +165,8 @@ export function RestartStepper({
                   className={cn(
                     "h-px flex-1",
                     i < currentIndex
-                      ? "bg-[--color-success]"
-                      : "bg-[--border]",
+                      ? "bg-(--color-success)"
+                      : "bg-(--border)",
                   )}
                 />
               )}

@@ -82,12 +82,12 @@ export function MemoryEntryRow({
   return (
     <li
       className={cn(
-        "group flex items-start gap-3 border-b border-[--border] px-3 py-2.5",
-        "hover:bg-[--surface]",
+        "group flex items-start gap-3 border-b border-(--border) px-3 py-2.5",
+        "hover:bg-(--surface)",
       )}
     >
       <div className="flex w-24 shrink-0 flex-col items-start gap-1 pt-0.5">
-        <span className="text-[10px] font-mono text-[--muted-foreground]">
+        <span className="text-[10px] font-mono text-(--muted-foreground)">
           {entry.section}
         </span>
         {entry.type ? (
@@ -104,13 +104,13 @@ export function MemoryEntryRow({
             onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
             rows={Math.max(2, Math.ceil(draft.length / 80))}
-            className="w-full resize-y rounded-[--radius-m] border border-[--border] bg-[--card] p-2 text-sm leading-6 text-[--foreground] outline-none focus:border-[--primary]"
+            className="w-full resize-y rounded-(--radius-m) border border-(--border) bg-(--card) p-2 text-sm leading-6 text-(--foreground) outline-none focus:border-(--primary)"
             aria-label={`항목 편집 — ${entry.id}`}
           />
         ) : (
-          <p className="break-words text-sm leading-6 text-[--foreground]">
+          <p className="break-words text-sm leading-6 text-(--foreground)">
             {entry.text || (
-              <span className="italic text-[--muted-foreground]">(빈 항목)</span>
+              <span className="italic text-(--muted-foreground)">(빈 항목)</span>
             )}
           </p>
         )}
@@ -156,7 +156,7 @@ export function MemoryEntryRow({
               disabled={disabled}
               leftIcon={<Trash2 size={12} aria-hidden />}
               aria-label={`항목 삭제 — ${entry.id}`}
-              className="text-[--color-error] hover:bg-[--color-error-bg]"
+              className="text-(--color-error) hover:bg-(--color-error-bg)"
             >
               삭제
             </Button>

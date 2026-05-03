@@ -20,17 +20,17 @@ const META: Record<
 > = {
   hot: {
     label: "Hot",
-    tone: "bg-[--color-success-bg] text-[--color-success]",
+    tone: "bg-(--color-success-bg) text-(--color-success)",
     Icon: Bolt,
   },
   "service-restart": {
     label: "Service restart",
-    tone: "bg-[--color-warning-bg] text-[--color-warning]",
+    tone: "bg-(--color-warning-bg) text-(--color-warning)",
     Icon: RotateCcw,
   },
   "process-restart": {
     label: "Process restart",
-    tone: "bg-[--color-error-bg] text-[--color-error]",
+    tone: "bg-(--color-error-bg) text-(--color-error)",
     Icon: Power,
   },
 };
@@ -46,7 +46,7 @@ export function PolicyPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-[--radius-pill] px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1.5 rounded-(--radius-pill) px-2 py-0.5 text-xs font-medium",
         tone,
         className,
       )}

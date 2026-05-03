@@ -147,6 +147,19 @@ async def main():
         else None
     )
 
+    # BIZ-74 — Active Projects: 기본 활성. 운영자가 끄려면 config 에서 enabled=false.
+    # sidecar_path는 conversations.db와 동일한 .agent/ 디렉토리에 두어 백업·운영 단순.
+    active_projects_cfg = dreaming_config.get("active_projects", {}) or {}
+    active_projects_enabled = active_projects_cfg.get("enabled", True)
+    active_projects_file = (
+        active_projects_cfg.get("sidecar_path", ".agent/active_projects.jsonl")
+        if active_projects_enabled
+        else None
+    )
+    active_projects_window_days = int(
+        active_projects_cfg.get("window_days", 7)
+    )
+
     dreaming_pipeline = DreamingPipeline(
         conversation_store=conv_store,
         memory_file=".agent/MEMORY.md",
@@ -180,6 +193,9 @@ async def main():
         auto_promote_evidence_count=dreaming_config.get(
             "auto_promote_evidence_count", 3
         ),
+        # BIZ-74: Active Projects
+        active_projects_file=active_projects_file,
+        active_projects_window_days=active_projects_window_days,
     )
     dreaming_trigger = DreamingTrigger(
         conversation_store=conv_store,

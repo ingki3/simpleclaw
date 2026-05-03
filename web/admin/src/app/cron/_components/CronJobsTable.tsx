@@ -36,9 +36,9 @@ export function CronJobsTable({
   onDelete,
 }: CronJobsTableProps) {
   return (
-    <div className="overflow-hidden rounded-[--radius-l] border border-[--border] bg-[--card]">
+    <div className="overflow-hidden rounded-(--radius-l) border border-(--border) bg-(--card)">
       <table className="w-full text-sm">
-        <thead className="bg-[--surface] text-xs text-[--muted-foreground]">
+        <thead className="bg-(--surface) text-xs text-(--muted-foreground)">
           <tr className="text-left">
             <th className="px-3 py-2 font-medium">이름</th>
             <th className="px-3 py-2 font-medium">표현식</th>
@@ -110,7 +110,7 @@ function CronJobsTableRow({
     <tr
       onClick={() => onSelect(job)}
       className={cn(
-        "h-12 cursor-pointer border-t border-[--border] transition-colors hover:bg-[--surface]",
+        "h-12 cursor-pointer border-t border-(--border) transition-colors hover:bg-(--surface)",
         // 비활성 잡은 흐리게 보여주되, 텍스트 명도/대비를 망가뜨리지 않도록
         // ``opacity-80``까지만 적용한다(WCAG AA 4.5:1 준수 — Lighthouse a11y).
         !job.enabled && "opacity-80",
@@ -118,26 +118,26 @@ function CronJobsTableRow({
     >
       <td className="px-3">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-[--foreground-strong]">{job.name}</span>
+          <span className="font-medium text-(--foreground-strong)">{job.name}</span>
           {circuitOpen ? <Badge tone="danger">circuit-break</Badge> : null}
         </div>
       </td>
-      <td className="px-3 font-mono text-xs text-[--muted-foreground]">
+      <td className="px-3 font-mono text-xs text-(--muted-foreground)">
         {job.cronExpression}
       </td>
-      <td className="px-3 text-[--muted-foreground]">{nextRunLabel}</td>
+      <td className="px-3 text-(--muted-foreground)">{nextRunLabel}</td>
       <td className="px-3">
         {lastRun ? (
           <div className="flex items-center gap-2">
             <StatusPill tone={LAST_RUN_TONE[lastRun.status] ?? "neutral"}>
               {LAST_RUN_LABEL[lastRun.status] ?? lastRun.status}
             </StatusPill>
-            <span className="text-xs text-[--muted-foreground]">
+            <span className="text-xs text-(--muted-foreground)">
               {formatRelative(new Date(lastRun.startedAt))}
             </span>
           </div>
         ) : (
-          <span className="text-xs text-[--muted-foreground]">기록 없음</span>
+          <span className="text-xs text-(--muted-foreground)">기록 없음</span>
         )}
       </td>
       <td className="px-3" onClick={stop}>

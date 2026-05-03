@@ -34,12 +34,12 @@ export function DryRunFooter({
 }: DryRunFooterProps) {
   return (
     <div className={cn("flex w-full items-center gap-3", className)}>
-      <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+      <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
         <span
           aria-hidden
           className={cn(
-            "inline-block h-2 w-2 rounded-[--radius-pill]",
-            dirty ? "bg-[--color-warning]" : "bg-[--muted-foreground]",
+            "inline-block h-2 w-2 rounded-(--radius-pill)",
+            dirty ? "bg-(--color-warning)" : "bg-(--muted-foreground)",
           )}
         />
         <span>

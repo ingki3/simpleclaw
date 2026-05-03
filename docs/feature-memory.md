@@ -92,6 +92,7 @@ memory:
 4. 추출된 내용을 각각 해당 파일에 추가:
    - **memory** (사실, 이벤트, 결정 사항) → `MEMORY.md`에 추가
    - **user_insights** (선호도, 관심사, 습관) → `USER.md`에 추가
+   - **active_projects** (사용자가 현재 집중 중인 프로젝트 카드) → `USER.md`의 `active-projects` 섹션을 in-place 갱신 (BIZ-74)
 5. (선택) 시맨틱 클러스터가 활성화되어 있으면 클러스터별 요약을 `MEMORY.md`의 HTML 마커 영역에 in-place 갱신
 
 ### 설정
@@ -104,6 +105,10 @@ daemon:
     model: "gemini"         # 드리밍에 사용할 LLM (선택, 미지정 시 기본 LLM 사용)
     enable_clusters: true   # 시맨틱 클러스터 기반 그래프형 드리밍 활성화 (BIZ-28부터 기본 ON)
     cluster_threshold: 0.75 # 코사인 유사도 임계값 — 낮추면 클러스터가 커지고, 높이면 작아진다
+    active_projects:
+      enabled: true                          # USER.md의 active-projects 섹션 자동 갱신 (BIZ-74)
+      window_days: 7                         # 활성 윈도우(일) — last_seen이 이 기간 안인 항목만 USER.md에 노출
+      sidecar_path: ".agent/active_projects.jsonl"  # 모든 프로젝트 메타가 누적 보관되는 sidecar
 ```
 
 `dreaming.model`을 지정하면 드리밍 요약에 특정 LLM 백엔드를 사용합니다. 예를 들어 일반 대화는 Claude를 쓰면서 드리밍은 비용이 낮은 Gemini로 처리할 수 있습니다.
@@ -131,6 +136,7 @@ daemon:
 | `MEMORY.md` | `journal` | 시간순 dreaming 기록 (레거시 모드) |
 | `MEMORY.md` | `clusters` | 시맨틱 클러스터 요약 컨테이너 (Phase 3) — 안쪽에 `<!-- cluster:N start/end -->` 들이 들어간다 |
 | `USER.md` | `insights` | dreaming-derived 사용자 인사이트 |
+| `USER.md` | `active-projects` | 최근 N일 윈도우의 활성 프로젝트 카드 (BIZ-74) — sidecar `.agent/active_projects.jsonl`에서 렌더링 |
 | `SOUL.md` | `dreaming-updates` | dreaming-suggested 성격/말투 변경 |
 | `AGENT.md` | `dreaming-updates` | dreaming-suggested 행동 규칙 변경 |
 

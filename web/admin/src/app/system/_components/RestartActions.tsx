@@ -158,29 +158,29 @@ export function RestartActions({
             return (
               <div
                 key={mode}
-                className="flex flex-col gap-3 rounded-[--radius-m] border border-[--border] bg-[--surface] p-4"
+                className="flex flex-col gap-3 rounded-(--radius-m) border border-(--border) bg-(--surface) p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-[--foreground-strong]">
+                    <p className="text-sm font-semibold text-(--foreground-strong)">
                       {meta.ctaLabel}
                     </p>
-                    <p className="text-xs text-[--muted-foreground]">
+                    <p className="text-xs text-(--muted-foreground)">
                       확인 토큰:{" "}
-                      <code className="font-mono text-[--foreground]">
+                      <code className="font-mono text-(--foreground)">
                         {meta.confirmation}
                       </code>
                     </p>
                   </div>
                   <span
                     aria-hidden
-                    className="text-base text-[--color-warning]"
+                    className="text-base text-(--color-warning)"
                     title={meta.power}
                   >
                     {meta.power}
                   </span>
                 </div>
-                <p className="text-sm text-[--muted-foreground]">{meta.blurb}</p>
+                <p className="text-sm text-(--muted-foreground)">{meta.blurb}</p>
                 <Button
                   variant={mode === "process" ? "destructive" : "primary"}
                   size="sm"
@@ -239,29 +239,29 @@ function FlowBody({ flow }: { flow: FlowState }) {
   const meta = MODE_META[flow.mode];
   if (flow.step === "applying") {
     return (
-      <p className="text-sm text-[--muted-foreground]">
+      <p className="text-sm text-(--muted-foreground)">
         {meta.ctaLabel} 요청을 데몬에 전송 중입니다…
       </p>
     );
   }
   if (flow.step === "done" && flow.failed) {
     return (
-      <p className="text-sm text-[--color-error]">
+      <p className="text-sm text-(--color-error)">
         요청이 실패했습니다: {flow.errorMessage ?? "알 수 없는 오류"}
       </p>
     );
   }
   if (flow.step === "done" && flow.result) {
     return (
-      <div className="flex flex-col gap-1 text-sm text-[--foreground]">
+      <div className="flex flex-col gap-1 text-sm text-(--foreground)">
         <p>
           ✓ {meta.ctaLabel} 요청을 수락했습니다. (audit:{" "}
-          <code className="font-mono text-[--muted-foreground]">
+          <code className="font-mono text-(--muted-foreground)">
             {flow.result.audit_id.slice(0, 8)}
           </code>
           )
         </p>
-        <p className="text-xs text-[--muted-foreground]">
+        <p className="text-xs text-(--muted-foreground)">
           적용된 펜딩 변경: {flow.result.applied_pending}건
         </p>
       </div>

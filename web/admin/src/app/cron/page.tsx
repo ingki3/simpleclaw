@@ -142,8 +142,8 @@ function CronPageBody() {
     <div className="flex flex-col gap-6">
       <header className="flex items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold text-[--foreground-strong]">Cron</h1>
-          <p className="text-sm text-[--muted-foreground]">
+          <h1 className="text-2xl font-semibold text-(--foreground-strong)">Cron</h1>
+          <p className="text-sm text-(--muted-foreground)">
             잡 목록·표현식·실행 이력을 한 화면에서 운영하세요.
           </p>
         </div>
@@ -175,7 +175,7 @@ function CronPageBody() {
           placeholder="이름으로 검색"
           containerClassName="w-64"
         />
-        <div className="flex items-center gap-1 rounded-[--radius-pill] border border-[--border] bg-[--card] p-1">
+        <div className="flex items-center gap-1 rounded-(--radius-pill) border border-(--border) bg-(--card) p-1">
           {(
             [
               ["all", "전체"],
@@ -190,10 +190,10 @@ function CronPageBody() {
               onClick={() => setStatusFilter(key)}
               aria-pressed={statusFilter === key}
               className={
-                "rounded-[--radius-pill] px-3 py-1 text-xs font-medium transition-colors " +
+                "rounded-(--radius-pill) px-3 py-1 text-xs font-medium transition-colors " +
                 (statusFilter === key
-                  ? "bg-[--primary] text-[--primary-foreground]"
-                  : "text-[--muted-foreground] hover:text-[--foreground]")
+                  ? "bg-(--primary) text-(--primary-foreground)"
+                  : "text-(--muted-foreground) hover:text-(--foreground)")
               }
             >
               {label}
@@ -203,7 +203,7 @@ function CronPageBody() {
       </div>
 
       {jobs === null ? (
-        <p className="text-sm text-[--muted-foreground]">불러오는 중…</p>
+        <p className="text-sm text-(--muted-foreground)">불러오는 중…</p>
       ) : filtered.length === 0 ? (
         <EmptyState
           hasJobs={jobs.length > 0}
@@ -268,11 +268,11 @@ function EmptyState({
 }) {
   // hasJobs=true이면 필터 결과가 없는 것 — "조건을 줄여 보세요" 안내.
   return (
-    <section className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-[--radius-l] border border-dashed border-[--border-strong] bg-[--card] px-8 py-12 text-center">
-      <h2 className="text-lg font-semibold text-[--foreground-strong]">
+    <section className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-(--radius-l) border border-dashed border-(--border-strong) bg-(--card) px-8 py-12 text-center">
+      <h2 className="text-lg font-semibold text-(--foreground-strong)">
         {hasJobs ? "조건에 맞는 잡이 없어요" : "아직 등록된 잡이 없어요"}
       </h2>
-      <p className="text-sm text-[--muted-foreground]">
+      <p className="text-sm text-(--muted-foreground)">
         {hasJobs
           ? "검색어나 상태 필터를 풀어 보세요."
           : "정기적으로 실행할 작업을 새 잡으로 등록해 주세요."}

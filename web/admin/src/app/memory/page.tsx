@@ -240,13 +240,13 @@ export default function MemoryPage() {
 
   if (loading && !data) {
     return (
-      <div className="text-sm text-[--muted-foreground]">불러오는 중…</div>
+      <div className="text-sm text-(--muted-foreground)">불러오는 중…</div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] px-4 py-3 text-sm">
+      <div className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) px-4 py-3 text-sm">
         메모리 인덱스를 불러오지 못했습니다: {error}
       </div>
     );
@@ -256,10 +256,10 @@ export default function MemoryPage() {
     <div className="mx-auto flex max-w-7xl flex-col gap-6">
       <header className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold text-[--foreground-strong]">
+          <h1 className="flex items-center gap-2 text-xl font-semibold text-(--foreground-strong)">
             <Database size={18} aria-hidden /> 기억
           </h1>
-          <p className="mt-1 text-sm text-[--muted-foreground]">
+          <p className="mt-1 text-sm text-(--muted-foreground)">
             대화 저장소·MEMORY.md 인덱스를 살펴보고, 드리밍을 직접 트리거할 수 있어요.
           </p>
         </div>
@@ -279,17 +279,17 @@ export default function MemoryPage() {
         {/* 인덱스 (좌측 2/3) */}
         <section
           aria-labelledby="memory-index-title"
-          className="flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-5 lg:col-span-2"
+          className="flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-5 lg:col-span-2"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2
                 id="memory-index-title"
-                className="text-sm font-semibold text-[--foreground-strong]"
+                className="text-sm font-semibold text-(--foreground-strong)"
               >
                 MEMORY.md 인덱스
               </h2>
-              <p className="text-xs text-[--muted-foreground]">
+              <p className="text-xs text-(--muted-foreground)">
                 {data.entries.length.toLocaleString()}개 항목 ·{" "}
                 {(data.file.sizeBytes / 1024).toFixed(1)} KB
                 {data.file.updatedAt
@@ -302,7 +302,7 @@ export default function MemoryPage() {
                 <Search
                   size={14}
                   aria-hidden
-                  className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-[--muted-foreground]"
+                  className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-(--muted-foreground)"
                 />
                 <Input
                   type="search"
@@ -332,10 +332,10 @@ export default function MemoryPage() {
                   aria-selected={active}
                   onClick={() => setTypeFilter(f.value)}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-[--radius-pill] border px-2.5 py-1 text-xs font-medium transition-colors",
+                    "inline-flex items-center gap-2 rounded-(--radius-pill) border px-2.5 py-1 text-xs font-medium transition-colors",
                     active
-                      ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                      : "border-[--border] bg-[--surface] text-[--muted-foreground] hover:text-[--foreground]",
+                      ? "border-(--primary) bg-(--primary-tint) text-(--primary)"
+                      : "border-(--border) bg-(--surface) text-(--muted-foreground) hover:text-(--foreground)",
                   )}
                 >
                   <span>{f.label}</span>
@@ -347,7 +347,7 @@ export default function MemoryPage() {
 
           {/* 항목 리스트 */}
           {filtered.length === 0 ? (
-            <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] px-4 py-8 text-center text-xs text-[--muted-foreground]">
+            <div className="rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) px-4 py-8 text-center text-xs text-(--muted-foreground)">
               {data.entries.length === 0
                 ? "아직 MEMORY.md 항목이 없어요. 드리밍을 한 번 돌려 봐요."
                 : "필터에 해당하는 항목이 없어요."}
@@ -358,7 +358,7 @@ export default function MemoryPage() {
               estimatedRowHeight={72}
               threshold={100}
               maxHeight={560}
-              className="rounded-[--radius-m] border border-[--border] bg-[--surface]"
+              className="rounded-(--radius-m) border border-(--border) bg-(--surface)"
               renderItem={(entry) => (
                 <MemoryEntryRow
                   key={entry.id}
@@ -409,8 +409,8 @@ export default function MemoryPage() {
         onConfirm={handleConfirmDelete}
       >
         {pendingDelete ? (
-          <div className="rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--foreground]">
-            <div className="text-[10px] font-mono text-[--muted-foreground]">
+          <div className="rounded-(--radius-m) border border-(--border) bg-(--surface) px-3 py-2 text-xs text-(--foreground)">
+            <div className="text-[10px] font-mono text-(--muted-foreground)">
               {pendingDelete.section} · {pendingDelete.id}
             </div>
             <div className="mt-1 break-words">{pendingDelete.text}</div>
@@ -446,21 +446,21 @@ function ExportCard({ range, onChange, disabled }: ExportCardProps) {
   return (
     <section
       aria-labelledby="export-card-title"
-      className="flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-5"
+      className="flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-5"
     >
       <header>
         <h2
           id="export-card-title"
-          className="flex items-center gap-2 text-sm font-semibold text-[--foreground-strong]"
+          className="flex items-center gap-2 text-sm font-semibold text-(--foreground-strong)"
         >
           <Download size={14} aria-hidden /> 대화 내보내기 (JSONL)
         </h2>
-        <p className="mt-1 text-xs text-[--muted-foreground]">
+        <p className="mt-1 text-xs text-(--muted-foreground)">
           기간을 비워 두면 전체 대화가 내려와요. UTC 기준 ISO 시각을 사용합니다.
         </p>
       </header>
       <div className="grid grid-cols-2 gap-2">
-        <label className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
+        <label className="flex flex-col gap-1 text-xs text-(--muted-foreground)">
           <span>From</span>
           <Input
             type="date"
@@ -468,7 +468,7 @@ function ExportCard({ range, onChange, disabled }: ExportCardProps) {
             onChange={(e) => onChange({ ...range, from: e.target.value })}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
+        <label className="flex flex-col gap-1 text-xs text-(--muted-foreground)">
           <span>To</span>
           <Input
             type="date"
@@ -482,10 +482,10 @@ function ExportCard({ range, onChange, disabled }: ExportCardProps) {
         download
         aria-disabled={disabled}
         className={cn(
-          "inline-flex items-center justify-center gap-2 rounded-[--radius-m] px-4 py-2 text-sm font-medium transition-colors",
+          "inline-flex items-center justify-center gap-2 rounded-(--radius-m) px-4 py-2 text-sm font-medium transition-colors",
           disabled
-            ? "pointer-events-none bg-[--surface] text-[--muted-foreground]"
-            : "bg-[--primary] text-[--primary-foreground] hover:bg-[--primary-hover]",
+            ? "pointer-events-none bg-(--surface) text-(--muted-foreground)"
+            : "bg-(--primary) text-(--primary-foreground) hover:bg-(--primary-hover)",
         )}
       >
         <Download size={14} aria-hidden />

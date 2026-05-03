@@ -85,13 +85,13 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
     >
       <section className="flex flex-col gap-4">
         <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--muted-foreground)">
             타임라인
           </h3>
           {trace.isLoading && !trace.data ? (
-            <p className="text-sm text-[--muted-foreground]">로그를 불러오는 중…</p>
+            <p className="text-sm text-(--muted-foreground)">로그를 불러오는 중…</p>
           ) : trace.error && traceId ? (
-            <p className="text-sm text-[--color-error]">
+            <p className="text-sm text-(--color-error)">
               trace 묶음을 불러오지 못했습니다 — 클릭한 항목만 표시합니다.
             </p>
           ) : null}
@@ -106,13 +106,13 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
                 <li
                   key={`${e.timestamp ?? "ts"}-${i}`}
                   className={
-                    "rounded-[--radius-sm] border px-3 py-2 " +
+                    "rounded-(--radius-sm) border px-3 py-2 " +
                     (isSelected
-                      ? "border-[--primary] bg-[--primary-tint]"
-                      : "border-[--border] bg-[--card]")
+                      ? "border-(--primary) bg-(--primary-tint)"
+                      : "border-(--border) bg-(--card)")
                   }
                 >
-                  <div className="flex items-center gap-2 text-xs text-[--muted-foreground]">
+                  <div className="flex items-center gap-2 text-xs text-(--muted-foreground)">
                     <Badge tone={LEVEL_TONE[level]}>{level.toLowerCase()}</Badge>
                     <span className="font-mono">
                       {e.timestamp ? new Date(e.timestamp).toLocaleTimeString("ko-KR") : "—"}
@@ -121,11 +121,11 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
                       <span>· {e.duration_ms.toFixed(0)} ms</span>
                     ) : null}
                   </div>
-                  <p className="mt-1 truncate font-mono text-xs text-[--foreground-strong]">
+                  <p className="mt-1 truncate font-mono text-xs text-(--foreground-strong)">
                     {e.action_type || "(no action_type)"}
                   </p>
                   {e.input_summary ? (
-                    <p className="mt-1 line-clamp-2 text-xs text-[--foreground]">
+                    <p className="mt-1 line-clamp-2 text-xs text-(--foreground)">
                       {e.input_summary}
                     </p>
                   ) : null}
@@ -137,7 +137,7 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
 
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-(--muted-foreground)">
               JSON 원문 (선택 항목)
             </h3>
             <Button
@@ -153,7 +153,7 @@ export function TraceDrawer({ open, onOpenChange, selected }: TraceDrawerProps) 
               복사
             </Button>
           </div>
-          <pre className="max-h-[420px] overflow-auto rounded-[--radius-sm] border border-[--border] bg-[--surface] p-3 font-mono text-xs leading-relaxed text-[--foreground]">
+          <pre className="max-h-[420px] overflow-auto rounded-(--radius-sm) border border-(--border) bg-(--surface) p-3 font-mono text-xs leading-relaxed text-(--foreground)">
             <code>{detailJson || "{}"}</code>
           </pre>
         </div>

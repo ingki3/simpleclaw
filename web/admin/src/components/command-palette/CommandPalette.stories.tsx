@@ -22,7 +22,7 @@ const SAMPLE_SECRETS: SecretMeta[] = [
 function Frame({ secrets }: { secrets?: SecretMeta[] }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background] p-10">
+    <div className="grid min-h-screen place-items-center bg-(--background) p-10">
       <Button onClick={() => setOpen(true)}>⌘K 열기</Button>
       <CommandPalette open={open} onOpenChange={setOpen} secrets={secrets} />
     </div>

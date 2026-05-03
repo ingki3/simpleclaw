@@ -35,7 +35,7 @@ export function MaskedSecretRow({
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2 text-sm">
-        <span className="font-medium text-[--foreground-strong]">{label}</span>
+        <span className="font-medium text-(--foreground-strong)">{label}</span>
         <Badge tone={scope === "prod" ? "danger" : scope === "dev" ? "warning" : "neutral"}>
           {scope}
         </Badge>

@@ -26,8 +26,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   ref,
 ) {
   const ringClass = invalid
-    ? "border-[--color-error]"
-    : "border-[--border] focus-within:border-[--primary]";
+    ? "border-(--color-error)"
+    : "border-(--border) focus-within:border-(--primary)";
 
   if (!leftIcon && !rightIcon) {
     return (
@@ -35,7 +35,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         ref={ref}
         aria-invalid={invalid || undefined}
         className={cn(
-          "w-full rounded-[--radius-m] border bg-[--card] px-3 py-2 text-sm text-[--foreground] placeholder:text-[--placeholder] outline-none transition-colors",
+          "w-full rounded-(--radius-m) border bg-(--card) px-3 py-2 text-sm text-(--foreground) placeholder:text-(--placeholder) outline-none transition-colors",
           ringClass,
           className,
         )}
@@ -47,13 +47,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   return (
     <div
       className={cn(
-        "flex w-full items-center gap-2 rounded-[--radius-m] border bg-[--card] px-3 py-2 transition-colors",
+        "flex w-full items-center gap-2 rounded-(--radius-m) border bg-(--card) px-3 py-2 transition-colors",
         ringClass,
         containerClassName,
       )}
     >
       {leftIcon ? (
-        <span aria-hidden className="text-[--muted-foreground]">
+        <span aria-hidden className="text-(--muted-foreground)">
           {leftIcon}
         </span>
       ) : null}
@@ -61,13 +61,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         ref={ref}
         aria-invalid={invalid || undefined}
         className={cn(
-          "min-w-0 flex-1 bg-transparent text-sm text-[--foreground] placeholder:text-[--placeholder] outline-none",
+          "min-w-0 flex-1 bg-transparent text-sm text-(--foreground) placeholder:text-(--placeholder) outline-none",
           className,
         )}
         {...rest}
       />
       {rightIcon ? (
-        <span aria-hidden className="text-[--muted-foreground]">
+        <span aria-hidden className="text-(--muted-foreground)">
           {rightIcon}
         </span>
       ) : null}

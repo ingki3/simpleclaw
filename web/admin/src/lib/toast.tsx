@@ -123,9 +123,9 @@ const ICON: Record<ToastTone, typeof CheckCircle2> = {
 };
 
 const TONE_CLASS: Record<ToastTone, string> = {
-  success: "border-[--color-success] bg-[--color-success-bg] text-[--color-success]",
-  error: "border-[--color-error] bg-[--color-error-bg] text-[--color-error]",
-  info: "border-[--color-info] bg-[--color-info-bg] text-[--color-info]",
+  success: "border-(--color-success) bg-(--color-success-bg) text-(--color-success)",
+  error: "border-(--color-error) bg-(--color-error-bg) text-(--color-error)",
+  info: "border-(--color-info) bg-(--color-info-bg) text-(--color-info)",
 };
 
 function ToastViewport({
@@ -149,23 +149,23 @@ function ToastViewport({
             key={t.id}
             role="status"
             aria-live={tone === "error" ? "assertive" : "polite"}
-            className="pointer-events-auto flex items-start gap-3 rounded-[--radius-m] border border-[--border] bg-[--card] p-3 shadow-[--shadow-m]"
+            className="pointer-events-auto flex items-start gap-3 rounded-(--radius-m) border border-(--border) bg-(--card) p-3 shadow-(--shadow-m)"
           >
             <span
               aria-hidden
               className={cn(
-                "grid h-7 w-7 shrink-0 place-items-center rounded-[--radius-pill] border",
+                "grid h-7 w-7 shrink-0 place-items-center rounded-(--radius-pill) border",
                 TONE_CLASS[tone],
               )}
             >
               <Icon size={14} />
             </span>
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <p className="text-sm font-medium text-[--foreground-strong]">
+              <p className="text-sm font-medium text-(--foreground-strong)">
                 {t.title}
               </p>
               {t.description ? (
-                <p className="text-xs text-[--muted-foreground]">
+                <p className="text-xs text-(--muted-foreground)">
                   {t.description}
                 </p>
               ) : null}
@@ -176,7 +176,7 @@ function ToastViewport({
                     t.onUndo?.();
                     onDismiss(t.id);
                   }}
-                  className="mt-1 inline-flex w-fit items-center gap-1 rounded-[--radius-sm] text-xs font-medium text-[--primary] hover:underline"
+                  className="mt-1 inline-flex w-fit items-center gap-1 rounded-(--radius-sm) text-xs font-medium text-(--primary) hover:underline"
                 >
                   <Undo2 size={12} aria-hidden />
                   되돌리기
@@ -187,7 +187,7 @@ function ToastViewport({
               type="button"
               aria-label="알림 닫기"
               onClick={() => onDismiss(t.id)}
-              className="text-[--muted-foreground] transition-colors hover:text-[--foreground]"
+              className="text-(--muted-foreground) transition-colors hover:text-(--foreground)"
             >
               <X size={14} aria-hidden />
             </button>

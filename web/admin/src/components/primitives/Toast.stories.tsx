@@ -43,7 +43,7 @@ function Demo({ kind }: { kind: "success" | "info" | "warn" | "destructive-soft"
     });
   };
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background]">
+    <div className="grid min-h-screen place-items-center bg-(--background)">
       <Button onClick={fire}>토스트 띄우기 ({kind})</Button>
     </div>
   );

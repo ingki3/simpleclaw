@@ -61,10 +61,10 @@ function LogsLoadingShell() {
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-3xl font-semibold leading-tight text-[--foreground-strong]">
+        <h1 className="text-3xl font-semibold leading-tight text-(--foreground-strong)">
           로그
         </h1>
-        <p className="text-sm text-[--muted-foreground]">로그를 불러오는 중…</p>
+        <p className="text-sm text-(--muted-foreground)">로그를 불러오는 중…</p>
       </header>
     </div>
   );
@@ -167,10 +167,10 @@ function LogsPageBody() {
   return (
     <div className="flex flex-col gap-6" onScrollCapture={onListScroll}>
       <header className="flex flex-col gap-1">
-        <h1 className="text-3xl font-semibold leading-tight text-[--foreground-strong]">
+        <h1 className="text-3xl font-semibold leading-tight text-(--foreground-strong)">
           로그
         </h1>
-        <p className="text-sm text-[--muted-foreground]">
+        <p className="text-sm text-(--muted-foreground)">
           구조화 로그 스트림 · 트레이스 타임라인 · 실시간 자동 새로고침.
         </p>
       </header>
@@ -196,10 +196,10 @@ function LogsPageBody() {
         aria-label="로그 스트림"
         className="flex flex-col gap-2"
       >
-        <div className="flex items-center justify-between text-xs text-[--muted-foreground]">
+        <div className="flex items-center justify-between text-xs text-(--muted-foreground)">
           <span>
             {error ? (
-              <span className="text-[--color-error]">
+              <span className="text-(--color-error)">
                 로그를 불러오지 못했습니다 — {error.message}
               </span>
             ) : (
@@ -212,7 +212,7 @@ function LogsPageBody() {
           {entries.length >= limit ? (
             <button
               type="button"
-              className="text-[--primary] hover:underline"
+              className="text-(--primary) hover:underline"
               onClick={() => setLimit((cur) => cur + PAGE_STEP)}
             >
               더 보기 (+{PAGE_STEP})

@@ -70,13 +70,13 @@ export default function SystemPage() {
             size={28}
             strokeWidth={1.5}
             aria-hidden
-            className="mt-1 text-[--primary]"
+            className="mt-1 text-(--primary)"
           />
           <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold text-[--foreground-strong]">
+            <h1 className="text-2xl font-semibold text-(--foreground-strong)">
               시스템
             </h1>
-            <p className="text-sm text-[--muted-foreground]">
+            <p className="text-sm text-(--muted-foreground)">
               데몬 상태·재시작 액션·전체 설정 스냅샷·테마를 한 곳에서 다룹니다.
             </p>
           </div>

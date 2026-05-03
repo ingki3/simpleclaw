@@ -64,11 +64,11 @@ export function AuditDetail({
     <div className="flex flex-col gap-5">
       <section
         aria-label="메타"
-        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3"
+        className="flex flex-col gap-2 rounded-(--radius-m) border border-(--border) bg-(--surface) p-3"
       >
         <div className="flex flex-wrap items-center gap-2">
-          <History size={14} aria-hidden className="text-[--muted-foreground]" />
-          <span className="font-medium text-[--foreground-strong]">
+          <History size={14} aria-hidden className="text-(--muted-foreground)" />
+          <span className="font-medium text-(--foreground-strong)">
             {entry.action}
           </span>
           <Badge tone="neutral">{entry.area || "—"}</Badge>
@@ -76,18 +76,18 @@ export function AuditDetail({
             {entry.outcome}
           </StatusPill>
         </div>
-        <code className="break-all font-mono text-xs text-[--muted-foreground]">
+        <code className="break-all font-mono text-xs text-(--muted-foreground)">
           {entry.target || "(target 없음)"}
         </code>
-        <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs text-[--muted-foreground]">
+        <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs text-(--muted-foreground)">
           <dt>시각</dt>
-          <dd className="text-[--foreground]">{formatAbsoluteTs(entry.ts)}</dd>
+          <dd className="text-(--foreground)">{formatAbsoluteTs(entry.ts)}</dd>
           <dt>actor</dt>
-          <dd className="text-[--foreground]">{entry.actor_id || "system"}</dd>
+          <dd className="text-(--foreground)">{entry.actor_id || "system"}</dd>
           {entry.trace_id ? (
             <>
               <dt>trace_id</dt>
-              <dd className="flex items-center gap-2 text-[--foreground]">
+              <dd className="flex items-center gap-2 text-(--foreground)">
                 <code className="font-mono">{entry.trace_id}</code>
                 {onViewTrace ? (
                   <Button
@@ -104,7 +104,7 @@ export function AuditDetail({
           {entry.affected_modules.length > 0 ? (
             <>
               <dt>영향 모듈</dt>
-              <dd className="text-[--foreground]">
+              <dd className="text-(--foreground)">
                 {entry.affected_modules.join(", ")}
               </dd>
             </>
@@ -120,7 +120,7 @@ export function AuditDetail({
           {entry.reason ? (
             <>
               <dt>사유</dt>
-              <dd className="text-[--foreground]">{entry.reason}</dd>
+              <dd className="text-(--foreground)">{entry.reason}</dd>
             </>
           ) : null}
         </dl>
@@ -131,10 +131,10 @@ export function AuditDetail({
         className="flex flex-col gap-2"
       >
         <header className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[--foreground-strong]">
+          <h3 className="text-sm font-semibold text-(--foreground-strong)">
             변경 내용 (before → after)
           </h3>
-          <span className="text-xs text-[--muted-foreground]">
+          <span className="text-xs text-(--muted-foreground)">
             시크릿 값은 ``••••&lt;last4&gt;``로 마스킹됨
           </span>
         </header>
@@ -146,17 +146,17 @@ export function AuditDetail({
 
       <section
         aria-label="되돌리기"
-        className="flex flex-col gap-2 rounded-[--radius-m] border border-[--border] bg-[--surface] p-3"
+        className="flex flex-col gap-2 rounded-(--radius-m) border border-(--border) bg-(--surface) p-3"
       >
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[--foreground-strong]">
+          <h3 className="text-sm font-semibold text-(--foreground-strong)">
             되돌리기
           </h3>
-          <span className="text-xs text-[--muted-foreground]">
+          <span className="text-xs text-(--muted-foreground)">
             5분 윈도 — 남은 시간 <code className="font-mono">{remain}</code>
           </span>
         </div>
-        <p className="text-xs text-[--muted-foreground]">
+        <p className="text-xs text-(--muted-foreground)">
           {undoUnavailableReason(entry, now) ??
             "버튼을 누르면 확인 후 백엔드에 되돌리기를 요청합니다. 새 감사 항목이 생성됩니다."}
         </p>
@@ -209,7 +209,7 @@ function DiffPane({ label, tone, payload }: DiffPaneProps) {
       <div className="flex items-center gap-2">
         <Badge tone={tone === "success" ? "success" : "neutral"}>{label}</Badge>
       </div>
-      <pre className="overflow-auto whitespace-pre-wrap break-all rounded-[--radius-m] border border-[--border] bg-[--card] p-3 text-xs leading-relaxed text-[--foreground]">
+      <pre className="overflow-auto whitespace-pre-wrap break-all rounded-(--radius-m) border border-(--border) bg-(--card) p-3 text-xs leading-relaxed text-(--foreground)">
         <code className="font-mono">{formatPayload(payload)}</code>
       </pre>
     </div>

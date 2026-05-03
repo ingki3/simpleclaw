@@ -37,17 +37,17 @@ export interface AuditRowProps {
 
 export function AuditRow({ entry, onUndo, onViewTrace }: AuditRowProps) {
   return (
-    <li className="flex flex-col gap-1 border-b border-[--border] px-3 py-3 text-sm last:border-b-0">
+    <li className="flex flex-col gap-1 border-b border-(--border) px-3 py-3 text-sm last:border-b-0">
       <div className="flex items-center gap-2">
         <History
           size={14}
           aria-hidden
-          className="text-[--muted-foreground]"
+          className="text-(--muted-foreground)"
         />
-        <span className="font-medium text-[--foreground-strong]">
+        <span className="font-medium text-(--foreground-strong)">
           {entry.action}
         </span>
-        <code className="font-mono text-xs text-[--muted-foreground]">
+        <code className="font-mono text-xs text-(--muted-foreground)">
           {entry.target}
         </code>
         <StatusPill tone={entry.outcome.tone} className="ml-auto">
@@ -55,13 +55,13 @@ export function AuditRow({ entry, onUndo, onViewTrace }: AuditRowProps) {
         </StatusPill>
       </div>
       {entry.before || entry.after ? (
-        <div className="flex items-center gap-2 pl-5 font-mono text-xs text-[--muted-foreground]">
+        <div className="flex items-center gap-2 pl-5 font-mono text-xs text-(--muted-foreground)">
           <span>{entry.before ?? "—"}</span>
           <span aria-hidden>→</span>
-          <span className="text-[--foreground]">{entry.after ?? "—"}</span>
+          <span className="text-(--foreground)">{entry.after ?? "—"}</span>
         </div>
       ) : null}
-      <div className="flex items-center gap-3 pl-5 text-xs text-[--muted-foreground]">
+      <div className="flex items-center gap-3 pl-5 text-xs text-(--muted-foreground)">
         <span>{entry.actor}</span>
         <span aria-hidden>·</span>
         <span>{entry.at}</span>

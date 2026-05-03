@@ -34,18 +34,18 @@ export function RestartBanner({
       role="alert"
       aria-live="polite"
       className={cn(
-        "flex items-center gap-3 rounded-[--radius-m] border border-[--color-warning] bg-[--color-warning-bg] px-4 py-3 text-sm text-[--foreground]",
+        "flex items-center gap-3 rounded-(--radius-m) border border-(--color-warning) bg-(--color-warning-bg) px-4 py-3 text-sm text-(--foreground)",
         className,
       )}
     >
       <AlertTriangle
         size={16}
         aria-hidden
-        className="text-[--color-warning]"
+        className="text-(--color-warning)"
       />
       <div className="flex-1">
         <strong className="font-medium">데몬 재시작이 필요합니다.</strong>{" "}
-        <span className="text-[--muted-foreground]">
+        <span className="text-(--muted-foreground)">
           저장된 변경 {pending}건이 다음 재시작 시 적용됩니다.
         </span>
       </div>

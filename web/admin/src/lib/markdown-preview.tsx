@@ -115,7 +115,7 @@ function renderInline(text: string): ReactNode {
       parts.push(
         <code
           key={`i${key++}`}
-          className="rounded-[--radius-sm] bg-[--surface] px-1 py-0.5 font-mono text-[0.85em]"
+          className="rounded-(--radius-sm) bg-(--surface) px-1 py-0.5 font-mono text-[0.85em]"
         >
           {tok.slice(1, -1)}
         </code>,
@@ -138,18 +138,18 @@ function renderInline(text: string): ReactNode {
 export function MarkdownPreview({ source }: { source: string }) {
   const blocks = tokenize(source);
   return (
-    <div className="space-y-3 text-sm text-[--foreground] leading-6">
+    <div className="space-y-3 text-sm text-(--foreground) leading-6">
       {blocks.map((b, idx) => {
         switch (b.kind) {
           case "heading": {
             const cls =
               b.level === 1
-                ? "text-xl font-semibold text-[--foreground-strong]"
+                ? "text-xl font-semibold text-(--foreground-strong)"
                 : b.level === 2
-                  ? "text-lg font-semibold text-[--foreground-strong]"
+                  ? "text-lg font-semibold text-(--foreground-strong)"
                   : b.level === 3
-                    ? "text-base font-semibold text-[--foreground-strong]"
-                    : "text-sm font-semibold text-[--foreground-strong]";
+                    ? "text-base font-semibold text-(--foreground-strong)"
+                    : "text-sm font-semibold text-(--foreground-strong)";
             return (
               <div key={idx} className={cls}>
                 {renderInline(b.text ?? "")}
@@ -158,7 +158,7 @@ export function MarkdownPreview({ source }: { source: string }) {
           }
           case "paragraph":
             return (
-              <p key={idx} className="text-[--foreground]">
+              <p key={idx} className="text-(--foreground)">
                 {renderInline(b.text ?? "")}
               </p>
             );
@@ -166,7 +166,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <ul
                 key={idx}
-                className="list-disc space-y-1 pl-5 text-[--foreground]"
+                className="list-disc space-y-1 pl-5 text-(--foreground)"
               >
                 {b.items?.map((it, j) => (
                   <li key={j}>{renderInline(it)}</li>
@@ -177,7 +177,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <pre
                 key={idx}
-                className="overflow-x-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-3 font-mono text-xs"
+                className="overflow-x-auto rounded-(--radius-m) border border-(--border) bg-(--surface) p-3 font-mono text-xs"
               >
                 <code>{b.text}</code>
               </pre>
@@ -186,7 +186,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <blockquote
                 key={idx}
-                className="border-l-2 border-[--border-strong] pl-3 text-[--muted-foreground]"
+                className="border-l-2 border-(--border-strong) pl-3 text-(--muted-foreground)"
               >
                 {b.text?.split("\n").map((l, j) => (
                   <Fragment key={j}>
@@ -200,7 +200,7 @@ export function MarkdownPreview({ source }: { source: string }) {
             return (
               <hr
                 key={idx}
-                className="my-4 border-0 border-t border-[--border]"
+                className="my-4 border-0 border-t border-(--border)"
               />
             );
           default:
@@ -208,7 +208,7 @@ export function MarkdownPreview({ source }: { source: string }) {
         }
       })}
       {blocks.length === 0 ? (
-        <p className="text-[--muted-foreground]">미리보기할 내용이 없습니다.</p>
+        <p className="text-(--muted-foreground)">미리보기할 내용이 없습니다.</p>
       ) : null}
     </div>
   );

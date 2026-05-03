@@ -10,19 +10,19 @@ import { cn } from "@/lib/cn";
 export type StatusTone = "success" | "warning" | "error" | "info" | "neutral";
 
 const DOT: Record<StatusTone, string> = {
-  success: "bg-[--color-success]",
-  warning: "bg-[--color-warning]",
-  error: "bg-[--color-error]",
-  info: "bg-[--color-info]",
-  neutral: "bg-[--muted-foreground]",
+  success: "bg-(--color-success)",
+  warning: "bg-(--color-warning)",
+  error: "bg-(--color-error)",
+  info: "bg-(--color-info)",
+  neutral: "bg-(--muted-foreground)",
 };
 
 const TONE_BG: Record<StatusTone, string> = {
-  success: "bg-[--color-success-bg] text-[--color-success]",
-  warning: "bg-[--color-warning-bg] text-[--color-warning]",
-  error: "bg-[--color-error-bg] text-[--color-error]",
-  info: "bg-[--color-info-bg] text-[--color-info]",
-  neutral: "bg-[--surface] text-[--muted-foreground]",
+  success: "bg-(--color-success-bg) text-(--color-success)",
+  warning: "bg-(--color-warning-bg) text-(--color-warning)",
+  error: "bg-(--color-error-bg) text-(--color-error)",
+  info: "bg-(--color-info-bg) text-(--color-info)",
+  neutral: "bg-(--surface) text-(--muted-foreground)",
 };
 
 export interface StatusPillProps {
@@ -42,7 +42,7 @@ export function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-[--radius-pill] px-2 py-0.5 text-xs font-medium",
+        "inline-flex items-center gap-1.5 rounded-(--radius-pill) px-2 py-0.5 text-xs font-medium",
         TONE_BG[tone],
         className,
       )}
@@ -50,7 +50,7 @@ export function StatusPill({
       <span
         aria-hidden
         className={cn(
-          "inline-block h-1.5 w-1.5 rounded-[--radius-pill]",
+          "inline-block h-1.5 w-1.5 rounded-(--radius-pill)",
           DOT[tone],
         )}
       />

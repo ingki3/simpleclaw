@@ -103,9 +103,9 @@ export function ConfirmGate({
       }
     >
       {children && <div className="mb-4">{children}</div>}
-      <label className="block text-xs text-[--muted-foreground]">
+      <label className="block text-xs text-(--muted-foreground)">
         계속하려면{" "}
-        <code className="rounded-[--radius-sm] border border-[--border] bg-[--surface] px-1 py-0.5 font-mono text-[11px] text-[--foreground]">
+        <code className="rounded-(--radius-sm) border border-(--border) bg-(--surface) px-1 py-0.5 font-mono text-[11px] text-(--foreground)">
           {confirmation}
         </code>
         를 그대로 입력해 주세요.
@@ -118,7 +118,7 @@ export function ConfirmGate({
         spellCheck={false}
         autoComplete="off"
         autoCapitalize="off"
-        className="mt-2 w-full rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 font-mono text-sm text-[--foreground] outline-none focus:border-[--primary] focus:ring-2 focus:ring-[--ring] disabled:opacity-50"
+        className="mt-2 w-full rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 font-mono text-sm text-(--foreground) outline-none focus:border-(--primary) focus:ring-2 focus:ring-(--ring) disabled:opacity-50"
         aria-label={`확인 입력 — ${confirmation}`}
       />
     </Modal>
