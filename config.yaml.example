@@ -92,7 +92,7 @@ admin_api:
   token_secret: "keyring:admin_api_token"
   read_timeout_seconds: 30
   request_max_body_kb: 256
-  cors_origins: []  # 예: ["http://localhost:3100"]
+  cors_origins: []  # 예: ["http://localhost:8088"]
 
 webhook:
   enabled: true
