@@ -162,6 +162,13 @@ async def main():
         insight_promotion_threshold=dreaming_config.get(
             "insight_promotion_threshold", 3
         ),
+        # BIZ-78: decay/reject 차단 리스트. config 가 None 이면 decay 비활성, reject TTL 영구.
+        decay_archive_after_days=dreaming_config.get("decay", {}).get(
+            "archive_after_days", 30
+        ),
+        reject_default_ttl_days=dreaming_config.get(
+            "reject_blocklist", {}
+        ).get("default_ttl_days"),
         # BIZ-79: Dry-run + Admin Review Loop. 기본은 dry_run=true 로 모든 새 인사이트가
         # 큐(insight_suggestions.jsonl)에 적재되며, auto_promote 두 조건을 동시에 만족하면
         # 자동 승격된다. 큐와 blocklist 도 .agent/ 하위에 둔다 — 운영자 검수 산출물.
