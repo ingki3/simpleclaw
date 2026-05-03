@@ -106,17 +106,17 @@ export function Drawer({
         onClick={(e) => e.stopPropagation()}
         tabIndex={-1}
         className={cn(
-          "flex h-full max-w-full flex-col border-l border-[--border] bg-[--card-elevated] shadow-[--shadow-l] outline-none motion-safe:animate-[drawer-in_180ms_cubic-bezier(.2,.8,.2,1)]",
+          "flex h-full max-w-full flex-col border-l border-(--border) bg-(--card-elevated) shadow-(--shadow-l) outline-none motion-safe:animate-[drawer-in_180ms_cubic-bezier(.2,.8,.2,1)]",
           WIDTH[size],
           className,
         )}
       >
-        <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-[--border] bg-[--card-elevated] px-5 py-4">
+        <header className="sticky top-0 z-10 flex items-start gap-3 border-b border-(--border) bg-(--card-elevated) px-5 py-4">
           <div className="flex-1">
             {title && (
               <h2
                 id={titleId}
-                className="text-md font-semibold text-[--foreground-strong]"
+                className="text-md font-semibold text-(--foreground-strong)"
               >
                 {title}
               </h2>
@@ -124,7 +124,7 @@ export function Drawer({
             {description && (
               <p
                 id={descId}
-                className="mt-1 text-sm text-[--muted-foreground]"
+                className="mt-1 text-sm text-(--muted-foreground)"
               >
                 {description}
               </p>
@@ -134,16 +134,16 @@ export function Drawer({
             type="button"
             aria-label="닫기"
             onClick={() => onOpenChange(false)}
-            className="-mr-1 grid h-8 w-8 place-items-center rounded-[--radius-m] text-[--muted-foreground] hover:bg-[--surface] hover:text-[--foreground]"
+            className="-mr-1 grid h-8 w-8 place-items-center rounded-(--radius-m) text-(--muted-foreground) hover:bg-(--surface) hover:text-(--foreground)"
           >
             <X size={16} aria-hidden />
           </button>
         </header>
-        <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-[--foreground]">
+        <div className="flex-1 overflow-y-auto px-5 py-4 text-sm text-(--foreground)">
           {children}
         </div>
         {footer && (
-          <footer className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-[--border] bg-[--card-elevated] px-5 py-4">
+          <footer className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-(--border) bg-(--card-elevated) px-5 py-4">
             {footer}
           </footer>
         )}

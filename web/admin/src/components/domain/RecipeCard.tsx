@@ -30,21 +30,21 @@ export interface RecipeCardProps {
 export function RecipeCard({ recipe, onToggleEnabled }: RecipeCardProps) {
   const [open, setOpen] = useState(false);
   return (
-    <article className="flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-4">
+    <article className="flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-4">
       <header className="flex items-start justify-between gap-3">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-controls={`recipe-steps-${recipe.id}`}
-          className="flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded-[--radius-m]"
+          className="flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-(--ring) rounded-(--radius-m)"
         >
-          <span aria-hidden className="mt-0.5 text-[--muted-foreground]">
+          <span aria-hidden className="mt-0.5 text-(--muted-foreground)">
             {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-semibold text-[--foreground-strong]">
+              <h3 className="truncate text-sm font-semibold text-(--foreground-strong)">
                 /{recipe.name}
               </h3>
               <Badge tone={recipe.version === "v2" ? "brand" : "neutral"}>
@@ -57,10 +57,10 @@ export function RecipeCard({ recipe, onToggleEnabled }: RecipeCardProps) {
                 </Badge>
               ) : null}
             </div>
-            <p className="line-clamp-2 text-xs text-[--muted-foreground]">
+            <p className="line-clamp-2 text-xs text-(--muted-foreground)">
               {recipe.description}
             </p>
-            <p className="text-xs text-[--muted-foreground]">
+            <p className="text-xs text-(--muted-foreground)">
               <span className="font-mono">trigger:</span> {recipe.trigger}
             </p>
           </div>
@@ -77,28 +77,28 @@ export function RecipeCard({ recipe, onToggleEnabled }: RecipeCardProps) {
       {open ? (
         <ol
           id={`recipe-steps-${recipe.id}`}
-          className="ml-6 flex flex-col gap-2 border-l border-[--border] pl-4"
+          className="ml-6 flex flex-col gap-2 border-l border-(--border) pl-4"
         >
           {recipe.steps.map((step, i) => {
             const Icon = STEP_ICON[step.type];
             return (
               <li
                 key={`${recipe.id}-step-${i}`}
-                className="flex items-start gap-2 text-xs text-[--foreground]"
+                className="flex items-start gap-2 text-xs text-(--foreground)"
               >
                 <span
                   aria-hidden
                   className={cn(
-                    "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-[--radius-pill] bg-[--surface] text-[--muted-foreground]",
+                    "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-(--radius-pill) bg-(--surface) text-(--muted-foreground)",
                   )}
                 >
                   <Icon size={11} />
                 </span>
                 <div className="flex flex-1 flex-col">
-                  <span className="font-medium text-[--foreground-strong]">
+                  <span className="font-medium text-(--foreground-strong)">
                     {i + 1}. {step.name}
                   </span>
-                  <span className="text-[--muted-foreground]">
+                  <span className="text-(--muted-foreground)">
                     {step.summary}
                   </span>
                 </div>
@@ -106,7 +106,7 @@ export function RecipeCard({ recipe, onToggleEnabled }: RecipeCardProps) {
               </li>
             );
           })}
-          <li className="text-[10px] text-[--muted-foreground]">
+          <li className="text-[10px] text-(--muted-foreground)">
             timeout {recipe.timeout_seconds}s
           </li>
         </ol>

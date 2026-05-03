@@ -72,22 +72,22 @@ export function LogRow({ entry, onSelect, isFresh }: LogRowProps) {
       onClick={onSelect}
       title={entry.timestamp ?? undefined}
       className={cn(
-        "log-row flex h-[44px] w-full items-center gap-3 border-b border-[--border] px-4 text-left text-sm",
-        "hover:bg-[--surface] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
+        "log-row flex h-[44px] w-full items-center gap-3 border-b border-(--border) px-4 text-left text-sm",
+        "hover:bg-(--surface) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
       )}
     >
-      <span className="w-[80px] shrink-0 font-mono text-xs text-[--muted-foreground]">
+      <span className="w-[80px] shrink-0 font-mono text-xs text-(--muted-foreground)">
         {formatTime(entry.timestamp)}
       </span>
       <span className="w-[64px] shrink-0">
         <Badge tone={tone}>{label}</Badge>
       </span>
-      <span className="w-[180px] shrink-0 truncate font-mono text-xs text-[--foreground-strong]">
+      <span className="w-[180px] shrink-0 truncate font-mono text-xs text-(--foreground-strong)">
         {entry.action_type || "—"}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[--foreground]">{message}</span>
+      <span className="min-w-0 flex-1 truncate text-(--foreground)">{message}</span>
       {trace ? (
-        <span className="shrink-0 font-mono text-xs text-[--muted-foreground]">
+        <span className="shrink-0 font-mono text-xs text-(--muted-foreground)">
           trace {trace.slice(0, 8)}
         </span>
       ) : null}

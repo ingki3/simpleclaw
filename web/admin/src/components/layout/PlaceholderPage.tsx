@@ -21,17 +21,17 @@ export function PlaceholderPage({
 }: PlaceholderPageProps) {
   const Icon = getIcon(icon);
   return (
-    <section className="mx-auto flex max-w-[480px] flex-col items-center gap-3 rounded-[--radius-l] border border-dashed border-[--border-strong] bg-[--card] px-8 py-16 text-center">
+    <section className="mx-auto flex max-w-[480px] flex-col items-center gap-3 rounded-(--radius-l) border border-dashed border-(--border-strong) bg-(--card) px-8 py-16 text-center">
       <Icon
         size={32}
         strokeWidth={1.5}
         aria-hidden
-        className="text-[--muted-foreground]"
+        className="text-(--muted-foreground)"
       />
-      <h2 className="text-xl font-semibold text-[--foreground-strong]">
+      <h2 className="text-xl font-semibold text-(--foreground-strong)">
         {title}
       </h2>
-      <p className="text-sm text-[--muted-foreground]">{description}</p>
+      <p className="text-sm text-(--muted-foreground)">{description}</p>
     </section>
   );
 }

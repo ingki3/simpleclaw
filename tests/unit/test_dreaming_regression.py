@@ -194,7 +194,7 @@ def workspace(tmp_path):
         insight_promotion_threshold=3,
         # BIZ-79: 본 회귀 가드는 sidecar 직접 적재 경로를 검증한다. 새 dry_run 기본값을
         # 회귀 의미와 분리하기 위해 명시적으로 옵트아웃 — dry_run 자체는 별도 모듈에서 검증.
-        dry_run_enabled=False,
+        # dry_run 비활성 — suggestions_file 미지정으로 레거시 모드 사용.
     )
     return {
         "tmp_path": tmp_path,
@@ -227,7 +227,7 @@ def cluster_workspace(tmp_path):
         enable_clusters=True,
         insight_promotion_threshold=3,
         # BIZ-79: cluster 모드도 동일하게 sidecar 직접 적재 경로 가드 — dry_run 옵트아웃.
-        dry_run_enabled=False,
+        # dry_run 비활성 — suggestions_file 미지정으로 레거시 모드 사용.
     )
     return {
         "tmp_path": tmp_path,

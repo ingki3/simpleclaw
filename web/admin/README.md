@@ -100,7 +100,7 @@ web/admin/
 
 ## 디자인 시스템 규약
 
-* 컴포넌트는 *semantic 토큰만* 참조한다 (`bg-[--card]`, `text-[--foreground]` 등).
+* 컴포넌트는 *semantic 토큰만* 참조한다 — Tailwind v4 의 CSS 변수 단축 문법 `(--var)` 만 사용 (예: `bg-(--card)`, `text-(--foreground)`). v3 시절의 대괄호 형태(`bg-` + `[--card]`)는 v4 에서 `background-color: --card;` 로 invalid CSS 가 emit 되어 transparent 로 떨어진다 (BIZ-82 회귀).
 * 라이트/다크 분기는 `globals.css`의 토큰 두 셋(`--*` light root + `.theme-dark`)으로만 처리한다 — **컴포넌트 내부 분기 0줄**.
 * 새 컬러/간격이 필요하면 Primitive를 globals.css에 먼저 추가한 뒤 Semantic을 매핑한다.
 * 아이콘은 lucide-react를 사용하고, nav 등 정적 메타데이터에서는 이름 문자열로만 보관해 `lib/icon.tsx`로 변환한다.

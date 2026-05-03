@@ -280,13 +280,13 @@ export default function LLMPage() {
             size={28}
             strokeWidth={1.5}
             aria-hidden
-            className="mt-1 text-[--primary]"
+            className="mt-1 text-(--primary)"
           />
           <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold text-[--foreground-strong]">
+            <h1 className="text-2xl font-semibold text-(--foreground-strong)">
               LLM 라우터
             </h1>
-            <p className="text-sm text-[--muted-foreground]">
+            <p className="text-sm text-(--muted-foreground)">
               프로바이더 활성·모델·토큰 예산·폴백·카테고리 라우팅을 한 화면에서
               관리합니다. 시크릿은 기본 마스킹되며 Reveal은 5초 후 자동 마스킹됩니다.
             </p>
@@ -323,14 +323,14 @@ export default function LLMPage() {
       {error ? (
         <div
           role="alert"
-          className="rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+          className="rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
         >
           설정을 불러오는 중 오류가 발생했습니다: {error}
         </div>
       ) : null}
 
       {loading || !draft ? (
-        <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-6 text-sm text-[--muted-foreground]">
+        <div className="rounded-(--radius-m) border border-dashed border-(--border) bg-(--surface) p-6 text-sm text-(--muted-foreground)">
           설정을 불러오는 중…
         </div>
       ) : (
@@ -342,7 +342,7 @@ export default function LLMPage() {
           >
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {providers.length === 0 ? (
-                <p className="text-sm text-[--muted-foreground]">
+                <p className="text-sm text-(--muted-foreground)">
                   등록된 프로바이더가 없습니다. config.yaml에 ``llm.providers``를
                   추가한 뒤 새로고침하세요.
                 </p>
@@ -376,7 +376,7 @@ export default function LLMPage() {
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-4">
               <label
                 htmlFor="llm-default"
-                className="text-sm font-medium text-[--foreground]"
+                className="text-sm font-medium text-(--foreground)"
               >
                 Default provider
               </label>
@@ -384,7 +384,7 @@ export default function LLMPage() {
                 id="llm-default"
                 value={draft.default ?? ""}
                 onChange={(e) => updateDefault(e.target.value)}
-                className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+                className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
               >
                 <option value="">— 선택 —</option>
                 {providers.map(([name]) => (
@@ -418,7 +418,7 @@ export default function LLMPage() {
         </>
       )}
 
-      <div className="fixed bottom-0 left-60 right-0 z-30 border-t border-[--border] bg-[--card] px-8 py-3 shadow-[--shadow-m]">
+      <div className="fixed bottom-0 left-60 right-0 z-30 border-t border-(--border) bg-(--card) px-8 py-3 shadow-(--shadow-m)">
         <DryRunFooter
           dirty={dirty}
           dryRunPassed={!!dryRunResult && dirty && !applying}

@@ -35,10 +35,10 @@ interface ToastContextValue {
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 const TONE_CLASS: Record<ToastTone, string> = {
-  success: "bg-[--color-success-bg] text-[--color-success]",
-  info: "bg-[--color-info-bg] text-[--color-info]",
-  warning: "bg-[--color-warning-bg] text-[--color-warning]",
-  error: "bg-[--color-error-bg] text-[--color-error]",
+  success: "bg-(--color-success-bg) text-(--color-success)",
+  info: "bg-(--color-info-bg) text-(--color-info)",
+  warning: "bg-(--color-warning-bg) text-(--color-warning)",
+  error: "bg-(--color-error-bg) text-(--color-error)",
 };
 
 /** 토스트가 자동 dismiss되기까지의 ms. 사용자 입력이 끊기는 시간을 짧게 유지. */
@@ -71,7 +71,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           role="status"
           aria-live="polite"
           className={cn(
-            "fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-[--radius-l] border border-[--border] px-4 py-3 shadow-[--shadow-m]",
+            "fixed bottom-6 right-6 z-50 flex max-w-md items-start gap-3 rounded-(--radius-l) border border-(--border) px-4 py-3 shadow-(--shadow-m)",
             TONE_CLASS[toast.tone],
           )}
         >

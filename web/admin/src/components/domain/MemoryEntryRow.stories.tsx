@@ -27,7 +27,7 @@ type Story = StoryObj<typeof MemoryEntryRow>;
 
 export const TypedUser: Story = {
   render: (args) => (
-    <ul className="rounded-[--radius-m] border border-[--border]">
+    <ul className="rounded-(--radius-m) border border-(--border)">
       <MemoryEntryRow {...args} />
     </ul>
   ),
@@ -38,7 +38,7 @@ export const NoType: Story = {
     entry: { ...baseEntry, id: "2:1", type: null, text: "타입 없는 자유 항목." },
   },
   render: (args) => (
-    <ul className="rounded-[--radius-m] border border-[--border]">
+    <ul className="rounded-(--radius-m) border border-(--border)">
       <MemoryEntryRow {...args} />
     </ul>
   ),
@@ -53,7 +53,7 @@ export const TypedFeedback: Story = {
     },
   },
   render: (args) => (
-    <ul className="rounded-[--radius-m] border border-[--border]">
+    <ul className="rounded-(--radius-m) border border-(--border)">
       <MemoryEntryRow {...args} />
     </ul>
   ),
@@ -62,7 +62,7 @@ export const TypedFeedback: Story = {
 export const Disabled: Story = {
   args: { disabled: true },
   render: (args) => (
-    <ul className="rounded-[--radius-m] border border-[--border]">
+    <ul className="rounded-(--radius-m) border border-(--border)">
       <MemoryEntryRow {...args} />
     </ul>
   ),
@@ -77,7 +77,7 @@ export const LongBody: Story = {
     },
   },
   render: (args) => (
-    <ul className="rounded-[--radius-m] border border-[--border]">
+    <ul className="rounded-(--radius-m) border border-(--border)">
       <MemoryEntryRow {...args} />
     </ul>
   ),

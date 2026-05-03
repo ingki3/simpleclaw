@@ -133,14 +133,14 @@ export function ProviderEditor({
   return (
     <article
       className={cn(
-        "flex flex-col gap-4 rounded-[--radius-l] border border-[--border] bg-[--card] p-5",
+        "flex flex-col gap-4 rounded-(--radius-l) border border-(--border) bg-(--card) p-5",
         className,
       )}
     >
       <header className="flex items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <h3 className="text-md font-semibold text-[--foreground-strong]">
+            <h3 className="text-md font-semibold text-(--foreground-strong)">
               {name}
             </h3>
             {role === "primary" ? (
@@ -152,7 +152,7 @@ export function ProviderEditor({
             )}
             <Badge tone="info">♻ Hot-reload</Badge>
           </div>
-          <code className="font-mono text-xs text-[--muted-foreground]">
+          <code className="font-mono text-xs text-(--muted-foreground)">
             type={value.type ?? "api"}
           </code>
         </div>
@@ -168,14 +168,14 @@ export function ProviderEditor({
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="flex flex-col gap-1">
-          <label htmlFor={modelId} className="text-xs font-medium text-[--muted-foreground]">
+          <label htmlFor={modelId} className="text-xs font-medium text-(--muted-foreground)">
             모델
           </label>
           <select
             id={modelId}
             value={value.model ?? ""}
             onChange={(e) => patch({ model: e.target.value })}
-            className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+            className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
           >
             <option value="">— 선택 —</option>
             {modelOptions.map((m) => (
@@ -190,7 +190,7 @@ export function ProviderEditor({
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor={budgetId} className="text-xs font-medium text-[--muted-foreground]">
+          <label htmlFor={budgetId} className="text-xs font-medium text-(--muted-foreground)">
             토큰 예산 (월)
           </label>
           <Input
@@ -215,7 +215,7 @@ export function ProviderEditor({
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor={priorityId} className="text-xs font-medium text-[--muted-foreground]">
+          <label htmlFor={priorityId} className="text-xs font-medium text-(--muted-foreground)">
             폴백 우선순위
           </label>
           <Input
@@ -241,7 +241,7 @@ export function ProviderEditor({
       </div>
 
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-[--muted-foreground]">
+        <span className="text-xs font-medium text-(--muted-foreground)">
           API 키
         </span>
         <SecretField
@@ -252,7 +252,7 @@ export function ProviderEditor({
           revealTtlMs={5_000}
         />
         {showRotate ? (
-          <div className="flex flex-col gap-2 rounded-[--radius-m] border border-dashed border-[--border-strong] bg-[--surface] p-3">
+          <div className="flex flex-col gap-2 rounded-(--radius-m) border border-dashed border-(--border-strong) bg-(--surface) p-3">
             <Input
               type="password"
               autoComplete="off"

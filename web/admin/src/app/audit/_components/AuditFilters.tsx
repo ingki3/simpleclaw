@@ -79,12 +79,12 @@ export function AuditFilters({
   return (
     <section
       aria-label="감사 필터"
-      className="flex flex-wrap items-end gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] px-4 py-3"
+      className="flex flex-wrap items-end gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) px-4 py-3"
     >
       <div className="flex flex-col gap-1">
         <label
           htmlFor="audit-since"
-          className="text-xs font-medium text-[--muted-foreground]"
+          className="text-xs font-medium text-(--muted-foreground)"
         >
           이후 (날짜)
         </label>
@@ -101,7 +101,7 @@ export function AuditFilters({
       <div className="flex flex-col gap-1">
         <label
           htmlFor="audit-area"
-          className="text-xs font-medium text-[--muted-foreground]"
+          className="text-xs font-medium text-(--muted-foreground)"
         >
           영역
         </label>
@@ -109,7 +109,7 @@ export function AuditFilters({
           id="audit-area"
           value={value.area}
           onChange={(e) => update("area", e.target.value)}
-          className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+          className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
         >
           <option value="">전체</option>
           {AUDIT_AREAS.map((a) => (
@@ -123,7 +123,7 @@ export function AuditFilters({
       <div className="flex flex-col gap-1">
         <label
           htmlFor="audit-action"
-          className="text-xs font-medium text-[--muted-foreground]"
+          className="text-xs font-medium text-(--muted-foreground)"
         >
           액션
         </label>
@@ -131,7 +131,7 @@ export function AuditFilters({
           id="audit-action"
           value={value.action}
           onChange={(e) => update("action", e.target.value)}
-          className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+          className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
         >
           <option value="">전체</option>
           {AUDIT_ACTIONS.map((a) => (
@@ -145,7 +145,7 @@ export function AuditFilters({
       <div className="flex flex-col gap-1">
         <label
           htmlFor="audit-outcome"
-          className="text-xs font-medium text-[--muted-foreground]"
+          className="text-xs font-medium text-(--muted-foreground)"
         >
           결과
         </label>
@@ -153,7 +153,7 @@ export function AuditFilters({
           id="audit-outcome"
           value={value.outcome}
           onChange={(e) => update("outcome", e.target.value)}
-          className="rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 text-sm text-[--foreground] focus:border-[--primary] focus:outline-none"
+          className="rounded-(--radius-m) border border-(--border) bg-(--card) px-3 py-2 text-sm text-(--foreground) focus:border-(--primary) focus:outline-none"
         >
           <option value="">전체</option>
           <option value="applied">applied</option>
@@ -166,7 +166,7 @@ export function AuditFilters({
       <div className="flex flex-col gap-1">
         <label
           htmlFor="audit-limit"
-          className="text-xs font-medium text-[--muted-foreground]"
+          className="text-xs font-medium text-(--muted-foreground)"
         >
           최대 표시
         </label>

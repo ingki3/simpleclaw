@@ -54,26 +54,26 @@ export function ThemeCard() {
               aria-checked={selected}
               onClick={() => setMode(value)}
               className={cn(
-                "flex flex-col items-start gap-2 rounded-[--radius-m] border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
+                "flex flex-col items-start gap-2 rounded-(--radius-m) border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
                 selected
-                  ? "border-[--primary] bg-[--card]"
-                  : "border-[--border] bg-[--surface] hover:bg-[--card]",
+                  ? "border-(--primary) bg-(--card)"
+                  : "border-(--border) bg-(--surface) hover:bg-(--card)",
               )}
             >
               <span className="flex items-center gap-2">
-                <Icon size={16} aria-hidden className="text-[--primary]" />
-                <span className="text-sm font-medium text-[--foreground-strong]">
+                <Icon size={16} aria-hidden className="text-(--primary)" />
+                <span className="text-sm font-medium text-(--foreground-strong)">
                   {label}
                 </span>
               </span>
-              <span className="text-xs text-[--muted-foreground]">{hint}</span>
+              <span className="text-xs text-(--muted-foreground)">{hint}</span>
             </button>
           );
         })}
       </div>
-      <p className="text-xs text-[--muted-foreground]">
+      <p className="text-xs text-(--muted-foreground)">
         현재 적용 모드:{" "}
-        <span className="font-medium text-[--foreground]">{resolved}</span>
+        <span className="font-medium text-(--foreground)">{resolved}</span>
         {mode === "system" ? " (시스템 추종)" : ""}
       </p>
     </SettingCard>

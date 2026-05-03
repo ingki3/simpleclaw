@@ -58,16 +58,16 @@ export function SkillCard({
         }
       }}
       className={cn(
-        "flex cursor-pointer flex-col gap-3 rounded-[--radius-l] border bg-[--card] p-4 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
+        "flex cursor-pointer flex-col gap-3 rounded-(--radius-l) border bg-(--card) p-4 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
         selected
-          ? "border-[--primary] shadow-[--shadow-sm]"
-          : "border-[--border] hover:border-[--border-strong]",
+          ? "border-(--primary) shadow-(--shadow-sm)"
+          : "border-(--border) hover:border-(--border-strong)",
       )}
     >
       <header className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-[--foreground-strong]">
+            <h3 className="truncate text-sm font-semibold text-(--foreground-strong)">
               {skill.name}
             </h3>
             <Badge tone={skill.source === "local" ? "brand" : "neutral"}>
@@ -75,7 +75,7 @@ export function SkillCard({
             </Badge>
             {skill.user_invocable ? <Badge tone="info">/명령</Badge> : null}
           </div>
-          <p className="line-clamp-2 text-xs text-[--muted-foreground]">
+          <p className="line-clamp-2 text-xs text-(--muted-foreground)">
             {skill.description}
           </p>
         </div>
@@ -95,7 +95,7 @@ export function SkillCard({
         </span>
       </header>
 
-      <footer className="flex flex-wrap items-center gap-2 text-xs text-[--muted-foreground]">
+      <footer className="flex flex-wrap items-center gap-2 text-xs text-(--muted-foreground)">
         <span className="inline-flex items-center gap-1">
           <Clock size={12} aria-hidden />
           {skill.last_run ? formatRelative(skill.last_run.started_at) : "실행 이력 없음"}

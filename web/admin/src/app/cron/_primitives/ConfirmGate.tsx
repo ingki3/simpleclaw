@@ -76,8 +76,8 @@ export function ConfirmGate({
     >
       {requireText ? (
         <div className="flex flex-col gap-2">
-          <label className="text-sm text-[--muted-foreground]">
-            계속하려면 <code className="rounded bg-[--surface] px-1 font-mono text-[--foreground-strong]">{requireText}</code> 을(를) 그대로 입력하세요.
+          <label className="text-sm text-(--muted-foreground)">
+            계속하려면 <code className="rounded bg-(--surface) px-1 font-mono text-(--foreground-strong)">{requireText}</code> 을(를) 그대로 입력하세요.
           </label>
           <Input
             value={typed}
@@ -87,7 +87,7 @@ export function ConfirmGate({
           />
         </div>
       ) : (
-        <p className="text-sm text-[--muted-foreground]">
+        <p className="text-sm text-(--muted-foreground)">
           확인 후 즉시 적용돼요. 되돌릴 수 없는 변경이라면 한 번 더 점검해 주세요.
         </p>
       )}

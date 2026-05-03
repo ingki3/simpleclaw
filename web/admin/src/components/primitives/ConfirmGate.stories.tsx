@@ -19,7 +19,7 @@ function Demo({
 }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background] p-10">
+    <div className="grid min-h-screen place-items-center bg-(--background) p-10">
       <Button variant="destructive" onClick={() => setOpen(true)}>
         시크릿 회전
       </Button>

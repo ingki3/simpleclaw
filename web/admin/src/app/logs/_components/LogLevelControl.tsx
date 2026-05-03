@@ -87,13 +87,13 @@ export function LogLevelControl() {
 
   return (
     <section
-      className="flex flex-col gap-3 rounded-[--radius-m] border border-[--border] bg-[--card] p-4"
+      className="flex flex-col gap-3 rounded-(--radius-m) border border-(--border) bg-(--card) p-4"
       aria-labelledby="log-level-heading"
     >
       <div className="flex items-center justify-between gap-2">
         <h2
           id="log-level-heading"
-          className="text-sm font-semibold text-[--foreground-strong]"
+          className="text-sm font-semibold text-(--foreground-strong)"
         >
           로그 레벨
         </h2>
@@ -105,13 +105,13 @@ export function LogLevelControl() {
       </div>
 
       {notReady ? (
-        <p className="text-xs text-[--muted-foreground]">
+        <p className="text-xs text-(--muted-foreground)">
           백엔드가 <code className="font-mono">logging.level</code> 정책 키를 노출하면
           이 패널에서 즉시 변경할 수 있어요. 그때까지는 <code className="font-mono">
           config.yaml</code>의 <code>logging.level</code>을 직접 수정해 주세요.
         </p>
       ) : query.error ? (
-        <p className="text-xs text-[--color-error]">
+        <p className="text-xs text-(--color-error)">
           현재 레벨을 불러오지 못했습니다 — {query.error.message}
         </p>
       ) : (
@@ -125,10 +125,10 @@ export function LogLevelControl() {
                 aria-checked={pending === tk}
                 onClick={() => setPending(tk)}
                 className={
-                  "rounded-[--radius-sm] border px-2 py-1 text-xs " +
+                  "rounded-(--radius-sm) border px-2 py-1 text-xs " +
                   (pending === tk
-                    ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                    : "border-[--border] text-[--muted-foreground] hover:bg-[--surface]")
+                    ? "border-(--primary) bg-(--primary-tint) text-(--primary)"
+                    : "border-(--border) text-(--muted-foreground) hover:bg-(--surface)")
                 }
               >
                 {LEVEL_LABEL[tk]}
@@ -144,11 +144,11 @@ export function LogLevelControl() {
             >
               {mutation.isMutating ? "적용 중…" : "적용"}
             </Button>
-            <span className="text-xs text-[--muted-foreground]">
+            <span className="text-xs text-(--muted-foreground)">
               ↻ 재시작 없이 즉시 반영
             </span>
             {mutation.error ? (
-              <span className="text-xs text-[--color-error]">
+              <span className="text-xs text-(--color-error)">
                 적용 실패: {mutation.error.message}
               </span>
             ) : null}

@@ -15,7 +15,7 @@ type Story = StoryObj<typeof Modal>;
 function Demo({ args }: { args: Partial<React.ComponentProps<typeof Modal>> }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background] p-10">
+    <div className="grid min-h-screen place-items-center bg-(--background) p-10">
       <Button onClick={() => setOpen(true)}>모달 열기</Button>
       <Modal
         {...(args as React.ComponentProps<typeof Modal>)}

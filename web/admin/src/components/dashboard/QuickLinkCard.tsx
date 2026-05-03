@@ -31,28 +31,28 @@ export function QuickLinkCard({
     <Link
       href={href}
       className={cn(
-        "group flex items-start gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-4 transition-colors hover:bg-[--surface] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
+        "group flex items-start gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-4 transition-colors hover:bg-(--surface) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
         className,
       )}
     >
       <span
         aria-hidden
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[--radius-m] bg-[--primary-tint] text-[--primary]"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-(--radius-m) bg-(--primary-tint) text-(--primary)"
       >
         <Icon size={18} strokeWidth={1.75} />
       </span>
       <span className="flex flex-1 flex-col gap-0.5 min-w-0">
-        <span className="text-sm font-semibold text-[--foreground-strong]">
+        <span className="text-sm font-semibold text-(--foreground-strong)">
           {title}
         </span>
-        <span className="text-xs text-[--muted-foreground] line-clamp-2">
+        <span className="text-xs text-(--muted-foreground) line-clamp-2">
           {description}
         </span>
       </span>
       <ChevronRight
         size={16}
         aria-hidden
-        className="mt-1 shrink-0 text-[--muted-foreground] transition-transform group-hover:translate-x-0.5"
+        className="mt-1 shrink-0 text-(--muted-foreground) transition-transform group-hover:translate-x-0.5"
       />
     </Link>
   );

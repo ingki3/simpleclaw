@@ -32,13 +32,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary:
-    "bg-[--primary] text-[--primary-foreground] hover:bg-[--primary-hover]",
-  secondary: "bg-[--card] text-[--foreground] hover:bg-[--surface]",
+    "bg-(--primary) text-(--primary-foreground) hover:bg-(--primary-hover)",
+  secondary: "bg-(--card) text-(--foreground) hover:bg-(--surface)",
   outline:
-    "border border-[--border-strong] bg-transparent text-[--foreground] hover:bg-[--surface]",
-  ghost: "bg-transparent text-[--foreground] hover:bg-[--surface]",
+    "border border-(--border-strong) bg-transparent text-(--foreground) hover:bg-(--surface)",
+  ghost: "bg-transparent text-(--foreground) hover:bg-(--surface)",
   destructive:
-    "bg-[--destructive] text-[--destructive-foreground] hover:opacity-90",
+    "bg-(--destructive) text-(--destructive-foreground) hover:opacity-90",
 };
 
 const SIZE: Record<ButtonSize, string> = {
@@ -67,7 +67,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         type={type}
         className={cn(
-          "inline-flex items-center justify-center rounded-[--radius-m] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+          "inline-flex items-center justify-center rounded-(--radius-m) font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
           VARIANT[variant],
           SIZE[size],
           className,

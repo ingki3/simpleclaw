@@ -32,10 +32,10 @@ export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(function Switch
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "relative inline-flex h-6 w-10 shrink-0 items-center rounded-[--radius-pill] border transition-colors",
+        "relative inline-flex h-6 w-10 shrink-0 items-center rounded-(--radius-pill) border transition-colors",
         checked
-          ? "bg-[--primary] border-transparent"
-          : "bg-[--card] border-[--border-strong]",
+          ? "bg-(--primary) border-transparent"
+          : "bg-(--card) border-(--border-strong)",
         disabled && "cursor-not-allowed opacity-50",
         className,
       )}
@@ -44,7 +44,7 @@ export const Switch = forwardRef<HTMLButtonElement, SwitchProps>(function Switch
       <span
         aria-hidden
         className={cn(
-          "inline-block h-4 w-4 transform rounded-[--radius-pill] bg-white shadow-[--shadow-sm] transition-transform",
+          "inline-block h-4 w-4 transform rounded-(--radius-pill) bg-white shadow-(--shadow-sm) transition-transform",
           checked ? "translate-x-5" : "translate-x-1",
         )}
       />

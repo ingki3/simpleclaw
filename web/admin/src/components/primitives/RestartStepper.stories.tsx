@@ -23,7 +23,7 @@ function Frame({ step, failed }: { step: RestartStep; failed?: boolean }) {
     done: "확인",
   };
   return (
-    <div className="grid min-h-screen place-items-center bg-[--background] p-10">
+    <div className="grid min-h-screen place-items-center bg-(--background) p-10">
       <Button onClick={() => setOpen(true)}>재시작 모달 열기</Button>
       <RestartStepper
         open={open}
@@ -39,7 +39,7 @@ function Frame({ step, failed }: { step: RestartStep; failed?: boolean }) {
           else setOpen(false);
         }}
       >
-        <p className="text-sm text-[--muted-foreground]">
+        <p className="text-sm text-(--muted-foreground)">
           {s === "pending" && "데몬 재시작이 필요한 변경 3건이 누적됐어요."}
           {s === "dry-run" &&
             "Dry-run이 정상적으로 끝났어요. 영향 모듈: webhook, channels."}

@@ -41,17 +41,17 @@ export function DreamingProgressCard({
   return (
     <section
       aria-labelledby="dreaming-card-title"
-      className="flex flex-col gap-3 rounded-[--radius-l] border border-[--border] bg-[--card] p-5"
+      className="flex flex-col gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-5"
     >
       <header className="flex items-start justify-between gap-3">
         <div>
           <h2
             id="dreaming-card-title"
-            className="flex items-center gap-2 text-sm font-semibold text-[--foreground-strong]"
+            className="flex items-center gap-2 text-sm font-semibold text-(--foreground-strong)"
           >
             <Sparkles size={14} aria-hidden /> 드리밍
           </h2>
-          <p className="mt-1 text-xs text-[--muted-foreground]">
+          <p className="mt-1 text-xs text-(--muted-foreground)">
             대화 이력을 요약해 MEMORY.md에 새 항목을 추가합니다.
             진행 중에는 다시 누를 수 없어요.
           </p>
@@ -77,7 +77,7 @@ export function DreamingProgressCard({
       <ol
         role="list"
         aria-label="드리밍 진행 단계"
-        className="flex items-center gap-1.5 text-[10px] text-[--muted-foreground]"
+        className="flex items-center gap-1.5 text-[10px] text-(--muted-foreground)"
       >
         {STEP_NAMES.map((label, idx) => {
           const isDone = running && idx < currentStep;
@@ -87,12 +87,12 @@ export function DreamingProgressCard({
               key={label}
               className={cn(
                 "flex flex-1 flex-col items-center gap-1",
-                "rounded-[--radius-sm] border px-1.5 py-1.5",
+                "rounded-(--radius-sm) border px-1.5 py-1.5",
                 isDone
-                  ? "border-[--color-success] bg-[--color-success-bg] text-[--color-success]"
+                  ? "border-(--color-success) bg-(--color-success-bg) text-(--color-success)"
                   : isActive
-                    ? "border-[--primary] bg-[--primary-tint] text-[--primary]"
-                    : "border-[--border] bg-[--surface]",
+                    ? "border-(--primary) bg-(--primary-tint) text-(--primary)"
+                    : "border-(--border) bg-(--surface)",
               )}
               aria-current={isActive ? "step" : undefined}
             >
@@ -110,7 +110,7 @@ export function DreamingProgressCard({
         <p
           role="status"
           aria-live="polite"
-          className="text-xs text-[--primary]"
+          className="text-xs text-(--primary)"
         >
           {state.stepLabel}…
         </p>
@@ -120,10 +120,10 @@ export function DreamingProgressCard({
       {!running && state.lastFinishedAt ? (
         <div
           className={cn(
-            "flex items-start gap-2 rounded-[--radius-m] border px-3 py-2 text-xs",
+            "flex items-start gap-2 rounded-(--radius-m) border px-3 py-2 text-xs",
             state.lastOutcome === "success"
-              ? "border-[--color-success] bg-[--color-success-bg] text-[--color-success]"
-              : "border-[--color-error] bg-[--color-error-bg] text-[--color-error]",
+              ? "border-(--color-success) bg-(--color-success-bg) text-(--color-success)"
+              : "border-(--color-error) bg-(--color-error-bg) text-(--color-error)",
           )}
         >
           {state.lastOutcome === "success" ? (
@@ -135,7 +135,7 @@ export function DreamingProgressCard({
             <div className="font-medium">
               {state.lastOutcome === "success" ? "최근 회차 완료" : "최근 회차 실패"}
             </div>
-            <div className="text-[--muted-foreground]">
+            <div className="text-(--muted-foreground)">
               {formatDateTime(state.lastFinishedAt)}
               {state.lastMessage ? ` · ${state.lastMessage}` : ""}
             </div>

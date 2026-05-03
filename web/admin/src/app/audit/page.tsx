@@ -135,13 +135,13 @@ export default function AuditPage() {
           size={28}
           strokeWidth={1.5}
           aria-hidden
-          className="mt-1 text-[--primary]"
+          className="mt-1 text-(--primary)"
         />
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold text-[--foreground-strong]">
+          <h1 className="text-2xl font-semibold text-(--foreground-strong)">
             감사
           </h1>
-          <p className="text-sm text-[--muted-foreground]">
+          <p className="text-sm text-(--muted-foreground)">
             데몬에 적용된 모든 변경을 시간 역순으로 보고, 최근 5분 안의 변경은
             안전하게 되돌립니다. 시크릿 값은 항상 마스킹된 상태로 표시됩니다.
           </p>
@@ -277,17 +277,17 @@ function TimelineSection({
   return (
     <section
       aria-label={title}
-      className="overflow-hidden rounded-[--radius-l] border border-[--border] bg-[--card]"
+      className="overflow-hidden rounded-(--radius-l) border border-(--border) bg-(--card)"
     >
-      <header className="flex items-center justify-between border-b border-[--border] px-4 py-2">
-        <h2 className="text-sm font-semibold text-[--foreground-strong]">
+      <header className="flex items-center justify-between border-b border-(--border) px-4 py-2">
+        <h2 className="text-sm font-semibold text-(--foreground-strong)">
           {title}
         </h2>
-        <span className="text-xs text-[--muted-foreground]">
+        <span className="text-xs text-(--muted-foreground)">
           {entries.length}건
         </span>
       </header>
-      <ul role="list" className="divide-y divide-[--border]">
+      <ul role="list" className="divide-y divide-(--border)">
         {entries.map((e) => (
           <AuditRowButton
             key={e.id}
@@ -325,16 +325,16 @@ function AuditRowButton({ entry, selected, onSelect }: AuditRowButtonProps) {
         onClick={onSelect}
         aria-pressed={selected}
         className={
-          "flex w-full flex-col gap-1 px-4 py-3 text-left text-sm transition-colors hover:bg-[--surface] focus-visible:bg-[--surface] focus-visible:outline-none " +
-          (selected ? "bg-[--surface]" : "")
+          "flex w-full flex-col gap-1 px-4 py-3 text-left text-sm transition-colors hover:bg-(--surface) focus-visible:bg-(--surface) focus-visible:outline-none " +
+          (selected ? "bg-(--surface)" : "")
         }
       >
         <div className="flex items-center gap-2">
-          <span className="font-medium text-[--foreground-strong]">
+          <span className="font-medium text-(--foreground-strong)">
             {entry.action}
           </span>
           <Badge tone="neutral">{entry.area || "—"}</Badge>
-          <code className="truncate font-mono text-xs text-[--muted-foreground]">
+          <code className="truncate font-mono text-xs text-(--muted-foreground)">
             {entry.target}
           </code>
           <StatusPill tone={tone} className="ml-auto">
@@ -343,13 +343,13 @@ function AuditRowButton({ entry, selected, onSelect }: AuditRowButtonProps) {
           {undoable ? <Badge tone="info">↩ undo 가능</Badge> : null}
         </div>
         {before || after ? (
-          <div className="flex items-center gap-2 pl-1 font-mono text-xs text-[--muted-foreground]">
+          <div className="flex items-center gap-2 pl-1 font-mono text-xs text-(--muted-foreground)">
             <span className="truncate">{before ?? "—"}</span>
             <span aria-hidden>→</span>
-            <span className="truncate text-[--foreground]">{after ?? "—"}</span>
+            <span className="truncate text-(--foreground)">{after ?? "—"}</span>
           </div>
         ) : null}
-        <div className="flex items-center gap-3 pl-1 text-xs text-[--muted-foreground]">
+        <div className="flex items-center gap-3 pl-1 text-xs text-(--muted-foreground)">
           <span>{entry.actor_id || "system"}</span>
           <span aria-hidden>·</span>
           <span>{formatRelativeTs(entry.ts)}</span>
@@ -375,11 +375,11 @@ function AuditRowButton({ entry, selected, onSelect }: AuditRowButtonProps) {
 
 function EmptyState() {
   return (
-    <section className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-[--radius-l] border border-dashed border-[--border-strong] bg-[--card] px-8 py-12 text-center">
-      <h2 className="text-lg font-semibold text-[--foreground-strong]">
+    <section className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-(--radius-l) border border-dashed border-(--border-strong) bg-(--card) px-8 py-12 text-center">
+      <h2 className="text-lg font-semibold text-(--foreground-strong)">
         조건에 맞는 감사 기록이 없어요
       </h2>
-      <p className="text-sm text-[--muted-foreground]">
+      <p className="text-sm text-(--muted-foreground)">
         필터를 줄이거나, 데몬에서 변경을 적용하면 여기 표시됩니다.
       </p>
     </section>
@@ -389,12 +389,12 @@ function EmptyState() {
 function SkeletonList() {
   // 3행 정도의 시각 placeholder — fetch 1회 사이클(보통 100ms 이내)에만 보인다.
   return (
-    <div className="flex flex-col gap-2 rounded-[--radius-l] border border-[--border] bg-[--card] p-4">
+    <div className="flex flex-col gap-2 rounded-(--radius-l) border border-(--border) bg-(--card) p-4">
       {[0, 1, 2].map((i) => (
         <div
           key={i}
           aria-hidden
-          className="h-12 animate-pulse rounded-[--radius-m] bg-[--surface]"
+          className="h-12 animate-pulse rounded-(--radius-m) bg-(--surface)"
         />
       ))}
     </div>
@@ -410,7 +410,7 @@ function ErrorPanel({ message, onRetry }: ErrorPanelProps) {
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-3 rounded-[--radius-m] border border-[--color-error] bg-[--color-error-bg] p-3 text-sm text-[--color-error]"
+      className="flex items-start justify-between gap-3 rounded-(--radius-m) border border-(--color-error) bg-(--color-error-bg) p-3 text-sm text-(--color-error)"
     >
       <div>
         <p className="font-medium">감사 로그를 불러오지 못했어요.</p>
