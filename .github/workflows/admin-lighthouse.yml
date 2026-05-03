@@ -4,6 +4,13 @@ name: Admin UI · Lighthouse
 # - a11y 카테고리는 95 미만이면 CI 실패(BIZ-55 DoD).
 # - 성능/베스트 프랙티스는 임계 미달 시 경고(빌드 실패는 아니지만 PR 코멘트에 노출).
 # - 결과는 임시 공개 스토리지에 업로드되어 PR 코멘트로 보고된다.
+#
+# 구현 메모(BIZ-60):
+#   초기 구현은 treosh/lighthouse-ci-action@v12을 사용했지만, 해당 액션은 `uses:`
+#   기반이라 잡 레벨 `defaults.run.working-directory`가 적용되지 않는다. 결과적으로
+#   리포 루트에서 `npm`을 찾다 실패해(`ENOENT package.json`) collect가 한 번도
+#   끝나지 않았다. 따라서 액션 의존을 제거하고 `working-directory: web/admin`이
+#   확실히 적용되는 일반 `run:` 스텝으로 lhci autorun을 직접 호출한다.
 
 on:
   push:
@@ -15,6 +22,12 @@ on:
     paths:
       - "web/admin/**"
       - ".github/workflows/admin-lighthouse.yml"
+
+# PR 코멘트를 작성하려면 issues:write가 필요하다. contents:read는 checkout용.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
 jobs:
   lighthouse:
@@ -47,17 +60,70 @@ jobs:
           ADMIN_API_TOKEN: ci-lighthouse-dummy
           ADMIN_API_BASE: http://127.0.0.1:0
 
-      - name: Run Lighthouse CI
-        # treosh/lighthouse-ci-action@v12 — lhci autorun 래퍼.
-        # configPath로 web/admin/lighthouserc.json을 사용.
-        uses: treosh/lighthouse-ci-action@v12
-        with:
-          configPath: ./web/admin/lighthouserc.json
-          uploadArtifacts: true
-          temporaryPublicStorage: true
+      - name: Install Lighthouse CI
+        # @lhci/cli를 명시적으로 글로벌 설치한다. 액션 래퍼와 달리 cwd가
+        # `web/admin`이므로 startServerCommand의 `npm run start`도 정상 동작한다.
+        run: npm install -g @lhci/cli@0.14.x
+
+      - name: Run Lighthouse CI (autorun)
+        id: lhci
+        # set -o pipefail: tee로 파이프된 lhci의 실패를 그대로 잡 실패로 전파.
+        # 출력은 `.lighthouseci-output.txt`로도 남겨 PR 코멘트 단계에서 파싱한다.
+        run: |
+          set -o pipefail
+          lhci autorun --config=./lighthouserc.json 2>&1 | tee .lighthouseci-output.txt
         env:
           ADMIN_API_TOKEN: ci-lighthouse-dummy
           ADMIN_API_BASE: http://127.0.0.1:0
+
+      - name: Upload Lighthouse artifacts
+        # collect 단계에서 만들어지는 LHR(JSON/HTML)과 lhci 표준출력 사본을
+        # 함께 보존한다. 어설션 실패로 잡이 깨져도 디버깅이 가능하도록 always.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouseci-${{ github.run_id }}
+          path: |
+            web/admin/.lighthouseci
+            web/admin/.lighthouseci-output.txt
+          if-no-files-found: warn
+
+      - name: Comment Lighthouse report links on PR
+        # temporary-public-storage 업로드 시 lhci가 표준출력에 보고서 URL을 찍는다.
+        # 그 URL을 추출해 PR 코멘트로 게시한다(액션 의존 제거에 따른 보강).
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'web/admin/.lighthouseci-output.txt';
+            if (!fs.existsSync(path)) {
+              core.info('lhci output 파일이 없어 코멘트를 건너뜁니다.');
+              return;
+            }
+            const out = fs.readFileSync(path, 'utf8');
+            // lhci는 "Open the report at https://storage.googleapis.com/lighthouse-..." 형태로 URL을 찍는다.
+            const re = /https:\/\/storage\.googleapis\.com\/lighthouse-[^\s)<>"']+/g;
+            const urls = [...new Set(out.match(re) || [])];
+            if (urls.length === 0) {
+              core.info('보고서 URL을 찾지 못해 코멘트를 건너뜁니다.');
+              return;
+            }
+            const status = '${{ steps.lhci.outcome }}' === 'success' ? '✅' : '⚠️';
+            const lines = [
+              `### ${status} Admin UI · Lighthouse 보고서`,
+              '',
+              `워크플로 실행: [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              '',
+              '임시 공개 스토리지 보고서 링크 (24시간 보존):',
+              ...urls.map((u, i) => `- [Run ${i + 1}](${u})`),
+            ];
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: lines.join('\n'),
+            });
 
       - name: Print Lighthouse summary on failure
         if: failure()
