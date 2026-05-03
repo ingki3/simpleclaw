@@ -154,7 +154,7 @@ export function SkillDetailDrawer({
             <h3 className="text-xs font-semibold uppercase tracking-wide text-[--muted-foreground]">
               SKILL.md
             </h3>
-            <pre className="max-h-[280px] overflow-auto rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]">
+            <pre className="max-h-[280px] overflow-auto rounded-[--radius-m] border border-[--border] bg-[--surface] p-4 font-mono text-xs leading-relaxed text-[--foreground]">
               {skill.skill_md}
             </pre>
           </section>
@@ -256,7 +256,7 @@ export function SkillDetailDrawer({
                 </div>
               }
               renderRow={(run) => (
-                <div className="flex h-full items-center gap-3 border-b border-[--border-divider] px-3 text-xs last:border-b-0">
+                <div className="flex h-full items-center gap-3 border-b border-[--border] px-3 text-xs last:border-b-0">
                   <StatusPill tone={STATUS_TONE[run.status]}>
                     {run.status}
                   </StatusPill>

@@ -29,7 +29,7 @@ export function ListPanel({
         className,
       )}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-[--border-divider] px-4 py-3">
+      <header className="flex items-center justify-between gap-2 border-b border-[--border] px-4 py-3">
         <h2 className="text-sm font-semibold text-[--foreground-strong]">
           {title}
         </h2>

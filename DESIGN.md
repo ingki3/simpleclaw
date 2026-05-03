@@ -85,11 +85,11 @@
 |---|---|---|---|
 | `$--background` | `neutral-0` | `neutral-0` | 페이지 배경 |
 | `$--surface` | `neutral-50` | `neutral-50` | 사이드바·서브 영역 |
-| `$--card` | `neutral-0` | `neutral-100` | 카드 배경 |
-| `$--card-elevated` | `neutral-0` | `neutral-100` | 모달·dropdown |
-| `$--border` | `neutral-200` | `#0B1117` (raw) | 카드 외곽 — 다크에서 page bg(#0B0F14)에 가까운 *recessed* 톤. BIZ-65에서 "발광하는 흰 선" 인식 문제로 BIZ-64의 `#232C38`을 폐기하고 회수 |
-| `$--border-divider` | `neutral-200` | `neutral-200` | (BIZ-65 신규) 카드 내부 row/section 구분 — recessed `--border`로는 inner sub-panel(`bg-[--surface]`)에서 보더가 거의 안 보이므로 분리 |
+| `$--card` | `neutral-0` | `#1A2230` (raw) | 카드 배경 — 다크에서 surface(`#10151B`) 대비 +9 luminance로 떠 보이게 (BIZ-67 / admin.pen BIZ-63 §09 가설 B) |
+| `$--card-elevated` | `neutral-0` | `#252F3D` (raw) | 모달·dropdown — card(`#1A2230`) 대비 +11 luminance (BIZ-67) |
+| `$--border` | `neutral-200` | `neutral-200` | 일반 보더 — 라이트/다크 모두 `neutral-200`. 다크에서 `#1F2731`은 card(`#1A2230`)보다 +6, surface(`#10151B`)보다 +17로 카드 *내부* 레이어로 읽혀 "발광하는 흰 선" 인식이 사라진다 (BIZ-67) |
 | `$--border-strong` | `neutral-300` | `neutral-300` | 강조 보더 |
+| `$--nav-active-bg` | `--primary-tint` | `--primary-tint` (다크 `#1A2244`) | 사이드바 active 항목 배경 (BIZ-67 신규 토큰, admin.pen BIZ-63 §09) |
 | `$--foreground` | `neutral-800` | `neutral-800` | 본문 텍스트 |
 | `$--foreground-strong` | `neutral-900` | `neutral-900` | 헤딩 |
 | `$--muted-foreground` | `neutral-600` | `neutral-600` | 보조 텍스트 |
@@ -108,13 +108,14 @@
 | `$--color-info-bg` | `info-50` | `info-50` | 상태 tint |
 | `$--destructive` | `danger-500` | danger-500 | 위험 액션 배경 |
 | `$--destructive-foreground` | `neutral-0` | `neutral-900` | 위험 액션 텍스트 |
-| `$--secret-mask-bg` | `neutral-100` | `#0E1218` (raw) | 마스킹된 시크릿 칩 배경 — 다크에서 카드(neutral-100)와 분리 (BIZ-64) |
+| `$--secret-mask-bg` | `neutral-100` | `#0E1218` (raw) | 마스킹된 시크릿 칩 배경 — 다크에서 카드(`#1A2230`)와 분리 (BIZ-64) |
 
-> **다크 보더 stacking 결정 history (BIZ-42 → BIZ-64 → BIZ-65)**
+> **다크 surface stacking 결정 history (BIZ-42 → BIZ-64 → BIZ-65 → BIZ-67)**
 >
-> * BIZ-42 — 다크 토큰 표 1차 결정. `--border` 라이트는 `neutral-200`(#E2E6EC), 다크는 다크 `neutral-200`(#1F2731).
-> * BIZ-64 — "다크 elevated 카드에서 보더가 약하다" 피드백을 받아 다크 `--border`를 `#232C38`로 raw 보강. 그러나 다크 page bg(#0B0F14)·card(#161C24)·surface(#10151B) 세 표면 모두보다 밝아 1px 라인이 두 어두운 면 사이에서 Mach band로 *발광하는 흰 선*처럼 인식되는 문제가 사용자 검증에서 드러남.
-> * BIZ-65 — 다크 보더 전략을 *recessed*로 전환. `--border`를 page bg에 가까운 `#0B1117`로 내려 카드 외곽 halo를 제거하고, 카드 내부 row/sub-panel 구분에는 별도 `--border-divider`(다크 `neutral-200`=#1F2731)를 사용한다. 적용처: 단방향 divider(`border-t/b/l/r`)와 `bg-[--surface]` inner sub-panel은 모두 `--border-divider`. 카드 outer/입력/모달 outline은 `--border`(recessed) 유지. 라이트 모드는 두 토큰이 같은 `neutral-200`이라 시각 회귀 없음.
+> * BIZ-42 — 다크 토큰 표 1차 결정. `--card` / `--card-elevated` = `neutral-100`(#161C24), `--border` = `neutral-200`(#1F2731).
+> * BIZ-64 — "다크 elevated 카드 보더가 약하다" 피드백으로 `--border`를 `#232C38`로 raw 보강. 그러나 page bg(#0B0F14)·card(#161C24)·surface(#10151B) 세 면 모두보다 밝아 1px 라인이 두 어두운 면 사이 Mach band로 *발광하는 흰 선*처럼 인식.
+> * BIZ-65 — 다크 보더 전략을 *recessed*로 전환 시도. `--border` = `#0B1117`로 내려 카드 외곽 halo 제거 + 카드 내부 row/sub-panel용 `--border-divider` 신설. 그러나 admin.pen BIZ-63 §09의 공식 보정안(가설 B)과 다른 경로(가설 A)였음.
+> * BIZ-67 — admin.pen BIZ-63 §09 가설 B 채택. surface 계층 luminance 격차를 확대(`--card` = #1A2230, `--card-elevated` = #252F3D)하여 1px `--border`(다크 `neutral-200` = #1F2731)가 카드 위 강세선이 아니라 카드 *내부* 레이어로 읽히게 한다. BIZ-65의 `--border` recessed / `--border-divider` 신설 전략은 회수. 라이트 무영향. 사이드바 active용 `--nav-active-bg` 토큰 신설.
 
 ### 2.4 타이포
 

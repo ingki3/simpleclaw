@@ -77,7 +77,7 @@ export function RecipeCard({ recipe, onToggleEnabled }: RecipeCardProps) {
       {open ? (
         <ol
           id={`recipe-steps-${recipe.id}`}
-          className="ml-6 flex flex-col gap-2 border-l border-[--border-divider] pl-4"
+          className="ml-6 flex flex-col gap-2 border-l border-[--border] pl-4"
         >
           {recipe.steps.map((step, i) => {
             const Icon = STEP_ICON[step.type];

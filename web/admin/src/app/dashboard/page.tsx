@@ -320,7 +320,7 @@ export default function DashboardPage() {
               {recentLogs.map((entry, idx) => (
                 <li
                   key={`${entry.trace_id ?? "no-trace"}-${idx}`}
-                  className="flex flex-col gap-1 border-b border-[--border-divider] px-4 py-3 last:border-b-0"
+                  className="flex flex-col gap-1 border-b border-[--border] px-4 py-3 last:border-b-0"
                 >
                   <div className="flex items-center gap-2">
                     <Badge tone={entry.level === "error" ? "danger" : "warning"}>

@@ -79,7 +79,7 @@ export function RoutingTable({
             {ROUTING_CATEGORIES.map((cat) => {
               const current = value[cat] ?? "";
               return (
-                <tr key={cat} className="border-t border-[--border-divider]">
+                <tr key={cat} className="border-t border-[--border]">
                   <td className="px-3 py-2 font-medium text-[--foreground-strong]">
                     {CATEGORY_LABEL[cat]}
                     <span className="ml-1 font-mono text-[10px] text-[--muted-foreground]">

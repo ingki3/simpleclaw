@@ -82,7 +82,7 @@ export function MemoryEntryRow({
   return (
     <li
       className={cn(
-        "group flex items-start gap-3 border-b border-[--border-divider] px-3 py-2.5",
+        "group flex items-start gap-3 border-b border-[--border] px-3 py-2.5",
         "hover:bg-[--surface]",
       )}
     >

@@ -279,7 +279,7 @@ function TimelineSection({
       aria-label={title}
       className="overflow-hidden rounded-[--radius-l] border border-[--border] bg-[--card]"
     >
-      <header className="flex items-center justify-between border-b border-[--border-divider] px-4 py-2">
+      <header className="flex items-center justify-between border-b border-[--border] px-4 py-2">
         <h2 className="text-sm font-semibold text-[--foreground-strong]">
           {title}
         </h2>
@@ -287,7 +287,7 @@ function TimelineSection({
           {entries.length}건
         </span>
       </header>
-      <ul role="list" className="divide-y divide-[--border-divider]">
+      <ul role="list" className="divide-y divide-[--border]">
         {entries.map((e) => (
           <AuditRowButton
             key={e.id}

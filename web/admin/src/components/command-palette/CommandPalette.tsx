@@ -207,7 +207,7 @@ export function CommandPalette({
         onClick={(e) => e.stopPropagation()}
         className="flex w-full max-w-xl flex-col overflow-hidden rounded-[--radius-l] border border-[--border] bg-[--card-elevated] shadow-[--shadow-l]"
       >
-        <div className="flex items-center gap-3 border-b border-[--border-divider] px-4 py-3">
+        <div className="flex items-center gap-3 border-b border-[--border] px-4 py-3">
           <Search
             size={16}
             aria-hidden
@@ -222,7 +222,7 @@ export function CommandPalette({
             className="flex-1 bg-transparent text-sm text-[--foreground] placeholder:text-[--placeholder] outline-none"
             aria-label="명령 검색"
           />
-          <kbd className="rounded-[--radius-sm] border border-[--border-divider] bg-[--background] px-1.5 py-0.5 font-mono text-[10px] text-[--muted-foreground]">
+          <kbd className="rounded-[--radius-sm] border border-[--border] bg-[--background] px-1.5 py-0.5 font-mono text-[10px] text-[--muted-foreground]">
             Esc
           </kbd>
         </div>

@@ -363,7 +363,7 @@ function ListSkeleton() {
         <div
           key={i}
           aria-hidden
-          className="h-[140px] animate-pulse rounded-[--radius-l] border border-[--border-divider] bg-[--surface]"
+          className="h-[140px] animate-pulse rounded-[--radius-l] border border-[--border] bg-[--surface]"
         />
       ))}
     </div>

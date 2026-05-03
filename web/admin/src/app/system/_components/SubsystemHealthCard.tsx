@@ -89,7 +89,7 @@ export function SubsystemHealthCard({
         {rows.map((row) => (
           <li
             key={row.name}
-            className="flex items-center justify-between gap-3 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] px-3 py-2"
+            className="flex items-center justify-between gap-3 rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2"
           >
             <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium text-[--foreground-strong]">

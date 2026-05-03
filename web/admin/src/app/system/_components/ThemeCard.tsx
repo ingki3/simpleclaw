@@ -57,7 +57,7 @@ export function ThemeCard() {
                 "flex flex-col items-start gap-2 rounded-[--radius-m] border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]",
                 selected
                   ? "border-[--primary] bg-[--card]"
-                  : "border-[--border-divider] bg-[--surface] hover:bg-[--card]",
+                  : "border-[--border] bg-[--surface] hover:bg-[--card]",
               )}
             >
               <span className="flex items-center gap-2">

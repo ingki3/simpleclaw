@@ -330,7 +330,7 @@ export default function LLMPage() {
       ) : null}
 
       {loading || !draft ? (
-        <div className="rounded-[--radius-m] border border-dashed border-[--border-divider] bg-[--surface] p-6 text-sm text-[--muted-foreground]">
+        <div className="rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-6 text-sm text-[--muted-foreground]">
           설정을 불러오는 중…
         </div>
       ) : (
@@ -418,7 +418,7 @@ export default function LLMPage() {
         </>
       )}
 
-      <div className="fixed bottom-0 left-60 right-0 z-30 border-t border-[--border-divider] bg-[--card] px-8 py-3 shadow-[--shadow-m]">
+      <div className="fixed bottom-0 left-60 right-0 z-30 border-t border-[--border] bg-[--card] px-8 py-3 shadow-[--shadow-m]">
         <DryRunFooter
           dirty={dirty}
           dryRunPassed={!!dryRunResult && dirty && !applying}

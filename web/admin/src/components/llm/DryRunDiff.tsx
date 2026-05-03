@@ -96,7 +96,7 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
     return (
       <div
         className={cn(
-          "rounded-[--radius-m] border border-dashed border-[--border-divider] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
+          "rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
           className,
         )}
       >
@@ -109,7 +109,7 @@ export function DryRunDiff({ result, loading, className }: DryRunDiffProps) {
     return (
       <div
         className={cn(
-          "rounded-[--radius-m] border border-dashed border-[--border-divider] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
+          "rounded-[--radius-m] border border-dashed border-[--border] bg-[--surface] p-4 text-sm text-[--muted-foreground]",
           className,
         )}
       >

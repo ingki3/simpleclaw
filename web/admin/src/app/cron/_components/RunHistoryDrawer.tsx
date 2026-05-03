@@ -109,7 +109,7 @@ export function RunHistoryDrawer({
                   ) : null}
                 </button>
                 {open ? (
-                  <div className="border-t border-[--border-divider] bg-[--surface] px-3 py-3 text-xs">
+                  <div className="border-t border-[--border] bg-[--surface] px-3 py-3 text-xs">
                     {run.resultSummary ? (
                       <Section title="결과">
                         <Pre>{run.resultSummary}</Pre>

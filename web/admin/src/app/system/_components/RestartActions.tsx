@@ -158,7 +158,7 @@ export function RestartActions({
             return (
               <div
                 key={mode}
-                className="flex flex-col gap-3 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] p-4"
+                className="flex flex-col gap-3 rounded-[--radius-m] border border-[--border] bg-[--surface] p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>

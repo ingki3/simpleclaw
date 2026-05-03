@@ -59,7 +59,7 @@ export function SettingCard({
       <div className="flex flex-col gap-4 px-6 py-6">{children}</div>
 
       {footer ? (
-        <footer className="flex items-center justify-end gap-2 rounded-b-[--radius-l] border-t border-[--border-divider] bg-[--surface] px-6 py-3">
+        <footer className="flex items-center justify-end gap-2 rounded-b-[--radius-l] border-t border-[--border] bg-[--surface] px-6 py-3">
           {footer}
         </footer>
       ) : null}

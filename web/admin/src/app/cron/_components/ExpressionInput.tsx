@@ -82,7 +82,7 @@ export function ExpressionInput({
         )}
       </div>
       {nextRuns.length > 0 ? (
-        <ul className="flex flex-col gap-1 rounded-[--radius-m] border border-[--border-divider] bg-[--surface] px-3 py-2 text-xs text-[--muted-foreground]">
+        <ul className="flex flex-col gap-1 rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs text-[--muted-foreground]">
           <li className="font-medium text-[--foreground]">
             다음 5회 예상 실행
           </li>

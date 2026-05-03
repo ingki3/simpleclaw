@@ -135,7 +135,7 @@ export function RestartStepper({
                   state === "active" &&
                     "border-[--primary] bg-[--card] text-[--primary]",
                   state === "todo" &&
-                    "border-[--border-divider] bg-[--surface] text-[--muted-foreground]",
+                    "border-[--border] bg-[--surface] text-[--muted-foreground]",
                   isFailedDone &&
                     "border-[--color-error] bg-[--color-error-bg] text-[--color-error]",
                 )}

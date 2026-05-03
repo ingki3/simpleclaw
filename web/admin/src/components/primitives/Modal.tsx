@@ -170,7 +170,7 @@ export function Modal({
         )}
       >
         {(title || dismissible) && (
-          <header className="flex items-start gap-3 border-b border-[--border-divider] px-6 py-4">
+          <header className="flex items-start gap-3 border-b border-[--border] px-6 py-4">
             <div className="flex-1">
               {title && (
                 <h2
@@ -205,7 +205,7 @@ export function Modal({
           {children}
         </div>
         {footer && (
-          <footer className="flex items-center justify-end gap-2 border-t border-[--border-divider] px-6 py-4">
+          <footer className="flex items-center justify-end gap-2 border-t border-[--border] px-6 py-4">
             {footer}
           </footer>
         )}
