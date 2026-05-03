@@ -4,7 +4,7 @@
 1. run() 호출 시 기존 MEMORY.md / USER.md를 백업(.bak)한다.
 2. 마지막 드리밍 이후 미처리 대화 메시지를 수집한다.
 3. LLM에게 대화를 분석시켜 기억 요약(memory)과 사용자 인사이트(user_insights)를 추출한다.
-4. 결과를 각각 MEMORY.md, USER.md에 추가(append)한다.
+4. 결과를 각각 MEMORY.md, USER.md의 managed 영역(BIZ-72 Protected Section)에 append한다.
 
 Phase 3(spec 005): 클러스터링이 활성화되면 MEMORY.md는 시간순 append가 아니라
  클러스터별 ``<!-- cluster:N start --> ... <!-- cluster:N end -->`` 섹션 단위로 upsert된다.
@@ -12,11 +12,20 @@ Phase 3(spec 005): 클러스터링이 활성화되면 MEMORY.md는 시간순 app
 LLM에 (기존 요약 + 신규 메시지)를 보내 새 요약을 받아 ``semantic_clusters`` 테이블과
 MEMORY.md를 함께 갱신한다. USER/SOUL/AGENT 파일은 기존 동작 그대로 유지된다.
 
+BIZ-72 Protected Section 모델:
+드리밍은 다음 managed 마커 안쪽 영역에만 쓸 수 있다. 외부(정체성, 캘린더 매핑 등)는
+read-only로 보존된다.
+    ``<!-- managed:dreaming:<section> -->`` ... ``<!-- /managed:dreaming:<section> -->``
+파일별 기본 섹션 이름은 ``DEFAULT_SECTIONS`` dict에 정의되어 있다. 마커가 누락된
+파일에 대한 쓰기는 fail-closed(전체 사이클 abort, 기존 파일 보존)로 처리된다.
+
 설계 결정:
 - LLM 호출 실패 시 단순 텍스트 요약(fallback)으로 대체하여 파이프라인이 중단되지 않도록 한다.
 - 대화 텍스트는 8000자로 잘라 LLM 컨텍스트 초과를 방지한다.
 - 백업 파일명에 타임스탬프를 포함하여 여러 번 드리밍해도 이전 백업이 덮어씌워지지 않는다.
 - 클러스터링이 비활성이거나 임베딩이 전혀 없는 입력일 때는 기존 append 동작으로 자연 fallback 한다.
+- Protected Section 위반은 fail-closed: 한 파일이라도 markers가 없거나 잘못돼 있으면
+  전체 사이클을 중단하고 어느 파일도 변경하지 않는다(부분 변경의 위험을 제거).
 """
 
 from __future__ import annotations
@@ -35,11 +44,38 @@ from simpleclaw.memory.models import (
     MemoryEntry,
 )
 from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.protected_section import (
+    ProtectedSectionError,
+    ProtectedSectionMissing,
+    append_to_section,
+    get_section_body,
+    replace_section_body,
+)
 
 logger = logging.getLogger(__name__)
 
+# BIZ-72 — 파일별 기본 managed 섹션 이름.
+#
+# 드리밍은 이 이름의 마커 안쪽에만 쓴다. 마커가 없으면 fail-closed.
+# 운영자가 다른 섹션 이름을 쓰고 싶으면 ``DreamingPipeline`` 생성 시 override 가능
+# (예: ``memory_section_name="custom"``). 기본값은 SimpleClaw 표준 템플릿과 일치.
+DEFAULT_MEMORY_SECTION = "journal"          # MEMORY.md — 시간순 dreaming 기록
+DEFAULT_CLUSTER_SECTION = "clusters"        # MEMORY.md — Phase 3 cluster 섹션 컨테이너
+DEFAULT_USER_SECTION = "insights"           # USER.md — dreaming-derived insights
+DEFAULT_SOUL_SECTION = "dreaming-updates"   # SOUL.md — dreaming-suggested 변경
+DEFAULT_AGENT_SECTION = "dreaming-updates"  # AGENT.md — dreaming-suggested 변경
+
+
+# 프롬프트는 LLM에게 마커 자체를 출력하지 말라고 명시 — 출력은 본문 마크다운만이며
+# 본 모듈이 managed 섹션 안쪽으로 안전하게 append한다.
 _DREAMING_PROMPT = """\
 다음 대화 내역을 분석하여 네 가지를 JSON으로 추출하세요.
+
+⚠️ 출력 규칙(중요): 본문은 SimpleClaw가 USER/MEMORY/AGENT/SOUL 파일의 dreaming
+managed 섹션(`<!-- managed:dreaming:... -->` 마커 내부)에 append됩니다. 응답에
+managed 마커 자체(`<!-- managed:dreaming:... -->`, `<!-- /managed:dreaming:... -->`)를
+포함하지 마세요. 본문 텍스트만 작성하세요. 마커 외부에는 절대 쓰지 않으므로,
+정체성·캘린더 매핑·디렉토리 규약 같은 보호 영역을 갱신하려 하지 마세요.
 
 1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
    - 날짜 헤더 포함 (## {date} 형식)
@@ -126,6 +162,12 @@ class DreamingPipeline:
         dreaming_model: str = "",
         clusterer: IncrementalClusterer | None = None,
         enable_clusters: bool = False,
+        *,
+        memory_section: str = DEFAULT_MEMORY_SECTION,
+        cluster_section: str = DEFAULT_CLUSTER_SECTION,
+        user_section: str = DEFAULT_USER_SECTION,
+        soul_section: str = DEFAULT_SOUL_SECTION,
+        agent_section: str = DEFAULT_AGENT_SECTION,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -140,6 +182,14 @@ class DreamingPipeline:
             clusterer: ``IncrementalClusterer`` 인스턴스. ``enable_clusters=True``일 때만 사용된다.
             enable_clusters: True면 Phase 3 그래프형 드리밍(클러스터 기반 MEMORY.md upsert) 사용.
                 False면 기존 append 동작 유지(하위 호환).
+            memory_section: MEMORY.md 시간순 append용 managed 섹션 이름. 기본 ``journal``.
+            cluster_section: MEMORY.md cluster 컨테이너 managed 섹션 이름. 기본 ``clusters``.
+            user_section: USER.md insight append용 섹션 이름. 기본 ``insights``.
+            soul_section: SOUL.md dreaming 변경용 섹션 이름. 기본 ``dreaming-updates``.
+            agent_section: AGENT.md dreaming 변경용 섹션 이름. 기본 ``dreaming-updates``.
+
+        BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
+        마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
         """
         self._store = conversation_store
         self._memory_file = Path(memory_file)
@@ -151,6 +201,12 @@ class DreamingPipeline:
         # Phase 3: 클러스터링이 None이면 enable_clusters 요청도 무시(안전 폴백)
         self._clusterer = clusterer
         self._enable_clusters = bool(enable_clusters and clusterer is not None)
+        # BIZ-72: 파일별 managed 섹션 이름. 운영자가 override 가능.
+        self._memory_section = memory_section
+        self._cluster_section = cluster_section
+        self._user_section = user_section
+        self._soul_section = soul_section
+        self._agent_section = agent_section
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -308,68 +364,79 @@ class DreamingPipeline:
         return "\n".join(lines)
 
     def append_to_memory(self, summary: str) -> None:
-        """드리밍 요약을 MEMORY.md 파일 끝에 추가한다.
+        """드리밍 요약을 MEMORY.md의 managed:dreaming:journal 섹션에 append한다.
 
-        파일이 없으면 '# Memory' 헤더와 함께 새로 생성한다.
+        BIZ-72: 마커 외부 영역은 보존된다. 마커가 없거나 잘못된 경우
+        ``ProtectedSectionError``를 던져 호출자가 fail-closed로 응답하게 한다.
         """
         if not summary:
             return
+        self._safe_append_in_section(
+            self._memory_file, self._memory_section, summary
+        )
 
-        self._memory_file.parent.mkdir(parents=True, exist_ok=True)
+    def _safe_append_in_section(
+        self,
+        file_path: Path,
+        section_name: str,
+        content: str,
+    ) -> None:
+        """파일의 ``managed:dreaming:<section_name>`` 안쪽에 ``content``를 append한다.
 
-        existing = ""
-        if self._memory_file.is_file():
-            existing = self._memory_file.read_text(encoding="utf-8")
+        Protected Section 모델의 1차 진입점. 마커 외부 바이트는 보존되고, 마커 자체도
+        그대로 유지된다. 파일이 없거나 마커가 없으면 ``ProtectedSectionError``를 던지므로
+        호출자(보통 ``run()``)가 잡아 fail-closed로 처리해야 한다.
 
-        if not existing.strip():
-            existing = "# Memory\n"
+        Args:
+            file_path: 갱신 대상 파일.
+            section_name: 갱신할 managed 섹션 이름.
+            content: 섹션 내부에 append할 마크다운 본문.
 
-        if not existing.endswith("\n"):
-            existing += "\n"
-
-        new_content = f"{existing}\n{summary}\n"
-        self._memory_file.write_text(new_content, encoding="utf-8")
-        logger.info("Updated memory file: %s", self._memory_file)
-
-    def _update_file_section(self, file_path: Path, updates: str, section_header: str) -> None:
-        """파일에 날짜별 섹션 헤더와 함께 업데이트 내용을 추가한다.
-
-        파일이 없거나 updates가 비어있으면 아무 작업도 하지 않는다.
+        Raises:
+            ProtectedSectionMissing: 파일이 없거나 해당 섹션이 정의돼 있지 않을 때.
+            ProtectedSectionMalformed: 마커 자체가 잘못된 경우.
         """
-        if not updates or not file_path:
-            return
+        if not file_path.is_file():
+            raise ProtectedSectionMissing(
+                f"managed 파일이 존재하지 않음: {file_path} (section={section_name})"
+            )
+        existing = file_path.read_text(encoding="utf-8")
+        new_text = append_to_section(existing, section_name, content)
+        # ``append_to_section``은 변경이 없으면 입력을 그대로 반환 — 불필요한 mtime 변경 방지
+        if new_text != existing:
+            file_path.write_text(new_text, encoding="utf-8")
+            logger.info(
+                "Updated managed section '%s' in %s", section_name, file_path
+            )
 
-        file_path.parent.mkdir(parents=True, exist_ok=True)
+    def _format_dated_block(self, header: str, content: str) -> str:
+        """``## {header} ({date})`` 헤더를 붙인 dated block을 생성한다.
 
-        existing = ""
-        if file_path.is_file():
-            existing = file_path.read_text(encoding="utf-8")
-
-        if not existing.strip():
-            existing = f"# {file_path.stem}\n"
-
-        if not existing.endswith("\n"):
-            existing += "\n"
-
+        managed 섹션 내부에 일자별 dreaming 결과를 append할 때의 표준 포맷.
+        """
         date_str = datetime.now().strftime("%Y-%m-%d")
-        new_content = f"{existing}\n## {section_header} ({date_str})\n{updates}\n"
-        file_path.write_text(new_content, encoding="utf-8")
-        logger.info("Updated file: %s", file_path)
+        return f"## {header} ({date_str})\n{content.strip()}"
 
     def update_user_file(self, insights: str) -> None:
-        """새로운 사용자 인사이트를 USER.md 파일에 추가한다."""
-        if self._user_file:
-            self._update_file_section(self._user_file, insights, "Dreaming Insights")
+        """새로운 사용자 인사이트를 USER.md의 managed:dreaming:insights 섹션에 추가한다."""
+        if not self._user_file or not insights:
+            return
+        block = self._format_dated_block("Dreaming Insights", insights)
+        self._safe_append_in_section(self._user_file, self._user_section, block)
 
     def update_soul_file(self, updates: str) -> None:
-        """에이전트 성격/말투 변경을 SOUL.md 파일에 추가한다."""
-        if self._soul_file:
-            self._update_file_section(self._soul_file, updates, "Dreaming Updates")
+        """에이전트 성격/말투 변경을 SOUL.md의 managed:dreaming:dreaming-updates에 추가한다."""
+        if not self._soul_file or not updates:
+            return
+        block = self._format_dated_block("Dreaming Updates", updates)
+        self._safe_append_in_section(self._soul_file, self._soul_section, block)
 
     def update_agent_file(self, updates: str) -> None:
-        """에이전트 행동 규칙 변경을 AGENT.md 파일에 추가한다."""
-        if self._agent_file:
-            self._update_file_section(self._agent_file, updates, "Dreaming Updates")
+        """에이전트 행동 규칙 변경을 AGENT.md의 managed:dreaming:dreaming-updates에 추가한다."""
+        if not self._agent_file or not updates:
+            return
+        block = self._format_dated_block("Dreaming Updates", updates)
+        self._safe_append_in_section(self._agent_file, self._agent_section, block)
 
     # ------------------------------------------------------------------
     # Phase 3 — 클러스터 기반 그래프형 드리밍
@@ -583,40 +650,56 @@ class DreamingPipeline:
     ) -> None:
         """MEMORY.md의 ``<!-- cluster:N -->`` 섹션을 갱신하거나 신규 추가한다.
 
-        규칙:
-        - 마커가 이미 존재하면 그 사이 본문만 교체(외부 영역은 보존).
-        - 마커가 없으면 파일 끝에 새 섹션 append.
-        - 파일이 없으면 ``# Memory`` 헤더와 함께 새로 생성.
-        """
-        self._memory_file.parent.mkdir(parents=True, exist_ok=True)
+        BIZ-72: cluster 섹션은 ``<!-- managed:dreaming:clusters -->`` 컨테이너
+        안쪽에서만 살아있다. 컨테이너가 없거나 잘못된 경우 ``ProtectedSectionError``를
+        던져 호출자가 fail-closed 처리하게 한다. 컨테이너 외부의 사용자 콘텐츠
+        (예: 정체성 메모, 수기 메모)는 절대 변경되지 않는다.
 
-        existing = ""
-        if self._memory_file.is_file():
-            existing = self._memory_file.read_text(encoding="utf-8")
-        if not existing.strip():
-            existing = "# Memory\n"
-        if not existing.endswith("\n"):
-            existing += "\n"
+        규칙:
+        - 컨테이너 내부에서 동일 ``cluster_id`` 마커가 있으면 본문만 교체.
+        - 컨테이너 내부에 마커가 없으면 컨테이너 끝부분에 새 섹션 append.
+        """
+        if not self._memory_file.is_file():
+            raise ProtectedSectionMissing(
+                f"managed 파일이 존재하지 않음: {self._memory_file} "
+                f"(section={self._cluster_section})"
+            )
+
+        existing = self._memory_file.read_text(encoding="utf-8")
+        # 컨테이너 본문(즉, dreaming이 자유롭게 cluster 마커를 두를 수 있는 영역)을 읽어온다.
+        container_body = get_section_body(existing, self._cluster_section)
+        # 끝부분 빈 줄을 정규화 — 항상 단일 trailing newline 기준으로 작업해 새 섹션 append시
+        # 인접 빈 줄이 끝없이 늘어나는 것을 방지.
+        normalized_body = container_body.strip("\n")
 
         section_body = self._format_cluster_section_body(cluster_id, label, summary)
         start_marker = _CLUSTER_MARKER_START.format(cid=cluster_id)
         end_marker = _CLUSTER_MARKER_END.format(cid=cluster_id)
         new_block = f"{start_marker}\n{section_body}\n{end_marker}"
 
-        # 정규식 매칭은 동일 cluster_id의 시작/끝 마커 한 쌍을 정확히 잡아낸다.
         section_re = re.compile(
             rf"{re.escape(start_marker)}\n?.*?\n?{re.escape(end_marker)}",
             re.DOTALL,
         )
-        if section_re.search(existing):
-            updated = section_re.sub(new_block, existing, count=1)
+        if section_re.search(normalized_body):
+            updated_body = section_re.sub(new_block, normalized_body, count=1)
         else:
-            # 신규 섹션 — 끝에 빈 줄 하나를 두고 append
-            sep = "" if existing.endswith("\n\n") else "\n"
-            updated = f"{existing}{sep}{new_block}\n"
+            # 신규 cluster — 컨테이너 끝에 빈 줄 한 칸 띄우고 append
+            if normalized_body:
+                updated_body = normalized_body + "\n\n" + new_block
+            else:
+                updated_body = new_block
 
-        self._memory_file.write_text(updated, encoding="utf-8")
-        logger.info("Upserted cluster %d in memory file", cluster_id)
+        new_text = replace_section_body(
+            existing, self._cluster_section, updated_body
+        )
+        if new_text != existing:
+            self._memory_file.write_text(new_text, encoding="utf-8")
+            logger.info(
+                "Upserted cluster %d in memory file (managed section '%s')",
+                cluster_id,
+                self._cluster_section,
+            )
 
     @staticmethod
     def _format_cluster_section_body(
@@ -627,36 +710,96 @@ class DreamingPipeline:
         body = summary.strip() or "(no summary yet)"
         return f"## {header_label} (cluster {cluster_id})\n\n{body}"
 
+    def _preflight_protected_sections(self) -> None:
+        """쓰기 시작 전에 모든 대상 파일이 필요한 managed 섹션을 갖췄는지 검증.
+
+        BIZ-72: "Fail-closed" 보장의 핵심 — 한 파일이라도 마커가 없거나 잘못돼 있으면
+        쓰기 자체를 시작하지 않는다. 부분 변경(한 파일만 변경되고 다른 파일은 abort)
+        같은 어정쩡한 상태가 절대 만들어지지 않게 한다.
+
+        검증되는 섹션:
+        - MEMORY.md: ``memory_section``(레거시 append) 또는 ``cluster_section``
+          (Phase 3) — ``enable_clusters`` 여부에 따라 다름.
+        - USER.md: ``user_section`` (파일이 설정돼 있을 때).
+        - SOUL.md: ``soul_section`` (파일이 설정돼 있을 때).
+        - AGENT.md: ``agent_section`` (파일이 설정돼 있을 때).
+
+        Raises:
+            ProtectedSectionError: 어느 한 파일이라도 검증 실패 시.
+        """
+        targets: list[tuple[Path, str]] = []
+        memory_section_name = (
+            self._cluster_section if self._enable_clusters else self._memory_section
+        )
+        targets.append((self._memory_file, memory_section_name))
+        if self._user_file:
+            targets.append((self._user_file, self._user_section))
+        if self._soul_file:
+            targets.append((self._soul_file, self._soul_section))
+        if self._agent_file:
+            targets.append((self._agent_file, self._agent_section))
+
+        for file_path, section_name in targets:
+            if not file_path.is_file():
+                raise ProtectedSectionMissing(
+                    f"Dreaming preflight 실패: {file_path}가 존재하지 않음 "
+                    f"(필요 섹션: {section_name}). 먼저 managed 마커가 포함된 템플릿을 "
+                    f"수동 또는 ``protected_section.ensure_initialized``로 생성하세요."
+                )
+            text = file_path.read_text(encoding="utf-8")
+            # ``get_section_body``는 섹션이 없으면 ProtectedSectionMissing,
+            # 마커가 잘못됐으면 ProtectedSectionMalformed를 던진다.
+            get_section_body(text, section_name)
+
     async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
         """전체 드리밍 파이프라인을 실행한다.
 
         1. 미처리 대화 메시지를 수집한다.
-        2. 처리할 내용이 있으면 대상 파일들을 백업한다.
+        2. 처리할 내용이 있으면 (a) Protected Section 사전 검증 후 (b) 대상 파일들을 백업한다.
         3. LLM을 통해 요약을 생성한다 (USER/SOUL/AGENT 갱신용).
         4. ``_enable_clusters=True``면 그래프형 드리밍을 추가로 실행하여
            MEMORY.md를 시간순 append 대신 클러스터별 마커 섹션 upsert로 갱신한다.
            False(기본값)면 기존 append 동작을 유지한다.
         5. USER/SOUL/AGENT 갱신은 두 모드 모두 동일하게 수행한다.
 
+        BIZ-72 Fail-closed 시맨틱:
+        - 사전 검증 단계(2-a)에서 한 파일이라도 managed 섹션이 누락/오염돼 있으면
+          전체 사이클을 즉시 abort하고 ``None``을 반환한다. 어떤 파일도 변경되지 않는다.
+        - 쓰기 도중에 ``ProtectedSectionError``가 던져지면(예: 파일이 외부에서 동시
+          편집됨) 백업에서 모든 대상 파일을 복원하고 ``None``을 반환한다.
+
         Args:
             last_dreaming: 마지막 드리밍 시각. None이면 최근 메시지를 대상으로 한다.
 
         Returns:
-            생성된 MemoryEntry 객체. 처리할 메시지가 없거나 결과가 비어있으면 None.
+            생성된 MemoryEntry 객체. 처리할 메시지가 없거나, fail-closed로 abort됐거나,
+            결과가 비어있으면 None.
         """
         messages = self.collect_unprocessed(last_dreaming)
         if not messages:
             logger.info("No new messages to process for dreaming.")
             return None
 
-        # 처리할 메시지가 있을 때만 백업 생성
-        self.create_backup(self._memory_file)
+        # BIZ-72: 쓰기 시작 전 Protected Section 사전 검증. 실패 시 어떤 파일도
+        # 백업조차 만들지 않고 즉시 종료(불필요한 디스크 I/O 방지).
+        try:
+            self._preflight_protected_sections()
+        except ProtectedSectionError as exc:
+            logger.error(
+                "Dreaming aborted (preflight): %s. 파일은 변경되지 않았습니다.",
+                exc,
+            )
+            return None
+
+        # 처리할 메시지가 있고 사전 검증 통과 — 백업 생성 후 본격 작업
+        backups: list[tuple[Path, Path | None]] = []
+        backups.append((self._memory_file, self.create_backup(self._memory_file)))
         if self._user_file:
-            self.create_backup(self._user_file)
+            backups.append((self._user_file, self.create_backup(self._user_file)))
         if self._soul_file:
-            self.create_backup(self._soul_file)
+            backups.append((self._soul_file, self.create_backup(self._soul_file)))
         if self._agent_file:
-            self.create_backup(self._agent_file)
+            backups.append((self._agent_file, self.create_backup(self._agent_file)))
 
         result = await self.summarize(messages)
         memory_summary = result.get("memory", "")
@@ -664,22 +807,30 @@ class DreamingPipeline:
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
 
-        # USER/SOUL/AGENT는 두 모드 공통으로 갱신
-        if user_insights:
-            self.update_user_file(user_insights)
-        if soul_updates:
-            self.update_soul_file(soul_updates)
-        if agent_updates:
-            self.update_agent_file(agent_updates)
-
-        # MEMORY.md 갱신은 클러스터 모드 여부에 따라 분기
         cluster_summary_text = ""
-        if self._enable_clusters:
-            cluster_summary_text = await self._run_cluster_pipeline()
+        try:
+            # USER/SOUL/AGENT는 두 모드 공통으로 갱신
+            if user_insights:
+                self.update_user_file(user_insights)
+            if soul_updates:
+                self.update_soul_file(soul_updates)
+            if agent_updates:
+                self.update_agent_file(agent_updates)
 
-        if not self._enable_clusters and memory_summary:
-            # 레거시 모드: 시간순 append
-            self.append_to_memory(memory_summary)
+            # MEMORY.md 갱신은 클러스터 모드 여부에 따라 분기
+            if self._enable_clusters:
+                cluster_summary_text = await self._run_cluster_pipeline()
+            elif memory_summary:
+                # 레거시 모드: 시간순 append (managed:dreaming:journal 안쪽으로)
+                self.append_to_memory(memory_summary)
+        except ProtectedSectionError as exc:
+            # 동시 편집·외부 손상 등으로 쓰기 도중 예외. 부분 변경된 파일이 있을 수
+            # 있으므로 모든 대상 파일을 백업으로 복원해 트랜잭션 의미를 보존한다.
+            logger.error(
+                "Dreaming aborted (mid-write): %s. 백업에서 복원합니다.", exc
+            )
+            self._restore_from_backups(backups)
+            return None
 
         # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록)
         if not any(
@@ -694,6 +845,27 @@ class DreamingPipeline:
             summary=entry_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",
         )
+
+    @staticmethod
+    def _restore_from_backups(backups: list[tuple[Path, Path | None]]) -> None:
+        """런타임 abort 시 모든 대상 파일을 백업본으로 되돌린다.
+
+        백업이 없는 항목(파일이 처음부터 없었던 경우 등)은 건너뛴다 — 그런 파일은
+        쓰기 시도 자체가 차단되었으므로 손상돼 있을 수 없다.
+        """
+        for original, backup in backups:
+            if backup is None or not backup.is_file():
+                continue
+            try:
+                shutil.copy2(backup, original)
+                logger.info("Restored %s from backup %s", original, backup)
+            except OSError:
+                # 복원조차 실패하면 운영자 개입이 필요 — 로그에 명확히 남긴다.
+                logger.exception(
+                    "Failed to restore %s from backup %s — manual intervention required",
+                    original,
+                    backup,
+                )
 
     async def _run_cluster_pipeline(self) -> str:
         """Phase 3 그래프형 드리밍 — 영향받은 클러스터를 LLM 요약으로 갱신하고 MEMORY.md를 upsert.

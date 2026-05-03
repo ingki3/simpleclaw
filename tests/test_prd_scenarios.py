@@ -146,7 +146,13 @@ class TestPRD_3_1_PersonaMemory:
         from simpleclaw.memory.models import ConversationMessage, MessageRole
 
         memory = tmp_path / "MEMORY.md"
-        memory.write_text("# Memory\n")
+        # BIZ-72: dreaming 쓰기 영역은 managed:dreaming:journal 마커 안쪽으로 한정.
+        memory.write_text(
+            "# Memory\n"
+            "\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "<!-- /managed:dreaming:journal -->\n"
+        )
         store = ConversationStore(tmp_path / "db.sqlite")
         store.add_message(ConversationMessage(role=MessageRole.USER, content="Plan my day"))
         store.add_message(ConversationMessage(role=MessageRole.ASSISTANT, content="Here is your plan"))

@@ -23,13 +23,30 @@ from simpleclaw.memory.models import ConversationMessage, MessageRole
 
 @pytest.fixture
 def setup(tmp_path):
-    """클러스터 모드 활성화된 파이프라인 + LLM 라우터 비활성(폴백)."""
+    """클러스터 모드 활성화된 파이프라인 + LLM 라우터 비활성(폴백).
+
+    BIZ-72: 클러스터 모드는 MEMORY.md의 ``managed:dreaming:clusters`` 컨테이너 안쪽에서만
+    cluster 섹션을 upsert한다. USER.md도 ``insights`` managed 섹션을 갖춰야 dreaming이
+    fail-closed 없이 진행된다.
+    """
     db = tmp_path / "test.db"
     store = ConversationStore(db)
     memory_file = tmp_path / "MEMORY.md"
-    memory_file.write_text("# Memory\n\nExisting content.\n")
+    memory_file.write_text(
+        "# Memory\n"
+        "\n"
+        "Existing content.\n"
+        "\n"
+        "<!-- managed:dreaming:clusters -->\n"
+        "<!-- /managed:dreaming:clusters -->\n"
+    )
     user_file = tmp_path / "USER.md"
-    user_file.write_text("# User Profile\n")
+    user_file.write_text(
+        "# User Profile\n"
+        "\n"
+        "<!-- managed:dreaming:insights -->\n"
+        "<!-- /managed:dreaming:insights -->\n"
+    )
 
     clusterer = IncrementalClusterer(threshold=0.75)
     pipeline = DreamingPipeline(
@@ -216,26 +233,38 @@ class TestUpsertMemorySection:
         assert "topic-a-v2" in content
         assert "topic-b" in content
 
-    def test_creates_file_if_missing(self, tmp_path):
+    def test_fails_closed_when_file_missing(self, tmp_path):
+        """BIZ-72: 파일이 없으면 fail-closed — 자동 생성하지 않는다.
+
+        AGENT.md 30→2줄 사고처럼 "자동 생성"이 결국 destructive overwrite로 이어지는
+        리스크를 차단한다. 운영자는 명시적으로 템플릿을 두어야 한다.
+        """
+        from simpleclaw.memory.protected_section import ProtectedSectionMissing
+
         store = ConversationStore(tmp_path / "x.db")
         memory_file = tmp_path / "new" / "MEMORY.md"
         clusterer = IncrementalClusterer()
         pipeline = DreamingPipeline(
             store, memory_file, clusterer=clusterer, enable_clusters=True
         )
-        pipeline.upsert_memory_section(1, "x", "- y")
-        assert memory_file.is_file()
-        content = memory_file.read_text()
-        assert "<!-- cluster:1 start -->" in content
+        with pytest.raises(ProtectedSectionMissing):
+            pipeline.upsert_memory_section(1, "x", "- y")
+        # 파일도 디렉토리도 만들지 않는다
+        assert not memory_file.exists()
 
 
 class TestRunIntegration:
     @pytest.mark.asyncio
     async def test_run_legacy_mode_appends(self, tmp_path):
-        """enable_clusters=False면 기존 append 동작 유지."""
+        """enable_clusters=False면 기존 append 동작 유지(managed:journal 안쪽으로)."""
         store = ConversationStore(tmp_path / "x.db")
         memory_file = tmp_path / "MEMORY.md"
-        memory_file.write_text("# Memory\n")
+        memory_file.write_text(
+            "# Memory\n"
+            "\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "<!-- /managed:dreaming:journal -->\n"
+        )
         pipeline = DreamingPipeline(store, memory_file)
         store.add_message(ConversationMessage(role=MessageRole.USER, content="hello"))
 
