@@ -166,6 +166,19 @@ daemon:
       enabled: true
       window_days: 7
       sidecar_path: ".agent/active_projects.jsonl"
+    # BIZ-80 — Dreaming 산출물의 1차 언어 정책. primary 가 USER/MEMORY/AGENT/SOUL
+    # dreaming-managed 섹션의 출력 언어를 결정한다. 영어 입력 대화에서도 출력은
+    # 1차 언어로 통일되어 retrieval 임베딩 일관성과 가독성이 확보된다.
+    # primary: null 이면 enforcement 비활성(LLM 출력 그대로). 기본 "ko".
+    # min_ratio: 한 항목 안의 한글/라틴 비율 임계치. 0.3 이면 "BIZ-66 진행" 같은
+    #   ASCII 토큰이 섞인 한국어 bullet 도 통과한다. 너무 빡빡하면 정상 한국어
+    #   bullet 까지 잘리니 유의.
+    # per_file: 파일별 1차 언어 override. 예: {"agent": "en"} 이면 AGENT.md 만 영어.
+    #   BIZ-80 표준은 USER/MEMORY/AGENT/SOUL 모두 ko (override 없음).
+    language:
+      primary: "ko"
+      min_ratio: 0.3
+      per_file: {}
   wait_state:
     default_timeout: 3600
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
