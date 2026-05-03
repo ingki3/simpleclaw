@@ -110,9 +110,13 @@ webhook:
         "Language: Korean\n"
         "Preference: Direct and concise answers.\n"
     )
+    # BIZ-72: dreaming은 managed:dreaming:journal 마커 안쪽에만 쓴다.
     (agent_dir / "MEMORY.md").write_text(
         "# Memory\n\n"
         "- 2026-04-17: User set up the agent.\n"
+        "\n"
+        "<!-- managed:dreaming:journal -->\n"
+        "<!-- /managed:dreaming:journal -->\n"
     )
 
     # Local skill: echo-skill (has executable script)
@@ -502,8 +506,8 @@ class TestScenario_Dreaming:
         assert len(updated_content) > len(original_content)
         assert "##" in updated_content  # date-based header from dreaming summary
 
-        # 백업 파일 생성 확인
-        backups = list(tmp_path.glob(".agent/MEMORY.*.bak"))
+        # 백업 파일 생성 확인 (BIZ-72: 백업은 memory-backup/ 서브디렉토리로 이동).
+        backups = list(tmp_path.glob(".agent/memory-backup/MEMORY.*.bak"))
         assert len(backups) >= 1
 
         # 같은 날 재실행 방지

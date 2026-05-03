@@ -1,4 +1,9 @@
-"""Tests for the dreaming pipeline."""
+"""Tests for the dreaming pipeline.
+
+BIZ-72: 모든 fixture는 Protected Section 마커를 포함한다. 마커가 없는 파일에 대한
+쓰기는 fail-closed로 차단되며, 그 동작 자체는 ``test_dreaming_protected_section.py``에서
+별도로 검증한다.
+"""
 
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -16,9 +21,26 @@ class TestDreamingPipeline:
         db = tmp_path / "test.db"
         store = ConversationStore(db)
         memory_file = tmp_path / "MEMORY.md"
-        memory_file.write_text("# Core Memory\n\nExisting content.\n")
+        # BIZ-72: managed 섹션 마커 안쪽이 dreaming의 쓰기 영역. "Existing content"는
+        # 마커 외부의 사용자 콘텐츠 — 어떤 dreaming 호출에서도 보존되어야 한다.
+        memory_file.write_text(
+            "# Core Memory\n"
+            "\n"
+            "Existing content.\n"
+            "\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "<!-- /managed:dreaming:journal -->\n"
+        )
         user_file = tmp_path / "USER.md"
-        user_file.write_text("# User Profile\n\n## Preferences\n- Language: Korean\n")
+        user_file.write_text(
+            "# User Profile\n"
+            "\n"
+            "## Preferences\n"
+            "- Language: Korean\n"
+            "\n"
+            "<!-- managed:dreaming:insights -->\n"
+            "<!-- /managed:dreaming:insights -->\n"
+        )
         pipeline = DreamingPipeline(store, memory_file, user_file=user_file)
         return store, pipeline, memory_file, user_file
 

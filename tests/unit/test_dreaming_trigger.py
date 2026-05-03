@@ -18,7 +18,13 @@ class TestDreamingTrigger:
         conv_db = tmp_path / "conv.db"
         conv_store = ConversationStore(conv_db)
         memory_file = tmp_path / "MEMORY.md"
-        memory_file.write_text("# Memory\n")
+        # BIZ-72: managed:dreaming:journal 마커 안쪽이 dreaming의 쓰기 영역.
+        memory_file.write_text(
+            "# Memory\n"
+            "\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "<!-- /managed:dreaming:journal -->\n"
+        )
         pipeline = DreamingPipeline(conv_store, memory_file)
 
         daemon_db = tmp_path / "daemon.db"

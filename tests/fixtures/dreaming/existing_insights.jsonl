@@ -1,0 +1,3 @@
+{"topic": "SimpleClaw 빌드", "text": "사용자는 SimpleClaw / Multica platform 빌드·릴리스에 가장 많은 시간을 쓴다", "evidence_count": 5, "confidence": 1.0, "first_seen": "2026-04-20T10:00:00", "last_seen": "2026-05-01T14:30:00", "source_msg_ids": [101, 142, 188, 220, 287]}
+{"topic": "한국어 우선", "text": "한국어로 응답을 선호하며 코드/명령어는 영어 그대로 인용", "evidence_count": 4, "confidence": 1.0, "first_seen": "2026-04-15T09:00:00", "last_seen": "2026-04-30T17:00:00", "source_msg_ids": [50, 95, 145, 250]}
+{"topic": "근거 우선", "text": "결정/제안에 대해 근거('왜')를 항상 동반하길 원함", "evidence_count": 3, "confidence": 0.7, "first_seen": "2026-04-22T11:00:00", "last_seen": "2026-04-29T15:20:00", "source_msg_ids": [120, 200, 270]}

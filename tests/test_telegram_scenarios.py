@@ -58,8 +58,12 @@ def agent_env(tmp_path):
     (agent_dir / "USER.md").write_text(
         "# User\n\nName: 홍길동\nLanguage: Korean\n"
     )
+    # BIZ-72: dreaming은 managed:dreaming:journal 마커 안쪽에만 쓴다.
     (agent_dir / "MEMORY.md").write_text(
         "# Memory\n\n- User set up the agent on 2026-04-17.\n"
+        "\n"
+        "<!-- managed:dreaming:journal -->\n"
+        "<!-- /managed:dreaming:journal -->\n"
     )
 
     # ── Skills with real executable scripts ──
