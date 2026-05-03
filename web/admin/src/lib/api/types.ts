@@ -96,6 +96,31 @@ export interface SystemRestartResponse {
   applied_pending: number;
 }
 
+/** 디스크 사용량 — 데몬이 있는 호스트의 워크스페이스 마운트 기준. */
+export interface DiskUsageInfo {
+  path: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+}
+
+/** 시스템 진단 정보 — System 화면의 좌측 카드 데이터원. */
+export interface SystemInfoResponse {
+  version: string;
+  build_sha: string | null;
+  python_version: string;
+  platform: string;
+  pid: number;
+  uptime_seconds: number;
+  config_path: string;
+  db_path: string;
+  db_exists: boolean;
+  db_size_bytes: number | null;
+  disk: DiskUsageInfo | null;
+  host: string;
+  port: number;
+}
+
 /** Admin UI 영역 — DESIGN.md §3.3 사이드바 11개 항목과는 다소 다르며, 백엔드의
  *  ``AREA_TO_YAML_KEY`` 키 집합과 일치한다. */
 export type AdminArea =

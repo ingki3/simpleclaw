@@ -421,6 +421,36 @@ class TestHealthAndSystem:
         assert "pending_changes" in data
 
     @pytest.mark.asyncio
+    async def test_system_info_returns_diagnostics(self, client, tmp_state):
+        resp = await client.get("/admin/v1/system/info", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        # 필수 키 — System 화면 좌측 카드가 의존하는 계약.
+        for key in (
+            "version",
+            "python_version",
+            "platform",
+            "pid",
+            "uptime_seconds",
+            "config_path",
+            "db_path",
+            "host",
+            "port",
+        ):
+            assert key in data, f"missing key: {key}"
+        assert data["pid"] > 0
+        assert data["config_path"] == str(tmp_state["config_path"])
+        # 디스크 정보는 OS 호출 실패 가능성 때문에 nullable이지만, 임시 디렉토리에서는
+        # 항상 채워진다.
+        assert data["disk"] is not None
+        assert {"path", "total_bytes", "used_bytes", "free_bytes"} <= data["disk"].keys()
+
+    @pytest.mark.asyncio
+    async def test_system_info_requires_auth(self, client):
+        resp = await client.get("/admin/v1/system/info")
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
     async def test_system_restart_merges_pending_into_yaml(
         self, client, tmp_state
     ):
