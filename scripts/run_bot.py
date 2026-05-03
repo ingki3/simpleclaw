@@ -21,6 +21,10 @@ import subprocess
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.channels.admin_api_setup import (
+    AdminAPIBootError,
+    build_admin_api_server,
+)
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.config import load_daemon_config, load_llm_config, load_telegram_config
 from simpleclaw.daemon.dreaming_trigger import DreamingTrigger
@@ -197,6 +201,51 @@ async def main():
         logger.warning("Dashboard failed to start: %s", exc)
         dashboard = None
 
+    # Admin API (BIZ-58) — Admin UI 백엔드. 토큰 검증·시크릿/감사 매니저는 모두
+    # build_admin_api_server에 위임. ``admin_api.enabled=False``면 None이 반환된다.
+    # 토큰이 비어 있으면 부팅 단계에서 RuntimeError가 올라가 봇 시작이 즉시 실패한다 —
+    # silent insecure 운용 방지.
+    admin_api = None
+    try:
+        # 헬스 콜백 — 데몬 메인 헬스(텔레그램/대시보드/cron 상태)를
+        # ``/admin/v1/health`` 응답에 머지한다.
+        def _admin_health() -> dict:
+            return {
+                "daemon": {
+                    "telegram_running": bool(getattr(bot, "is_running", False)),
+                    "dashboard_running": dashboard is not None,
+                    "cron_jobs_active": len(cron.list_jobs()),
+                    "scheduler_running": apscheduler.running,
+                }
+            }
+
+        admin_api = build_admin_api_server(
+            CONFIG_PATH,
+            structured_logger=structured_logger,
+            health_provider=_admin_health,
+        )
+    except AdminAPIBootError as exc:
+        # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
+        print(f"ERROR: Admin API 부팅 실패 — {exc}")
+        if dashboard is not None:
+            try:
+                await dashboard.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Dashboard stop failed during admin boot abort")
+        return
+
+    if admin_api is not None:
+        try:
+            await admin_api.start()
+        except Exception as exc:  # noqa: BLE001 — 포트 충돌 등은 명시적 에러로 종료.
+            print(f"ERROR: Admin API 바인딩 실패 — {exc}")
+            if dashboard is not None:
+                try:
+                    await dashboard.stop()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Dashboard stop failed during admin bind abort")
+            return
+
     # Start cron + dreaming scheduler
     apscheduler.start()
     cron.load_persisted_jobs()
@@ -227,6 +276,12 @@ async def main():
     print("\nStopping...")
     if apscheduler.running:
         apscheduler.shutdown(wait=False)
+    if admin_api is not None:
+        try:
+            # AppRunner.cleanup()이 진행 중 요청을 마무리한다 — graceful shutdown.
+            await admin_api.stop()
+        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
+            logger.exception("Admin API stop failed")
     if dashboard is not None:
         try:
             await dashboard.stop()

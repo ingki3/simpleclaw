@@ -236,11 +236,19 @@ class AdminAPIServer:
         reload_callback: ReloadCallback | None = None,
         structured_logger: object | None = None,
         health_provider: Callable[[], dict] | None = None,
+        cors_origins: list[str] | None = None,
+        request_max_body_bytes: int | None = None,
     ) -> None:
         self._host = host
         self._port = port
         self._auth_token = auth_token
         self._config_path = Path(config_path)
+        # CORS allowlist — 비어 있으면 헤더를 부착하지 않아 동일 origin만 허용한다.
+        # 단일 운영자 가정의 dev 환경(예: Admin UI가 별도 포트에서 실행)을 위한 옵션.
+        self._cors_origins = list(cors_origins or [])
+        # 본문 크기 상한 — 설정 PATCH 페이로드는 일반적으로 작으므로 256 KiB 기본.
+        # ``None``이면 제한 없음(테스트 편의).
+        self._max_body_bytes = request_max_body_bytes
 
         # 상태 저장 위치(펜딩 변경, reveal nonce 등) — 시크릿 볼트와 분리해
         # ``~/.simpleclaw/admin/``에 둔다.
@@ -283,7 +291,20 @@ class AdminAPIServer:
         if self._app is not None:
             return self._app
 
-        app = web.Application()
+        # 본문 크리 상한이 지정되면 aiohttp 레벨에서 차단 — 핸들러 도달 전에 413 응답.
+        kwargs: dict[str, Any] = {}
+        if self._max_body_bytes is not None:
+            kwargs["client_max_size"] = self._max_body_bytes
+        app = web.Application(**kwargs)
+
+        # CORS — 설정된 origin이 있을 때만 미들웨어를 등록한다. preflight(OPTIONS)는
+        # 인증 래퍼를 거치지 않고 즉시 204를 반환해 Admin UI dev 서버가 정상 동작하도록.
+        if self._cors_origins:
+            app.middlewares.append(self._cors_middleware())
+            app.router.add_route(
+                "OPTIONS", "/admin/v1/{tail:.*}", self._handle_cors_preflight
+            )
+
         prefix = "/admin/v1"
         app.router.add_get(f"{prefix}/config", self._wrap(self._handle_get_config_all))
         app.router.add_get(
@@ -342,6 +363,46 @@ class AdminAPIServer:
 
     def get_metrics(self) -> AdminAPIMetrics:
         return AdminAPIMetrics(**self._metrics.__dict__)
+
+    # ------------------------------------------------------------------
+    # CORS — Admin UI dev 서버(별도 origin)에서의 호출을 허용하기 위한 최소 구현.
+    # ------------------------------------------------------------------
+
+    def _cors_middleware(self):
+        """허용 origin과 일치하면 CORS 응답 헤더를 부착하는 aiohttp 미들웨어."""
+
+        @web.middleware
+        async def middleware(request: web.Request, handler):
+            response = await handler(request)
+            origin = request.headers.get("Origin", "")
+            if origin and origin in self._cors_origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Vary"] = "Origin"
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
+
+        return middleware
+
+    async def _handle_cors_preflight(self, request: web.Request) -> web.Response:
+        """OPTIONS preflight — 인증 없이 허용 origin에만 204를 반환한다."""
+        origin = request.headers.get("Origin", "")
+        if not origin or origin not in self._cors_origins:
+            return _json_error(403, "Origin not allowed")
+        req_method = request.headers.get("Access-Control-Request-Method", "GET")
+        req_headers = request.headers.get(
+            "Access-Control-Request-Headers", "Authorization, Content-Type"
+        )
+        return web.Response(
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": req_method,
+                "Access-Control-Allow-Headers": req_headers,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
+        )
 
     # ------------------------------------------------------------------
     # 인증 래퍼 — 모든 핸들러는 이 래퍼를 통과해 토큰을 검증받는다.
