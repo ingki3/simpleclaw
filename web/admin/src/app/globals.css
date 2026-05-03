@@ -126,6 +126,14 @@
   --primary-foreground: var(--neutral-900);
   --destructive-foreground: var(--neutral-900);
 
+  /* BIZ-64 — 다크 전용 가시성 보강 (BIZ-42 결정)
+   * - --secret-mask-bg: 카드(neutral-100=#161c24)와 분리되도록 더 어둡게
+   * - --primary-hover : 다크 base(brand-500=#7c8bff)보다 밝게 → hover UX 일관
+   * - --border       : elevated 표면에서 보더 가시성 보강 */
+  --secret-mask-bg: #0e1218;
+  --primary-hover: #a0aaff;
+  --border: #232c38;
+
   color-scheme: dark;
 }
 
@@ -159,6 +167,10 @@
     --card-elevated: var(--neutral-100);
     --primary-foreground: var(--neutral-900);
     --destructive-foreground: var(--neutral-900);
+    /* BIZ-64 — .theme-dark 블록과 동기 유지 (다크 전용 override) */
+    --secret-mask-bg: #0e1218;
+    --primary-hover: #a0aaff;
+    --border: #232c38;
     color-scheme: dark;
   }
 }

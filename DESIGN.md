@@ -87,7 +87,7 @@
 | `$--surface` | `neutral-50` | `neutral-50` | 사이드바·서브 영역 |
 | `$--card` | `neutral-0` | `neutral-100` | 카드 배경 |
 | `$--card-elevated` | `neutral-0` | `neutral-100` | 모달·dropdown |
-| `$--border` | `neutral-200` | `neutral-200` | 일반 보더 |
+| `$--border` | `neutral-200` | `#232C38` (raw) | 일반 보더 — 다크 elevated 표면 보더 가시성 보강 (BIZ-64) |
 | `$--border-strong` | `neutral-300` | `neutral-300` | 강조 보더 |
 | `$--foreground` | `neutral-800` | `neutral-800` | 본문 텍스트 |
 | `$--foreground-strong` | `neutral-900` | `neutral-900` | 헤딩 |
@@ -95,7 +95,7 @@
 | `$--placeholder` | `neutral-500` | `neutral-500` | 입력 placeholder |
 | `$--primary` | `brand-500` | `brand-500` | 1차 액션 배경 |
 | `$--primary-foreground` | `neutral-0` | `neutral-900` | 1차 액션 텍스트 |
-| `$--primary-hover` | `brand-600` | `brand-600` | hover |
+| `$--primary-hover` | `brand-600` | `#A0AAFF` (raw) | hover — 다크 base(brand-500)보다 밝아야 hover UX가 일관됨 (BIZ-64) |
 | `$--ring` | `brand-500` (40% alpha) | 동일 | focus ring |
 | `$--color-success` | `success-500` | success-500 | 상태 |
 | `$--color-success-bg` | `success-50` | `success-50` | 상태 tint |
@@ -107,7 +107,7 @@
 | `$--color-info-bg` | `info-50` | `info-50` | 상태 tint |
 | `$--destructive` | `danger-500` | danger-500 | 위험 액션 배경 |
 | `$--destructive-foreground` | `neutral-0` | `neutral-900` | 위험 액션 텍스트 |
-| `$--secret-mask-bg` | `neutral-100` | `neutral-100` | 마스킹된 시크릿 칩 배경 |
+| `$--secret-mask-bg` | `neutral-100` | `#0E1218` (raw) | 마스킹된 시크릿 칩 배경 — 다크에서 카드(neutral-100)와 분리 (BIZ-64) |
 
 ### 2.4 타이포
 
