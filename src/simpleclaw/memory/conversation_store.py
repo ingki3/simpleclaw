@@ -102,12 +102,20 @@ class ConversationStore:
             if "cluster_id" not in cols:
                 conn.execute("ALTER TABLE messages ADD COLUMN cluster_id INTEGER")
                 logger.info("Legacy normalize: added cluster_id column to messages")
+            # BIZ-77 — channel 컬럼은 마이그레이션 0002 가 추가한다.
+            # 여기서 보충하면 0002 의 ALTER 가 duplicate 로 실패하므로, 정규화는
+            # baseline (embedding/cluster_id) 까지만 처리하고 이후 컬럼은 마이그레이션
+            # 러너에 위임한다.
 
     def add_message(self, message: ConversationMessage) -> int:
         """새 대화 메시지를 DB에 저장하고 INSERT된 행 id를 반환한다.
 
         반환 id는 이후 ``add_embedding()`` 호출 시 message_id로 사용한다.
         기존 호출자는 반환값을 무시해도 무방하다(이전 시그니처 호환).
+
+        ``message.channel`` 은 BIZ-77 에서 추가된 선택 컬럼이며 ``None`` 이면
+        DB에 NULL 로 저장된다. producer (텔레그램/웹훅/cron 등)가 명시하지 않으면
+        Admin UI 에서는 "unknown" 으로 노출된다.
 
         Args:
             message: 저장할 대화 메시지 객체.
@@ -117,13 +125,14 @@ class ConversationStore:
         """
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.execute(
-                "INSERT INTO messages (role, content, timestamp, token_count) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO messages (role, content, timestamp, token_count, channel) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
                     message.role.value,
                     message.content,
                     message.timestamp.isoformat(),
                     message.token_count,
+                    message.channel,
                 ),
             )
             return int(cursor.lastrowid)
@@ -139,19 +148,20 @@ class ConversationStore:
         """
         with sqlite3.connect(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT role, content, timestamp, token_count FROM messages "
+                "SELECT role, content, timestamp, token_count, channel FROM messages "
                 "ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
 
         messages = []
         # DB에서 역순(최신 먼저)으로 가져온 뒤 다시 뒤집어 시간순으로 만든다
-        for role, content, ts, tokens in reversed(rows):
+        for role, content, ts, tokens, channel in reversed(rows):
             messages.append(ConversationMessage(
                 role=MessageRole(role),
                 content=content,
                 timestamp=datetime.fromisoformat(ts),
                 token_count=tokens,
+                channel=channel,
             ))
         return messages
 
@@ -166,7 +176,7 @@ class ConversationStore:
         """
         with sqlite3.connect(self._db_path) as conn:
             rows = conn.execute(
-                "SELECT role, content, timestamp, token_count FROM messages "
+                "SELECT role, content, timestamp, token_count, channel FROM messages "
                 "WHERE timestamp >= ? ORDER BY id",
                 (since.isoformat(),),
             ).fetchall()
@@ -177,8 +187,108 @@ class ConversationStore:
                 content=content,
                 timestamp=datetime.fromisoformat(ts),
                 token_count=tokens,
+                channel=channel,
             )
-            for role, content, ts, tokens in rows
+            for role, content, ts, tokens, channel in rows
+        ]
+
+    # ------------------------------------------------------------------
+    # ID-bearing fetch (BIZ-77) — 인사이트 source 역추적을 위한 헬퍼
+    # ------------------------------------------------------------------
+
+    def get_recent_with_ids(
+        self, limit: int = 20
+    ) -> list[tuple[int, ConversationMessage]]:
+        """최근 메시지를 ``(id, message)`` 쌍으로 시간순 반환.
+
+        ``get_recent`` 와 동일하지만 message rowid 를 함께 노출한다 — 드리밍이
+        인사이트 메타에 ``source_msg_ids`` 로 적재해야 하므로 BIZ-77 에서 추가됨.
+        """
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, timestamp, token_count, channel "
+                "FROM messages ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        results: list[tuple[int, ConversationMessage]] = []
+        # DB에서 역순(최신 먼저)으로 가져온 뒤 다시 뒤집어 시간순으로 만든다.
+        for mid, role, content, ts, tokens, channel in reversed(rows):
+            msg = ConversationMessage(
+                role=MessageRole(role),
+                content=content,
+                timestamp=datetime.fromisoformat(ts),
+                token_count=tokens,
+                channel=channel,
+            )
+            results.append((int(mid), msg))
+        return results
+
+    def get_since_with_ids(
+        self, since: datetime
+    ) -> list[tuple[int, ConversationMessage]]:
+        """지정 시점 이후 메시지를 ``(id, message)`` 쌍으로 시간순 반환."""
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, timestamp, token_count, channel "
+                "FROM messages WHERE timestamp >= ? ORDER BY id",
+                (since.isoformat(),),
+            ).fetchall()
+
+        return [
+            (
+                int(mid),
+                ConversationMessage(
+                    role=MessageRole(role),
+                    content=content,
+                    timestamp=datetime.fromisoformat(ts),
+                    token_count=tokens,
+                    channel=channel,
+                ),
+            )
+            for mid, role, content, ts, tokens, channel in rows
+        ]
+
+    def get_messages_by_ids(
+        self, ids: list[int]
+    ) -> list[tuple[int, ConversationMessage]]:
+        """주어진 rowid 들을 시간순으로 조회한다.
+
+        존재하지 않는 id 는 결과에서 그냥 빠진다(에러 없음). Admin API 가
+        인사이트의 ``source_msg_ids`` 를 사람이 읽을 메시지로 풀어내기 위해 사용.
+
+        Args:
+            ids: messages.id 리스트 (중복/빈 리스트 허용).
+
+        Returns:
+            id 오름차순(= 시간순) ``(id, ConversationMessage)`` 리스트.
+        """
+        if not ids:
+            return []
+        # 중복 제거 + 정렬 — sqlite IN ()가 빈 튜플을 허용하지 않으므로 가드.
+        unique_ids = sorted({int(i) for i in ids})
+        if not unique_ids:
+            return []
+        placeholders = ",".join("?" * len(unique_ids))
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                f"SELECT id, role, content, timestamp, token_count, channel "
+                f"FROM messages WHERE id IN ({placeholders}) ORDER BY id",
+                unique_ids,
+            ).fetchall()
+
+        return [
+            (
+                int(mid),
+                ConversationMessage(
+                    role=MessageRole(role),
+                    content=content,
+                    timestamp=datetime.fromisoformat(ts),
+                    token_count=tokens,
+                    channel=channel,
+                ),
+            )
+            for mid, role, content, ts, tokens, channel in rows
         ]
 
     def count(self) -> int:

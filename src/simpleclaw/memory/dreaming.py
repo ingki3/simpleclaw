@@ -187,6 +187,15 @@ class DreamingPipeline:
             self._insights_store = None
         self._insight_promotion_threshold = max(1, int(insight_promotion_threshold))
 
+    @property
+    def insight_store(self) -> InsightStore | None:
+        """인사이트 sidecar 저장소 (BIZ-73). Admin API 가 같은 sidecar 를 공유한다.
+
+        ``insights_file`` 인자나 ``user_file`` 옆 자동 결정 경로가 둘 다 없으면
+        ``None``. Admin API 라우팅은 None 일 때 503 으로 명시 disabled 응답.
+        """
+        return self._insights_store
+
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
 
@@ -236,6 +245,18 @@ class DreamingPipeline:
         if last_dreaming:
             return self._store.get_since(last_dreaming)
         return self._store.get_recent(limit=50)
+
+    def collect_unprocessed_with_ids(
+        self, last_dreaming: datetime | None = None
+    ) -> list[tuple[int, ConversationMessage]]:
+        """``collect_unprocessed`` 의 id-bearing 변형 (BIZ-77).
+
+        인사이트 source 역추적을 위해 메시지 rowid 를 함께 수집해야 한다.
+        반환 순서는 시간순 (id 오름차순) 으로 일관된다.
+        """
+        if last_dreaming:
+            return self._store.get_since_with_ids(last_dreaming)
+        return self._store.get_recent_with_ids(limit=50)
 
     async def summarize(self, messages: list) -> dict:
         """LLM을 사용하여 대화 요약을 생성한다.
@@ -767,10 +788,14 @@ class DreamingPipeline:
         Returns:
             생성된 MemoryEntry 객체. 처리할 메시지가 없거나 결과가 비어있으면 None.
         """
-        messages = self.collect_unprocessed(last_dreaming)
-        if not messages:
+        # BIZ-77 — 메시지를 id 와 함께 수집한다. 분석 자체는 message 객체만 쓰지만
+        # 인사이트 source 역추적을 위해 rowid 를 sidecar 에 기록해야 하기 때문이다.
+        id_pairs = self.collect_unprocessed_with_ids(last_dreaming)
+        if not id_pairs:
             logger.info("No new messages to process for dreaming.")
             return None
+        source_msg_ids = [mid for mid, _ in id_pairs]
+        messages = [msg for _, msg in id_pairs]
 
         # 처리할 메시지가 있을 때만 백업 생성
         self.create_backup(self._memory_file)
@@ -788,13 +813,14 @@ class DreamingPipeline:
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
 
-        # BIZ-73: 인사이트 메타 sidecar 갱신 — USER.md 본문 append 보다 먼저 실행하여
-        # 어떤 항목이 \"승격\" 됐는지(USER.md에 high-confidence 표시 가능) 사전 판단할 수 있게 한다.
-        # 후속 BIZ-77(F: source linkage) 가 source_msg_ids 를 풍부하게 채울 예정.
+        # BIZ-73 + BIZ-77: 인사이트 메타 sidecar 갱신 — USER.md 본문 append 보다 먼저
+        # 실행하여 어떤 항목이 "승격" 됐는지(USER.md에 high-confidence 표시 가능)
+        # 사전 판단할 수 있게 한다. BIZ-77 부터는 이번 회차에 분석된 모든 메시지의
+        # rowid 를 신규/강화된 모든 인사이트에 부착한다 — Admin "근거 보기" 의 입력.
         promoted_meta: list[InsightMeta] = []
         if user_insights_meta and self._insights_store:
             _, promoted_meta = self.apply_insight_meta(
-                user_insights_meta, source_msg_ids=[]
+                user_insights_meta, source_msg_ids=source_msg_ids
             )
 
         # USER/SOUL/AGENT는 두 모드 공통으로 갱신
