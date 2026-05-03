@@ -172,6 +172,47 @@ class TestDreamingPipeline:
         assert result["memory"] == "not json at all"
 
     @pytest.mark.asyncio
+    async def test_run_persists_insight_meta_sidecar(self, setup):
+        """BIZ-73: dreaming.run() 이 user_insights_meta 를 sidecar 에 영속화한다.
+
+        같은 topic 의 인사이트가 두 회차에 걸쳐 들어오면 evidence_count 가 누적되고,
+        승격 임계치(기본 3)에 도달하기 전까지 confidence 는 0.4~0.7 사이를 유지한다.
+        """
+        from simpleclaw.memory.insights import InsightStore
+
+        store, pipeline, _, user_file = setup
+
+        mock_response = MagicMock()
+        mock_response.text = (
+            '{"memory": "## d\\n- x", "user_insights": "- 정치 뉴스 관심", '
+            '"user_insights_meta": [{"topic": "정치뉴스", "text": "정치 뉴스 관심"}], '
+            '"soul_updates": "", "agent_updates": ""}'
+        )
+        mock_router = MagicMock()
+        mock_router.send = AsyncMock(return_value=mock_response)
+        pipeline._router = mock_router
+
+        # 회차 1
+        store.add_message(ConversationMessage(role=MessageRole.USER, content="뉴스"))
+        await pipeline.run()
+
+        sidecar = InsightStore(user_file.parent / "insights.jsonl")
+        loaded = sidecar.load()
+        assert "정치뉴스" in loaded
+        assert loaded["정치뉴스"].evidence_count == 1
+        # DoD #1: 단발 관측은 0.4 캡.
+        assert loaded["정치뉴스"].confidence == 0.4
+
+        # 회차 2 — 같은 topic 이 다시 들어오면 evidence_count 누적.
+        store.add_message(ConversationMessage(role=MessageRole.USER, content="뉴스 또"))
+        await pipeline.run()
+
+        loaded = sidecar.load()
+        assert loaded["정치뉴스"].evidence_count == 2
+        # 2/3 보간 → 0.55. 아직 승격 전.
+        assert loaded["정치뉴스"].confidence == pytest.approx(0.55)
+
+    @pytest.mark.asyncio
     async def test_backup_both_files(self, setup):
         """Both MEMORY.md and USER.md are backed up."""
         store, pipeline, memory_file, user_file = setup

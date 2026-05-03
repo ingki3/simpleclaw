@@ -133,6 +133,10 @@ daemon:
     overnight_hour: 3
     idle_threshold: 7200
     model: "gemini"
+    # BIZ-73: 인사이트 승격 임계 관측 횟수. 단발 관측은 항상 confidence ≤ 0.4 로 캡되고,
+    # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
+    # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
+    insight_promotion_threshold: 3
   wait_state:
     default_timeout: 3600
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.

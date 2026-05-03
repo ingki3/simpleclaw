@@ -29,6 +29,12 @@ from datetime import datetime
 from pathlib import Path
 
 from simpleclaw.memory.clustering import IncrementalClusterer
+from simpleclaw.memory.insights import (
+    InsightMeta,
+    InsightStore,
+    is_promoted,
+    merge_insights,
+)
 from simpleclaw.memory.models import (
     ClusterRecord,
     ConversationMessage,
@@ -39,26 +45,34 @@ from simpleclaw.memory.conversation_store import ConversationStore
 logger = logging.getLogger(__name__)
 
 _DREAMING_PROMPT = """\
-다음 대화 내역을 분석하여 네 가지를 JSON으로 추출하세요.
+다음 대화 내역을 분석하여 다섯 가지를 JSON으로 추출하세요.
 
 1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
    - 날짜 헤더 포함 (## {date} 형식)
    - 사실 기반만 (의견/추측 금지)
    - 반복되는 주제나 관심사를 기록 (패턴 파악용)
 
-2. "user_insights": 사용자에 대해 새로 알게 된 정보 (선호도, 관심사, 습관)
+2. "user_insights": 사용자에 대해 새로 알게 된 정보 (선호도, 관심사, 습관) — 사람이 읽는 bullet 텍스트
    - 이미 알고 있는 정보(기존 USER.md 내용)는 제외
    - 추측이 아닌 대화에서 명확히 드러난 정보만
    - 민감한 개인정보(비밀번호, 금융정보)는 절대 저장하지 않음
    - 없으면 빈 문자열
 
-3. "soul_updates": 에이전트의 성격·말투·호칭에 대한 사용자의 피드백
+3. "user_insights_meta": 위 user_insights를 구조화한 객체 배열 (BIZ-73 — 누적 evidence 추적용)
+   - 각 항목 형식: {{"topic": "<3~10자 짧은 한국어 주제 키>", "text": "<bullet 한 줄>"}}
+   - topic 은 같은 주제로 다음 회차에 다시 관측될 때 매칭하기 위한 키 — 짧고 일관되게.
+     예: "맥북에어 가격 조회" → topic="맥북에어가격", "정치 뉴스 요약" → topic="정치뉴스".
+   - text 는 user_insights bullet 과 같은 문장(접두 "- " 없이).
+   - 단발 관측이라도 모두 포함하세요. confidence는 시스템이 부여합니다.
+   - 없으면 빈 배열 [].
+
+4. "soul_updates": 에이전트의 성격·말투·호칭에 대한 사용자의 피드백
    - 사용자가 명시적으로 요청한 변경만 (예: "반말 써", "이모지 쓰지 마", "~라고 불러")
    - 기존 SOUL.md 내용과 중복이면 제외
    - 추측하지 말고, 사용자가 직접 지시한 것만 포함
    - 없으면 빈 문자열
 
-4. "agent_updates": 에이전트 행동 규칙에 대한 사용자의 피드백
+5. "agent_updates": 에이전트 행동 규칙에 대한 사용자의 피드백
    - 사용자가 명시적으로 요청한 설정 변경만 (예: 캘린더 추가, 스킬 설정 등)
    - 기존 AGENT.md 내용과 중복이면 제외
    - 없으면 빈 문자열
@@ -76,7 +90,7 @@ _DREAMING_PROMPT = """\
 {conversations}
 
 JSON 형식으로만 응답하세요:
-{{"memory": "## {date}\\n- 항목1\\n- 항목2", "user_insights": "- 새 정보1", "soul_updates": "- 변경1", "agent_updates": "- 변경1"}}"""
+{{"memory": "## {date}\\n- 항목1", "user_insights": "- 새 정보1", "user_insights_meta": [{{"topic": "주제키", "text": "새 정보1"}}], "soul_updates": "- 변경1", "agent_updates": "- 변경1"}}"""
 
 
 # Phase 3 — 클러스터별 LLM 요약 프롬프트 (기존 + 신규 메시지를 받아 갱신된 라벨/요약 산출)
@@ -126,6 +140,8 @@ class DreamingPipeline:
         dreaming_model: str = "",
         clusterer: IncrementalClusterer | None = None,
         enable_clusters: bool = False,
+        insights_file: str | Path | None = None,
+        insight_promotion_threshold: int = 3,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -140,6 +156,12 @@ class DreamingPipeline:
             clusterer: ``IncrementalClusterer`` 인스턴스. ``enable_clusters=True``일 때만 사용된다.
             enable_clusters: True면 Phase 3 그래프형 드리밍(클러스터 기반 MEMORY.md upsert) 사용.
                 False면 기존 append 동작 유지(하위 호환).
+            insights_file: 인사이트 메타 sidecar(JSONL) 파일 경로 (BIZ-73). None이면
+                ``user_file`` 옆 ``insights.jsonl`` 로 자동 결정. ``user_file``도 None이면
+                인사이트 메타 추적은 비활성.
+            insight_promotion_threshold: 인사이트 승격 임계 관측 횟수 (BIZ-73). 단발 관측은
+                항상 confidence ≤ 0.4 로 캡되고, 이 횟수에 도달해야 승격선(0.7)에 진입한다.
+                기본 3회.
         """
         self._store = conversation_store
         self._memory_file = Path(memory_file)
@@ -151,6 +173,19 @@ class DreamingPipeline:
         # Phase 3: 클러스터링이 None이면 enable_clusters 요청도 무시(안전 폴백)
         self._clusterer = clusterer
         self._enable_clusters = bool(enable_clusters and clusterer is not None)
+
+        # BIZ-73: insight 메타 sidecar.
+        # - 명시 경로가 없으면 USER.md 옆에 둔다 (운영자 수기 검토가 쉬움).
+        # - USER.md 도 없으면 메타 추적 자체를 끈다(인사이트의 사람이 읽는 출력 자리가 없으므로).
+        if insights_file is not None:
+            self._insights_store: InsightStore | None = InsightStore(insights_file)
+        elif self._user_file is not None:
+            self._insights_store = InsightStore(
+                self._user_file.parent / "insights.jsonl"
+            )
+        else:
+            self._insights_store = None
+        self._insight_promotion_threshold = max(1, int(insight_promotion_threshold))
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -214,7 +249,7 @@ class DreamingPipeline:
             'memory'와 'user_insights' 키를 포함하는 딕셔너리.
         """
         if not messages:
-            return {"memory": "", "user_insights": ""}
+            return {"memory": "", "user_insights": "", "user_insights_meta": []}
 
         if self._router:
             try:
@@ -222,7 +257,11 @@ class DreamingPipeline:
             except Exception:
                 logger.exception("LLM summarization failed, using fallback")
 
-        return {"memory": self._summarize_fallback(messages), "user_insights": ""}
+        return {
+            "memory": self._summarize_fallback(messages),
+            "user_insights": "",
+            "user_insights_meta": [],
+        }
 
     async def _summarize_with_llm(self, messages: list) -> dict:
         """LLM을 호출하여 대화를 분석하고 memory/user/soul/agent 업데이트를 추출한다."""
@@ -279,15 +318,35 @@ class DreamingPipeline:
 
         try:
             result = json.loads(raw)
+            # user_insights_meta — 객체 배열만 받아들이고, 형식에 안 맞는 항목은 silently drop.
+            raw_meta = result.get("user_insights_meta") or []
+            meta_items: list[dict] = []
+            if isinstance(raw_meta, list):
+                for item in raw_meta:
+                    if (
+                        isinstance(item, dict)
+                        and isinstance(item.get("topic"), str)
+                        and isinstance(item.get("text"), str)
+                    ):
+                        meta_items.append(
+                            {"topic": item["topic"], "text": item["text"]}
+                        )
             return {
                 "memory": result.get("memory", ""),
                 "user_insights": result.get("user_insights", ""),
+                "user_insights_meta": meta_items,
                 "soul_updates": result.get("soul_updates", ""),
                 "agent_updates": result.get("agent_updates", ""),
             }
         except json.JSONDecodeError:
             logger.warning("Failed to parse dreaming JSON: %s", raw[:200])
-            return {"memory": raw[:500], "user_insights": "", "soul_updates": "", "agent_updates": ""}
+            return {
+                "memory": raw[:500],
+                "user_insights": "",
+                "user_insights_meta": [],
+                "soul_updates": "",
+                "agent_updates": "",
+            }
 
     def _summarize_fallback(self, messages: list) -> str:
         """LLM 없이 단순 텍스트 기반 요약을 생성한다. 각 메시지의 첫 5단어를 토픽으로 추출."""
@@ -360,6 +419,70 @@ class DreamingPipeline:
         """새로운 사용자 인사이트를 USER.md 파일에 추가한다."""
         if self._user_file:
             self._update_file_section(self._user_file, insights, "Dreaming Insights")
+
+    # ------------------------------------------------------------------
+    # BIZ-73 — 인사이트 메타 (sidecar JSONL) 갱신
+    # ------------------------------------------------------------------
+
+    def apply_insight_meta(
+        self,
+        meta_items: list[dict],
+        source_msg_ids: list[int] | None = None,
+    ) -> tuple[list[InsightMeta], list[InsightMeta]]:
+        """이번 회차의 인사이트 메타를 sidecar 와 병합·저장한다.
+
+        Args:
+            meta_items: ``[{"topic": ..., "text": ...}, ...]`` 형태의 LLM 추출물.
+            source_msg_ids: 이번 회차에 분석한 메시지 rowid 목록(F: source linkage 의 1차 입력).
+                None 이면 빈 리스트로 처리. 이 회차에 신규/갱신된 모든 인사이트에 동일하게 부착된다.
+
+        Returns:
+            (changed, promoted)
+            - changed: 이번 회차에 추가/갱신된 인사이트 (모두).
+            - promoted: 그 중 ``is_promoted == True`` 인 항목들 (USER.md 노출 대상).
+            sidecar 저장소가 비활성이거나 입력이 비어있으면 (빈 리스트, 빈 리스트).
+        """
+        if not self._insights_store or not meta_items:
+            return [], []
+
+        now = datetime.now()
+        ids = list(source_msg_ids or [])
+        observations: list[InsightMeta] = []
+        for item in meta_items:
+            topic = (item.get("topic") or "").strip()
+            text = (item.get("text") or "").strip()
+            if not topic or not text:
+                continue
+            observations.append(
+                InsightMeta(
+                    topic=topic,
+                    text=text,
+                    evidence_count=1,
+                    confidence=0.0,  # merge_insights 가 재계산
+                    first_seen=now,
+                    last_seen=now,
+                    source_msg_ids=list(ids),
+                )
+            )
+
+        if not observations:
+            return [], []
+
+        existing = self._insights_store.load()
+        merged, changed = merge_insights(
+            existing, observations, self._insight_promotion_threshold
+        )
+        self._insights_store.save_all(merged)
+
+        promoted = [
+            m for m in changed
+            if is_promoted(m, self._insight_promotion_threshold)
+        ]
+        logger.info(
+            "Insights updated: %d changed, %d promoted (threshold=%d)",
+            len(changed), len(promoted), self._insight_promotion_threshold,
+        )
+        return changed, promoted
 
     def update_soul_file(self, updates: str) -> None:
         """에이전트 성격/말투 변경을 SOUL.md 파일에 추가한다."""
@@ -661,8 +784,18 @@ class DreamingPipeline:
         result = await self.summarize(messages)
         memory_summary = result.get("memory", "")
         user_insights = result.get("user_insights", "")
+        user_insights_meta = result.get("user_insights_meta", []) or []
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
+
+        # BIZ-73: 인사이트 메타 sidecar 갱신 — USER.md 본문 append 보다 먼저 실행하여
+        # 어떤 항목이 \"승격\" 됐는지(USER.md에 high-confidence 표시 가능) 사전 판단할 수 있게 한다.
+        # 후속 BIZ-77(F: source linkage) 가 source_msg_ids 를 풍부하게 채울 예정.
+        promoted_meta: list[InsightMeta] = []
+        if user_insights_meta and self._insights_store:
+            _, promoted_meta = self.apply_insight_meta(
+                user_insights_meta, source_msg_ids=[]
+            )
 
         # USER/SOUL/AGENT는 두 모드 공통으로 갱신
         if user_insights:
