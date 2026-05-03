@@ -27,7 +27,18 @@ npm test             # vitest run (API 클라이언트 + MSW)
 
 ## 환경 변수 (`.env.local`)
 
-`.env.local.example`을 복사해 시작한다.
+처음 셋업할 때는 리포 루트의 헬퍼 스크립트가 토큰 발급(`keyring:admin_api_token`),
+`.env.local` 작성, `config.yaml`의 `admin_api` 블록 보강을 한 번에 처리한다.
+
+```bash
+# 리포 루트에서
+.venv/bin/python scripts/setup_admin_api.py
+```
+
+스크립트는 idempotent하다 — 이미 토큰이 있으면 재사용하고, `.env.local` 의 토큰
+라인만 갱신한다. 토큰을 강제로 재발급하려면 `--force`를 붙인다.
+
+직접 작성하고 싶으면 `.env.local.example` 을 복사해 다음 키를 채워도 된다:
 
 ```bash
 cp .env.local.example .env.local
@@ -45,9 +56,24 @@ ADMIN_API_TOKEN=...
 ADMIN_API_BASE=http://127.0.0.1:8082
 ```
 
+> **dev 서버 재기동 필수** — `.env.local` 변경 후에는 `npm run dev` 프로세스를
+> 재시작해야 새 토큰이 프록시 라우트(`/api/admin/[...path]`)에 반영된다.
+
 > **백엔드 CORS 정합** — Admin Backend(`AdminAPIServer`, BIZ-58)는 `cors_origins`에
-> `http://localhost:3100`을 기본 포함해야 한다. 다른 포트로 운영할 경우 백엔드 설정의
+> `http://localhost:3100`을 기본 포함해야 한다. 위 스크립트는 `config.yaml` 에 이
+> origin이 빠져 있으면 자동으로 추가한다. 다른 포트로 운영할 경우 백엔드 설정의
 > `cors_origins`도 함께 추가한다.
+
+## 검증 (백엔드 살아 있을 때)
+
+```bash
+# 데몬: scripts/run_bot.py 가 admin_api 를 :8082 에 띄운다.
+curl -sS http://localhost:3100/api/admin/health        | head -c 200
+curl -sS http://localhost:3100/api/admin/config/llm    | head -c 200
+curl -sS http://localhost:3100/api/admin/config/persona | head -c 200
+```
+
+세 호출 모두 200 + JSON이면 11개 화면이 실데이터로 렌더된다.
 
 ## 구조
 
