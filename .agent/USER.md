@@ -20,9 +20,9 @@
 -->
 
 ## Preferences
-- Primary language: Korean (한국어)
-- Communication style: Casual, direct
-- Prefers concise answers over verbose explanations
+- 1차 언어: 한국어 (BIZ-80 — dreaming 산출물도 한국어로 통일)
+- 대화 스타일: 캐주얼하고 직설적
+- 장황한 설명보다 간결한 답변 선호
 
 <!-- managed:dreaming:insights -->
 ## Dreaming Insights (2026-04-28)
