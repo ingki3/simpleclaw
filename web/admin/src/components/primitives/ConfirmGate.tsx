@@ -1,161 +1,126 @@
 "use client";
 
 /**
- * ConfirmGate — DESIGN.md §3.2 / §4.2 ("텍스트 confirm 입력 + 카운트다운 게이지").
+ * ConfirmGate — DESIGN.md §3.2 / §1 #5 위험 변경 격리.
  *
- * 파괴적 액션 직전에 띄우는 모달. 운영자가 정확한 확인 문자열을 입력해야만
- * Confirm 버튼이 활성화되고, 그 외에는 도주(Escape/취소) 외 경로가 없다.
+ * 파괴적 액션(시크릿 회전, 데몬 재시작, 삭제)에 대해 *텍스트 일치 입력*을 요구한다.
+ * 운영자가 정확히 ``ROTATE`` 또는 ``DELETE``를 입력해야만 ``Confirm`` 버튼이 활성화.
  *
- * BIZ-46에서는 MEMORY.md 영구 삭제에 사용된다 — 입력 일치(`MEMORY.md` 같은
- * 식별 문자열)로 의도를 한 번 더 검증한다.
+ * 본 컴포넌트는 :Modal 위에 얹은 wrapper다. ``alert: true`` 모달로 시맨틱 격상하며,
+ * 입력값과 ``confirmation`` prop이 정확히 일치할 때만 ``onConfirm``이 호출된다.
+ *
+ * 디자인 결정:
+ *  - 입력 비교는 *대소문자 구분* — 운영자가 진짜로 의도했는지 강제하기 위함.
+ *  - 진행 중(isPending)에는 입력/취소도 비활성화 — 모달은 dismissible=false가 된다.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/atoms/Button";
-import { Input } from "@/components/atoms/Input";
-import { cn } from "@/lib/cn";
+import { Modal } from "./Modal";
 
 export interface ConfirmGateProps {
   open: boolean;
-  title: string;
-  description?: React.ReactNode;
-  /** 운영자가 그대로 입력해야 통과되는 문자열 (예: 파일명). */
-  expectedInput: string;
-  /** 입력란 placeholder — 보통 `expectedInput과 동일하게 입력` 같은 안내. */
-  inputLabel?: string;
+  onOpenChange: (open: boolean) => void;
+  /** 다이얼로그 헤더 — 예: "Claude 키를 회전할까요?". */
+  title: ReactNode;
+  /** 보조 설명 — 결과로 어떤 일이 일어나는지 한국어 존댓말. */
+  description?: ReactNode;
+  /** 운영자가 입력해야 정확히 일치해야 하는 토큰 — 보통 ``ROTATE`` / ``DELETE``. */
+  confirmation: string;
+  /** Confirm 버튼 라벨 — 미지정 시 "계속". */
   confirmLabel?: string;
-  cancelLabel?: string;
+  /** Confirm 클릭 시 실행되는 핸들러. 비동기 가능. */
   onConfirm: () => void | Promise<void>;
-  onCancel: () => void;
+  /** 위험도 — 기본 destructive(빨강). */
+  tone?: "destructive" | "warning";
+  /** 외부에서 진행 중 상태 강제 — 외부 mutation 훅과 결합하려 할 때. */
+  isPending?: boolean;
+  /** 추가 본문(자식). 보통 영향 분석 또는 dry-run 결과 요약. */
+  children?: ReactNode;
 }
 
 export function ConfirmGate({
   open,
+  onOpenChange,
   title,
   description,
-  expectedInput,
-  inputLabel,
-  confirmLabel = "삭제",
-  cancelLabel = "취소",
+  confirmation,
+  confirmLabel = "계속",
   onConfirm,
-  onCancel,
+  tone = "destructive",
+  isPending,
+  children,
 }: ConfirmGateProps) {
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [input, setInput] = useState("");
+  const [internalPending, setInternalPending] = useState(false);
+  const pending = !!isPending || internalPending;
+  const valid = input === confirmation;
 
-  // 모달이 열릴 때마다 입력값을 초기화하고 입력란에 포커스
+  // 진입할 때마다 입력값 초기화 — 다른 항목 confirm에 누설되지 않도록.
   useEffect(() => {
-    if (open) {
-      setValue("");
-      setBusy(false);
-      // 다음 tick에 포커스 (DOM mount 이후)
-      const t = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(t);
-    }
+    if (open) setInput("");
   }, [open]);
 
-  // Escape로 닫기 — 작업 중에는 잠금
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, busy, onCancel]);
-
-  if (!open) return null;
-
-  const matches = value.trim() === expectedInput;
+  async function handleConfirm() {
+    if (!valid || pending) return;
+    setInternalPending(true);
+    try {
+      await onConfirm();
+      onOpenChange(false);
+    } finally {
+      setInternalPending(false);
+    }
+  }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="confirm-gate-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      // 배경 클릭으로 닫기 (busy일 때는 잠금)
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onCancel();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        className={cn(
-          "w-full max-w-md rounded-[--radius-l] border border-[--border] bg-[--card] p-6 shadow-[--shadow-l]",
-        )}
-      >
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 shrink-0">
-            <AlertTriangle
-              size={20}
-              className="text-[--color-error]"
-              aria-hidden
-            />
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2
-              id="confirm-gate-title"
-              className="text-base font-semibold text-[--foreground-strong]"
-            >
-              {title}
-            </h2>
-            {description ? (
-              <div className="mt-1 text-sm text-[--muted-foreground]">
-                {description}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <label
-            htmlFor="confirm-gate-input"
-            className="mb-1 block text-xs text-[--muted-foreground]"
-          >
-            {inputLabel ?? `확인을 위해 "${expectedInput}"를 입력하세요`}
-          </label>
-          <Input
-            id="confirm-gate-input"
-            ref={inputRef}
-            value={value}
-            invalid={value.length > 0 && !matches}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder={expectedInput}
-            disabled={busy}
-            autoComplete="off"
-          />
-        </div>
-
-        <div className="mt-5 flex items-center justify-end gap-2">
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      description={description}
+      alert
+      dismissible={!pending}
+      size="sm"
+      footer={
+        <>
           <Button
             variant="ghost"
-            size="md"
-            onClick={onCancel}
-            disabled={busy}
+            size="sm"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
           >
-            {cancelLabel}
+            취소
           </Button>
           <Button
-            variant="destructive"
-            size="md"
-            disabled={!matches || busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onConfirm();
-              } finally {
-                setBusy(false);
-              }
-            }}
+            variant={tone === "destructive" ? "destructive" : "primary"}
+            size="sm"
+            onClick={handleConfirm}
+            disabled={!valid || pending}
           >
-            {confirmLabel}
+            {pending ? "진행 중…" : confirmLabel}
           </Button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {children && <div className="mb-4">{children}</div>}
+      <label className="block text-xs text-[--muted-foreground]">
+        계속하려면{" "}
+        <code className="rounded-[--radius-sm] border border-[--border] bg-[--surface] px-1 py-0.5 font-mono text-[11px] text-[--foreground]">
+          {confirmation}
+        </code>
+        를 그대로 입력해 주세요.
+      </label>
+      <input
+        type="text"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        disabled={pending}
+        spellCheck={false}
+        autoComplete="off"
+        autoCapitalize="off"
+        className="mt-2 w-full rounded-[--radius-m] border border-[--border] bg-[--card] px-3 py-2 font-mono text-sm text-[--foreground] outline-none focus:border-[--primary] focus:ring-2 focus:ring-[--ring] disabled:opacity-50"
+        aria-label={`확인 입력 — ${confirmation}`}
+      />
+    </Modal>
   );
 }

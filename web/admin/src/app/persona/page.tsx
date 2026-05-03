@@ -19,7 +19,7 @@ import { Eye, RefreshCcw, Save, Trash2, X } from "lucide-react";
 import { Badge } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { ConfirmGate } from "@/components/primitives/ConfirmGate";
-import { Toast } from "@/components/primitives/Toast";
+import { useToast } from "@/components/primitives/Toast";
 import { MarkdownPreview } from "@/lib/markdown-preview";
 import { cn } from "@/lib/cn";
 import {
@@ -51,14 +51,12 @@ const TABS: TabDef[] = [
   { type: "memory", label: "MEMORY", filename: "MEMORY.md", deletable: true },
 ];
 
-interface ToastState {
-  tone: "success" | "warn" | "destructive-soft" | "info";
-  title: string;
-  description?: React.ReactNode;
-  undoToken?: string;
-}
+// 5분 undo 윈도우 — DESIGN.md §1 #6 Reversibility.
+const UNDO_WINDOW_MS = 5 * 60 * 1000;
 
 export default function PersonaPage() {
+  const { push: pushToast } = useToast();
+
   // 디스크에서 읽은 4파일 메타 — 단일 source-of-truth는 백엔드, 클라이언트는 캐시.
   const [files, setFiles] = useState<FileMap | null>(null);
   const [tokenBudget, setTokenBudget] = useState(8000);
@@ -72,7 +70,6 @@ export default function PersonaPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [resolvePreview, setResolvePreview] = useState<
     PersonaResolveResponse | null
@@ -202,15 +199,22 @@ export default function PersonaPage() {
             }
           : prev,
       );
-      setToast({
+      const undoToken = res.undoToken;
+      pushToast({
         tone: "success",
         title: `${TABS.find((t) => t.type === activeTab)?.filename} 저장됨 ♻`,
         description:
           "다음 메시지부터 새 페르소나가 적용됩니다. 5분 안에 되돌릴 수 있어요.",
-        undoToken: res.undoToken,
+        undo: undoToken
+          ? {
+              label: "되돌리기 (5분)",
+              expiresAt: Date.now() + UNDO_WINDOW_MS,
+              onUndo: () => undoSavedPersona(undoToken),
+            }
+          : undefined,
       });
     } catch (e) {
-      setToast({
+      pushToast({
         tone: "destructive-soft",
         title: "저장에 실패했습니다",
         description: e instanceof Error ? e.message : String(e),
@@ -220,10 +224,10 @@ export default function PersonaPage() {
     }
   };
 
-  const handleUndo = async () => {
-    if (!toast?.undoToken) return;
+  // 저장 토스트의 undo 슬롯에서 호출되는 핸들러 — 저장 시점에 받은 token 클로저로 호출.
+  const undoSavedPersona = async (undoToken: string) => {
     try {
-      const result = await undoPersona(toast.undoToken);
+      const result = await undoPersona(undoToken);
       // 디스크에서 다시 읽어 캐시 동기화
       setFiles((prev) =>
         prev
@@ -244,14 +248,13 @@ export default function PersonaPage() {
         delete next[result.type];
         return next;
       });
-      // 후속 토스트 — 자동 dismiss
-      setToast({
+      pushToast({
         tone: "info",
         title: "되돌렸습니다",
         description: `${TABS.find((t) => t.type === result.type)?.filename}을 직전 상태로 복원했습니다.`,
       });
     } catch (e) {
-      setToast({
+      pushToast({
         tone: "destructive-soft",
         title: "되돌리기 실패",
         description: e instanceof Error ? e.message : String(e),
@@ -265,7 +268,7 @@ export default function PersonaPage() {
       const res = await resolvePersona();
       setResolvePreview(res);
     } catch (e) {
-      setToast({
+      pushToast({
         tone: "destructive-soft",
         title: "Resolver 호출 실패",
         description: e instanceof Error ? e.message : String(e),
@@ -298,14 +301,14 @@ export default function PersonaPage() {
         return next;
       });
       setConfirmDelete(false);
-      setToast({
+      pushToast({
         tone: "warn",
         title: "MEMORY.md를 영구 삭제했습니다",
         description: "다음 메시지부터 빈 메모리로 시작합니다.",
       });
     } catch (e) {
       setConfirmDelete(false);
-      setToast({
+      pushToast({
         tone: "destructive-soft",
         title: "삭제 실패",
         description: e instanceof Error ? e.message : String(e),
@@ -606,6 +609,7 @@ export default function PersonaPage() {
       {/* MEMORY 영구 삭제 ConfirmGate */}
       <ConfirmGate
         open={confirmDelete}
+        onOpenChange={setConfirmDelete}
         title="MEMORY.md를 영구 삭제할까요?"
         description={
           <>
@@ -614,29 +618,11 @@ export default function PersonaPage() {
             확인해 주세요.
           </>
         }
-        expectedInput="MEMORY.md"
+        confirmation="MEMORY.md"
         confirmLabel="영구 삭제"
         onConfirm={handleConfirmDelete}
-        onCancel={() => setConfirmDelete(false)}
       />
-
-      {/* 토스트 */}
-      {toast ? (
-        <Toast
-          tone={toast.tone}
-          title={toast.title}
-          description={toast.description}
-          undo={
-            toast.undoToken
-              ? {
-                  label: "되돌리기 (5분)",
-                  onUndo: handleUndo,
-                }
-              : undefined
-          }
-          onClose={() => setToast(null)}
-        />
-      ) : null}
+      {/* 토스트는 ToastProvider(@/components/primitives) viewport에서 렌더된다. */}
     </div>
   );
 }
