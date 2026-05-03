@@ -11,6 +11,7 @@
 
 import type { Metadata } from "next";
 import { ThemeProvider } from "@/lib/theme";
+import { ToastProvider as LegacyToastProvider } from "@/lib/toast";
 import { Shell } from "@/components/layout/Shell";
 import { ToastProvider } from "@/components/primitives";
 import "./globals.css";
@@ -30,7 +31,9 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <ToastProvider>
-            <Shell>{children}</Shell>
+            <LegacyToastProvider>
+              <Shell>{children}</Shell>
+            </LegacyToastProvider>
           </ToastProvider>
         </ThemeProvider>
       </body>

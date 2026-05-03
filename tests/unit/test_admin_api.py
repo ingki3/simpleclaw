@@ -501,6 +501,15 @@ class TestPolicyEngine:
         # 둘 중 더 보수적인 PROCESS_RESTART 채택.
         assert result.level == PROCESS_RESTART
 
+    def test_hot_for_llm_routing(self):
+        # BIZ-45 — 카테고리별 라우팅은 다음 호출부터 즉시 적용되므로 Hot.
+        result = classify_keys(
+            "llm",
+            {"routing": {"general": "claude", "coding": "claude"}},
+        )
+        assert result.level == HOT
+        assert "llm.router" in result.affected_modules
+
 
 class TestValidation:
     def test_history_limit_range(self):
@@ -527,6 +536,25 @@ class TestValidation:
         assert validate_patch(
             "voice", {"tts": {"output_format": "wav"}}
         )
+
+    def test_llm_routing_value_must_match_provider_when_full_patch(self):
+        # 동일 PATCH에 providers가 함께 들어오면 화이트리스트 검증.
+        errors = validate_patch(
+            "llm",
+            {
+                "providers": {"claude": {"type": "api"}},
+                "routing": {"general": "openai"},
+            },
+        )
+        assert errors
+
+    def test_llm_routing_partial_patch_skips_whitelist(self):
+        # routing만 단독 patch — 백엔드는 기존 providers를 모르므로 검증 생략.
+        assert validate_patch("llm", {"routing": {"general": "claude"}}) == []
+
+    def test_llm_routing_value_must_be_string(self):
+        errors = validate_patch("llm", {"routing": {"general": 1}})
+        assert errors
 
     def test_llm_default_must_exist_in_providers(self):
         errors = validate_patch(

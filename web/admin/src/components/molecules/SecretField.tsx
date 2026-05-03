@@ -24,10 +24,13 @@ export interface SecretFieldProps {
   onReveal?: () => Promise<string | undefined> | string | undefined;
   onCopy?: () => void;
   onRotate?: () => void;
+  /** Reveal 자동 만료 시간(ms). 기본 30초; 영역별 정책에 따라 단축 가능
+   *  (예: BIZ-45 LLM 라우터는 5초 정책). */
+  revealTtlMs?: number;
   className?: string;
 }
 
-const REVEAL_TTL_MS = 30_000;
+const DEFAULT_REVEAL_TTL_MS = 30_000;
 
 export function SecretField({
   name,
@@ -36,16 +39,19 @@ export function SecretField({
   onReveal,
   onCopy,
   onRotate,
+  revealTtlMs,
   className,
 }: SecretFieldProps) {
   const [revealed, setRevealed] = useState<string | null>(null);
+  const ttl = revealTtlMs ?? DEFAULT_REVEAL_TTL_MS;
 
-  // reveal TTL 자동 만료. DESIGN.md §4.2의 30초 카운트다운을 지킨다.
+  // reveal TTL 자동 만료. DESIGN.md §4.2의 30초 카운트다운을 지키되, 영역별
+  // 정책으로 더 짧게 설정할 수 있다(예: BIZ-45 LLM 라우터의 5초 정책).
   useEffect(() => {
     if (!revealed) return;
-    const t = setTimeout(() => setRevealed(null), REVEAL_TTL_MS);
+    const t = setTimeout(() => setRevealed(null), ttl);
     return () => clearTimeout(t);
-  }, [revealed]);
+  }, [revealed, ttl]);
 
   async function handleReveal() {
     if (revealed) {

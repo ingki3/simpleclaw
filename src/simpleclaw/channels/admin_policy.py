@@ -49,6 +49,9 @@ POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     "llm.providers.*.model": (HOT, ["llm.router"]),
     "llm.providers.*.api_key": (HOT, ["llm.router", "secrets"]),
     "llm.providers.*.type": (HOT, ["llm.router"]),
+    # 카테고리별 라우팅 — Admin UI(BIZ-45)에서 도입한 키. 라우터가 다음 호출부터
+    # 새 매핑을 사용하므로 데몬 재시작 없이 Hot 등급.
+    "llm.routing.*": (HOT, ["llm.router"]),
     # Agent core — 경로 키는 process restart.
     "agent.history_limit": (HOT, ["agent.orchestrator"]),
     "agent.max_tool_iterations": (HOT, ["agent.orchestrator"]),
@@ -383,6 +386,30 @@ def validate_patch(area: str, patch: dict) -> list[str]:
                 errors.append(
                     f"llm.default: providers에 정의되지 않은 이름입니다 (got '{default}')"
                 )
+        # 카테고리 라우팅 — 값은 문자열(provider 이름)이어야 하고, 동시에 PATCH로
+        # 들어온 providers가 있다면 그 안에 정의돼 있어야 한다.
+        # 부분 PATCH(routing만 보내는 경우)는 서버가 기존 providers를 알지 못하므로
+        # 화이트리스트 검증을 생략한다 — admin_api 핸들러가 머지 후 적용한다.
+        routing = patch.get("routing", {})
+        if isinstance(routing, dict):
+            for cat, val in routing.items():
+                if not isinstance(cat, str) or not cat:
+                    errors.append(f"llm.routing: 카테고리 이름은 비어있지 않은 문자열이어야 합니다")
+                    continue
+                if val is None:
+                    continue
+                if not isinstance(val, str):
+                    errors.append(
+                        f"llm.routing.{cat}: provider 이름(문자열)이어야 합니다 (got {type(val).__name__})"
+                    )
+                    continue
+                if (
+                    isinstance(providers, dict) and providers
+                    and val not in providers
+                ):
+                    errors.append(
+                        f"llm.routing.{cat}: providers에 정의되지 않은 이름입니다 (got '{val}')"
+                    )
 
     return errors
 

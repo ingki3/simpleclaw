@@ -1,5 +1,6 @@
 import type { Preview } from "@storybook/react";
 import "../src/app/globals.css";
+import { ToastProvider } from "../src/lib/toast";
 
 /**
  * Storybook preview — 디자인 토큰을 그대로 노출하기 위해 globals.css를 임포트한다.
@@ -35,7 +36,11 @@ const preview: Preview = {
         if (theme === "light") root.classList.add("theme-light");
         if (theme === "dark") root.classList.add("theme-dark");
       }
-      return <Story />;
+      return (
+        <ToastProvider>
+          <Story />
+        </ToastProvider>
+      );
     },
   ],
 };
