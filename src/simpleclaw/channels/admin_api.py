@@ -399,6 +399,17 @@ class AdminAPIServer:
             self._wrap(self._handle_get_insight_sources),
         )
 
+        # BIZ-92 — `/memory/insights` 4-탭 페이지의 Active/Archive/Blocklist
+        # 데이터 공급. read-only listing.
+        app.router.add_get(
+            f"{prefix}/memory/insights",
+            self._wrap(self._handle_list_insights),
+        )
+        app.router.add_get(
+            f"{prefix}/memory/blocklist",
+            self._wrap(self._handle_list_blocklist),
+        )
+
         # BIZ-79 (H: Dreaming Dry-run + Admin Review Loop) — 큐 운영 엔드포인트.
         # GET    /memory/suggestions               — pending 목록
         # GET    /memory/suggestions/{id}/sources  — 근거 메시지 (BIZ-77 재사용)
@@ -1713,6 +1724,110 @@ class AdminAPIServer:
             details={"reason": reason or ""},
         )
         return _json_ok(self._serialize_suggestion(result))
+
+    # ------------------------------------------------------------------
+    # BIZ-92 — Insights 라우트(4-탭) 의 Active/Archive/Blocklist 데이터 공급
+    # ------------------------------------------------------------------
+    #
+    # `/memory/insights` 페이지의 Review 탭은 이미 `_handle_list_suggestions`
+    # 가 채우지만, 나머지 세 탭은 InsightStore / BlocklistStore 의 read-only
+    # listing 이 필요하다. 두 listing 핸들러는 mutation 을 일으키지 않고
+    # 기존 sidecar 데이터를 그대로 직렬화한다.
+
+    def _serialize_insight(self, meta) -> dict:
+        """``InsightMeta`` 를 JSON 응답 dict 로 변환.
+
+        Active/Archive 탭에서 InsightCard 가 직접 소비하는 필드 집합:
+        topic/text/confidence/evidence/last_seen/start_msg_id/end_msg_id/
+        archived_at. last_seen 은 카드의 메타 라인, archived_at 은 탭 분리에
+        쓰인다.
+        """
+        return {
+            "topic": meta.topic,
+            "text": meta.text,
+            "evidence_count": meta.evidence_count,
+            "confidence": meta.confidence,
+            "first_seen": meta.first_seen.isoformat(),
+            "last_seen": meta.last_seen.isoformat(),
+            "start_msg_id": meta.start_msg_id,
+            "end_msg_id": meta.end_msg_id,
+            "source_msg_ids": list(meta.source_msg_ids),
+            "archived_at": (
+                meta.archived_at.isoformat() if meta.archived_at else None
+            ),
+        }
+
+    async def _handle_list_insights(self, request: web.Request) -> web.Response:
+        """``GET /admin/v1/memory/insights``.
+
+        Query params:
+        - ``status``: ``active`` (default — archived_at is None) /
+          ``archived`` (archived_at is not None) / ``all`` (debugging).
+
+        Response:
+        ``{"insights": [...], "total": N, "active_count": A, "archived_count": B}``
+
+        503 if ``insight_store`` 가 주입되지 않음 — Admin API 가 메모리 스택
+        없이 부팅된 환경 (silent 404 보다 명시적인 503 이 운영 진단에 유리).
+        """
+        if self._insight_store is None:
+            return _json_error(
+                503, "Insight store is not configured on this server"
+            )
+
+        status_filter = (request.query.get("status") or "active").strip().lower()
+        all_items = list(self._insight_store.load().values())
+        # 정렬: last_seen 내림차순 — 최근 관측이 위로. 운영자 멘탈 모델상 가장
+        # 자연스럽다 (Active 는 새로 강화된 항목 우선, Archive 는 가장 최근에
+        # 잠든 항목 우선).
+        all_items.sort(key=lambda m: m.last_seen, reverse=True)
+        if status_filter == "all":
+            items = all_items
+        elif status_filter == "archived":
+            items = [m for m in all_items if m.is_archived()]
+        else:  # default 'active'
+            items = [m for m in all_items if not m.is_archived()]
+
+        return _json_ok({
+            "insights": [self._serialize_insight(m) for m in items],
+            "total": len(items),
+            "active_count": sum(1 for m in all_items if not m.is_archived()),
+            "archived_count": sum(1 for m in all_items if m.is_archived()),
+        })
+
+    async def _handle_list_blocklist(self, request: web.Request) -> web.Response:
+        """``GET /admin/v1/memory/blocklist``.
+
+        BIZ-79 의 ``BlocklistStore`` 는 정규형 topic 한 줄당 ``{topic,
+        topic_key, reason, blocked_at}`` 를 저장한다. 응답 형태:
+
+        ``{"entries": [{topic, topic_key, reason, blocked_at}, ...],
+           "total": N}``
+
+        503 if ``blocklist_store`` 가 주입되지 않음. 정렬은 ``blocked_at``
+        내림차순 — 운영자가 가장 최근 결정의 컨텍스트를 빠르게 회수.
+        """
+        if self._blocklist_store is None:
+            return _json_error(
+                503, "Blocklist store is not configured on this server"
+            )
+
+        entries = list(self._blocklist_store.load().values())
+        # blocked_at 은 ISO 문자열 — string 비교가 ISO 형식에서 시간순 정렬과
+        # 일치한다. 누락된 필드는 빈 문자열로 폴백해 정렬이 깨지지 않도록.
+        entries.sort(key=lambda e: e.get("blocked_at") or "", reverse=True)
+        return _json_ok({
+            "entries": [
+                {
+                    "topic": e.get("topic", ""),
+                    "topic_key": e.get("topic_key", ""),
+                    "reason": e.get("reason", ""),
+                    "blocked_at": e.get("blocked_at"),
+                }
+                for e in entries
+            ],
+            "total": len(entries),
+        })
 
     # ------------------------------------------------------------------
     # BIZ-81 — 드리밍 운영 관측성 핸들러
