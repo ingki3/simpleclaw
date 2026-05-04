@@ -32,7 +32,7 @@ import json
 import logging
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from simpleclaw.memory.insights import InsightMeta, normalize_topic
@@ -318,33 +318,86 @@ class BlocklistStore:
             out[key] = d
         return out
 
-    def is_blocked(self, topic: str) -> bool:
+    def is_blocked(self, topic: str, *, now: datetime | None = None) -> bool:
+        """topic 이 현재 차단 상태인지 확인.
+
+        BIZ-93 이후로 항목별 만료(``expires_at``) 가 지원되므로, 만료된 항목은
+        차단으로 보지 않는다. ``expires_at`` 가 없으면 영구 차단.
+        """
         key = normalize_topic(topic)
         if not key:
             return False
-        return key in self.load()
+        entry = self.load().get(key)
+        if entry is None:
+            return False
+        return not _is_blocklist_expired(entry, now=now)
 
-    def add(self, topic: str, *, reason: str | None = None) -> None:
+    def add(
+        self,
+        topic: str,
+        *,
+        reason: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> None:
+        """topic 을 차단 리스트에 등록(중복 시 갱신).
+
+        BIZ-93: ``ttl_seconds`` 가 양수면 ``expires_at`` 을 함께 기록해
+        ``is_blocked`` 가 만료를 자동 인지한다. ``None`` 또는 0 이하면 영구.
+        """
         items = self.load()
         key = normalize_topic(topic)
         if not key:
             return
-        items[key] = {
+        now = datetime.now()
+        # ttl 정규화 — None/0/음수는 영구로 처리.
+        ttl_norm: int | None = None
+        if ttl_seconds is not None:
+            try:
+                ttl_int = int(ttl_seconds)
+            except (TypeError, ValueError):
+                ttl_int = 0
+            if ttl_int > 0:
+                ttl_norm = ttl_int
+        entry: dict = {
             "topic": topic.strip(),
             "topic_key": key,
             "reason": reason or "",
-            "blocked_at": datetime.now().isoformat(),
+            "blocked_at": now.isoformat(),
         }
+        if ttl_norm is not None:
+            entry["ttl_seconds"] = ttl_norm
+            entry["expires_at"] = (
+                now + timedelta(seconds=ttl_norm)
+            ).isoformat()
+        items[key] = entry
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
         with tmp_path.open("w", encoding="utf-8") as f:
-            for entry in items.values():
-                f.write(json.dumps(entry, ensure_ascii=False))
+            for item in items.values():
+                f.write(json.dumps(item, ensure_ascii=False))
                 f.write("\n")
         tmp_path.replace(self._path)
 
     def list_all(self) -> list[dict]:
         return list(self.load().values())
+
+
+def _is_blocklist_expired(
+    entry: dict, *, now: datetime | None = None
+) -> bool:
+    """blocklist 항목이 만료됐는지 판정.
+
+    ``expires_at`` 필드가 ISO 문자열로 저장돼 있으면 그 시점을 기준으로,
+    누락이거나 파싱 실패면 영구 차단으로 간주(False).
+    """
+    raw = entry.get("expires_at")
+    if not raw:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return False
+    return (now or datetime.now()) >= expires_at
 
 
 __all__ = [

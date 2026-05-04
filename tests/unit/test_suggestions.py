@@ -167,6 +167,46 @@ class TestBlocklistStore:
         bl.add("---", reason="punct only")
         assert bl.list_all() == []
 
+    def test_ttl_seconds_records_expires_at(self, tmp_path: Path):
+        """BIZ-93: ttl_seconds 양수 → expires_at 가 함께 저장된다."""
+        bl = BlocklistStore(tmp_path / "bl.jsonl")
+        bl.add("스팸토픽", reason="r", ttl_seconds=30 * 86400)
+        entry = bl.load().get("스팸토픽")
+        assert entry is not None
+        assert entry["ttl_seconds"] == 30 * 86400
+        assert "expires_at" in entry
+        # 현재 시점 기준 차단 유지.
+        assert bl.is_blocked("스팸토픽")
+
+    def test_ttl_zero_or_none_is_permanent(self, tmp_path: Path):
+        """BIZ-93: ttl_seconds=None 또는 0/음수는 영구(만료 필드 없음)."""
+        from simpleclaw.memory.insights import normalize_topic
+
+        bl = BlocklistStore(tmp_path / "bl.jsonl")
+        cases = [
+            ("토픽가", None),
+            ("토픽나", 0),
+            ("토픽다", -5),
+        ]
+        for topic, ttl in cases:
+            bl.add(topic, ttl_seconds=ttl)
+        for topic, _ in cases:
+            entry = bl.load().get(normalize_topic(topic))
+            assert entry is not None
+            assert "expires_at" not in entry
+
+    def test_is_blocked_skips_expired_entry(self, tmp_path: Path):
+        """BIZ-93: expires_at 가 과거면 차단으로 보지 않는다."""
+        from datetime import timedelta
+
+        bl = BlocklistStore(tmp_path / "bl.jsonl")
+        # 1초 짜리 항목 등록 후 미래 시점으로 is_blocked 호출 → 만료.
+        bl.add("ephemeral", ttl_seconds=1)
+        future = datetime.now() + timedelta(hours=1)
+        assert not bl.is_blocked("ephemeral", now=future)
+        # 만료 전이면 여전히 차단.
+        assert bl.is_blocked("ephemeral")
+
 
 # ----------------------------------------------------------------------
 # DreamingPipeline.apply_insight_meta — dry-run 분기 검증 (DoD #1, #2)
