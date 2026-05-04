@@ -116,6 +116,111 @@ class TestFindManagedSections:
         with pytest.raises(ProtectedSectionMalformed, match="여러 번 정의"):
             find_managed_sections(text)
 
+    # -----------------------------------------------------------------------
+    # BIZ-104 — outer 코멘트 가드: 운영자 doc 주석 안에 마커 토큰이 *문자 그대로*
+    # 등장하는 경우, 그 토큰들은 진짜 마커로 잡히면 안 된다(2차 안전망).
+    # -----------------------------------------------------------------------
+
+    def test_marker_inside_outer_doc_comment_is_ignored(self):
+        # ``.agent/MEMORY.md`` 의 회귀 시나리오: 파일 상단의 ``<!-- ... -->`` doc
+        # 주석 본문에 마커 사용 예시가 ``<!-- managed:dreaming:journal -->`` 그대로
+        # 적혀 있다. 하단의 *진짜* journal/clusters 마커만 인식돼야 한다.
+        text = (
+            "# Memory\n"
+            "\n"
+            "<!--\n"
+            "이 파일의 두 영역:\n"
+            "1. <!-- managed:dreaming:journal --> ~ "
+            "<!-- /managed:dreaming:journal -->: append 영역\n"
+            "2. <!-- managed:dreaming:clusters --> ~ "
+            "<!-- /managed:dreaming:clusters -->: 클러스터 영역\n"
+            "-->\n"
+            "\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "real journal body\n"
+            "<!-- /managed:dreaming:journal -->\n"
+            "\n"
+            "<!-- managed:dreaming:clusters -->\n"
+            "real cluster body\n"
+            "<!-- /managed:dreaming:clusters -->\n"
+        )
+        sections = find_managed_sections(text)
+        assert [s.name for s in sections] == ["journal", "clusters"]
+        # 본문은 doc 주석 안의 예시가 아니라 진짜 영역에서 추출돼야 한다.
+        journal_body = text[
+            sections[0].body_offset : sections[0].body_end_offset
+        ].strip("\n")
+        assert journal_body == "real journal body"
+        cluster_body = text[
+            sections[1].body_offset : sections[1].body_end_offset
+        ].strip("\n")
+        assert cluster_body == "real cluster body"
+
+    def test_doc_comment_with_only_inner_markers_is_ignored(self):
+        # outer 안에 진짜 마커 *만* 들어 있는 변종 — 그래도 outer 자체는 doc 코멘트
+        # (안에 다른 텍스트가 있으니까) 로 인식돼 inner 마커는 모두 무시돼야 한다.
+        text = (
+            "<!--\n"
+            "예시:\n"
+            "<!-- managed:dreaming:foo -->\n"
+            "<!-- /managed:dreaming:foo -->\n"
+            "-->\n"
+            "\n"
+            "<!-- managed:dreaming:foo -->\n"
+            "actual\n"
+            "<!-- /managed:dreaming:foo -->\n"
+        )
+        sections = find_managed_sections(text)
+        assert [s.name for s in sections] == ["foo"]
+        body = text[sections[0].body_offset : sections[0].body_end_offset].strip("\n")
+        assert body == "actual"
+
+    def test_pure_marker_token_is_not_treated_as_doc_comment(self):
+        # outer 깊이 0 으로 닫히는 ``<!-- managed:dreaming:NAME -->`` 단일 토큰은
+        # doc 코멘트로 분류되면 안 된다 — 아니면 진짜 마커도 무시되어 모든 파일이
+        # 마커 누락으로 보이게 된다.
+        text = (
+            "<!-- managed:dreaming:foo -->\n"
+            "body\n"
+            "<!-- /managed:dreaming:foo -->\n"
+        )
+        sections = find_managed_sections(text)
+        assert [s.name for s in sections] == ["foo"]
+
+    def test_unbalanced_open_does_not_swallow_real_markers(self):
+        # 끝까지 닫히지 않은 ``<!--`` 는 doc 코멘트 후보로 잡히지 않는다 — 그러면 그
+        # 뒤의 모든 진짜 마커가 silent 하게 사라져 destructive overwrite 의 빌미가
+        # 되기 때문. 닫히지 않은 코멘트는 두고, 마커는 정상적으로 인식돼야 한다.
+        text = (
+            "<!-- 닫히지 않은 코멘트 시작\n"
+            "그 뒤에 진짜 마커가 따라온다\n"
+            "<!-- managed:dreaming:foo -->\n"
+            "real body\n"
+            "<!-- /managed:dreaming:foo -->\n"
+        )
+        sections = find_managed_sections(text)
+        names = [s.name for s in sections]
+        assert "foo" in names
+
+    def test_outer_comment_with_text_after_inner_marker_still_protects_inner(self):
+        # outer doc 안에 inner 마커뿐 아니라 다른 텍스트도 있는 일반적 형태.
+        text = (
+            "<!--\n"
+            "Heading note.\n"
+            "Inside example: <!-- managed:dreaming:journal -->\n"
+            "More commentary follows.\n"
+            "<!-- /managed:dreaming:journal -->\n"
+            "End of doc note.\n"
+            "-->\n"
+            "<!-- managed:dreaming:journal -->\n"
+            "actual\n"
+            "<!-- /managed:dreaming:journal -->\n"
+        )
+        sections = find_managed_sections(text)
+        assert [s.name for s in sections] == ["journal"]
+        body = text[sections[0].body_offset : sections[0].body_end_offset].strip("\n")
+        assert body == "actual"
+
 
 # ---------------------------------------------------------------------------
 # get_managed_section / get_section_body — 단일 섹션 조회
