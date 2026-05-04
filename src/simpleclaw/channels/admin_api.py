@@ -1690,6 +1690,26 @@ class AdminAPIServer:
         body = await self._read_json_body(request)
         reason = (body.get("reason") or "").strip() or None
 
+        # blocklist 차단 기간 — 30/90/180일 또는 null(영구).
+        # BIZ-93: 운영자가 모달에서 단일 선택. None 또는 명시적 null 은 영구.
+        # 그 외 값은 422 로 반려해 잘못된 클라이언트 입력을 즉시 가시화한다.
+        period_raw = body.get("blocklist_period_days", None)
+        ttl_seconds: int | None = None
+        if period_raw is not None:
+            try:
+                period_days = int(period_raw)
+            except (TypeError, ValueError):
+                return _json_error(
+                    422,
+                    "blocklist_period_days must be one of 30, 90, 180, or null",
+                )
+            if period_days not in (30, 90, 180):
+                return _json_error(
+                    422,
+                    "blocklist_period_days must be one of 30, 90, 180, or null",
+                )
+            ttl_seconds = period_days * 86400
+
         s = self._suggestion_store.get(sid)
         if s is None:
             return _json_error(404, f"Suggestion not found: {sid}")
@@ -1700,8 +1720,11 @@ class AdminAPIServer:
             )
 
         # 1) 블록리스트 추가 — 다음 dreaming 사이클부터 같은 topic 은 필터링됨.
+        #    ttl_seconds=None 은 영구 차단, 양수는 해당 시간 후 만료.
         # 2) suggestion 행 status 를 rejected 로 마킹 (UI 에서 사라짐, audit 보존).
-        self._blocklist_store.add(s.topic, reason=reason)
+        self._blocklist_store.add(
+            s.topic, ttl_seconds=ttl_seconds, reason=reason
+        )
         updated = self._suggestion_store.update_status(
             sid, "rejected", reject_reason=reason
         )
@@ -1710,7 +1733,12 @@ class AdminAPIServer:
             request,
             "reject_suggestion",
             result,
-            details={"reason": reason or ""},
+            details={
+                "reason": reason or "",
+                "blocklist_period_days": (
+                    int(period_raw) if ttl_seconds is not None else None
+                ),
+            },
         )
         return _json_ok(self._serialize_suggestion(result))
 
