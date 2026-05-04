@@ -9,7 +9,7 @@ Section 모델에 따라 두 영역으로 구성된다:
    - 정체성, 사칭 금지, 언어 규칙, .agent/ 디렉토리 트리, Google Calendar 매핑 등.
    - 드리밍은 절대 손대지 않는다 — 이 영역의 손실은 에이전트 정체성 자체의 손실.
 
-2. <!-- managed:dreaming:dreaming-updates --> ~ <!-- /managed:dreaming:dreaming-updates -->:
+2. `managed:dreaming:dreaming-updates` 섹션:
    - 드리밍이 사용자가 명시적으로 요청한 행동/통합 변경을 누적 기록하는 영역.
    - 마커 안쪽에서만 dreaming의 추가가 허용되며, 마커가 없으면 fail-closed로 중단된다.
 
