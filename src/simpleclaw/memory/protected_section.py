@@ -38,6 +38,30 @@ _START_RE = re.compile(rf"<!--\s*managed:dreaming:({_NAME_RE})\s*-->")
 _END_RE = re.compile(rf"<!--\s*/managed:dreaming:({_NAME_RE})\s*-->")
 
 
+def _is_marker_on_own_line(text: str, start: int, end: int) -> bool:
+    """``text[start:end]`` 가 자기 줄을 단독으로 차지하는지 검사.
+
+    "단독으로 차지" 는 마커 앞쪽이 (파일 시작 또는 줄바꿈) + 임의 공백, 마커 뒤쪽이
+    임의 공백 + (줄바꿈 또는 파일 끝) 임을 의미한다. 예를 들어 ``1. <!-- ... -->`` 처럼
+    같은 줄의 앞에 prose 가 있으면 *문서 설명용 인라인 mention* 으로 보고 진짜 marker 가
+    아닌 것으로 판단한다.
+    """
+    # 앞쪽: 줄 시작까지 거슬러 올라가 모두 공백이어야 함.
+    i = start
+    while i > 0 and text[i - 1] in " \t":
+        i -= 1
+    if i > 0 and text[i - 1] != "\n":
+        return False
+    # 뒤쪽: 줄 끝까지 모두 공백이어야 함.
+    j = end
+    n = len(text)
+    while j < n and text[j] in " \t":
+        j += 1
+    if j < n and text[j] != "\n":
+        return False
+    return True
+
+
 class ProtectedSectionError(Exception):
     """모든 protected-section 위반의 베이스 예외."""
 
@@ -93,11 +117,19 @@ def find_managed_sections(text: str) -> list[ManagedSection]:
     # 시작·끝 마커를 모두 모아 등장 순으로 정렬 후 스택으로 짝 검증.
     # 이 방식은 정규식 한 번으로 시작/끝을 동시에 잡으려는 시도보다 훨씬 견고하다 —
     # 시작과 끝이 다른 줄에 있어도, 같은 줄에 있어도 동일하게 동작한다.
+    #
+    # 단, marker 는 *자기 줄을 단독으로* 차지하는 형태만 진짜 marker 로 본다.
+    # `.agent/MEMORY.md` 등 운영 파일은 최상단 doc 주석 안에 marker 토큰을 *문서
+    # 설명용*으로 그대로 적는 경우가 있고("2. <!-- managed:dreaming:journal --> ~ ..."),
+    # 그 인라인 등장은 진짜 marker 가 아니다. 줄 단독 제약(앞뒤가 줄 경계 + 공백뿐)을
+    # 추가해 doc 안 인라인 mention 이 fail-closed 트랩이 되지 않도록 한다 (BIZ-104).
     tokens: list[tuple[str, int, int, str]] = []
     for m in _START_RE.finditer(text):
-        tokens.append(("start", m.start(), m.end(), m.group(1)))
+        if _is_marker_on_own_line(text, m.start(), m.end()):
+            tokens.append(("start", m.start(), m.end(), m.group(1)))
     for m in _END_RE.finditer(text):
-        tokens.append(("end", m.start(), m.end(), m.group(1)))
+        if _is_marker_on_own_line(text, m.start(), m.end()):
+            tokens.append(("end", m.start(), m.end(), m.group(1)))
     tokens.sort(key=lambda t: t[1])
 
     sections: list[ManagedSection] = []

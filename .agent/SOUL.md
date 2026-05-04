@@ -5,7 +5,7 @@ SimpleClaw의 정체성·말투·핵심 가치관(SOUL.md). 마커 외부의 모
 (Identity / Personality / Speaking Style / Core Values)은 사용자 직접 관리 영역이며
 드리밍은 절대 손대지 않는다 (BIZ-72 Protected Section).
 
-마커 안쪽 <!-- managed:dreaming:dreaming-updates -->는 사용자가 명시적으로 요청한
+마커 안쪽 `managed:dreaming:dreaming-updates` 섹션은 사용자가 명시적으로 요청한
 말투/호칭/페르소나 변경을 드리밍이 누적 기록하는 영역이다. 마커가 없으면 드리밍이
 fail-closed로 중단된다.
 -->
