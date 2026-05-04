@@ -2,12 +2,13 @@
 
 검증 범위 (DoD §B 의 핵심 사이클):
 
-1. dreaming.run() 결과가 곧바로 USER.md/insights.jsonl 에 가지 않고
-   ``insight_suggestions.jsonl`` 큐에 pending 상태로 적재된다.
-2. 운영자가 reject 하면 (`InsightBlocklist.add`) 다음 dreaming 사이클은
-   같은 topic 을 큐에도 sidecar 에도 등록하지 않는다.
+1. dreaming.run() 결과가 곧바로 USER.md 에 auto-promote 되지 않고
+   ``insight_suggestions.jsonl`` 큐에 pending 상태로 적재된다 (단발 관측
+   confidence 0.4 + evidence 1 → auto-promote 임계 미달).
+2. 운영자가 reject 하면 (`BlocklistStore.add`) 다음 dreaming 사이클은
+   같은 topic 을 큐에도 sidecar 에도 등록하지 않는다 (blocklist 사전 필터).
 3. auto_promote 두 조건(confidence AND evidence_count)을 동시에 만족하는
-   항목은 dry_run 중에도 큐를 우회해 sidecar 로 직접 승격된다 — "이미 충분히
+   항목은 dry_run 중에도 큐를 우회해 USER.md 로 직접 승격된다 — "이미 충분히
    강한 시그널은 매번 승인할 필요가 없다" 는 운영자 부담 완화 정책.
 
 이 모듈은 LLM 을 모킹해 정해진 user_insights_meta 를 반환시킴으로써
@@ -26,8 +27,7 @@ from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.insights import InsightStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.memory.suggestions import (
-    SUGGESTION_STATUS_PENDING,
-    InsightBlocklist,
+    BlocklistStore,
     SuggestionStore,
 )
 
@@ -79,7 +79,6 @@ def dryrun_pipeline(tmp_path):
         insights_file=insights_path,
         suggestions_file=suggestions_path,
         blocklist_file=blocklist_path,
-        dry_run_enabled=True,
         # 자동 승격 임계는 평소 운영값으로 — 단발 관측은 자연히 큐 경유.
         auto_promote_confidence=0.7,
         auto_promote_evidence_count=3,
@@ -89,7 +88,7 @@ def dryrun_pipeline(tmp_path):
         "pipeline": pipeline,
         "store": store,
         "suggestions": SuggestionStore(suggestions_path),
-        "blocklist": InsightBlocklist(blocklist_path),
+        "blocklist": BlocklistStore(blocklist_path),
         "insights": InsightStore(insights_path),
     }
 
@@ -98,7 +97,9 @@ class TestDryRunQueueing:
     """1회 관측은 confidence 0.4 + evidence 1 — 어떤 auto-promote 임계도 못 넘는다."""
 
     @pytest.mark.asyncio
-    async def test_single_observation_goes_to_queue_not_sidecar(self, dryrun_pipeline):
+    async def test_single_observation_goes_to_queue_not_user_md(
+        self, dryrun_pipeline, tmp_path
+    ):
         ctx = dryrun_pipeline
         ctx["pipeline"]._router = _mock_router("정치뉴스", "정치 뉴스 관심")
         ctx["store"].add_message(
@@ -106,13 +107,23 @@ class TestDryRunQueueing:
         )
         await ctx["pipeline"].run()
 
-        # sidecar 는 비어있어야 — 큐에서 운영자 검수를 기다리는 상태.
-        assert ctx["insights"].load() == {}
+        # USER.md insights 섹션은 비어있어야 — auto-promote 임계 미달이므로
+        # 운영자 검수 대기 (sidecar 는 evidence_count 추적용으로 채워짐).
+        user_text = (tmp_path / "USER.md").read_text()
+        section = user_text.split("<!-- managed:dreaming:insights -->")[1]
+        section = section.split("<!-- /managed:dreaming:insights -->")[0]
+        assert section.strip() == ""
+
+        # sidecar 는 evidence 추적을 위해 관측을 누적하되 confidence 는 단발 cap.
+        sidecar = ctx["insights"].load()
+        assert "정치뉴스" in sidecar
+        assert sidecar["정치뉴스"].confidence < 0.7
+
         # 큐에는 pending 상태로 1건 적재.
         pending = ctx["suggestions"].list_pending()
         assert len(pending) == 1
         assert pending[0].topic == "정치뉴스"
-        assert pending[0].status == SUGGESTION_STATUS_PENDING
+        assert pending[0].status == "pending"
 
 
 class TestRejectBlockingNextCycle:
@@ -132,7 +143,9 @@ class TestRejectBlockingNextCycle:
 
         # 운영자 reject — blocklist 등재 + status 변경. (admin API 와 동일 인터페이스)
         ctx["blocklist"].add("정치뉴스", reason="user_rejected")
-        ctx["suggestions"].mark_status("정치뉴스", "rejected")
+        target = ctx["suggestions"].find_pending_by_topic("정치뉴스")
+        assert target is not None
+        ctx["suggestions"].update_status(target.id, "rejected")
 
         # 회차 2 — 같은 topic 이 다시 관측되어도, 큐 default(pending) 에 다시 뜨면 안 됨.
         ctx["store"].add_message(
@@ -143,8 +156,10 @@ class TestRejectBlockingNextCycle:
         # default 큐 노출에서 같은 topic 이 부활하면 안 된다.
         pending_topics = [item.topic for item in ctx["suggestions"].list_pending()]
         assert "정치뉴스" not in pending_topics
-        # sidecar 도 여전히 빈 상태 — blocklist 가 sandbox 단계에서 차단.
-        assert ctx["insights"].load() == {}
+        # sidecar 의 evidence_count 도 회차 1 그대로 — blocklist 가 회차 2 관측을
+        # 사전 차단해 reinforcement 가 발생하지 않는다.
+        sidecar = ctx["insights"].load()
+        assert sidecar["정치뉴스"].evidence_count == 1
 
     @pytest.mark.asyncio
     async def test_rejected_topic_normalized_form_also_blocked(self, dryrun_pipeline):

@@ -1114,11 +1114,71 @@ class TestSuggestionQueue:
         assert body["reject_reason"] == "스팸"
         # writer 는 호출되지 않는다.
         assert applied == []
-        # blocklist 에 추가됐다.
+        # blocklist 에 추가됐다 — period 미지정은 영구.
         assert bl_store.is_blocked("스팸토픽")
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert "expires_at" not in entry  # 영구 차단
         # suggestion 행도 rejected.
         s = sugg_store.get(s2_id)
         assert s is not None and s.status == "rejected"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("period_days", [30, 90, 180])
+    async def test_reject_with_blocklist_period_sets_ttl(
+        self, suggestion_client, period_days
+    ):
+        """BIZ-93: blocklist_period_days 30/90/180 → expires_at 기록."""
+        client, _, bl_store, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={
+                "reason": "스팸",
+                "blocklist_period_days": period_days,
+            },
+        )
+        assert resp.status == 200
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert entry["ttl_seconds"] == period_days * 86400
+        assert "expires_at" in entry  # ISO 문자열로 저장
+        # 차단 상태가 현재 시점 기준으로 유효해야 한다.
+        assert bl_store.is_blocked("스팸토픽")
+
+    @pytest.mark.asyncio
+    async def test_reject_with_null_period_is_permanent(
+        self, suggestion_client
+    ):
+        """BIZ-93: blocklist_period_days=null 은 영구 차단."""
+        client, _, bl_store, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={
+                "reason": "영구",
+                "blocklist_period_days": None,
+            },
+        )
+        assert resp.status == 200
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert "expires_at" not in entry
+        assert "ttl_seconds" not in entry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_value", [7, 365, "abc", -1, 0])
+    async def test_reject_invalid_period_returns_422(
+        self, suggestion_client, bad_value
+    ):
+        """BIZ-93: 30/90/180/null 외 값은 422 반환."""
+        client, _, _, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={"blocklist_period_days": bad_value},
+        )
+        assert resp.status == 422
 
     @pytest.mark.asyncio
     async def test_get_sources_returns_messages(self, suggestion_client):

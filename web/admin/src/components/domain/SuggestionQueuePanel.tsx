@@ -6,7 +6,7 @@
  * 책임:
  *  - pending suggestions 를 한 행씩 보여주고 accept / edit / reject / 근거보기 액션 제공.
  *  - edit 은 인라인 textarea 로 전환되어 저장 시 ``editSuggestion``을 호출.
- *  - reject 는 ConfirmGate 로 가드 — 블록리스트 추가 = "재추출 차단"이라는 단방향 효과 안내.
+ *  - reject 는 RejectInsightModal(BIZ-93) 로 가드 — 차단 기간(30/90/180/영구) 단일 선택.
  *  - "근거 보기"는 Modal 로 ``getSuggestionSources`` 결과를 시간순 표시.
  *
  * 비책임:
@@ -34,18 +34,18 @@ import {
 import { Badge } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { Modal } from "@/components/primitives/Modal";
-import { ConfirmGate } from "@/components/primitives/ConfirmGate";
 import { useToast } from "@/components/primitives/Toast";
+import { RejectInsightModal } from "@/components/domain/RejectInsightModal";
 import {
   acceptSuggestion,
   editSuggestion,
   getSuggestionSources,
   listSuggestions,
   rejectSuggestion,
+  type RejectBlocklistPeriodDays,
   type Suggestion,
   type SuggestionSourceMessage,
 } from "@/lib/api/suggestions";
-import { cn } from "@/lib/cn";
 
 export interface SuggestionQueuePanelProps {
   /** 외부(드리밍 진행 중 등)에서 액션을 차단해야 할 때 true. */
@@ -141,24 +141,39 @@ export function SuggestionQueuePanel({
     }
   };
 
-  const handleConfirmReject = async (reason: string) => {
+  const handleConfirmReject = async (
+    period: RejectBlocklistPeriodDays,
+  ) => {
     if (!rejectTarget) return;
+    // 호출자 측 try/catch 는 의도적으로 throw 를 다시 올린다 — RejectInsightModal
+    // 이 자체 error state 로 표시할 수 있게 하고, 모달이 닫히지 않도록 해야 한다.
     try {
-      await rejectSuggestion(rejectTarget.id, reason);
+      await rejectSuggestion(rejectTarget.id, {
+        blocklist_period_days: period,
+      });
+      const periodLabel =
+        period === null
+          ? "영구적으로"
+          : `${period}일 동안`;
       pushToast({
         tone: "info",
-        title: "제안을 거절하고 블록리스트에 추가했어요.",
-        description: `다음 드리밍부터 “${rejectTarget.topic}” 주제는 다시 추출되지 않아요.`,
+        title: "blocklist에 등록되었습니다.",
+        description: `“${rejectTarget.topic}” 주제는 ${periodLabel} 다시 추출되지 않아요.`,
       });
+      const target = rejectTarget;
       setRejectTarget(null);
       await refresh();
       onChanged?.();
+      // 성공 경로는 모달이 onConfirm 완료 후 자동으로 닫힌다 — target 변수로
+      // 토스트 desc 만 유지.
+      void target;
     } catch (e) {
       pushToast({
         tone: "destructive-soft",
         title: "거절 처리에 실패했어요.",
         description: e instanceof Error ? e.message : String(e),
       });
+      throw e;
     }
   };
 
@@ -306,10 +321,14 @@ export function SuggestionQueuePanel({
         ) : null}
       </Modal>
 
-      {/* Reject 확인 게이트 — reason 자유서술. */}
-      <RejectConfirm
-        target={rejectTarget}
-        onCancel={() => setRejectTarget(null)}
+      {/* Reject 확인 모달 — BIZ-93: 차단 기간(30/90/180/영구) 단일 선택. */}
+      <RejectInsightModal
+        open={!!rejectTarget}
+        onOpenChange={(o) => {
+          if (!o) setRejectTarget(null);
+        }}
+        topic={rejectTarget?.topic ?? ""}
+        bodyPreview={rejectTarget?.text}
         onConfirm={handleConfirmReject}
       />
     </section>
@@ -478,73 +497,6 @@ function SuggestionRow({
         )}
       </div>
     </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Reject 확인 모달 — ConfirmGate(타이핑 일치) + 자유서술 reason.
-// ---------------------------------------------------------------------------
-
-interface RejectConfirmProps {
-  target: Suggestion | null;
-  onCancel: () => void;
-  onConfirm: (reason: string) => void | Promise<void>;
-}
-
-function RejectConfirm({ target, onCancel, onConfirm }: RejectConfirmProps) {
-  // ConfirmGate 의 children 슬롯이 reason textarea 를 담는다 — gate 재사용으로
-  // 위험 의식 + 추가 메모 입력을 한 번에 수집한다.
-  const [reason, setReason] = useState("");
-
-  // target 변경 시 입력 리셋 — 이전 reason 가 다른 항목으로 흘러가지 않도록.
-  useEffect(() => {
-    setReason("");
-  }, [target?.id]);
-
-  return (
-    <ConfirmGate
-      open={!!target}
-      onOpenChange={(o) => {
-        if (!o) onCancel();
-      }}
-      title="이 제안을 거절할까요?"
-      description={
-        <>
-          거절하면 <span className="font-mono">{target?.topic}</span> 주제는 다음 드리밍 사이클부터
-          블록리스트에 의해 자동으로 차단됩니다. 다시 허용하려면 블록리스트에서 직접 제거해야 해요.
-          계속하려면 <span className="font-mono">REJECT</span>를 입력해 주세요.
-        </>
-      }
-      confirmation="REJECT"
-      confirmLabel="거절하고 블록"
-      onConfirm={() => onConfirm(reason)}
-    >
-      <div className="flex flex-col gap-2">
-        {target ? (
-          <div className="rounded-[--radius-m] border border-[--border] bg-[--surface] px-3 py-2 text-xs">
-            <div className="font-mono text-[10px] text-[--muted-foreground]">
-              {target.topic} · {target.id}
-            </div>
-            <div className="mt-1 break-words text-[--foreground]">
-              {target.text}
-            </div>
-          </div>
-        ) : null}
-        <label className="flex flex-col gap-1 text-xs text-[--muted-foreground]">
-          <span>거절 사유 (선택, audit 로그에 남아요)</span>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={2}
-            className={cn(
-              "w-full resize-y rounded-[--radius-m] border border-[--border] bg-[--card] p-2 text-sm text-[--foreground] outline-none",
-              "focus:border-[--primary]",
-            )}
-            placeholder="예: 일회성 농담이라 학습할 가치 없음"
-          />
-        </label>
-      </div>
-    </ConfirmGate>
   );
 }
 
