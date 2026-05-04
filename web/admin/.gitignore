@@ -19,6 +19,9 @@ storybook-static/
 *.pem
 .env*.local
 
+# BIZ-92 screenshot artifacts (재현 가능한 출력물이라 저장소에 두지 않음)
+screenshots-biz-92/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
