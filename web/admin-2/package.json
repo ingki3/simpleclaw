@@ -1,0 +1,38 @@
+{
+  "name": "@simpleclaw/admin-2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SimpleClaw Admin 2.0 — admin.pen 기반 재구축 (BIZ-108 트리)",
+  "scripts": {
+    "dev": "node scripts/run-next.mjs dev",
+    "build": "next build",
+    "start": "node scripts/run-next.mjs start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install --with-deps chromium"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "@tailwindcss/postcss": "^4.0.0",
+    "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.18.0",
+    "jsdom": "^25.0.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.0"
+  }
+}
