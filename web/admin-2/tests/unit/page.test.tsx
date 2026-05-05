@@ -1,21 +1,24 @@
 /**
- * 스모크 단위 테스트 — Admin 2.0 hello-world 페이지가 렌더되는지 확인.
+ * 스모크 단위 테스트 — Admin 2.0 루트 페이지 (BIZ-113 부터는 redirect).
  *
- * S0 의 목적은 빌드/테스트 인프라가 살아 있다는 것을 입증하는 것이므로,
- * 본 테스트는 페이지 컴포넌트가 예외 없이 렌더되고 scaffold marker 가 보이는지만 검증한다.
+ * S2 부터 `/` 는 영역 셸의 기본 화면(`/dashboard`)으로 즉시 리다이렉트한다.
+ * Next 의 `redirect()` 는 내부적으로 NEXT_REDIRECT 라는 이름의 에러를 throw 하므로,
+ * 본 테스트는 그 호출이 실제로 일어나는지를 검증한다.
  */
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import HomePage from "@/app/page";
+import { describe, expect, it, vi } from "vitest";
 
-describe("Admin 2.0 hello-world 페이지", () => {
-  it("scaffold marker 와 제목을 렌더한다", () => {
-    render(<HomePage />);
-    expect(
-      screen.getByRole("heading", { name: /SimpleClaw Admin 2\.0/i }),
-    ).toBeDefined();
-    expect(screen.getByTestId("scaffold-marker").textContent).toContain(
-      "BIZ-111",
-    );
+vi.mock("next/navigation", () => ({
+  redirect: vi.fn((path: string) => {
+    throw new Error(`NEXT_REDIRECT:${path}`);
+  }),
+}));
+
+import HomePage from "@/app/page";
+import { redirect } from "next/navigation";
+
+describe("Admin 2.0 루트 페이지", () => {
+  it("/dashboard 로 리다이렉트한다", () => {
+    expect(() => HomePage()).toThrow(/NEXT_REDIRECT:\/dashboard/);
+    expect(redirect).toHaveBeenCalledWith("/dashboard");
   });
 });

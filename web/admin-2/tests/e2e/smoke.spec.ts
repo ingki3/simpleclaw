@@ -1,14 +1,16 @@
 /**
- * Playwright 스모크 e2e — Admin 2.0 hello-world 가 실제 브라우저에서 뜨는지 확인.
+ * Playwright 스모크 e2e — Admin 2.0 App Shell 의 기본 진입(BIZ-113 이후).
  *
- * S0 의 DoD ("dev server 가 hello-world 페이지를 렌더") 를 e2e 단에서도 입증한다.
+ * 루트 `/` 진입 → `/dashboard` 리다이렉트 → Sidebar/Topbar/AreaPlaceholder 렌더.
  */
 import { expect, test } from "@playwright/test";
 
-test("hello-world 페이지가 렌더된다", async ({ page }) => {
+test("루트 진입 시 /dashboard 셸이 렌더된다", async ({ page }) => {
   await page.goto("/");
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.getByTestId("sidebar")).toBeVisible();
+  await expect(page.getByTestId("topbar")).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: /SimpleClaw Admin 2\.0/i }),
+    page.getByRole("heading", { level: 1, name: "대시보드" }),
   ).toBeVisible();
-  await expect(page.getByTestId("scaffold-marker")).toContainText("BIZ-111");
 });
