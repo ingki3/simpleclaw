@@ -42,9 +42,12 @@ class AgentDaemon:
     ) -> None:
         self._config_path = Path(config_path)
         self._config = load_daemon_config(config_path)
-        self._pid_file = Path(self._config["pid_file"])
-        self._db_path = Path(self._config["db_path"])
-        self._status_file = Path(self._config["status_file"])
+        # BIZ-139: config.yaml 의 daemon.* 경로는 ``~/.simpleclaw/...`` 표기를
+        # 그대로 노출하므로, 리터럴 ``~`` 디렉터리 생성을 막기 위해 expanduser
+        # 를 일관되게 적용한다 (run_bot.py / orchestrator.py 와 동일).
+        self._pid_file = Path(self._config["pid_file"]).expanduser()
+        self._db_path = Path(self._config["db_path"]).expanduser()
+        self._status_file = Path(self._config["status_file"]).expanduser()
         self._heartbeat_interval = self._config["heartbeat_interval"]
 
         self._agent = agent_orchestrator
