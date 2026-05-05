@@ -141,6 +141,7 @@ def _is_marker_on_own_line(text: str, start: int, end: int) -> bool:
     return True
 
 
+
 class ProtectedSectionError(Exception):
     """모든 protected-section 위반의 베이스 예외."""
 
