@@ -30,6 +30,7 @@ from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
+    load_llm_config,
     load_persona_config,
     load_telegram_config,
 )
