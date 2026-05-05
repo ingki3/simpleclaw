@@ -1,53 +1,11 @@
 /**
- * 루트(`/`) — Admin 2.0 진입 페이지.
+ * 루트(`/`) — Admin 2.0 진입 시 영역 셸의 기본 화면(`/dashboard`)으로 리다이렉트.
  *
- * S0 의 hello-world 골격 + S1 디자인 시스템 카탈로그 링크.
- * 실제 라우팅·내비게이션은 S2 (App Shell) 에서 정의한다.
+ * S2 (BIZ-113) 부터는 `/` 자체가 별도 콘텐츠를 갖지 않는다 — 11개 영역 라우트가
+ * 단일 진실이고, 그 중 dashboard 가 운영자의 기본 진입점이다.
  */
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return (
-    <main
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: "12px",
-        padding: "48px",
-      }}
-    >
-      <h1 style={{ fontSize: "28px", fontWeight: 600, margin: 0 }}>
-        SimpleClaw Admin 2.0
-      </h1>
-      <p style={{ margin: 0, color: "#555" }}>
-        S0 scaffold is live. Design system (S1) and app shell (S2) follow.
-      </p>
-      <code
-        data-testid="scaffold-marker"
-        style={{
-          fontSize: "13px",
-          padding: "4px 8px",
-          borderRadius: "4px",
-          background: "#f3f4f6",
-          color: "#111",
-        }}
-      >
-        web/admin-2 — BIZ-111
-      </code>
-      <Link
-        href="/design-system"
-        style={{
-          fontSize: "14px",
-          padding: "8px 14px",
-          borderRadius: "8px",
-          background: "var(--primary, #5b6cf6)",
-          color: "var(--primary-foreground, #fff)",
-          textDecoration: "none",
-        }}
-      >
-        BIZ-112 — Design system catalog →
-      </Link>
-    </main>
-  );
+  redirect("/dashboard");
 }

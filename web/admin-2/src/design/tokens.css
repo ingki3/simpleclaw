@@ -46,6 +46,10 @@
   --border: var(--neutral-200);
   --border-strong: var(--neutral-300);
   --nav-active-bg: var(--primary-tint);
+  --sidebar-bg: var(--surface);
+  --sidebar-border: var(--border);
+  --topbar-bg: var(--card);
+  --topbar-border: var(--border);
   --foreground: var(--neutral-800);
   --foreground-strong: var(--neutral-900);
   --muted-foreground: var(--neutral-600);
