@@ -179,6 +179,13 @@ daemon:
       primary: "ko"
       min_ratio: 0.3
       per_file: {}
+    # BIZ-132 — 사이클 직전 safety backup 보존 사이클 수. 매 dreaming 사이클의
+    # preflight 직전, 라이브 페르소나/sidecar/DB 가 ``.agent/_safety_backup/{ts}/``
+    # 에 통째로 스냅샷된다. ``max_cycles`` 를 초과한 오래된 사이클은 자동 삭제되며,
+    # ``가장 최근 1개는 항상 보존`` 보장은 0/음수 입력에서도 살아남는다.
+    # 7개 보존이면 약 1주(일 1회 가정) — 사고가 발생해도 한 주 안에 운영자가
+    # 인지/복원 가능한 시간을 확보한다.
+    safety_backup_max_cycles: 7
   wait_state:
     default_timeout: 3600
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.

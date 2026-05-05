@@ -74,6 +74,10 @@ from simpleclaw.memory.protected_section import (
     has_managed_section,
     replace_section_body,
 )
+from simpleclaw.memory.safety_backup import (
+    SafetyBackupManager,
+    find_legacy_memory_backup,
+)
 from simpleclaw.memory.dreaming_runs import (
     SKIP_EMPTY_RESULTS,
     SKIP_MIDWRITE_ABORTED,
@@ -287,6 +291,8 @@ class DreamingPipeline:
         runs_file: str | Path | None = None,
         runs_max_records: int = DreamingRunStore.DEFAULT_MAX_RECORDS,
         language_policy: LanguagePolicy | None = None,
+        safety_backup_manager: SafetyBackupManager | None = None,
+        memory_backup_dir: str | Path | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -481,6 +487,25 @@ class DreamingPipeline:
             language_policy if language_policy is not None
             else LanguagePolicy(primary=None)
         )
+
+        # BIZ-132 — 사이클 직전 safety backup. 매니저가 주입되면 ``run()`` 의 preflight
+        # 직전에 ``snapshot()`` 을 호출하여 위험 파일 목록을 ``.agent/_safety_backup``
+        # 디렉터리에 보존한다. 주입되지 않으면 비활성(레거시 호환).
+        self._safety_backup_manager = safety_backup_manager
+        # Phase 2 자가 복원이 폴백으로 참조하는 레거시 .bak 백업 디렉터리. 명시되지
+        # 않으면 ``self._memory_file`` 옆 ``memory-backup/`` 으로 자동 결정 — 이는
+        # ``create_backup`` 이 사용하는 위치와 일치하므로 자가 복원 후보가 자동으로
+        # 정렬된다.
+        if memory_backup_dir is not None:
+            self._memory_backup_dir: Path = Path(memory_backup_dir)
+        else:
+            self._memory_backup_dir = self._memory_file.parent / "memory-backup"
+        # 한 회차 내에서 self-restore 1회 한정 가드 — preflight 가 두 번째 호출돼도
+        # 자가 복원을 재시도하지 않게 한다. ``run()`` 진입 시 0으로 초기화된다.
+        self._self_restore_count_in_cycle: int = 0
+        # 자가 복원이 실제로 일어났을 때의 메타(파일 → 사용된 백업 경로). run() 이
+        # ``dreaming_runs.jsonl`` 의 ``details["recovered_from"]`` 에 기록한다.
+        self._last_recovered_files: dict[str, str] = {}
 
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -1725,6 +1750,15 @@ class DreamingPipeline:
         - SOUL.md: ``soul_section`` (파일이 설정돼 있을 때).
         - AGENT.md: ``agent_section`` (파일이 설정돼 있을 때).
 
+        BIZ-132 Phase 2 자가 복원:
+            라이브 파일이 *부재* 인 경우(파일 자체가 없음 — BIZ-28 사고 클래스),
+            ``safety_backup_manager`` 또는 레거시 ``memory-backup/`` 디렉터리에서
+            동일 basename 의 최신 백업을 찾아 라이브 경로에 1회 한정으로 복사한 뒤
+            검증을 재시도한다. 복원 후의 파일이 여전히 마커를 갖추지 못했다면
+            ``ProtectedSectionMissing`` 으로 fail-closed (마커 손상은 좁은 예외에
+            포함되지 않음). 마커가 잘못된 경우(``ProtectedSectionMalformed``)도
+            자가 복원하지 않고 즉시 abort.
+
         Raises:
             ProtectedSectionError: 어느 한 파일이라도 검증 실패 시.
         """
@@ -1746,15 +1780,70 @@ class DreamingPipeline:
 
         for file_path, section_name in targets:
             if not file_path.is_file():
-                raise ProtectedSectionMissing(
-                    f"Dreaming preflight 실패: {file_path}가 존재하지 않음 "
-                    f"(필요 섹션: {section_name}). 먼저 managed 마커가 포함된 템플릿을 "
-                    f"수동 또는 ``protected_section.ensure_initialized``로 생성하세요."
+                # BIZ-132 Phase 2 — 부재 케이스 한정 1회 자가 복원 시도.
+                # 복원에 실패하면 그대로 fail-closed 로 떨어진다(BIZ-72 의미 보존).
+                restored_from = self._try_self_restore(file_path)
+                if restored_from is None:
+                    raise ProtectedSectionMissing(
+                        f"Dreaming preflight 실패: {file_path}가 존재하지 않음 "
+                        f"(필요 섹션: {section_name}). 먼저 managed 마커가 포함된 템플릿을 "
+                        f"수동 또는 ``protected_section.ensure_initialized``로 생성하세요."
+                    )
+                logger.warning(
+                    "Dreaming preflight: %s 가 없어 백업에서 복원했습니다 (source=%s).",
+                    file_path,
+                    restored_from,
                 )
+                self._last_recovered_files[file_path.name] = str(restored_from)
             text = file_path.read_text(encoding="utf-8")
             # ``get_section_body``는 섹션이 없으면 ProtectedSectionMissing,
             # 마커가 잘못됐으면 ProtectedSectionMalformed를 던진다.
+            # 자가 복원으로 채워진 파일이라도 마커가 없거나 손상돼 있으면 여기서
+            # 동일하게 fail-closed — Phase 2 의 좁은 예외는 "부재" 한 케이스만이며,
+            # 마커 손상·내용 비정상은 abort.
             get_section_body(text, section_name)
+
+    def _try_self_restore(self, file_path: Path) -> Path | None:
+        """라이브 파일 부재 시 백업에서 1회 한정 복원 시도 (BIZ-132 Phase 2).
+
+        우선순위:
+        1. ``safety_backup_manager`` (사이클 직전 통째 스냅샷) — 가장 최근 사이클의
+           동일 basename 사본.
+        2. 레거시 ``.agent/memory-backup/{stem}.{ts}.bak`` — ``create_backup`` 이
+           만든 파일별 직전 사본.
+
+        한 회차 안에서 ``_self_restore_count_in_cycle`` 가 0 일 때만 진행한다.
+        같은 회차 안에 두 번째 부재가 발생하면(예: 운영자가 race 로 다시 삭제) 그건
+        백업 한 번으로 풀릴 문제가 아니므로 자가 복원을 멈추고 fail-closed 로 처리.
+        """
+        if self._self_restore_count_in_cycle > 0:
+            return None
+
+        backup_path: Path | None = None
+        if self._safety_backup_manager is not None:
+            backup_path = self._safety_backup_manager.latest_backup_for(file_path.name)
+        if backup_path is None:
+            backup_path = find_legacy_memory_backup(
+                self._memory_backup_dir, file_path.name
+            )
+        if backup_path is None or not backup_path.is_file():
+            return None
+
+        try:
+            # 안전한 atomic 복원: 임시 경로에 쓴 뒤 rename. 라이브 위치에 다른
+            # 프로세스가 동시에 만들어둘 수 있는 race window 를 좁힌다.
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = file_path.with_suffix(file_path.suffix + ".restore.tmp")
+            shutil.copy2(backup_path, tmp_path)
+            tmp_path.replace(file_path)
+        except OSError:
+            logger.exception(
+                "Self-restore failed: %s ← %s", file_path, backup_path,
+            )
+            return None
+
+        self._self_restore_count_in_cycle += 1
+        return backup_path
 
     async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
         """전체 드리밍 파이프라인을 실행한다.
@@ -1806,6 +1895,15 @@ class DreamingPipeline:
             run_record.input_msg_count = len(id_pairs)
             self._runs_store.update(run_record)
 
+        # BIZ-132 Phase 1 — 매 사이클의 preflight 직전, 위험 파일 목록을 통째로
+        # ``.agent/_safety_backup/{ts}/`` 에 스냅샷한다. 백업 자체의 실패는 사이클을
+        # 막지 않고(SafetyBackupManager 내부에서 흡수), preflight 가 라이브 손상의
+        # 1차 가드 역할을 그대로 수행. 자가 복원 카운터/메타도 회차 단위로 초기화.
+        self._self_restore_count_in_cycle = 0
+        self._last_recovered_files = {}
+        if self._safety_backup_manager is not None:
+            self._safety_backup_manager.snapshot()
+
         # BIZ-72: 쓰기 시작 전 Protected Section 사전 검증. 실패 시 어떤 파일도
         # 백업조차 만들지 않고 즉시 종료(불필요한 디스크 I/O 방지).
         try:
@@ -1823,6 +1921,18 @@ class DreamingPipeline:
                     details={"message": str(exc)},
                 )
             return None
+
+        # BIZ-132 — preflight 가 자가 복원으로 통과한 경우, 어떤 파일이 어떤 백업으로
+        # 부터 복원됐는지 메트릭 행에 메타로 남겨 운영 가시성을 확보한다. preflight
+        # 실패 경로는 위에서 이미 SKIP_PREFLIGHT_FAILED 로 종료됐으므로 여기 도달 X.
+        if (
+            self._last_recovered_files
+            and run_record is not None
+            and self._runs_store is not None
+        ):
+            run_record.details = dict(run_record.details or {})
+            run_record.details["recovered_from"] = dict(self._last_recovered_files)
+            self._runs_store.update(run_record)
 
         # 처리할 메시지가 있고 사전 검증 통과 — 백업 생성 후 본격 작업.
         # BIZ-81: 이후의 모든 예외는 finally 에서 메트릭 행에 error 로 반영된다.
