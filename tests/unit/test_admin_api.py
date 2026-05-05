@@ -1204,8 +1204,6 @@ class TestSuggestionQueue:
         )
         assert resp.status == 404
 
-
-
 # ---------------------------------------------------------------------------
 # BIZ-81 — 드리밍 운영 관측성 (/memory/dreaming/runs, /memory/dreaming/status)
 # ---------------------------------------------------------------------------
@@ -1461,8 +1459,6 @@ class TestDreamingObservability:
         assert body["metrics_enabled"] is True
         assert body["next_run"] is None
         assert body["trigger_blockers"] == []
-
-
 
 
 # ---------------------------------------------------------------------------
