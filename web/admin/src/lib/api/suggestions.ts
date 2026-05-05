@@ -115,16 +115,41 @@ export function editSuggestion(id: string, text: string): Promise<Suggestion> {
   );
 }
 
+/** BIZ-93: blocklist 차단 기간 — 운영자가 모달에서 단일 선택. null 은 영구. */
+export type RejectBlocklistPeriodDays = 30 | 90 | 180 | null;
+
+export interface RejectSuggestionOptions {
+  /** audit 만 위한 자유서술. 빈 문자열도 허용. */
+  reason?: string;
+  /** 30/90/180/null — 미지정 시 backend 가 영구로 처리. */
+  blocklist_period_days?: RejectBlocklistPeriodDays;
+}
+
 /**
- * 블록리스트에 topic 을 추가하고 큐에서 제거. ``reason`` 은 audit 만 위함이라
- * 자유서술이며 비워도 된다.
+ * 블록리스트에 topic 을 추가하고 큐에서 제거.
+ *
+ * BIZ-93 으로 옵션 객체 인자가 도입됐다. 기존 ``string`` 시그니처(reason only)
+ * 도 호환을 위해 유지 — 내부에서 normalize.
  */
 export function rejectSuggestion(
   id: string,
-  reason?: string,
+  optsOrReason?: string | RejectSuggestionOptions,
 ): Promise<Suggestion> {
+  const opts: RejectSuggestionOptions =
+    typeof optsOrReason === "string"
+      ? { reason: optsOrReason }
+      : (optsOrReason ?? {});
+
+  const body: Record<string, unknown> = { reason: opts.reason ?? "" };
+  // ``blocklist_period_days`` 가 명시된 경우만 페이로드에 포함 — undefined 는
+  // 전달하지 않아 backend 가 기본값(영구)을 쓰도록 한다. null 은 운영자가
+  // 영구 차단을 명시 선택한 경우이므로 그대로 전송.
+  if (opts.blocklist_period_days !== undefined) {
+    body.blocklist_period_days = opts.blocklist_period_days;
+  }
+
   return fetchAdmin<Suggestion>(
     `/memory/suggestions/${encodeURIComponent(id)}/reject`,
-    { method: "POST", json: { reason: reason ?? "" } },
+    { method: "POST", json: body },
   );
 }

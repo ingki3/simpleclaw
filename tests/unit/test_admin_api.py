@@ -1114,11 +1114,71 @@ class TestSuggestionQueue:
         assert body["reject_reason"] == "스팸"
         # writer 는 호출되지 않는다.
         assert applied == []
-        # blocklist 에 추가됐다.
+        # blocklist 에 추가됐다 — period 미지정은 영구.
         assert bl_store.is_blocked("스팸토픽")
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert "expires_at" not in entry  # 영구 차단
         # suggestion 행도 rejected.
         s = sugg_store.get(s2_id)
         assert s is not None and s.status == "rejected"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("period_days", [30, 90, 180])
+    async def test_reject_with_blocklist_period_sets_ttl(
+        self, suggestion_client, period_days
+    ):
+        """BIZ-93: blocklist_period_days 30/90/180 → expires_at 기록."""
+        client, _, bl_store, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={
+                "reason": "스팸",
+                "blocklist_period_days": period_days,
+            },
+        )
+        assert resp.status == 200
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert entry["ttl_seconds"] == period_days * 86400
+        assert "expires_at" in entry  # ISO 문자열로 저장
+        # 차단 상태가 현재 시점 기준으로 유효해야 한다.
+        assert bl_store.is_blocked("스팸토픽")
+
+    @pytest.mark.asyncio
+    async def test_reject_with_null_period_is_permanent(
+        self, suggestion_client
+    ):
+        """BIZ-93: blocklist_period_days=null 은 영구 차단."""
+        client, _, bl_store, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={
+                "reason": "영구",
+                "blocklist_period_days": None,
+            },
+        )
+        assert resp.status == 200
+        entry = bl_store.load().get("스팸토픽")
+        assert entry is not None
+        assert "expires_at" not in entry
+        assert "ttl_seconds" not in entry
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_value", [7, 365, "abc", -1, 0])
+    async def test_reject_invalid_period_returns_422(
+        self, suggestion_client, bad_value
+    ):
+        """BIZ-93: 30/90/180/null 외 값은 422 반환."""
+        client, _, _, _, _, s2_id, _ = suggestion_client
+        resp = await client.post(
+            f"/admin/v1/memory/suggestions/{s2_id}/reject",
+            headers=HEADERS,
+            json={"blocklist_period_days": bad_value},
+        )
+        assert resp.status == 422
 
     @pytest.mark.asyncio
     async def test_get_sources_returns_messages(self, suggestion_client):
@@ -1400,3 +1460,209 @@ class TestDreamingObservability:
         assert body["metrics_enabled"] is True
         assert body["next_run"] is None
         assert body["trigger_blockers"] == []
+
+
+
+# ---------------------------------------------------------------------------
+# BIZ-92 — `/memory/insights` 페이지가 사용하는 read-only listing 엔드포인트
+# ---------------------------------------------------------------------------
+
+
+class TestInsightsList:
+    """``GET /admin/v1/memory/insights`` 검증.
+
+    Active/Archive 탭의 데이터 공급 엔드포인트. status query 로 active(default)
+    / archived / all 분기. 핸들러는 mutation 을 일으키지 않고 기존 sidecar 를
+    그대로 직렬화한다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_store_missing(self, client):
+        resp = await client.get("/admin/v1/memory/insights", headers=HEADERS)
+        assert resp.status == 503
+
+    @pytest_asyncio.fixture
+    async def insights_client(self, tmp_state, tmp_path, aiohttp_client):
+        """active 2건 + archived 1건이 적재된 InsightStore 를 주입한 클라이언트."""
+        from datetime import datetime, timedelta
+        from simpleclaw.memory.insights import InsightMeta, InsightStore
+
+        sidecar = tmp_path / "insights.jsonl"
+        store = InsightStore(sidecar)
+        now = datetime.now()
+        active1 = InsightMeta(
+            topic="정치뉴스",
+            text="정치 뉴스 관심",
+            evidence_count=3,
+            confidence=0.72,
+            source_msg_ids=["m1"],
+            last_seen=now,
+        )
+        active2 = InsightMeta(
+            topic="요리",
+            text="한식 위주",
+            evidence_count=2,
+            confidence=0.55,
+            source_msg_ids=["m2"],
+            last_seen=now - timedelta(hours=1),
+        )
+        archived = InsightMeta(
+            topic="여행",
+            text="동남아 휴양지",
+            evidence_count=4,
+            confidence=0.81,
+            source_msg_ids=["m3"],
+            last_seen=now - timedelta(days=40),
+            archived_at=now - timedelta(days=10),
+        )
+        store.save_all({
+            "정치뉴스": active1,
+            "요리": active2,
+            "여행": archived,
+        })
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            insight_store=store,
+        )
+        return await aiohttp_client(srv.get_app())
+
+    @pytest.mark.asyncio
+    async def test_default_returns_active_only(self, insights_client):
+        """status 미지정 → active 만 (last_seen 내림차순)."""
+        resp = await insights_client.get(
+            "/admin/v1/memory/insights", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 2
+        assert body["active_count"] == 2
+        assert body["archived_count"] == 1
+        topics = [item["topic"] for item in body["insights"]]
+        # "정치뉴스" 가 더 최근 last_seen.
+        assert topics == ["정치뉴스", "요리"]
+        # 직렬화 필드 점검 — UI 카드가 의존하는 키들.
+        item = body["insights"][0]
+        assert item["confidence"] == 0.72
+        assert item["evidence_count"] == 3
+        assert item["archived_at"] is None
+        assert "last_seen" in item
+
+    @pytest.mark.asyncio
+    async def test_archived_filter_returns_only_archived(self, insights_client):
+        resp = await insights_client.get(
+            "/admin/v1/memory/insights?status=archived", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 1
+        topics = [item["topic"] for item in body["insights"]]
+        assert topics == ["여행"]
+        assert body["insights"][0]["archived_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_all_filter_returns_everything(self, insights_client):
+        resp = await insights_client.get(
+            "/admin/v1/memory/insights?status=all", headers=HEADERS
+        )
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 3
+
+
+class TestBlocklistList:
+    """``GET /admin/v1/memory/blocklist`` 검증.
+
+    Blocklist 탭 데이터 공급. ``BlocklistStore`` (BIZ-79) 가 저장하는 한 줄당
+    ``{topic, topic_key, reason, blocked_at}`` 를 그대로 노출한다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_503_when_store_missing(self, client):
+        resp = await client.get("/admin/v1/memory/blocklist", headers=HEADERS)
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_returns_entries_sorted_by_recency(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        """blocked_at 내림차순 정렬 — 가장 최근 거절 결정이 위로."""
+        import json as _json
+        from datetime import datetime, timedelta
+        from simpleclaw.memory.suggestions import BlocklistStore
+
+        bl_path = tmp_path / "bl.jsonl"
+        bl = BlocklistStore(bl_path)
+        # 시간 차이를 만들어내기 위해 add 후 직접 sidecar 를 다시 쓴다 — store
+        # 가 시간 mutate API 를 노출하지 않으므로.
+        bl.add("정치뉴스", reason="cron 노이즈")
+        bl.add("스팸", reason="짤림")
+        now = datetime.now()
+        rows = [
+            {
+                "topic": "정치뉴스",
+                "topic_key": "정치뉴스",
+                "reason": "cron 노이즈",
+                "blocked_at": (now - timedelta(hours=2)).isoformat(),
+            },
+            {
+                "topic": "스팸",
+                "topic_key": "스팸",
+                "reason": "짤림",
+                "blocked_at": (now - timedelta(minutes=10)).isoformat(),
+            },
+        ]
+        bl_path.write_text(
+            "\n".join(_json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+            encoding="utf-8",
+        )
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            blocklist_store=bl,
+        )
+        c = await aiohttp_client(srv.get_app())
+        resp = await c.get("/admin/v1/memory/blocklist", headers=HEADERS)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 2
+        topics = [e["topic"] for e in body["entries"]]
+        assert topics == ["스팸", "정치뉴스"]
+        first = body["entries"][0]
+        assert first["reason"] == "짤림"
+        assert first["topic_key"] == "스팸"
+        assert "blocked_at" in first
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_entries(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        """sidecar 가 비어 있으면 entries=[] / total=0."""
+        from simpleclaw.memory.suggestions import BlocklistStore
+
+        bl_path = tmp_path / "bl.jsonl"
+        bl = BlocklistStore(bl_path)
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            blocklist_store=bl,
+        )
+        c = await aiohttp_client(srv.get_app())
+        resp = await c.get("/admin/v1/memory/blocklist", headers=HEADERS)
+        assert resp.status == 200
+        body = await resp.json()
+        assert body["total"] == 0
+        assert body["entries"] == []
+

@@ -530,3 +530,107 @@ class TestGuard4_ExistingInsightsSurviveWithoutReinforcement:
         assert ko.evidence_count == 5
         # text 는 최신 관측으로 갱신.
         assert ko.text == "한국어 응답 강하게 선호"
+
+
+# ──────────────────────────────────────────────────────────
+# 회귀 가드 #5 (BIZ-104): doc 코멘트 안 마커 토큰을 포함한 파일에서도 dreaming 정상 진행
+# ──────────────────────────────────────────────────────────
+
+class TestGuard5_DocCommentMarkerTolerance:
+    """파일 상단 doc 주석 안에 마커 사용 예시가 *문자 그대로* 들어 있어도 dreaming 이
+    정상 진행돼야 한다.
+
+    BIZ-104 회귀 시나리오:
+        ``.agent/MEMORY.md`` 의 운영자 starter 템플릿이 doc 주석 안에 마커 예시
+        (``<!-- managed:dreaming:journal -->`` 등) 를 그대로 적었던 사고가 있었다.
+        그 결과 ``find_managed_sections`` 가 같은 이름의 섹션을 두 번 잡아
+        ``ProtectedSectionMalformed`` 을 던지고 사이클 전체가 ``preflight_failed`` 로
+        skip 되었다.
+
+    1차 안전망(템플릿 escape) 외에 2차 안전망 — 운영자가 doc 에 또 실수로 마커
+    토큰을 적어도 dreaming 이 막히지 않는다 — 을 본 가드로 고정한다.
+    """
+
+    def _inject_doc_marker_block(self, file_path: Path, sections: list[str]) -> None:
+        """파일 최상단에 마커 토큰을 *문자 그대로* 포함한 doc 주석 블록을 주입한다.
+
+        실 사고와 동일한 형태(outer ``<!-- ... -->`` 안에 inner ``<!-- managed:..-->`` 가
+        등장) 를 만든다. 보호 영역(마커 외부) 보존 검증을 위해 기존 본문은
+        그대로 보존된다.
+        """
+        original = file_path.read_text(encoding="utf-8")
+        # 헤더 다음 줄에 doc 코멘트를 끼워넣는다 — 운영자가 starter template 에
+        # 적는 위치와 동일.
+        lines = original.splitlines(keepends=True)
+        header_end = 0
+        for idx, line in enumerate(lines):
+            if line.startswith("# "):
+                header_end = idx + 1
+                break
+
+        doc_block = ["<!--\n", "이 파일의 두 영역(BIZ-104 회귀 시나리오):\n"]
+        for n in sections:
+            doc_block.append(
+                f"- <!-- managed:dreaming:{n} --> ~ "
+                f"<!-- /managed:dreaming:{n} -->: dreaming 갱신 영역\n"
+            )
+        doc_block.append("-->\n\n")
+
+        new_lines = lines[:header_end] + ["\n"] + doc_block + lines[header_end:]
+        file_path.write_text("".join(new_lines), encoding="utf-8")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("ws_fixture", ["workspace", "cluster_workspace"])
+    async def test_dreaming_completes_with_doc_comment_markers(
+        self, ws_fixture, request
+    ):
+        ws = request.getfixturevalue(ws_fixture)
+
+        # 4종 파일 모두에 doc 주석 블록을 주입 — 한 파일이라도 preflight 가
+        # malformed 로 잡아내면 사이클 전체가 abort 되므로, 한 번에 모두 검증한다.
+        self._inject_doc_marker_block(
+            ws["files"]["MEMORY.md"], ["journal", "clusters"]
+        )
+        self._inject_doc_marker_block(ws["files"]["USER.md"], ["insights"])
+        self._inject_doc_marker_block(
+            ws["files"]["AGENT.md"], ["dreaming-updates"]
+        )
+        self._inject_doc_marker_block(
+            ws["files"]["SOUL.md"], ["dreaming-updates"]
+        )
+
+        # 사이클 전 outside (doc 주석 포함) 스냅샷 — outside 영역의 byte-for-byte
+        # 보존도 함께 검증한다.
+        before_outside = {
+            name: _outside_text(p) for name, p in ws["files"].items()
+        }
+
+        ws["pipeline"]._router = _mock_router(_single_observation_payload())
+        _seed_conversation_store(
+            ws["store"], with_embeddings=ws["enable_clusters"]
+        )
+
+        result = await ws["pipeline"].run()
+
+        # 핵심 invariant — preflight 가 통과해 사이클이 완료됐다.
+        # ``DreamingPipeline.run`` 은 정상 완료 시 ``MemoryEntry`` 를 돌려준다.
+        # ``None`` 은 abort/skip 의미이므로 회귀 발생.
+        assert result is not None, (
+            "doc 주석 안 마커 토큰 때문에 사이클이 abort 됨 — BIZ-104 회귀"
+        )
+
+        # outside 영역(주입한 doc 주석 포함) 은 byte-for-byte 보존돼야 한다.
+        after_outside = {
+            name: _outside_text(p) for name, p in ws["files"].items()
+        }
+        for name in _FIXTURE_FILES:
+            assert after_outside[name] == before_outside[name], (
+                f"{name} outside 가 변경됨 — BIZ-104 가드 위반"
+            )
+
+        # managed 영역 안에는 새 본문이 잘 적용돼야 한다(LLM mock 가 던진 키워드
+        # 가 USER.md insights 영역에 들어갔는지로 진행 여부를 양성 검증).
+        user_text = ws["files"]["USER.md"].read_text(encoding="utf-8")
+        assert "지속적인 관심" in user_text or "맥북에어 15인치 구매" in user_text, (
+            "사이클이 진행됐는데 새 인사이트가 USER.md 에 반영되지 않음"
+        )

@@ -18,7 +18,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Database, Download, RefreshCw, Search } from "lucide-react";
+import Link from "next/link";
+import {
+  ChevronRight,
+  Database,
+  Download,
+  RefreshCw,
+  Search,
+  Sparkles,
+} from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/atoms/Badge";
 import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
@@ -30,6 +38,7 @@ import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
 import { MemoryStatsCards } from "@/components/domain/MemoryStatsCards";
 import { SuggestionQueuePanel } from "@/components/domain/SuggestionQueuePanel";
 import { VirtualList } from "@/components/domain/VirtualList";
+import { listSuggestions } from "@/lib/api/suggestions";
 import {
   type DreamingState,
   type MemoryEntry,
@@ -374,7 +383,6 @@ export default function MemoryPage() {
         </section>
 
         {/* 우측 1/3 — 드리밍 + 관측성(BIZ-81) + 검토 큐(BIZ-79) + 내보내기 */}
-        {/* 우측 1/3 — 드리밍 + 검토 큐(BIZ-79) + 내보내기 */}
         <aside className="flex flex-col gap-4">
           <DreamingProgressCard
             state={data.dreaming}
@@ -387,10 +395,9 @@ export default function MemoryPage() {
           <DreamingObservabilityPanel
             refreshKey={data.dreaming.running ? 1 : 0}
           />
-          <SuggestionQueuePanel
-            disabled={dreamingDisabled}
-            onChanged={() => void refresh()}
-          />
+          {/* BIZ-92: SuggestionQueuePanel 자리 → Insights 진입 카드.
+              4-탭(Review/Active/Archive/Blocklist) 화면은 ``/memory/insights`` 가 담당. */}
+          <InsightsEntryCard />
           <ExportCard
             range={exportRange}
             onChange={setExportRange}
@@ -500,5 +507,69 @@ function ExportCard({ range, onChange, disabled }: ExportCardProps) {
         {disabled ? "드리밍 중에는 내보낼 수 없어요" : "JSONL 다운로드"}
       </a>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Insights 진입 카드 (BIZ-92)
+// ---------------------------------------------------------------------
+
+/**
+ * /memory 우측 사이드의 작은 카드. 검토 큐(SuggestionQueuePanel) 의 책임은
+ * /memory/insights 4-탭 화면으로 옮겼고, 여기서는 pending 건수만 노출하면서
+ * 사용자가 그 화면으로 1-클릭 진입할 수 있게 한다.
+ *
+ * 자체 polling 은 두지 않고 한 번만 fetch — 정확한 카운트는 진입 후 화면에서
+ * 갱신된다. 503(큐 미설정) 등은 카운트만 0 으로 폴백.
+ */
+function InsightsEntryCard() {
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await listSuggestions("pending");
+        if (!cancelled) setPendingCount(res.pending_count);
+      } catch {
+        if (!cancelled) setPendingCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <Link
+      href="/memory/insights"
+      className="group flex items-center justify-between gap-3 rounded-(--radius-l) border border-(--border) bg-(--card) p-5 transition-colors hover:border-(--primary)"
+    >
+      <div className="flex items-start gap-3">
+        <Sparkles
+          size={16}
+          aria-hidden
+          className="mt-0.5 text-(--primary)"
+        />
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-(--foreground-strong)">
+            Insights 자세히
+            {pendingCount !== null ? (
+              <Badge tone={pendingCount > 0 ? "brand" : "neutral"}>
+                {pendingCount}건 pending
+              </Badge>
+            ) : null}
+          </h2>
+          <p className="mt-1 text-xs text-(--muted-foreground)">
+            검토 / 활성 / 보관 / 블록리스트를 한 화면에서 관리해요.
+          </p>
+        </div>
+      </div>
+      <ChevronRight
+        size={16}
+        aria-hidden
+        className="text-(--muted-foreground) transition-transform group-hover:translate-x-0.5 group-hover:text-(--primary)"
+      />
+    </Link>
   );
 }

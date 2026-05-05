@@ -472,6 +472,7 @@ class DreamingPipeline:
         # 한 회차 내에서 apply_insight_meta 가 차단·필터한 관측 수.
         # run() 이 메트릭에 기록하기 위해 사용. apply_insight_meta 호출 직전 0으로 초기화.
         self._last_rejected_count: int = 0
+
         # BIZ-80: 1차 언어 정책. ``None`` (기본) 이면 enforcement 없이 LLM 출력을
         # 그대로 통과시켜 기존 테스트/배포 fixture 가 그대로 동작한다 (BIZ-80 이전
         # 동작과 byte-for-byte 동일). 운영 환경 (``scripts/run_bot.py``) 은 명시적으로
@@ -1784,6 +1785,7 @@ class DreamingPipeline:
         run_record = (
             self._runs_store.begin() if self._runs_store is not None else None
         )
+
         # BIZ-77 — 메시지를 id 와 함께 수집한다. 분석 자체는 message 객체만 쓰지만
         # 인사이트 source 역추적을 위해 rowid 를 sidecar 에 기록해야 하기 때문이다.
         id_pairs = self.collect_unprocessed_with_ids(last_dreaming)

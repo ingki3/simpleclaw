@@ -37,6 +37,84 @@ _NAME_RE = r"[A-Za-z0-9_-]+"
 _START_RE = re.compile(rf"<!--\s*managed:dreaming:({_NAME_RE})\s*-->")
 _END_RE = re.compile(rf"<!--\s*/managed:dreaming:({_NAME_RE})\s*-->")
 
+# 단일 토큰 마커(start 또는 end) 전체를 식별하기 위한 정규식. ``_doc_comment_ranges``
+# 가 "이 코멘트가 마커 자체인지 vs 마커가 본문에 등장하는 doc 코멘트인지" 를 판별할 때
+# 사용한다.
+_PURE_MARKER_RE = re.compile(
+    rf"^<!--\s*/?managed:dreaming:{_NAME_RE}\s*-->$"
+)
+_OPEN_TOKEN_RE = re.compile(r"<!--")
+_CLOSE_TOKEN_RE = re.compile(r"-->")
+
+
+def _doc_comment_ranges(text: str) -> list[tuple[int, int]]:
+    """본문 안의 outer "doc 코멘트" 블록 범위를 찾는다 (BIZ-104).
+
+    이 함수가 해결하는 문제:
+        ``.agent/MEMORY.md`` 같은 운영자 템플릿은 파일 상단의 ``<!-- ... -->`` doc
+        주석 안에 마커 사용 예시(``<!-- managed:dreaming:journal -->`` 등)를 *문자
+        그대로* 포함시키는 경우가 있다. 이때 ``_START_RE`` 가 doc 코멘트 안의
+        예시 토큰까지 진짜 마커로 잡아 같은 이름이 두 번 등장한 것처럼 보이고
+        ``ProtectedSectionMalformed`` 가 던져진다 (실 사고: BIZ-104).
+
+    범위 판별 규칙:
+        - ``<!--`` 와 ``-->`` 를 균형 괄호로 취급해(HTML 표준은 nesting 을 금지하지만,
+          운영자가 doc 안에 마커 예시를 적는 의도를 보존하기 위함) 깊이 0→1→...→0
+          으로 닫히는 outer 블록을 모은다.
+        - 그 outer 블록 전체 텍스트가 ``<!-- /?managed:dreaming:NAME -->`` 형태의
+          *순수 마커 토큰* 이면 doc 코멘트로 보지 않는다 — 진짜 마커이기 때문.
+        - 그 외(본문에 다른 텍스트가 섞여 있거나 nested 토큰이 있는 outer 블록) 는
+          모두 doc 코멘트로 간주한다.
+
+    반환:
+        ``(start_offset, end_offset)`` 튜플의 리스트. 각 범위는 ``<!--`` 의 첫 문자
+        부터 outer ``-->`` 의 다음 문자(exclusive) 까지를 포함한다.
+        균형이 맞지 않는 ``<!--``/``-->`` 는 doc 코멘트로 취급하지 않는다 — 그러면
+        스택이 영원히 닫히지 않아 false positive 가 생기기 때문.
+
+    Note:
+        이 함수는 본 모듈 외부에서 사용하지 않도록 ``_`` 접두 — 마커 식별 정책의
+        일부일 뿐 외부 API 가 아니다.
+    """
+    # 모든 ``<!--`` / ``-->`` 토큰을 등장 순으로 모은다.
+    events: list[tuple[int, int, str]] = []
+    for m in _OPEN_TOKEN_RE.finditer(text):
+        events.append((m.start(), m.end(), "open"))
+    for m in _CLOSE_TOKEN_RE.finditer(text):
+        events.append((m.start(), m.end(), "close"))
+    events.sort(key=lambda t: t[0])
+
+    ranges: list[tuple[int, int]] = []
+    # stack 원소 = (open_start_offset, open_end_offset)
+    stack: list[tuple[int, int]] = []
+    for start, end, kind in events:
+        if kind == "open":
+            stack.append((start, end))
+        else:  # close
+            if not stack:
+                # 짝 없는 ``-->`` — 본문 텍스트일 수도 있고 이미 닫힌 코멘트의
+                # 잔재일 수도 있다. doc 코멘트 후보가 아니므로 무시.
+                continue
+            open_start, _open_end = stack.pop()
+            if stack:
+                # 아직 더 깊은 outer 가 열려 있다 — outer 가 닫힐 때까지 기다린다.
+                continue
+            # 깊이 0 으로 닫힌 outer 블록 한 개. 마커 자체인지 점검.
+            full = text[open_start:end]
+            if _PURE_MARKER_RE.match(full):
+                # 단일 마커 토큰 — doc 코멘트가 아니다.
+                continue
+            ranges.append((open_start, end))
+    return ranges
+
+
+def _is_inside_any_range(offset: int, ranges: list[tuple[int, int]]) -> bool:
+    """오프셋이 ``ranges`` 중 어느 하나의 [start, end) 안에 있는지 검사."""
+    for start, end in ranges:
+        if start <= offset < end:
+            return True
+    return False
+
 
 def _is_marker_on_own_line(text: str, start: int, end: int) -> bool:
     """``text[start:end]`` 가 자기 줄을 단독으로 차지하는지 검사.
@@ -118,18 +196,19 @@ def find_managed_sections(text: str) -> list[ManagedSection]:
     # 이 방식은 정규식 한 번으로 시작/끝을 동시에 잡으려는 시도보다 훨씬 견고하다 —
     # 시작과 끝이 다른 줄에 있어도, 같은 줄에 있어도 동일하게 동작한다.
     #
-    # 단, marker 는 *자기 줄을 단독으로* 차지하는 형태만 진짜 marker 로 본다.
-    # `.agent/MEMORY.md` 등 운영 파일은 최상단 doc 주석 안에 marker 토큰을 *문서
-    # 설명용*으로 그대로 적는 경우가 있고("2. <!-- managed:dreaming:journal --> ~ ..."),
-    # 그 인라인 등장은 진짜 marker 가 아니다. 줄 단독 제약(앞뒤가 줄 경계 + 공백뿐)을
-    # 추가해 doc 안 인라인 mention 이 fail-closed 트랩이 되지 않도록 한다 (BIZ-104).
+    # BIZ-104 — 운영자가 파일 상단 doc 코멘트(``<!-- ... -->``) 안에 마커 사용
+    # 예시를 *문자 그대로* 적어두는 사고를 방지한다. doc 코멘트 안의 마커 토큰은
+    # 의도된 진짜 마커가 아니므로 토큰 목록에서 제외한다 (2차 가드).
+    doc_ranges = _doc_comment_ranges(text)
     tokens: list[tuple[str, int, int, str]] = []
     for m in _START_RE.finditer(text):
-        if _is_marker_on_own_line(text, m.start(), m.end()):
-            tokens.append(("start", m.start(), m.end(), m.group(1)))
+        if _is_inside_any_range(m.start(), doc_ranges):
+            continue
+        tokens.append(("start", m.start(), m.end(), m.group(1)))
     for m in _END_RE.finditer(text):
-        if _is_marker_on_own_line(text, m.start(), m.end()):
-            tokens.append(("end", m.start(), m.end(), m.group(1)))
+        if _is_inside_any_range(m.start(), doc_ranges):
+            continue
+        tokens.append(("end", m.start(), m.end(), m.group(1)))
     tokens.sort(key=lambda t: t[1])
 
     sections: list[ManagedSection] = []

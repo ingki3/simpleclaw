@@ -6,12 +6,12 @@ SimpleClaw의 일자별 핵심 기억(MEMORY.md). 두 영역으로 구성된다:
 1. 마커 외부 영역:
    - 사용자가 직접 적은 메모/맥락. 드리밍은 절대 손대지 않는다.
 
-2. `managed:dreaming:journal` 섹션:
+2. `managed:dreaming:journal` ~ `/managed:dreaming:journal`:
    - 드리밍 사이클이 일자별 사실/이벤트를 append하는 영역.
    - 마커 안쪽에서만 dreaming의 시간순 append가 허용된다.
 
-3. `managed:dreaming:clusters` 섹션:
-   - Phase 3 그래프형 드리밍이 활성화된 경우 ``cluster:N start`` 등의
+3. `managed:dreaming:clusters` ~ `/managed:dreaming:clusters`:
+   - Phase 3 그래프형 드리밍이 활성화된 경우 `cluster:N start` 등의
      클러스터 섹션이 이 컨테이너 안에서만 upsert된다.
 
 마커 자체를 삭제·변형하면 드리밍이 fail-closed로 중단된다 (BIZ-72).
