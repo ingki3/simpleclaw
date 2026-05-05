@@ -19,11 +19,15 @@ llm:
       model: "gemini-3-flash-preview"
       api_key: "env:GOOGLE_API_KEY"
 
+# BIZ-133 — 운영 데이터(SQLite, 페르소나 라이브 파일, dreaming sidecar 등)는 모두
+# 저장소 working tree 외부 ``~/.simpleclaw/`` 로 이전됐다. git 작업과 dreaming
+# 런타임 쓰기가 같은 디렉터리를 공유하지 않으므로 BIZ-28 류의 race window 가
+# 구조적으로 사라진다. 다른 위치를 쓰고 싶으면 아래 키들을 수동으로 override.
 agent:
   history_limit: 20
-  db_path: ".agent/conversations.db"
+  db_path: "~/.simpleclaw/conversations.db"
   max_tool_iterations: 5
-  workspace_dir: ".agent/workspace"
+  workspace_dir: "~/.simpleclaw/workspace"
 
 # 시맨틱 메모리 (RAG, spec 005 Phase 2)
 # enabled: true 로 켜면 sentence-transformers가 첫 메시지에 모델(~500MB)을 다운로드한다.
@@ -126,9 +130,9 @@ sub_agents:
 
 daemon:
   heartbeat_interval: 300
-  pid_file: ".agent/daemon.pid"
-  status_file: ".agent/HEARTBEAT.md"
-  db_path: ".agent/daemon.db"
+  pid_file: "~/.simpleclaw/daemon.pid"
+  status_file: "~/.simpleclaw/HEARTBEAT.md"
+  db_path: "~/.simpleclaw/daemon.db"
   dreaming:
     overnight_hour: 3
     idle_threshold: 7200
@@ -165,7 +169,17 @@ daemon:
     active_projects:
       enabled: true
       window_days: 7
-      sidecar_path: ".agent/active_projects.jsonl"
+      sidecar_path: "~/.simpleclaw/active_projects.jsonl"
+    # BIZ-133 — dreaming sidecar 파일 경로. 운영 디렉터리(``~/.simpleclaw/``) 외부
+    # 이전을 위해 모든 sidecar 위치를 명시 노출한다. 다른 마운트로 옮기고 싶으면
+    # 아래 키를 override 하면 된다.
+    insights_file: "~/.simpleclaw/insights.jsonl"
+    suggestions_file: "~/.simpleclaw/suggestions.jsonl"
+    blocklist_file: "~/.simpleclaw/insight_blocklist.jsonl"
+    runs_file: "~/.simpleclaw/dreaming_runs.jsonl"
+    # BIZ-132 / BIZ-133 — dreaming 사이클 직전 라이브 파일을 통째로 스냅샷.
+    # 운영 데이터와 같은 루트 아래 두어 백업/복원이 동일 마운트 내에서 일어나도록.
+    safety_backup_dir: "~/.simpleclaw/_safety_backup"
     # BIZ-80 — Dreaming 산출물의 1차 언어 정책. primary 가 USER/MEMORY/AGENT/SOUL
     # dreaming-managed 섹션의 출력 언어를 결정한다. 영어 입력 대화에서도 출력은
     # 1차 언어로 통일되어 retrieval 임베딩 일관성과 가독성이 확보된다.
@@ -202,7 +216,10 @@ daemon:
 
 persona:
   token_budget: 4096
-  local_dir: ".agent"
+  # BIZ-133 — 페르소나 라이브 파일(AGENT/USER/MEMORY/SOUL.md) 위치. 저장소 외부
+  # 운영 디렉터리로 이전됐다. 새 환경에서는 ``scripts/migrate_local_dir.py`` 가
+  # ``.agent/`` 의 기존 파일을 이 위치로 옮겨준다.
+  local_dir: "~/.simpleclaw"
   global_dir: "~/.agents/main"
   files:
     - name: "AGENT.md"

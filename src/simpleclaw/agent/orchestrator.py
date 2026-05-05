@@ -125,7 +125,8 @@ class AgentOrchestrator:
         self._router = create_router(config_path)
 
         # Conversation store
-        db_path = Path(agent_config["db_path"])
+        # BIZ-133: db_path 가 ``~/.simpleclaw/...`` 형태로 오므로 expanduser 로 풀어준다.
+        db_path = Path(agent_config["db_path"]).expanduser()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._store = ConversationStore(db_path)
 
@@ -162,10 +163,12 @@ class AgentOrchestrator:
         # Multi-turn tool execution budget
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 5)
 
-        # Workspace directory for skill file output
+        # Workspace directory for skill file output.
+        # BIZ-133: 기본 위치는 운영 디렉터리(`~/.simpleclaw/workspace`) — 저장소
+        # working tree 안에 임시 파일이 쌓이지 않도록.
         self._workspace_dir = Path(
-            agent_config.get("workspace_dir", ".agent/workspace")
-        )
+            agent_config.get("workspace_dir", "~/.simpleclaw/workspace")
+        ).expanduser()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(
