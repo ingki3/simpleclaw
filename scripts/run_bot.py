@@ -37,6 +37,7 @@ from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
+from simpleclaw.memory.safety_backup import SafetyBackupManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,6 +172,36 @@ async def main():
         per_file=dict(language_cfg.get("per_file", {}) or {}),
     )
 
+    # BIZ-132 — 사이클 직전 통째 백업 매니저. ``.agent`` 의 위험 파일 목록(라이브
+    # 페르소나 4종 + dreaming sidecar 들 + DB)을 매 사이클 직전 시점으로 보존한다.
+    # 사고 클래스: PR #106 처럼 git rm --cached 로 untrack된 파일이 외부 git 작업
+    # 도중 working tree에서 사라지는 race window 에서 데이터 손실을 막는다.
+    # 보존 정책: 최근 7개 사이클 + 가장 최근 1개는 항상 보존.
+    from pathlib import Path as _Path
+    safety_backup_files: list[_Path] = [
+        _Path(".agent/AGENT.md"),
+        _Path(".agent/USER.md"),
+        _Path(".agent/MEMORY.md"),
+        _Path(".agent/SOUL.md"),
+        _Path(".agent/insights.jsonl"),
+        _Path(".agent/suggestions.jsonl"),
+        _Path(".agent/insight_blocklist.jsonl"),
+        _Path(".agent/dreaming_runs.jsonl"),
+        _Path(".agent/HEARTBEAT.md"),
+    ]
+    if active_projects_file:
+        safety_backup_files.append(_Path(active_projects_file))
+    safety_backup_databases: list[_Path] = [
+        _Path(agent_config["db_path"]),
+        _Path(daemon_config["db_path"]),
+    ]
+    safety_backup_manager = SafetyBackupManager(
+        backup_root=_Path(".agent/_safety_backup"),
+        files=safety_backup_files,
+        databases=safety_backup_databases,
+        max_cycles=int(dreaming_config.get("safety_backup_max_cycles", 7)),
+    )
+
     dreaming_pipeline = DreamingPipeline(
         conversation_store=conv_store,
         memory_file=".agent/MEMORY.md",
@@ -212,6 +243,8 @@ async def main():
         runs_file=".agent/dreaming_runs.jsonl",
         # BIZ-80: 1차 언어 정책 (USER/MEMORY/AGENT/SOUL = ko 기본).
         language_policy=language_policy,
+        # BIZ-132: 사이클 직전 safety backup 매니저 + preflight 자가 복원 입력.
+        safety_backup_manager=safety_backup_manager,
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))
