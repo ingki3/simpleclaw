@@ -1,12 +1,12 @@
 # Task Assignment
 
-**Issue ID:** 84202b0e-146c-494d-bb2f-ec800dd8dc8f
+**Issue ID:** 146bca9a-34cb-4f65-866b-2dfb3cd2573a
 
 **Trigger:** New Assignment
 
 ## Quick Start
 
-Run `multica issue get 84202b0e-146c-494d-bb2f-ec800dd8dc8f --output json` to fetch the full issue details.
+Run `multica issue get 146bca9a-34cb-4f65-866b-2dfb3cd2573a --output json` to fetch the full issue details.
 
 ## Agent Skills
 
