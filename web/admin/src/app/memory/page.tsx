@@ -32,6 +32,7 @@ import { Button } from "@/components/atoms/Button";
 import { Input } from "@/components/atoms/Input";
 import { ConfirmGate } from "@/components/primitives/ConfirmGate";
 import { useToast } from "@/components/primitives/Toast";
+import { ActiveProjectsPanel } from "@/components/domain/ActiveProjectsPanel";
 import { DreamingObservabilityPanel } from "@/components/domain/DreamingObservabilityPanel";
 import { DreamingProgressCard } from "@/components/domain/DreamingProgressCard";
 import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
@@ -283,6 +284,11 @@ export default function MemoryPage() {
       </header>
 
       <MemoryStatsCards stats={data.stats} />
+
+      {/* BIZ-96: Active Projects 패널은 MEMORY clusters 섹션(아래 grid) 위에 둔다.
+          dreaming 종료 시점의 ``data.dreaming.running`` 토글을 refreshKey 로 넘겨
+          사이클 직후 자동 재조회. */}
+      <ActiveProjectsPanel refreshKey={data.dreaming.running ? 1 : 0} />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* 인덱스 (좌측 2/3) */}
