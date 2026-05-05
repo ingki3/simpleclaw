@@ -37,6 +37,7 @@ import { DreamingObservabilityPanel } from "@/components/domain/DreamingObservab
 import { DreamingProgressCard } from "@/components/domain/DreamingProgressCard";
 import { MemoryEntryRow } from "@/components/domain/MemoryEntryRow";
 import { MemoryStatsCards } from "@/components/domain/MemoryStatsCards";
+import { SuggestionQueuePanel } from "@/components/domain/SuggestionQueuePanel";
 import { VirtualList } from "@/components/domain/VirtualList";
 import { listSuggestions } from "@/lib/api/suggestions";
 import {
