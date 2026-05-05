@@ -6,13 +6,24 @@
  */
 
 import type {
+  ActiveProjectSummary,
+  ActiveProjectsResponse,
   DreamingState,
+  GatePolicy,
   MemoryEntry,
   MemoryEntryType,
   MemoryStats,
 } from "./memory-server";
 
-export type { DreamingState, MemoryEntry, MemoryEntryType, MemoryStats };
+export type {
+  ActiveProjectSummary,
+  ActiveProjectsResponse,
+  DreamingState,
+  GatePolicy,
+  MemoryEntry,
+  MemoryEntryType,
+  MemoryStats,
+};
 
 export interface MemoryIndexResponse {
   stats: MemoryStats;
@@ -72,6 +83,10 @@ async function jsonRequest<T>(
 
 export function getMemoryIndex(): Promise<MemoryIndexResponse> {
   return jsonRequest<MemoryIndexResponse>("/api/memory/index");
+}
+
+export function getActiveProjects(): Promise<ActiveProjectsResponse> {
+  return jsonRequest<ActiveProjectsResponse>("/api/memory/active-projects");
 }
 
 export function patchMemoryEntry(
