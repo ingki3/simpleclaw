@@ -122,9 +122,6 @@ class TestFindManagedSections:
     # -----------------------------------------------------------------------
 
     def test_marker_inside_outer_doc_comment_is_ignored(self):
-        # ``.agent/MEMORY.md`` 의 회귀 시나리오: 파일 상단의 ``<!-- ... -->`` doc
-        # 주석 본문에 마커 사용 예시가 ``<!-- managed:dreaming:journal -->`` 그대로
-        # 적혀 있다. 하단의 *진짜* journal/clusters 마커만 인식돼야 한다.
         text = (
             "# Memory\n"
             "\n"
