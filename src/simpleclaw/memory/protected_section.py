@@ -116,6 +116,7 @@ def _is_inside_any_range(offset: int, ranges: list[tuple[int, int]]) -> bool:
     return False
 
 
+
 def _is_marker_on_own_line(text: str, start: int, end: int) -> bool:
     """``text[start:end]`` 가 자기 줄을 단독으로 차지하는지 검사.
 

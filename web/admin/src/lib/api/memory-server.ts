@@ -26,6 +26,27 @@ import { spawnSync } from "node:child_process";
 
 const MEMORY_FILENAME = "MEMORY.md";
 const CONVERSATIONS_DB = "conversations.db";
+const ACTIVE_PROJECTS_FILENAME = "active_projects.jsonl";
+
+/**
+ * Active Projects 윈도우 (일) — `last_seen >= now - WINDOW_DAYS` 항목만 패널에 노출.
+ * Python 측 dreaming 의 ``active_projects.window_days`` (기본 7일, BIZ-74) 와 동일한
+ * 정책을 따른다. 수치를 동적으로 읽으려면 config.yaml 파싱이 필요한데, 본 모듈은
+ * 데몬 의존을 피하기 위해 정적 기본값으로 고정한다 — 사용자가 다른 윈도우를 쓰면
+ * 데몬과 어드민의 표시가 어긋날 수 있으나, sidecar 자체에는 윈도우 외 항목도 그대로
+ * 남으므로 데이터 손실은 없다.
+ */
+const ACTIVE_PROJECTS_WINDOW_DAYS = 7;
+
+/**
+ * Gate policy 안내값. 실제 enforcement 는 Python dreaming 파이프라인이 담당하며,
+ * 본 모듈은 패널 풋노트 표시용 표상값만 노출한다(BIZ-73 단발 관측 자동 승격 차단,
+ * BIZ-74 active-projects 부착 임계).
+ */
+const GATE_POLICY_DEFAULTS: GatePolicy = {
+  single_observation_block: true,
+  cluster_threshold: 0.6,
+};
 
 /** 5분 윈도 단발 undo. */
 const UNDO_WINDOW_MS = 5 * 60 * 1000;
@@ -54,6 +75,42 @@ export interface MemoryStats {
   totalMessages: number | null;
   /** 마지막 드리밍 시각 ISO — MEMORY.md mtime. 파일 부재 시 null. */
   lastDreamingAt: string | null;
+}
+
+/**
+ * Active Project — `/memory` 상단 패널 한 행에 대응 (BIZ-66/74/96).
+ *
+ * sidecar(`.agent/active_projects.jsonl`)는 Python 측 ``ActiveProject`` 데이터클래스를
+ * 그대로 직렬화한다 (필드: name/role/recent_summary/first_seen/last_seen). 본 응답은
+ * 패널 spec 에 맞춰 재가공한 파생 모델이다 — sidecar 의 내부 키와는 별도로 관리.
+ *
+ * 필드 매핑:
+ *   id          ← normalize_name(name)  — 한·영 표기 변형이 있어도 동일 키로 묶임.
+ *   title       ← name (사람이 읽는 표기 그대로).
+ *   managed     ← 항상 true. sidecar 적재 자체가 dreaming-managed 의 표지(BIZ-66).
+ *                  단발 관측은 큐에 머물고 sidecar 에 들어오지 않으므로, 여기 등장한
+ *                  시점에서 이미 cluster 채택 임계를 통과했다.
+ *   score       ← 윈도우 내 recency 점수 (1.0 = 오늘, 윈도우 끝에서 0.0). 클러스터의
+ *                  코사인 점수가 sidecar 에 보존되지 않으므로(BIZ-74 의 의도된 단순화)
+ *                  파생 신호로 대체. 사용자가 "최근에 가장 활발한 것"을 빠르게 보도록.
+ *   updated_at  ← last_seen (ISO8601).
+ */
+export interface ActiveProjectSummary {
+  id: string;
+  title: string;
+  managed: boolean;
+  score: number;
+  updated_at: string;
+}
+
+export interface GatePolicy {
+  single_observation_block: boolean;
+  cluster_threshold: number;
+}
+
+export interface ActiveProjectsResponse {
+  active_projects: ActiveProjectSummary[];
+  gate_policy: GatePolicy;
 }
 
 export interface DreamingState {
@@ -510,6 +567,117 @@ SELECT id, role, content, timestamp FROM messages${where} ORDER BY id ASC;
 }
 
 // --------------------------------------------------------------------
+// Active Projects sidecar 리더 (BIZ-96)
+// --------------------------------------------------------------------
+
+function activeProjectsFile(): string {
+  return path.join(agentDir(), ACTIVE_PROJECTS_FILENAME);
+}
+
+/**
+ * Python 측 ``normalize_name`` 과 동치 (BIZ-74). 한·영 혼용 표기를 동일 키로 묶기
+ * 위해 공백·구두점을 제거하고 영문은 소문자화한다. ``\p{L}\p{N}`` 만 보존하면 한글
+ * 음절 (가-힣) 도 유지되며, 한국어→영문 음역은 일부러 하지 않는다(과처리 위험).
+ */
+function normalizeName(name: string): string {
+  if (!name) return "";
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * sidecar 한 줄을 파싱한다. 손상된 줄은 skip — Python 쪽 ``ActiveProjectStore.load``
+ * 와 동일한 관용성. 필수 필드(``name``, ``last_seen``)가 비면 null.
+ */
+function parseActiveProjectLine(
+  line: string,
+): { name: string; lastSeen: Date } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  const name = typeof obj.name === "string" ? obj.name.trim() : "";
+  const lastSeenRaw = typeof obj.last_seen === "string" ? obj.last_seen : null;
+  if (!name || !lastSeenRaw) return null;
+  const ts = new Date(lastSeenRaw);
+  if (Number.isNaN(ts.getTime())) return null;
+  return { name, lastSeen: ts };
+}
+
+/**
+ * sidecar(`.agent/active_projects.jsonl`)를 읽어 패널용 모델로 변환한다.
+ *
+ * 정책:
+ *   - 윈도우(``ACTIVE_PROJECTS_WINDOW_DAYS``) 밖 항목은 제외 — sidecar 는 영구 보관이지만
+ *     UI 는 활성 항목만 노출(데몬 측 ``filter_active`` 와 동일한 정책).
+ *   - 같은 정규형 키가 두 번 등장하면 마지막 줄을 채택 (Python 쪽 ``load`` 와 동치).
+ *   - 정렬: ``last_seen`` 내림차순 — "가장 최근" 이 위에.
+ *   - 파일 부재 / 빈 파일 / sqlite 등 오류는 모두 빈 리스트로 환원 (UI 에서 empty state).
+ *
+ * 호출 시점에 ``Date.now()`` 를 기준으로 score 와 윈도우 컷오프를 계산한다 — 테스트는
+ * 시간 의존 없이 ``parseActiveProjectLine`` 단위로 검증할 수 있도록 분리해 두었다.
+ */
+export async function readActiveProjects(): Promise<ActiveProjectsResponse> {
+  const fp = activeProjectsFile();
+  let raw: string;
+  try {
+    raw = await fs.readFile(fp, "utf8");
+  } catch (err) {
+    if (isNotFound(err)) {
+      return { active_projects: [], gate_policy: { ...GATE_POLICY_DEFAULTS } };
+    }
+    throw err;
+  }
+
+  const now = Date.now();
+  const windowMs = ACTIVE_PROJECTS_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const cutoff = now - windowMs;
+
+  // 같은 키 중복 시 "마지막 줄 채택" 의미를 살리려고 Map 으로 누적.
+  const byKey = new Map<string, { name: string; lastSeen: Date }>();
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parsed = parseActiveProjectLine(trimmed);
+    if (!parsed) continue;
+    const key = normalizeName(parsed.name);
+    if (!key) continue;
+    byKey.set(key, parsed);
+  }
+
+  const items: ActiveProjectSummary[] = [];
+  for (const [key, p] of byKey) {
+    const lastSeenMs = p.lastSeen.getTime();
+    if (lastSeenMs < cutoff) continue;
+    // recency score: 1.0(=now) → 0.0(=윈도우 끝). 음수는 cutoff 가드로 차단됨.
+    const score = Math.max(0, Math.min(1, (lastSeenMs - cutoff) / windowMs));
+    items.push({
+      id: key,
+      title: p.name,
+      managed: true,
+      score: Number(score.toFixed(2)),
+      updated_at: p.lastSeen.toISOString(),
+    });
+  }
+
+  items.sort(
+    (a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+
+  return {
+    active_projects: items,
+    gate_policy: { ...GATE_POLICY_DEFAULTS },
+  };
+}
+
+// --------------------------------------------------------------------
 // 헬퍼
 // --------------------------------------------------------------------
 
@@ -531,5 +699,9 @@ export const ENTRY_TYPES: readonly MemoryEntryType[] = [
 
 export {
   writeMemoryFileWithUndo,
+  parseActiveProjectLine,
+  normalizeName,
+  ACTIVE_PROJECTS_WINDOW_DAYS,
+  GATE_POLICY_DEFAULTS,
   // 외부에서 트리거 종료를 강제로 시뮬할 수 있도록 노출(테스트용).
 };
