@@ -177,8 +177,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--user-file",
         type=Path,
-        default=Path(".agent/USER.md"),
-        help="입력 USER.md 경로 (기본: .agent/USER.md)",
+        default=Path("~/.simpleclaw/USER.md").expanduser(),
+        help="입력 USER.md 경로 (기본: ~/.simpleclaw/USER.md)",
     )
     parser.add_argument(
         "--out",

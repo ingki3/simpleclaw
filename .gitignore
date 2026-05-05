@@ -1,5 +1,9 @@
 .claude
 .specify
+# `.agent/` 는 BIZ-133 이후로 라이브 데이터를 보관하지 않는다. 운영 데이터는 모두
+# ``~/.simpleclaw/`` 로 이전됐고, 저장소 안의 ``.agent/`` 는 ``skills/``/``recipes/``
+# 같은 프로젝트 자산만을 담는 빈 골격으로 남는다. 그래도 dev 환경에서 ``bot.log`` /
+# 임시 산출물이 만들어질 수 있으므로 통째로 ignore 한다(저장소 깨끗함 보존).
 .agent
 .logs
 specs
@@ -23,11 +27,7 @@ config.yaml
 .coverage
 htmlcov/
 
-# Agent runtime
-.agent/bot.log
-.agent/conversations.db
-.agent/daemon.db
-.agent/memory-backup/
+# graphify 산출물(코드 분석 캐시)
 graphify-out/
 
 # OS / IDE
