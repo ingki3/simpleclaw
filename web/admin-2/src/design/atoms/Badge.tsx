@@ -4,7 +4,7 @@
  * tones: neutral | success | warning | danger | info | brand.
  */
 
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 export type BadgeTone =
@@ -16,11 +16,10 @@ export type BadgeTone =
   | "brand";
 export type BadgeSize = "sm" | "md";
 
-export interface BadgeProps {
+export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: BadgeTone;
   size?: BadgeSize;
   children: ReactNode;
-  className?: string;
 }
 
 const TONE: Record<BadgeTone, string> = {
@@ -42,6 +41,7 @@ export function Badge({
   size = "sm",
   children,
   className,
+  ...rest
 }: BadgeProps) {
   return (
     <span
@@ -52,6 +52,7 @@ export function Badge({
         SIZE[size],
         className,
       )}
+      {...rest}
     >
       {children}
     </span>
