@@ -1,11 +1,12 @@
 /**
- * RootLayout — Admin 2.0 App Router 진입점 (S0 스캐폴드).
+ * RootLayout — Admin 2.0 App Router 진입점.
  *
- * S0 단계에서는 ThemeProvider/Shell 등의 구조물 없이 최소 layout만 둔다.
- * - S1 (Design System): globals.css의 `@theme` 토큰과 ThemeProvider 추가.
- * - S2 (App Shell): Sidebar/Topbar/Shell 합성과 다크 모드 토글 wiring.
+ * S1 단계: ThemeProvider 가 라이트/다크 모드를 <html data-theme> 으로 토글.
+ * 토큰 본체는 tokens.css 에서 `[data-theme="dark"]` 셀렉터로 swap 된다.
+ * S2 (App Shell) 에서 Sidebar/Topbar/Shell 합성이 더해진다.
  */
 import type { Metadata } from "next";
+import { ThemeProvider } from "@/design/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -20,7 +21,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }
