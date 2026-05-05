@@ -1,5 +1,8 @@
 .claude
 .specify
+.agent
+.logs
+specs
 # 루트의 에이전트 설정 파일만 무시 (tests/fixtures/agent.md 등 하위 경로는 추적 대상)
 /AGENT.md
 /CLAUDE.md
