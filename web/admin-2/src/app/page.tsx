@@ -1,10 +1,11 @@
 /**
- * 루트(`/`) — Admin 2.0 hello-world 페이지 (S0 스캐폴드).
+ * 루트(`/`) — Admin 2.0 진입 페이지.
  *
- * S0 의 DoD 는 "dev server 가 hello-world 페이지를 렌더한다" 이므로
- * 본 페이지는 빌드/린트/테스트 인프라가 살아 있는지만 검증한다.
+ * S0 의 hello-world 골격 + S1 디자인 시스템 카탈로그 링크.
  * 실제 라우팅·내비게이션은 S2 (App Shell) 에서 정의한다.
  */
+import Link from "next/link";
+
 export default function HomePage() {
   return (
     <main
@@ -34,6 +35,19 @@ export default function HomePage() {
       >
         web/admin-2 — BIZ-111
       </code>
+      <Link
+        href="/design-system"
+        style={{
+          fontSize: "14px",
+          padding: "8px 14px",
+          borderRadius: "8px",
+          background: "var(--primary, #5b6cf6)",
+          color: "var(--primary-foreground, #fff)",
+          textDecoration: "none",
+        }}
+      >
+        BIZ-112 — Design system catalog →
+      </Link>
     </main>
   );
 }
