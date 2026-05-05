@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import subprocess
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -26,7 +27,13 @@ from simpleclaw.channels.admin_api_setup import (
     build_admin_api_server,
 )
 from simpleclaw.channels.telegram_bot import TelegramBot
-from simpleclaw.config import load_daemon_config, load_llm_config, load_telegram_config
+from simpleclaw.config import (
+    load_agent_config,
+    load_daemon_config,
+    load_llm_config,
+    load_persona_config,
+    load_telegram_config,
+)
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
@@ -37,6 +44,7 @@ from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
+from simpleclaw.memory.safety_backup import SafetyBackupManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -108,9 +116,13 @@ async def main():
         message_handler=orchestrator.process_message,
     )
 
-    # Cron scheduler — notifier is the only external wiring
+    # Cron scheduler — notifier is the only external wiring.
+    # BIZ-133: daemon.db_path 도 운영 디렉터리(`~/.simpleclaw/`) 기본 — `~` 확장과
+    # 부모 디렉토리 생성을 호출 측에서 보장한다.
     daemon_config = load_daemon_config(CONFIG_PATH)
-    daemon_store = DaemonStore(daemon_config["db_path"])
+    daemon_db_path = Path(daemon_config["db_path"]).expanduser()
+    daemon_db_path.parent.mkdir(parents=True, exist_ok=True)
+    daemon_store = DaemonStore(daemon_db_path)
     apscheduler = AsyncIOScheduler()
 
     notify_chat_id = whitelist["user_ids"][0] if whitelist["user_ids"] else None
@@ -133,9 +145,8 @@ async def main():
     # Dreaming — 야간 자동 대화 요약 (5분마다 조건 체크)
     dreaming_config = daemon_config.get("dreaming", {})
     # orchestrator와 동일한 대화 DB를 사용
-    from simpleclaw.config import load_agent_config
     agent_config = load_agent_config(CONFIG_PATH)
-    conv_store = ConversationStore(agent_config["db_path"])
+    conv_store = ConversationStore(Path(agent_config["db_path"]).expanduser())
     llm_router = orchestrator._router  # 오케스트레이터의 LLM 라우터 재사용
 
     # Phase 3 그래프형 드리밍 — enable_clusters=True일 때만 IncrementalClusterer를 주입한다.
@@ -148,14 +159,13 @@ async def main():
         else None
     )
 
-    # BIZ-74 — Active Projects: 기본 활성. 운영자가 끄려면 config 에서 enabled=false.
-    # sidecar_path는 conversations.db와 동일한 .agent/ 디렉토리에 두어 백업·운영 단순.
+    # BIZ-74 / BIZ-133 — Active Projects: 기본 활성. 운영자가 끄려면 config 에서
+    # enabled=false. sidecar_path 는 운영 디렉터리(``~/.simpleclaw/``) 기본값을 따른다.
+    # config 로더가 항상 enabled/window_days/sidecar_path 세 키를 채워주므로 fallback 불필요.
     active_projects_cfg = dreaming_config.get("active_projects", {}) or {}
-    active_projects_enabled = active_projects_cfg.get("enabled", True)
+    active_projects_enabled = bool(active_projects_cfg.get("enabled", True))
     active_projects_file = (
-        active_projects_cfg.get("sidecar_path", ".agent/active_projects.jsonl")
-        if active_projects_enabled
-        else None
+        active_projects_cfg.get("sidecar_path") if active_projects_enabled else None
     )
     active_projects_window_days = int(
         active_projects_cfg.get("window_days", 7)
@@ -171,18 +181,68 @@ async def main():
         per_file=dict(language_cfg.get("per_file", {}) or {}),
     )
 
+    # BIZ-133: 페르소나 라이브 파일은 persona.local_dir (기본 `~/.simpleclaw/`) 하위에
+    # 위치한다. dreaming sidecar 경로는 daemon.dreaming.* 키에서 직접 읽는다 — 코드에
+    # `.agent/...` 같은 하드코드를 두지 않아 운영 디렉터리 이전이 config 한 곳에서
+    # 끝나도록 한다.
+    persona_config = load_persona_config(CONFIG_PATH)
+    persona_local_dir = Path(persona_config["local_dir"]).expanduser()
+    persona_local_dir.mkdir(parents=True, exist_ok=True)
+
+    def _expand(path_str: str | None) -> str | None:
+        """config 의 raw 경로를 ``~/`` 확장된 절대 경로로 풀어준다.
+
+        DreamingPipeline 와 sidecar store 들은 내부에서 ``Path(...)`` 만 호출하므로
+        ``~`` 가 그대로 남으면 working tree 의 리터럴 ``~`` 디렉터리에 떨어지는
+        사고가 난다. 이 헬퍼가 wiring 한 곳에서 일괄적으로 풀어준다.
+        """
+        if path_str is None:
+            return None
+        return str(Path(path_str).expanduser())
+
+    # BIZ-132 — 사이클 직전 통째 백업 매니저. ``.agent`` 의 위험 파일 목록(라이브
+    # 페르소나 4종 + dreaming sidecar 들 + DB)을 매 사이클 직전 시점으로 보존한다.
+    # 사고 클래스: PR #106 처럼 git rm --cached 로 untrack된 파일이 외부 git 작업
+    # 도중 working tree에서 사라지는 race window 에서 데이터 손실을 막는다.
+    # 보존 정책: 최근 7개 사이클 + 가장 최근 1개는 항상 보존.
+    from pathlib import Path as _Path
+    safety_backup_files: list[_Path] = [
+        _Path(".agent/AGENT.md"),
+        _Path(".agent/USER.md"),
+        _Path(".agent/MEMORY.md"),
+        _Path(".agent/SOUL.md"),
+        _Path(".agent/insights.jsonl"),
+        _Path(".agent/suggestions.jsonl"),
+        _Path(".agent/insight_blocklist.jsonl"),
+        _Path(".agent/dreaming_runs.jsonl"),
+        _Path(".agent/HEARTBEAT.md"),
+    ]
+    if active_projects_file:
+        safety_backup_files.append(_Path(active_projects_file))
+    safety_backup_databases: list[_Path] = [
+        _Path(agent_config["db_path"]),
+        _Path(daemon_config["db_path"]),
+    ]
+    safety_backup_manager = SafetyBackupManager(
+        backup_root=_Path(".agent/_safety_backup"),
+        files=safety_backup_files,
+        databases=safety_backup_databases,
+        max_cycles=int(dreaming_config.get("safety_backup_max_cycles", 7)),
+    )
+
     dreaming_pipeline = DreamingPipeline(
         conversation_store=conv_store,
-        memory_file=".agent/MEMORY.md",
-        user_file=".agent/USER.md",
-        soul_file=".agent/SOUL.md",
-        agent_file=".agent/AGENT.md",
+        memory_file=str(persona_local_dir / "MEMORY.md"),
+        user_file=str(persona_local_dir / "USER.md"),
+        soul_file=str(persona_local_dir / "SOUL.md"),
+        agent_file=str(persona_local_dir / "AGENT.md"),
         llm_router=llm_router,
         dreaming_model=dreaming_config.get("model", ""),
         clusterer=clusterer,
         enable_clusters=enable_clusters,
-        # BIZ-73: 인사이트 메타 sidecar — USER.md 옆에 두어 운영자 검수가 쉽도록.
-        insights_file=".agent/insights.jsonl",
+        # BIZ-73 / BIZ-133: 인사이트 메타 sidecar — config.yaml 의 daemon.dreaming.insights_file
+        # 키로 노출되며 기본값은 ``~/.simpleclaw/insights.jsonl``.
+        insights_file=_expand(dreaming_config["insights_file"]),
         insight_promotion_threshold=dreaming_config.get(
             "insight_promotion_threshold", 3
         ),
@@ -196,8 +256,8 @@ async def main():
         # BIZ-79: dry-run + admin review 모드. 운영 환경에서는 항상 켜져 있어
         # 추출된 인사이트가 USER.md 에 즉시 쓰이지 않고 review 큐로 들어간다.
         # auto_promote 임계치를 동시에 충족한 항목만 큐 우회.
-        suggestions_file=".agent/suggestions.jsonl",
-        blocklist_file=".agent/insight_blocklist.jsonl",
+        suggestions_file=_expand(dreaming_config["suggestions_file"]),
+        blocklist_file=_expand(dreaming_config["blocklist_file"]),
         auto_promote_confidence=dreaming_config.get(
             "auto_promote_confidence", 0.7
         ),
@@ -205,13 +265,15 @@ async def main():
             "auto_promote_evidence_count", 3
         ),
         # BIZ-74: Active Projects
-        active_projects_file=active_projects_file,
+        active_projects_file=_expand(active_projects_file),
         active_projects_window_days=active_projects_window_days,
-        # BIZ-81: 사이클 메트릭 sidecar — Admin UI Memory 화면의 KPI/진단 입력원.
-        # 별도 .agent/ 파일에 적재하여 grep/diff 친화적이고 운영자 수기 검토 가능.
-        runs_file=".agent/dreaming_runs.jsonl",
+        # BIZ-81 / BIZ-133: 사이클 메트릭 sidecar — Admin UI Memory 화면의 KPI/진단 입력원.
+        # 운영 디렉터리 외부 이전 후에도 grep/diff 친화적인 단일 JSONL 로 유지.
+        runs_file=_expand(dreaming_config["runs_file"]),
         # BIZ-80: 1차 언어 정책 (USER/MEMORY/AGENT/SOUL = ko 기본).
         language_policy=language_policy,
+        # BIZ-132: 사이클 직전 safety backup 매니저 + preflight 자가 복원 입력.
+        safety_backup_manager=safety_backup_manager,
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))

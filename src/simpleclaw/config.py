@@ -48,9 +48,12 @@ def _resolve_secret_field(value: object) -> str:
 
 
 # 페르소나 엔진 기본 설정값
+# BIZ-133: 운영 디렉터리는 저장소 working tree 가 아니라 사용자 홈 (`~/.simpleclaw/`)
+# 으로 이전한다 — git 작업과 dreaming 런타임 쓰기가 같은 디렉터리를 공유하지
+# 않게 해 BIZ-28 류의 race 가 *발생할 수 없도록* 만들기 위함.
 _DEFAULTS = {
     "token_budget": 4096,
-    "local_dir": ".agent",
+    "local_dir": "~/.simpleclaw",
     "global_dir": "~/.agents/main",
     "files": [
         {"name": "AGENT.md", "type": "agent"},
@@ -141,11 +144,14 @@ def load_llm_config(config_path: str | Path) -> dict:
 
 
 # 데몬 기본 설정값
+# BIZ-133: 운영 데이터(.pid/.db/HEARTBEAT.md)는 모두 사용자 홈 (`~/.simpleclaw/`)
+# 으로 이전. 저장소 working tree 안에는 dreaming 런타임이 쓰는 라이브 파일이 더 이상
+# 존재하지 않게 한다.
 _DAEMON_DEFAULTS: dict = {
     "heartbeat_interval": 300,
-    "pid_file": ".agent/daemon.pid",
-    "status_file": ".agent/HEARTBEAT.md",
-    "db_path": ".agent/daemon.db",
+    "pid_file": "~/.simpleclaw/daemon.pid",
+    "status_file": "~/.simpleclaw/HEARTBEAT.md",
+    "db_path": "~/.simpleclaw/daemon.db",
     "dreaming": {
         "overnight_hour": 3,
         "idle_threshold": 7200,
@@ -171,10 +177,28 @@ _DAEMON_DEFAULTS: dict = {
             "default_ttl_days": None,
         },
         # BIZ-79: dry-run + admin review 모드. 추출된 인사이트는 USER.md 에 즉시
-        # 쓰지 않고 review 큐(.agent/suggestions.jsonl)에 적재된다. auto_promote
+        # 쓰지 않고 review 큐(suggestions.jsonl)에 적재된다. auto_promote
         # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
         "auto_promote_confidence": 0.7,
         "auto_promote_evidence_count": 3,
+        # BIZ-133: dreaming 사이드카 파일 경로 — 운영 디렉터리(`~/.simpleclaw/`)
+        # 외부 이전을 위해 코드 하드코드를 제거하고 모두 config 로 빼낸다.
+        # 운영자가 다른 위치에 두고 싶다면 config.yaml 에서 개별적으로 override 가능.
+        "insights_file": "~/.simpleclaw/insights.jsonl",
+        "suggestions_file": "~/.simpleclaw/suggestions.jsonl",
+        "blocklist_file": "~/.simpleclaw/insight_blocklist.jsonl",
+        "runs_file": "~/.simpleclaw/dreaming_runs.jsonl",
+        # BIZ-132 (Phase 1+2) / BIZ-133 — safety_backup 디렉터리. dreaming 사이클
+        # 직전 라이브 파일을 통째로 스냅샷해 두는 위치. 운영 데이터와 같은 루트
+        # 아래 두어 백업/복원이 동일 마운트 내에서 일어나도록 한다.
+        "safety_backup_dir": "~/.simpleclaw/_safety_backup",
+        # BIZ-74 / BIZ-133: Active Projects 패널 sidecar. enabled=True 가 기본,
+        # window_days 는 USER.md 의 active-projects 섹션에 노출할 최근성 윈도우.
+        "active_projects": {
+            "enabled": True,
+            "window_days": 7,
+            "sidecar_path": "~/.simpleclaw/active_projects.jsonl",
+        },
         # BIZ-80: dreaming 산출물의 1차 언어 정책. ``primary`` 는 USER/MEMORY/AGENT/SOUL
         # dreaming-managed 섹션의 출력 언어 — 기본 "ko" 로 영어 입력에서도 인사이트가
         # 한국어로 통일된다. None 으로 두면 enforcement 없이 LLM 출력을 그대로 통과
@@ -295,6 +319,11 @@ def load_daemon_config(config_path: str | Path) -> dict:
     language = dreaming.get("language", {})
     if not isinstance(language, dict):
         language = {}
+    # BIZ-74 / BIZ-133: active_projects sidecar 설정. dict 이 아니면 빈 dict 로 떨어뜨려
+    # 아래 기본값 (~/.simpleclaw/active_projects.jsonl) 으로 채운다.
+    active_projects = dreaming.get("active_projects", {})
+    if not isinstance(active_projects, dict):
+        active_projects = {}
 
     wait_state = daemon.get("wait_state", {})
     if not isinstance(wait_state, dict):
@@ -390,6 +419,45 @@ def load_daemon_config(config_path: str | Path) -> dict:
             # 코드("ko"/"en") 면 dreaming 출력을 해당 언어로 강제. ``min_ratio`` 는
             # 0.0~1.0 으로 클램프. ``per_file`` 은 파일 식별자→언어 코드 dict 만 허용.
             "language": _coerce_language_policy(language),
+            # BIZ-133: dreaming sidecar 파일 경로 — 모두 운영 디렉터리(`~/.simpleclaw/`)
+            # 기본 경로로 떨어진다. 호출자(run_bot.py 등) 는 *반드시* config 값을
+            # 읽어 DreamingPipeline 에 주입해야 한다 (코드 하드코드 금지).
+            "insights_file": dreaming.get(
+                "insights_file",
+                _DAEMON_DEFAULTS["dreaming"]["insights_file"],
+            ),
+            "suggestions_file": dreaming.get(
+                "suggestions_file",
+                _DAEMON_DEFAULTS["dreaming"]["suggestions_file"],
+            ),
+            "blocklist_file": dreaming.get(
+                "blocklist_file",
+                _DAEMON_DEFAULTS["dreaming"]["blocklist_file"],
+            ),
+            "runs_file": dreaming.get(
+                "runs_file",
+                _DAEMON_DEFAULTS["dreaming"]["runs_file"],
+            ),
+            # BIZ-132 / BIZ-133: safety_backup 디렉터리.
+            "safety_backup_dir": dreaming.get(
+                "safety_backup_dir",
+                _DAEMON_DEFAULTS["dreaming"]["safety_backup_dir"],
+            ),
+            # BIZ-74 / BIZ-133: active_projects sidecar 설정.
+            "active_projects": {
+                "enabled": bool(active_projects.get(
+                    "enabled",
+                    _DAEMON_DEFAULTS["dreaming"]["active_projects"]["enabled"],
+                )),
+                "window_days": int(active_projects.get(
+                    "window_days",
+                    _DAEMON_DEFAULTS["dreaming"]["active_projects"]["window_days"],
+                )),
+                "sidecar_path": active_projects.get(
+                    "sidecar_path",
+                    _DAEMON_DEFAULTS["dreaming"]["active_projects"]["sidecar_path"],
+                ),
+            },
         },
         "wait_state": {
             "default_timeout": wait_state.get(
@@ -401,11 +469,13 @@ def load_daemon_config(config_path: str | Path) -> dict:
 
 
 # 에이전트 오케스트레이터 기본 설정값
+# BIZ-133: 대화 DB / 스킬 워크스페이스도 운영 디렉터리(`~/.simpleclaw/`) 로 이전.
+# 저장소 working tree 안에는 SQLite WAL/SHM 파일이 더 이상 존재하지 않게 된다.
 _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
-    "db_path": ".agent/conversations.db",
+    "db_path": "~/.simpleclaw/conversations.db",
     "max_tool_iterations": 5,
-    "workspace_dir": ".agent/workspace",
+    "workspace_dir": "~/.simpleclaw/workspace",
 }
 
 

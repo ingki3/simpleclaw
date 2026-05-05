@@ -1,0 +1,90 @@
+/*
+ * Admin 2.0 글로벌 스타일.
+ *
+ * 본 파일의 책임:
+ *  1) `tokens.css` 를 import 하여 light/dark CSS 변수 SSOT 를 적용한다.
+ *  2) Tailwind v4 의 `@theme inline` 으로 토큰을 utility 로 노출한다.
+ *  3) 페이지 base (font, color, focus ring) 와 reduced-motion 정책을 둔다.
+ *
+ * 디자인 토큰 본체는 `src/design/tokens.css` 에 있다 — 본 파일에서 값을 직접
+ * 정의하지 않는다. 토큰 변경은 반드시 SSOT 에서.
+ */
+
+@import "tailwindcss";
+@import "../design/tokens.css";
+
+/* ─── Tailwind v4 @theme — 토큰을 utility 로 노출 ───────────────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-card-elevated: var(--card-elevated);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-nav-active-bg: var(--nav-active-bg);
+  --color-foreground: var(--foreground);
+  --color-foreground-strong: var(--foreground-strong);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-placeholder: var(--placeholder);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-tint: var(--primary-tint);
+  --color-success: var(--color-success);
+  --color-success-bg: var(--color-success-bg);
+  --color-warning: var(--color-warning);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-error: var(--color-error);
+  --color-error-bg: var(--color-error-bg);
+  --color-info: var(--color-info);
+  --color-info-bg: var(--color-info-bg);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-secret-mask-bg: var(--secret-mask-bg);
+
+  --radius-none: var(--radius-none);
+  --radius-sm: var(--radius-sm);
+  --radius-m: var(--radius-m);
+  --radius-l: var(--radius-l);
+  --radius-pill: var(--radius-pill);
+
+  --font-sans: var(--font-primary);
+  --font-mono: var(--font-mono);
+}
+
+/* ─── Base ─────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-primary);
+  font-size: 14px;
+  line-height: 22px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* DESIGN.md §5 — 모든 인터랙티브 요소의 포커스 링은 절대 제거하지 않는다. */
+:where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* DESIGN.md §2.7 — reduced motion 시 transform 제거, opacity 만 유지. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

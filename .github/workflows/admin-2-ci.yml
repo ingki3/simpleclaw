@@ -1,0 +1,93 @@
+name: Admin 2.0 · CI
+
+# SimpleClaw Admin 2.0 (web/admin-2) — BIZ-111 S0 스캐폴드 검증.
+# lint + test + build 3 잡이 모두 통과해야 PR 머지 가능 상태가 된다.
+# Playwright e2e 는 본 워크플로우에 포함하지 않는다 (별도 잡으로 분리 가능,
+# S1 이후 라우트 늘어나면 추가).
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "web/admin-2/**"
+      - ".github/workflows/admin-2-ci.yml"
+  pull_request:
+    paths:
+      - "web/admin-2/**"
+      - ".github/workflows/admin-2-ci.yml"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/admin-2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/admin-2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  test:
+    name: Unit tests (vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web/admin-2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/admin-2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run vitest
+        run: npm test
+
+  build:
+    name: Build (next build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web/admin-2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/admin-2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build

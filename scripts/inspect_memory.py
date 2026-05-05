@@ -128,8 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--db",
-        default=".agent/conversations.db",
-        help="ConversationStore SQLite 파일 경로 (기본: .agent/conversations.db)",
+        default="~/.simpleclaw/conversations.db",
+        help="ConversationStore SQLite 파일 경로 (기본: ~/.simpleclaw/conversations.db)",
     )
     parser.add_argument(
         "--logs",
@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    db_path = Path(args.db)
+    db_path = Path(args.db).expanduser()
     if not db_path.is_file():
         # store는 없으면 자동 생성하므로, 점검 의도에 맞게 명확히 알린다
         print(f"⚠ DB 파일이 존재하지 않습니다: {db_path}", file=sys.stderr)

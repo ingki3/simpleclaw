@@ -1133,11 +1133,12 @@ class AdminAPIServer:
 
         # config.yaml에서 daemon.db_path를 우선 채택 — 없으면 admin_state_dir의
         # 형제 conversations.db를 폴백으로 노출(파일 존재 여부도 함께 응답).
+        # BIZ-133: 운영 디렉터리 기본 폴백은 ``~/.simpleclaw/conversations.db`` 로 변경.
         cfg = self._read_yaml()
         db_path_str = (
             _get_dotted(cfg, "agent.db_path")
             or _get_dotted(cfg, "daemon.db_path")
-            or ".agent/conversations.db"
+            or "~/.simpleclaw/conversations.db"
         )
         db_path = Path(str(db_path_str)).expanduser()
         db_size = None
@@ -1982,7 +1983,6 @@ class AdminAPIServer:
             "rejection": self._suggestion_rejection_rate(),
             "metrics_enabled": self._dreaming_run_store is not None,
         })
-
 
 
 # ---------------------------------------------------------------------------
