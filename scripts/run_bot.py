@@ -199,31 +199,43 @@ async def main():
             return None
         return str(Path(path_str).expanduser())
 
-    # BIZ-132 — 사이클 직전 통째 백업 매니저. ``.agent`` 의 위험 파일 목록(라이브
-    # 페르소나 4종 + dreaming sidecar 들 + DB)을 매 사이클 직전 시점으로 보존한다.
+    # BIZ-132 / BIZ-133 / BIZ-138 — 사이클 직전 통째 백업 매니저. 위험 파일 목록(라이브
+    # 페르소나 4종 + dreaming sidecar 들 + 데몬 상태 파일 + DB)을 매 사이클 직전
+    # 시점으로 보존한다. 모든 경로는 config 와 영구 디렉터리(``~/.simpleclaw/``)에서
+    # 끌어와 코드에 ``.agent/...`` 같은 하드코드를 두지 않는다 — BIZ-133 후속 마무리
+    # (BIZ-138). config.yaml 이 ``~/.simpleclaw/`` 를 가리키는데도 봇이 ``.agent/``
+    # 에 백업하던 회귀를 차단한다.
     # 사고 클래스: PR #106 처럼 git rm --cached 로 untrack된 파일이 외부 git 작업
     # 도중 working tree에서 사라지는 race window 에서 데이터 손실을 막는다.
     # 보존 정책: 최근 7개 사이클 + 가장 최근 1개는 항상 보존.
     from pathlib import Path as _Path
     safety_backup_files: list[_Path] = [
-        _Path(".agent/AGENT.md"),
-        _Path(".agent/USER.md"),
-        _Path(".agent/MEMORY.md"),
-        _Path(".agent/SOUL.md"),
-        _Path(".agent/insights.jsonl"),
-        _Path(".agent/suggestions.jsonl"),
-        _Path(".agent/insight_blocklist.jsonl"),
-        _Path(".agent/dreaming_runs.jsonl"),
-        _Path(".agent/HEARTBEAT.md"),
+        persona_local_dir / "AGENT.md",
+        persona_local_dir / "USER.md",
+        persona_local_dir / "MEMORY.md",
+        persona_local_dir / "SOUL.md",
+        _Path(_expand(dreaming_config["insights_file"])),
+        _Path(_expand(dreaming_config["suggestions_file"])),
+        _Path(_expand(dreaming_config["blocklist_file"])),
+        _Path(_expand(dreaming_config["runs_file"])),
+        _Path(daemon_config["status_file"]).expanduser(),
     ]
     if active_projects_file:
-        safety_backup_files.append(_Path(active_projects_file))
+        safety_backup_files.append(_Path(_expand(active_projects_file)))
     safety_backup_databases: list[_Path] = [
-        _Path(agent_config["db_path"]),
-        _Path(daemon_config["db_path"]),
+        _Path(agent_config["db_path"]).expanduser(),
+        _Path(daemon_config["db_path"]).expanduser(),
     ]
+    # BIZ-138 — backup_root 도 config 키(``daemon.dreaming.safety_backup_dir``)에서
+    # 읽는다. 키 누락 시에도 ``~/.simpleclaw/_safety_backup`` 으로 떨어뜨려 다시는
+    # working tree 내부 레거시 경로로 흐르지 않게 한다.
+    safety_backup_root = _Path(
+        _expand(
+            dreaming_config.get("safety_backup_dir", "~/.simpleclaw/_safety_backup")
+        )
+    )
     safety_backup_manager = SafetyBackupManager(
-        backup_root=_Path(".agent/_safety_backup"),
+        backup_root=safety_backup_root,
         files=safety_backup_files,
         databases=safety_backup_databases,
         max_cycles=int(dreaming_config.get("safety_backup_max_cycles", 7)),
