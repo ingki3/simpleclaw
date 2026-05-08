@@ -20,7 +20,7 @@ export interface MemoryCluster {
 }
 
 export interface MemoryClusterMapProps {
-  clusters: MemoryCluster[];
+  clusters: readonly MemoryCluster[];
   className?: string;
 }
 

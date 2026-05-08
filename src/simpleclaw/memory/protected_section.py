@@ -116,32 +116,6 @@ def _is_inside_any_range(offset: int, ranges: list[tuple[int, int]]) -> bool:
     return False
 
 
-
-def _is_marker_on_own_line(text: str, start: int, end: int) -> bool:
-    """``text[start:end]`` 가 자기 줄을 단독으로 차지하는지 검사.
-
-    "단독으로 차지" 는 마커 앞쪽이 (파일 시작 또는 줄바꿈) + 임의 공백, 마커 뒤쪽이
-    임의 공백 + (줄바꿈 또는 파일 끝) 임을 의미한다. 예를 들어 ``1. <!-- ... -->`` 처럼
-    같은 줄의 앞에 prose 가 있으면 *문서 설명용 인라인 mention* 으로 보고 진짜 marker 가
-    아닌 것으로 판단한다.
-    """
-    # 앞쪽: 줄 시작까지 거슬러 올라가 모두 공백이어야 함.
-    i = start
-    while i > 0 and text[i - 1] in " \t":
-        i -= 1
-    if i > 0 and text[i - 1] != "\n":
-        return False
-    # 뒤쪽: 줄 끝까지 모두 공백이어야 함.
-    j = end
-    n = len(text)
-    while j < n and text[j] in " \t":
-        j += 1
-    if j < n and text[j] != "\n":
-        return False
-    return True
-
-
-
 class ProtectedSectionError(Exception):
     """모든 protected-section 위반의 베이스 예외."""
 

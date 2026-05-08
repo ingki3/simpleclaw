@@ -137,6 +137,17 @@ daemon:
     overnight_hour: 3
     idle_threshold: 7200
     model: "gemini"
+    # Phase 3 그래프형 드리밍 — IncrementalClusterer가 미클러스터 임베딩을 부착하고
+    # MEMORY.md의 ``<!-- cluster:N -->`` 마커 영역을 in-place 갱신한다. 기본값은 안전
+    # 측면에서 ``False``이며 명시적으로 켜야 활성화된다.
+    enable_clusters: true
+    # 클러스터 부착 임계값(cosine) — multilingual-e5-small 기준. 낮추면 클러스터가 커
+    # 지고(잡음↑·단일 메가 위험), 높이면 작아진다(파편화↑). BIZ-147 fine-tune 결과
+    # 50메시지 / 한국어 일상 대화 데이터셋에서 0.88이 max<50% (22/50=44%) 를 만족하
+    # 는 첫 값으로 관찰됐다. 0.86 이하에서는 ~70% 단일 mini-mega가 사라지지 않고,
+    # 0.89 이상에서는 1-멤버 stragglers가 빠르게 늘어난다. 데이터셋이 다르면 0.86~0.92
+    # 사이에서 재측정하는 것을 권장.
+    cluster_threshold: 0.88
     # BIZ-73: 인사이트 승격 임계 관측 횟수. 단발 관측은 항상 confidence ≤ 0.4 로 캡되고,
     # 이 횟수에 도달해야 승격선(0.7)에 진입한다. 작은 값이면 빨리 승격(잘못된 일반화↑),
     # 큰 값이면 보수적(누적 신뢰성↑). 기본 3회.
