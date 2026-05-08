@@ -111,7 +111,7 @@ const WEBHOOKS: WebhooksConfig = {
     concurrency: 8,
     signature: "HMAC-SHA256",
   },
-  reqLast24hTotal: 1432,
+  reqLast24hTotal: 952,
   errorRate24h: 0.004,
   endpoints: [
     {
@@ -124,18 +124,6 @@ const WEBHOOKS: WebhooksConfig = {
       rateLimitPerSec: 30,
       concurrency: 4,
       bodySchema: '{ "type": "object" }',
-    },
-    {
-      id: "multica",
-      url: "https://hooks.simpleclaw.dev/multica",
-      purpose: "Multica 이슈/코멘트 inbound",
-      reqLast24h: 480,
-      enabled: true,
-      secretEnv: "WEBHOOK_MULTICA_SECRET",
-      rateLimitPerSec: 20,
-      concurrency: 4,
-      bodySchema:
-        '{\n  "type": "object",\n  "required": ["issue_id"],\n  "properties": { "issue_id": { "type": "string" } }\n}',
     },
     {
       id: "legacy-slack",

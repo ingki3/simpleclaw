@@ -12,9 +12,9 @@ test("Channels — 헤더와 핵심 섹션이 모두 보인다", async ({ page }
   await expect(page.getByTestId("telegram-card")).toBeVisible();
   await expect(page.getByTestId("webhook-list")).toBeVisible();
 
-  // fixture — github / multica endpoint 카드.
+  // fixture — github / legacy-slack endpoint 카드.
   await expect(page.getByTestId("webhook-endpoint-github")).toBeVisible();
-  await expect(page.getByTestId("webhook-endpoint-multica")).toBeVisible();
+  await expect(page.getByTestId("webhook-endpoint-legacy-slack")).toBeVisible();
 });
 
 test.describe("WebhookList 4-variant", () => {
