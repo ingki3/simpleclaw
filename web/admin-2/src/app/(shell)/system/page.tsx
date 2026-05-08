@@ -20,6 +20,7 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { findAreaByPath } from "@/app/areas";
 import { Button } from "@/design/atoms/Button";
+import { NotConnectedBanner } from "@/design/molecules";
 import { SystemInfoCard } from "./_components/SystemInfoCard";
 import { SubsystemHealthCard } from "./_components/SubsystemHealthCard";
 import { RestartCard } from "./_components/RestartCard";
@@ -104,6 +105,10 @@ function SystemContent() {
           데몬 재시작
         </Button>
       </header>
+
+      <NotConnectedBanner
+        description="시스템 정보·헬스·보안 정책·백업·재시작은 fixture 기반입니다. 데몬 mutate API(재시작·정책 편집·백업·복원) 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SystemInfoCard info={snapshot.info} />

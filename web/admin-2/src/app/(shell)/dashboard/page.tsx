@@ -16,6 +16,7 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { findAreaByPath } from "@/app/areas";
+import { NotConnectedBanner } from "@/design/molecules";
 import { SystemStatusRow } from "./_components/SystemStatusRow";
 import { DashboardMetrics } from "./_components/DashboardMetrics";
 import {
@@ -73,6 +74,10 @@ function DashboardContent() {
           <SystemStatusRow domains={snapshot.domains} />
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="헬스·메트릭·최근 변경/알림은 모두 fixture 기반입니다. 데몬·LLM·webhook·cron 데이터 소스 연결 후 실 운영값으로 교체됩니다."
+      />
 
       <DashboardMetrics metrics={snapshot.metrics} />
 

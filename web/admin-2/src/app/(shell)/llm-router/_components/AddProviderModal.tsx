@@ -17,7 +17,10 @@ import { Input } from "@/design/atoms/Input";
 import { Label } from "@/design/atoms/Label";
 import { Select } from "@/design/atoms/Select";
 import { Switch } from "@/design/atoms/Switch";
+import { Tooltip } from "@/design/atoms/Tooltip";
 import { Modal } from "./Modal";
+
+const PENDING_LABEL = "예정 — 데몬 mutate API 연결 후 활성화";
 
 export interface AddProviderFormValue {
   name: string;
@@ -34,6 +37,11 @@ interface AddProviderModalProps {
   onClose: () => void;
   /** 검증 통과 후 호출. 부모가 fixture/state 갱신을 담당. */
   onSubmit: (value: AddProviderFormValue) => void;
+  /**
+   * 데몬 mutate API가 미연결 상태(BIZ-151) 일 때 true.
+   * 폼은 채울 수 있지만 추가 버튼은 비활성화 + "예정" tooltip.
+   */
+  mutationDisabled?: boolean;
 }
 
 const API_TYPE_OPTIONS = [
@@ -57,6 +65,7 @@ export function AddProviderModal({
   open,
   onClose,
   onSubmit,
+  mutationDisabled = false,
 }: AddProviderModalProps) {
   const [form, setForm] = useState<AddProviderFormValue>(DEFAULT_FORM);
   const [submitted, setSubmitted] = useState(false);
@@ -68,6 +77,7 @@ export function AddProviderModal({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (mutationDisabled) return;
     setSubmitted(true);
     if (!valid) return;
     onSubmit(form);
@@ -106,14 +116,30 @@ export function AddProviderModal({
           >
             취소
           </Button>
-          <Button
-            variant="primary"
-            onClick={handleSubmit}
-            disabled={showErrors && !valid}
-            data-testid="add-provider-submit"
-          >
-            추가
-          </Button>
+          {mutationDisabled ? (
+            <Tooltip content={PENDING_LABEL}>
+              <Button
+                variant="primary"
+                onClick={handleSubmit}
+                disabled
+                title={PENDING_LABEL}
+                aria-label={`추가 (${PENDING_LABEL})`}
+                data-testid="add-provider-submit"
+                data-mutation-disabled="true"
+              >
+                추가
+              </Button>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={handleSubmit}
+              disabled={showErrors && !valid}
+              data-testid="add-provider-submit"
+            >
+              추가
+            </Button>
+          )}
         </>
       }
     >

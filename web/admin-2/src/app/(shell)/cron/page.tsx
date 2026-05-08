@@ -21,6 +21,7 @@ import { Badge } from "@/design/atoms/Badge";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
 import { MetricCard } from "@/design/molecules/MetricCard";
+import { NotConnectedBanner } from "@/design/molecules";
 import {
   CronJobsList,
   type CronJobsListState,
@@ -121,6 +122,10 @@ function CronContent() {
           </Button>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="잡 목록·실행 히스토리·새 작업 생성은 fixture 기반입니다. 실 운영 레시피로의 교체와 데몬 mutate API(생성·토글·실행·삭제) 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <SectionHeader
         id="jobs"

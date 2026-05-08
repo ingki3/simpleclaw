@@ -17,9 +17,12 @@ import { useEffect, useState } from "react";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
 import { Label } from "@/design/atoms/Label";
+import { Tooltip } from "@/design/atoms/Tooltip";
 import { DryRunCard } from "@/design/molecules/DryRunCard";
 import type { RoutingRule, RoutingRuleProvider } from "../_data";
 import { Modal } from "./Modal";
+
+const PENDING_LABEL = "예정 — 데몬 mutate API 연결 후 활성화";
 
 export interface RoutingRuleFormValue {
   id: string;
@@ -36,6 +39,11 @@ interface RoutingRuleEditorModalProps {
   onClose: () => void;
   /** dry-run 결과를 부모가 노출. 본 단계에선 콘솔 로그 또는 toast 가 적합. */
   onDryRun: (value: RoutingRuleFormValue) => void;
+  /**
+   * 데몬 mutate API가 미연결 상태(BIZ-151) 일 때 true.
+   * 적용(dry-run) 버튼이 disabled + "예정" tooltip 으로 표시된다.
+   */
+  mutationDisabled?: boolean;
 }
 
 export function RoutingRuleEditorModal({
@@ -43,6 +51,7 @@ export function RoutingRuleEditorModal({
   rule,
   onClose,
   onDryRun,
+  mutationDisabled = false,
 }: RoutingRuleEditorModalProps) {
   const [form, setForm] = useState<RoutingRuleFormValue | null>(null);
 
@@ -103,13 +112,28 @@ export function RoutingRuleEditorModal({
           >
             취소
           </Button>
-          <Button
-            variant="primary"
-            onClick={() => onDryRun(form)}
-            data-testid="routing-rule-dryrun"
-          >
-            적용 (dry-run)
-          </Button>
+          {mutationDisabled ? (
+            <Tooltip content={PENDING_LABEL}>
+              <Button
+                variant="primary"
+                disabled
+                title={PENDING_LABEL}
+                aria-label={`적용 (dry-run) (${PENDING_LABEL})`}
+                data-testid="routing-rule-dryrun"
+                data-mutation-disabled="true"
+              >
+                적용 (dry-run)
+              </Button>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={() => onDryRun(form)}
+              data-testid="routing-rule-dryrun"
+            >
+              적용 (dry-run)
+            </Button>
+          )}
         </>
       }
     >
