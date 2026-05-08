@@ -28,6 +28,8 @@ interface CronJobsListProps {
   onToggleEnabled: (id: string, next: boolean) => void;
   /** 즉시 실행 — 본 단계는 stub (console). */
   onRunNow?: (id: string) => void;
+  /** ✎ Edit — EditCronJobModal 트리거. 부모가 editingJobId 상태를 담당. */
+  onEdit?: (id: string) => void;
   /** error 시 노출할 사람 친화 메시지. */
   errorMessage?: string;
   onRetry?: () => void;
@@ -45,6 +47,7 @@ export function CronJobsList({
   jobs = [],
   onToggleEnabled,
   onRunNow,
+  onEdit,
   errorMessage = "크론 잡 목록을 불러오지 못했습니다.",
   onRetry,
   onCreate,
@@ -75,6 +78,7 @@ export function CronJobsList({
             jobs={jobs}
             onToggleEnabled={onToggleEnabled}
             onRunNow={onRunNow}
+            onEdit={onEdit}
           />
         )
       ) : null}
@@ -86,10 +90,12 @@ function Table({
   jobs,
   onToggleEnabled,
   onRunNow,
+  onEdit,
 }: {
   jobs: readonly CronJob[];
   onToggleEnabled: (id: string, next: boolean) => void;
   onRunNow?: (id: string) => void;
+  onEdit?: (id: string) => void;
 }) {
   return (
     <div className="overflow-hidden rounded-(--radius-l) border border-(--border) bg-(--card)">
@@ -137,6 +143,17 @@ function Table({
                       data-testid={`cron-job-${job.id}-run`}
                     >
                       실행
+                    </Button>
+                  ) : null}
+                  {onEdit ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onEdit(job.id)}
+                      aria-label={`${job.name} 수정`}
+                      data-testid={`cron-job-${job.id}-edit`}
+                    >
+                      ✎ 수정
                     </Button>
                   ) : null}
                   <Switch
