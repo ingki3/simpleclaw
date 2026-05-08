@@ -31,3 +31,9 @@ export type { ConfirmGateProps } from "./ConfirmGate";
 
 export { MaskedSecretRow } from "./MaskedSecretRow";
 export type { MaskedSecretRowProps } from "./MaskedSecretRow";
+
+export { NotConnectedBanner } from "./NotConnectedBanner";
+export type {
+  NotConnectedBannerProps,
+  NotConnectedTone,
+} from "./NotConnectedBanner";

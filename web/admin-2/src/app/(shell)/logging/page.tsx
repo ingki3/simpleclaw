@@ -20,6 +20,7 @@ import { findAreaByPath } from "@/app/areas";
 import { Badge } from "@/design/atoms/Badge";
 import { Input } from "@/design/atoms/Input";
 import { Select } from "@/design/atoms/Select";
+import { NotConnectedBanner } from "@/design/molecules";
 import { TracesList, type TracesListState } from "./_components/TracesList";
 import { TraceDetailModal } from "./_components/TraceDetailModal";
 import {
@@ -166,6 +167,10 @@ function LoggingContent() {
           </div>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="로그 이벤트·trace timeline은 fixture 기반입니다. 실 데몬 로그 스트림 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <TracesList
         state={tracesState}

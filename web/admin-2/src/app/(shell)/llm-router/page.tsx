@@ -19,6 +19,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { findAreaByPath } from "@/app/areas";
 import { Badge } from "@/design/atoms/Badge";
+import { NotConnectedBanner } from "@/design/molecules";
 import { ProvidersGrid, type ProvidersState } from "./_components/ProvidersGrid";
 import { FallbackChainCard } from "./_components/FallbackChainCard";
 import { RoutingRulesCard } from "./_components/RoutingRulesCard";
@@ -99,6 +100,10 @@ function LlmRouterContent() {
         </div>
       </header>
 
+      <NotConnectedBanner
+        description="프로바이더·라우팅 룰은 fixture 기반입니다. 추가·편집·룰 dry-run 동작은 후속 sub-issue에서 데몬 mutate API에 연결됩니다."
+      />
+
       <ProvidersGrid
         state={gridState}
         providers={providers}
@@ -132,6 +137,7 @@ function LlmRouterContent() {
       <AddProviderModal
         open={addOpen}
         onClose={() => setAddOpen(false)}
+        mutationDisabled
         onSubmit={(value) => {
           if (typeof console !== "undefined") {
             console.info("[llm-router] add provider", value);
@@ -143,6 +149,7 @@ function LlmRouterContent() {
         open={editTarget !== null}
         provider={editTarget}
         onClose={() => setEditTarget(null)}
+        mutationDisabled
         onSubmit={(value) => {
           if (typeof console !== "undefined") {
             console.info("[llm-router] edit provider", value);
@@ -164,6 +171,7 @@ function LlmRouterContent() {
         open={ruleTarget !== null}
         rule={ruleTarget}
         onClose={() => setRuleTarget(null)}
+        mutationDisabled
         onDryRun={(value) => {
           if (typeof console !== "undefined") {
             console.info("[llm-router] dry-run rule", value);

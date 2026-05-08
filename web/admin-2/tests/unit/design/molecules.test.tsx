@@ -13,6 +13,7 @@ import {
   InputGroup,
   MaskedSecretRow,
   MetricCard,
+  NotConnectedBanner,
   PolicyChip,
 } from "@/design/molecules";
 
@@ -124,6 +125,32 @@ describe("Molecular — EmptyState", () => {
     expect(screen.getByText("비어있음")).toBeDefined();
     expect(screen.getByText("추가하세요")).toBeDefined();
     expect(screen.getByRole("button", { name: "추가" })).toBeDefined();
+  });
+});
+
+describe("Molecular — NotConnectedBanner", () => {
+  it("기본 title 과 description 을 노출하고 status role 을 가진다", () => {
+    render(<NotConnectedBanner description="fixture 안내" />);
+    const banner = screen.getByTestId("not-connected-banner");
+    expect(banner.getAttribute("role")).toBe("status");
+    expect(banner.getAttribute("aria-live")).toBe("polite");
+    expect(banner.getAttribute("data-tone")).toBe("info");
+    expect(screen.getByText("데몬 API 연결 대기")).toBeDefined();
+    expect(screen.getByText("fixture 안내")).toBeDefined();
+  });
+
+  it("tone='warning' 으로 변경 시 data-tone 이 갱신된다", () => {
+    render(
+      <NotConnectedBanner
+        tone="warning"
+        title="부분 연결"
+        description="일부만 fixture"
+      />,
+    );
+    expect(screen.getByTestId("not-connected-banner").getAttribute("data-tone")).toBe(
+      "warning",
+    );
+    expect(screen.getByText("부분 연결")).toBeDefined();
   });
 });
 

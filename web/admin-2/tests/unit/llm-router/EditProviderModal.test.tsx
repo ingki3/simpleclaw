@@ -122,4 +122,34 @@ describe("EditProviderModal", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByTestId("edit-provider-timeout-error")).toBeDefined();
   });
+
+  it("mutationDisabled=true 면 저장·회전·삭제가 비활성화 (BIZ-151)", () => {
+    const onSubmit = vi.fn();
+    const onRotate = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <EditProviderModal
+        open
+        mutationDisabled
+        provider={PROVIDER}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+        onRotateSecret={onRotate}
+        onDelete={onDelete}
+      />,
+    );
+    const save = screen.getByTestId("edit-provider-submit") as HTMLButtonElement;
+    const rotate = screen.getByTestId("edit-provider-rotate") as HTMLButtonElement;
+    const del = screen.getByTestId("edit-provider-delete") as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(rotate.disabled).toBe(true);
+    expect(del.disabled).toBe(true);
+    expect(save.getAttribute("title")).toMatch(/예정/);
+    fireEvent.click(save);
+    fireEvent.click(rotate);
+    fireEvent.click(del);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onRotate).not.toHaveBeenCalled();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
 });
