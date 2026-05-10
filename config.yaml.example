@@ -26,7 +26,7 @@ llm:
 agent:
   history_limit: 20
   db_path: "~/.simpleclaw/conversations.db"
-  max_tool_iterations: 5
+  max_tool_iterations: 15
   workspace_dir: "~/.simpleclaw/workspace"
 
 # 시맨틱 메모리 (RAG, spec 005 Phase 2)

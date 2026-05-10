@@ -71,7 +71,7 @@
 - LLM이 명시적으로 **Thought**(추론), **Action**(도구 호출), **Observation**(결과 관찰) 사이클을 반복.
 - 결과가 불완전하거나 부정확하면 LLM이 스스로 다른 접근으로 재시도 (자기 보정).
 - 작업이 완료되면 **Answer**를 생성하여 최종 응답.
-- `config.yaml`의 `agent.max_tool_iterations`로 최대 반복 횟수 제한 (기본: 5).
+- `config.yaml`의 `agent.max_tool_iterations`로 최대 반복 횟수 제한 (기본: 15).
 - 단일 도구만 필요한 경우 루프가 1회만 실행되어 기존 동작과 완전히 호환.
 
 #### 3.5.5. 스마트 Python 경로 감지
