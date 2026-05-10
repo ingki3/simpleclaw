@@ -16,8 +16,11 @@ import { Input } from "@/design/atoms/Input";
 import { Label } from "@/design/atoms/Label";
 import { Switch } from "@/design/atoms/Switch";
 import { SecretField } from "@/design/atoms/SecretField";
+import { Tooltip } from "@/design/atoms/Tooltip";
 import type { RouterProvider } from "../_data";
 import { Modal } from "./Modal";
+
+const PENDING_LABEL = "예정 — 데몬 mutate API 연결 후 활성화";
 
 export interface EditProviderFormValue {
   id: string;
@@ -37,6 +40,11 @@ interface EditProviderModalProps {
   onRotateSecret?: (providerId: string) => void;
   /** 프로바이더 삭제 (좌하단 destructive). */
   onDelete?: (providerId: string) => void;
+  /**
+   * 데몬 mutate API가 미연결 상태(BIZ-151) 일 때 true.
+   * 저장·시크릿 회전·삭제 버튼이 disabled + "예정" tooltip 으로 표시된다.
+   */
+  mutationDisabled?: boolean;
 }
 
 export function EditProviderModal({
@@ -46,6 +54,7 @@ export function EditProviderModal({
   onSubmit,
   onRotateSecret,
   onDelete,
+  mutationDisabled = false,
 }: EditProviderModalProps) {
   const [form, setForm] = useState<EditProviderFormValue | null>(null);
   const [submitted, setSubmitted] = useState(false);
@@ -85,6 +94,7 @@ export function EditProviderModal({
   const valid = Object.keys(errors).length === 0;
 
   const handleSubmit = () => {
+    if (mutationDisabled) return;
     setSubmitted(true);
     if (!valid) return;
     onSubmit(form);
@@ -111,17 +121,33 @@ export function EditProviderModal({
       }
       footerLeft={
         onDelete ? (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => {
-              onDelete(provider.id);
-              onClose();
-            }}
-            data-testid="edit-provider-delete"
-          >
-            프로바이더 삭제
-          </Button>
+          mutationDisabled ? (
+            <Tooltip content={PENDING_LABEL}>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled
+                title={PENDING_LABEL}
+                aria-label={`프로바이더 삭제 (${PENDING_LABEL})`}
+                data-testid="edit-provider-delete"
+                data-mutation-disabled="true"
+              >
+                프로바이더 삭제
+              </Button>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                onDelete(provider.id);
+                onClose();
+              }}
+              data-testid="edit-provider-delete"
+            >
+              프로바이더 삭제
+            </Button>
+          )
         ) : null
       }
       footer={
@@ -133,14 +159,30 @@ export function EditProviderModal({
           >
             취소
           </Button>
-          <Button
-            variant="primary"
-            onClick={handleSubmit}
-            disabled={showErrors && !valid}
-            data-testid="edit-provider-submit"
-          >
-            저장
-          </Button>
+          {mutationDisabled ? (
+            <Tooltip content={PENDING_LABEL}>
+              <Button
+                variant="primary"
+                onClick={handleSubmit}
+                disabled
+                title={PENDING_LABEL}
+                aria-label={`저장 (${PENDING_LABEL})`}
+                data-testid="edit-provider-submit"
+                data-mutation-disabled="true"
+              >
+                저장
+              </Button>
+            </Tooltip>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={handleSubmit}
+              disabled={showErrors && !valid}
+              data-testid="edit-provider-submit"
+            >
+              저장
+            </Button>
+          )}
         </>
       }
     >
@@ -168,14 +210,30 @@ export function EditProviderModal({
             }}
           />
           {onRotateSecret ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => onRotateSecret(provider.id)}
-              data-testid="edit-provider-rotate"
-            >
-              ↻ 회전
-            </Button>
+            mutationDisabled ? (
+              <Tooltip content={PENDING_LABEL}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled
+                  title={PENDING_LABEL}
+                  aria-label={`시크릿 회전 (${PENDING_LABEL})`}
+                  data-testid="edit-provider-rotate"
+                  data-mutation-disabled="true"
+                >
+                  ↻ 회전
+                </Button>
+              </Tooltip>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => onRotateSecret(provider.id)}
+                data-testid="edit-provider-rotate"
+              >
+                ↻ 회전
+              </Button>
+            )
           ) : null}
         </div>
       </div>

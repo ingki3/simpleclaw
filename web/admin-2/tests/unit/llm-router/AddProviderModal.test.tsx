@@ -82,4 +82,28 @@ describe("AddProviderModal", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByTestId("add-provider-name-error")).toBeDefined();
   });
+
+  it("mutationDisabled=true 면 추가 버튼이 비활성화되고 onSubmit 미호출 (BIZ-151)", () => {
+    const onSubmit = vi.fn();
+    render(
+      <AddProviderModal
+        open
+        mutationDisabled
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+    );
+    const submit = screen.getByTestId("add-provider-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(submit.getAttribute("data-mutation-disabled")).toBe("true");
+    expect(submit.getAttribute("title")).toMatch(/예정/);
+    fireEvent.change(screen.getByTestId("add-provider-name"), {
+      target: { value: "my-openai" },
+    });
+    fireEvent.change(screen.getByTestId("add-provider-api-key"), {
+      target: { value: "sk-test" },
+    });
+    fireEvent.click(submit);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

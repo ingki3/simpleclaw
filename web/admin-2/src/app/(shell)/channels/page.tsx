@@ -20,6 +20,7 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import { findAreaByPath } from "@/app/areas";
+import { NotConnectedBanner } from "@/design/molecules";
 import { TelegramCard } from "./_components/TelegramCard";
 import {
   WebhookList,
@@ -93,6 +94,10 @@ function ChannelsContent() {
           Telegram 봇 · 웹훅 endpoint 와 정책을 관리합니다.
         </p>
       </header>
+
+      <NotConnectedBanner
+        description="Telegram 봇·웹훅 endpoint·정책은 fixture 기반입니다. 토큰 회전·정책 저장·트래픽 시뮬레이션 mutate API 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <TelegramCard
         channel={snapshot.telegram}

@@ -89,7 +89,59 @@ function nowMinus(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
 
+/**
+ * fixture 는 운영 레시피 (`.agent/recipes/*`) 를 첫 잡들로 포함하고, 그 뒤에
+ * 데몬 차원의 시스템 잡 (memory/dreaming/trace/channel/audit) 만 남긴다.
+ * BIZ-157 — 시연용 잡 (stock.watchlist 등) 은 의미가 약해 제거.
+ */
 const JOBS: readonly CronJob[] = [
+  {
+    id: "recipe.check-email",
+    name: "recipe.check-email",
+    schedule: "every 30m",
+    skillId: "recipe.check-email",
+    payload: '{\n  "scope": "unread"\n}',
+    timeoutSeconds: 90,
+    maxRetries: 2,
+    enabled: true,
+    lastRun: { startedAt: nowMinus(12), status: "success", durationMs: 2_100 },
+    health: "healthy",
+    circuit: "closed",
+  },
+  {
+    id: "recipe.ai-report",
+    name: "recipe.ai-report",
+    schedule: "0 18 * * *",
+    skillId: "recipe.ai-report",
+    payload: '{\n  "horizon": "today"\n}',
+    timeoutSeconds: 300,
+    maxRetries: 2,
+    enabled: true,
+    lastRun: {
+      startedAt: nowMinus(60 * 18),
+      status: "success",
+      durationMs: 22_500,
+    },
+    health: "healthy",
+    circuit: "closed",
+  },
+  {
+    id: "recipe.morning-briefing",
+    name: "recipe.morning-briefing",
+    schedule: "0 7 * * *",
+    skillId: "recipe.morning-briefing",
+    payload: '{\n  "date": "today"\n}',
+    timeoutSeconds: 120,
+    maxRetries: 2,
+    enabled: true,
+    lastRun: {
+      startedAt: nowMinus(60 * 4),
+      status: "success",
+      durationMs: 9_400,
+    },
+    health: "healthy",
+    circuit: "closed",
+  },
   {
     id: "dreaming-cycle",
     name: "dreaming.cycle",
@@ -99,7 +151,7 @@ const JOBS: readonly CronJob[] = [
     timeoutSeconds: 600,
     maxRetries: 2,
     enabled: true,
-    lastRun: { startedAt: nowMinus(32), status: "success", durationMs: 4200 },
+    lastRun: { startedAt: nowMinus(32), status: "success", durationMs: 4_200 },
     health: "healthy",
     circuit: "closed",
   },
@@ -166,51 +218,6 @@ const JOBS: readonly CronJob[] = [
     lastRun: { startedAt: nowMinus(2), status: "success", durationMs: 320 },
     health: "healthy",
     circuit: "closed",
-  },
-  {
-    id: "secret-rotation-watch",
-    name: "secret.rotation.watch",
-    schedule: "0 */6 * * *",
-    payload: '{\n  "warn_days": 7\n}',
-    timeoutSeconds: 60,
-    maxRetries: 1,
-    enabled: true,
-    lastRun: {
-      startedAt: nowMinus(60 * 4),
-      status: "success",
-      durationMs: 540,
-    },
-    health: "healthy",
-    circuit: "closed",
-  },
-  {
-    id: "audit-snapshot",
-    name: "audit.snapshot",
-    schedule: "0 4 * * *",
-    payload: "{}",
-    timeoutSeconds: 180,
-    maxRetries: 2,
-    enabled: true,
-    lastRun: {
-      startedAt: nowMinus(60 * 5),
-      status: "running",
-      durationMs: 0,
-    },
-    health: "healthy",
-    circuit: "closed",
-  },
-  {
-    id: "stock-watchlist-snapshot",
-    name: "stock.watchlist.snapshot",
-    schedule: "0 8 * * 1-5",
-    skillId: "us-stock-skill",
-    payload: '{\n  "tickers": ["AAPL","MSFT","NVDA"]\n}',
-    timeoutSeconds: 120,
-    maxRetries: 2,
-    enabled: false,
-    lastRun: null,
-    health: "degraded",
-    circuit: "half-open",
   },
 ];
 

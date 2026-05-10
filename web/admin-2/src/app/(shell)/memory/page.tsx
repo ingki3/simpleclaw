@@ -23,6 +23,7 @@ import { findAreaByPath } from "@/app/areas";
 import { Badge } from "@/design/atoms/Badge";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
+import { NotConnectedBanner } from "@/design/molecules";
 import { MemoryClusterMap } from "@/design/domain/MemoryClusterMap";
 import {
   ActiveProjectsPanel,
@@ -167,6 +168,10 @@ function MemoryContent() {
           </Button>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="Insights·Active Projects·클러스터·블로클리스트는 fixture 기반입니다. Memory/Dreaming 데몬 데이터 소스 연결과 채택·거절·차단해제·dry-run mutate는 후속 sub-issue에서 진행됩니다."
+      />
 
       <SectionHeader
         id="active-projects"

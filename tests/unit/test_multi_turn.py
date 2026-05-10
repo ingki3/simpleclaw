@@ -167,7 +167,10 @@ class TestMultiTurnExecution:
         )
 
         result = await orchestrator.process_message("Complex query", 1, 1)
-        assert result == "Partial result."
+        # BIZ-160 — 의미 있는 final 텍스트는 그대로 유지하되, 한도 도달
+        # 사실을 사용자에게 알리는 한 줄이 부보된다.
+        assert result.startswith("Partial result.")
+        assert "도구 호출 한도 3회에 도달" in result
         # 3 tool iterations (max) + 1 forced final = 4
         assert orchestrator._router.send.call_count == 4
 

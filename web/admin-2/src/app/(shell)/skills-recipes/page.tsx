@@ -22,6 +22,7 @@ import { findAreaByPath } from "@/app/areas";
 import { Badge } from "@/design/atoms/Badge";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
+import { NotConnectedBanner } from "@/design/molecules";
 import {
   SkillsList,
   type SkillsListState,
@@ -123,6 +124,10 @@ function SkillsRecipesContent() {
           </Button>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="스킬·레시피 카탈로그 및 활성/재시도 정책 토글은 fixture 기반입니다. 실 카탈로그·정책 mutate API 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <SectionHeader id="skills" title="스킬" subtitle="설치된 스킬 — 활성/비활성 토글과 재시도 정책 편집." />
       <SkillsList

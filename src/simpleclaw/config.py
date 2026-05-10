@@ -474,7 +474,7 @@ def load_daemon_config(config_path: str | Path) -> dict:
 _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
     "db_path": "~/.simpleclaw/conversations.db",
-    "max_tool_iterations": 5,
+    "max_tool_iterations": 15,
     "workspace_dir": "~/.simpleclaw/workspace",
 }
 

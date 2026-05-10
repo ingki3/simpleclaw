@@ -21,6 +21,7 @@ import { Badge } from "@/design/atoms/Badge";
 import { Input } from "@/design/atoms/Input";
 import { Select } from "@/design/atoms/Select";
 import { Switch } from "@/design/atoms/Switch";
+import { NotConnectedBanner } from "@/design/molecules";
 import { AuditList, type AuditListState } from "./_components/AuditList";
 import { UndoConfirmModal } from "./_components/UndoConfirmModal";
 import {
@@ -213,6 +214,10 @@ function AuditContent() {
           </label>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="감사 로그·되돌리기 동작은 fixture 기반입니다. 실 운영 감사 스트림 연결과 데몬 undo mutate API는 후속 sub-issue에서 진행됩니다."
+      />
 
       <AuditList
         state={listState}

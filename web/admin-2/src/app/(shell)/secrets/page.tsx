@@ -23,6 +23,7 @@ import { findAreaByPath } from "@/app/areas";
 import { Badge } from "@/design/atoms/Badge";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
+import { NotConnectedBanner } from "@/design/molecules";
 import {
   AddSecretModal,
   maskValue,
@@ -194,6 +195,10 @@ function SecretsContent() {
           </Button>
         </div>
       </header>
+
+      <NotConnectedBanner
+        description="시크릿 목록·추가·로테이트는 fixture 기반입니다 — 평문 값은 저장되지 않으며, keyring API 연결은 후속 sub-issue에서 진행됩니다."
+      />
 
       <SecretsList
         state={listState}

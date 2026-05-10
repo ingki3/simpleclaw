@@ -115,4 +115,22 @@ describe("RoutingRuleEditorModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(onDryRun).not.toHaveBeenCalled();
   });
+
+  it("mutationDisabled=true 면 적용 버튼이 비활성화 (BIZ-151)", () => {
+    const onDryRun = vi.fn();
+    render(
+      <RoutingRuleEditorModal
+        open
+        mutationDisabled
+        rule={RULE}
+        onClose={() => {}}
+        onDryRun={onDryRun}
+      />,
+    );
+    const submit = screen.getByTestId("routing-rule-dryrun") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(submit.getAttribute("title")).toMatch(/예정/);
+    fireEvent.click(submit);
+    expect(onDryRun).not.toHaveBeenCalled();
+  });
 });

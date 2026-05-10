@@ -21,10 +21,12 @@ import { Badge } from "@/design/atoms/Badge";
 import { Button } from "@/design/atoms/Button";
 import { Input } from "@/design/atoms/Input";
 import { MetricCard } from "@/design/molecules/MetricCard";
+import { NotConnectedBanner } from "@/design/molecules";
 import {
   CronJobsList,
   type CronJobsListState,
 } from "./_components/CronJobsList";
+import { EditCronJobModal } from "./_components/EditCronJobModal";
 import {
   NewCronJobModal,
   type NewCronJobInput,
@@ -58,6 +60,13 @@ function CronContent() {
   const [jobs, setJobs] = useState<CronJob[]>(() => [...snapshot.jobs]);
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  // 편집 대상 잡의 id — null 이면 EditCronJobModal 닫힘. 데몬 통합 단계에서
+  // 실제 PATCH 호출로 교체될 때까지는 로컬 fixture 만 갱신한다.
+  const [editingJobId, setEditingJobId] = useState<string | null>(null);
+  const editingJob = useMemo(
+    () => (editingJobId ? jobs.find((j) => j.id === editingJobId) ?? null : null),
+    [editingJobId, jobs],
+  );
 
   // empty variant 일 때는 fixture 를 비워서 EmptyState 가 노출되도록 — variant 검증.
   const jobsForRender =
@@ -122,6 +131,10 @@ function CronContent() {
         </div>
       </header>
 
+      <NotConnectedBanner
+        description="잡 목록·실행 히스토리·새 작업 생성은 fixture 기반입니다. 실 운영 레시피로의 교체와 데몬 mutate API(생성·토글·실행·삭제) 연결은 후속 sub-issue에서 진행됩니다."
+      />
+
       <SectionHeader
         id="jobs"
         title={`등록된 작업 (${jobs.length})`}
@@ -144,6 +157,7 @@ function CronContent() {
             console.info("[cron] run now", id);
           }
         }}
+        onEdit={(id) => setEditingJobId(id)}
         onCreate={() => setCreateOpen(true)}
         onRetry={() => {
           if (typeof console !== "undefined") {
@@ -178,6 +192,34 @@ function CronContent() {
           setJobs((cur) => [...cur, materialize(input)]);
           if (typeof console !== "undefined") {
             console.info("[cron] create job", input.name, input.schedule);
+          }
+        }}
+      />
+
+      <EditCronJobModal
+        open={Boolean(editingJob)}
+        job={editingJob}
+        onClose={() => setEditingJobId(null)}
+        onSave={(id, input) => {
+          // 데몬 통합 단계의 박제 — 실제 mutation 은 PATCH /admin/cron/jobs/<id>
+          // 응답으로 교체될 자리. 본 단계는 로컬 fixture 만 업데이트한다.
+          setJobs((cur) =>
+            cur.map((j) =>
+              j.id === id
+                ? {
+                    ...j,
+                    schedule: input.scheduleRaw || input.schedule,
+                    skillId: input.skillId,
+                    payload: input.payload,
+                    timeoutSeconds: input.timeoutSeconds,
+                    maxRetries: input.maxRetries,
+                    enabled: input.enabled,
+                  }
+                : j,
+            ),
+          );
+          if (typeof console !== "undefined") {
+            console.info("[cron] save job", id, input.schedule);
           }
         }}
       />
