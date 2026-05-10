@@ -459,7 +459,9 @@ class TestBuiltinWebFetch:
             )
 
         static_mock.assert_awaited_once_with("https://example.com/spa")
-        headless_mock.assert_awaited_once_with("https://example.com/spa")
+        headless_mock.assert_awaited_once_with(
+            "https://example.com/spa", headless_binary=None
+        )
         assert "via headless render" in result
         assert "static fetch returned 4 chars" in result
         assert "full rendered article body" in result
@@ -499,7 +501,9 @@ class TestBuiltinWebFetch:
             )
 
         static_mock.assert_not_awaited()
-        headless_mock.assert_awaited_once_with("https://example.com/spa")
+        headless_mock.assert_awaited_once_with(
+            "https://example.com/spa", headless_binary=None
+        )
         assert "force_headless=True" in result
         assert "rendered content" in result
 
@@ -539,6 +543,82 @@ class TestBuiltinWebFetch:
 
         assert "headless fallback failed" in result
         assert "tiny" in result
+
+
+class TestResolveAgentBrowser:
+    """BIZ-162 — `_resolve_agent_browser` CLI 탐색 다단계 강건성."""
+
+    def test_config_override_takes_priority(self, tmp_path):
+        """config override 가 PATH/glob 보다 우선해 사용된다."""
+        from simpleclaw.agent.builtin_tools import _resolve_agent_browser
+
+        # 실행 가능한 스텁 바이너리 생성
+        binary = tmp_path / "agent-browser-custom"
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+
+        # PATH 에 동명의 다른 바이너리가 있어도 override 가 이긴다.
+        with patch("simpleclaw.agent.builtin_tools.shutil.which",
+                   return_value="/usr/local/bin/agent-browser"):
+            resolved, searched = _resolve_agent_browser(override=str(binary))
+
+        assert resolved == str(binary)
+        assert any("config override" in s for s in searched)
+
+    def test_path_lookup_when_no_override(self):
+        """override 없으면 ``shutil.which`` 결과를 사용한다."""
+        from simpleclaw.agent.builtin_tools import _resolve_agent_browser
+
+        with patch("simpleclaw.agent.builtin_tools.shutil.which",
+                   return_value="/path/from/which/agent-browser"):
+            resolved, searched = _resolve_agent_browser(override=None)
+
+        assert resolved == "/path/from/which/agent-browser"
+        assert any("$PATH" in s for s in searched)
+
+    def test_glob_candidate_used_when_path_missing(self, tmp_path):
+        """PATH 가 비어 있어도 알려진 후보 glob 이 매치하면 그것을 사용한다.
+
+        nohup 데몬에서 fnm shim 디렉터리가 PATH 에서 빠진 회귀 시나리오 (BIZ-162).
+        """
+        from simpleclaw.agent import builtin_tools
+        from simpleclaw.agent.builtin_tools import _resolve_agent_browser
+
+        # tmp_path 안에 npm npx 캐시 모양의 실행 가능한 스텁을 만든다.
+        npx_dir = tmp_path / "npx_cache" / "abcd1234" / "node_modules" / "agent-browser" / "bin"
+        npx_dir.mkdir(parents=True)
+        binary = npx_dir / "agent-browser-darwin-arm64"
+        binary.write_text("#!/bin/sh\nexit 0\n")
+        binary.chmod(0o755)
+
+        fake_candidates = (
+            str(tmp_path / "npx_cache" / "*" / "node_modules"
+                / "agent-browser" / "bin" / "agent-browser-darwin-arm64"),
+        )
+        with patch("simpleclaw.agent.builtin_tools.shutil.which",
+                   return_value=None), \
+             patch.object(builtin_tools, "_AGENT_BROWSER_GLOB_CANDIDATES",
+                          fake_candidates):
+            resolved, searched = _resolve_agent_browser(override=None)
+
+        assert resolved == str(binary)
+        assert any(str(tmp_path) in s for s in searched)
+
+    def test_all_paths_fail_returns_none_with_diagnostic(self):
+        """탐색 모두 실패하면 None + searched 목록을 반환해 진단 메시지에 동봉 가능."""
+        from simpleclaw.agent import builtin_tools
+        from simpleclaw.agent.builtin_tools import _resolve_agent_browser
+
+        with patch("simpleclaw.agent.builtin_tools.shutil.which",
+                   return_value=None), \
+             patch.object(builtin_tools, "_AGENT_BROWSER_GLOB_CANDIDATES",
+                          ("/nonexistent/agent-browser",)):
+            resolved, searched = _resolve_agent_browser(override=None)
+
+        assert resolved is None
+        # 진단에 PATH 와 glob 후보가 모두 박혀 있어야 운영자가 즉시 원인 파악 가능.
+        assert any("$PATH" in s for s in searched)
+        assert any("/nonexistent/agent-browser" in s for s in searched)
 
 
 class TestBuiltinFileRead:
