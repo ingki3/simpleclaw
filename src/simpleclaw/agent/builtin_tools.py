@@ -14,8 +14,11 @@ AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import re
+import shutil
 import stat as _stat
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +28,10 @@ if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
 
 logger = logging.getLogger(__name__)
+
+# 정적 HTML fetch 결과가 이 길이(공백 strip 후) 미만이면 자동으로 헤드리스 폴백.
+# JS 렌더링 SPA 가 빈 셸만 반환하는 경우(2026-05-08 사고: 27자) 대응.
+STATIC_FALLBACK_THRESHOLD = 200
 
 # 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록
 BUILTIN_TOOL_NAMES = frozenset({
@@ -83,24 +90,14 @@ _INTERNAL_URL_RE = re.compile(
 )
 
 
-async def handle_web_fetch(routing: dict) -> str:
-    """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
+_WEB_FETCH_MAX_CHARS = 8000
 
-    HTML인 경우 script/style 태그를 제거하고 태그를 strip하여 텍스트만 추출한다.
-    최대 8000자까지 반환하며, 초과 시 잘라낸다.
-    """
+
+async def _fetch_static(url: str) -> str:
+    """정적 HTML/텍스트 fetch (aiohttp). 성공 시 본문, 실패 시 ``Error: ...`` 문자열."""
     import aiohttp
 
-    url = routing.get("url", "")
-    if not url:
-        return "Error: 'url' field is required."
-
-    if _INTERNAL_URL_RE.match(url):
-        return "Error: internal/local network URLs are blocked."
-
-    max_chars = 8000
     timeout = aiohttp.ClientTimeout(total=30)
-
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, allow_redirects=True) as resp:
@@ -116,8 +113,11 @@ async def handle_web_fetch(routing: dict) -> str:
                     body = re.sub(r"<[^>]+>", " ", body)
                     body = re.sub(r"\s+", " ", body).strip()
 
-                if len(body) > max_chars:
-                    body = body[:max_chars] + f"\n\n... [truncated, total {len(body)} chars]"
+                if len(body) > _WEB_FETCH_MAX_CHARS:
+                    body = (
+                        body[:_WEB_FETCH_MAX_CHARS]
+                        + f"\n\n... [truncated, total {len(body)} chars]"
+                    )
 
                 return body
 
@@ -125,6 +125,128 @@ async def handle_web_fetch(routing: dict) -> str:
         return f"Error: request failed — {str(exc)[:200]}"
     except Exception as exc:
         return f"Error: {str(exc)[:200]}"
+
+
+async def _fetch_headless(url: str) -> str:
+    """헤드리스 브라우저(`agent-browser` CLI)로 페이지를 렌더링하고 본문 텍스트를 반환한다.
+
+    `agent-browser open <url>` → `wait --load networkidle` → `get text body` → `close`.
+    CLI 미설치/실패 시 ``Error: ...`` 반환.
+    """
+    binary = shutil.which("agent-browser")
+    if not binary:
+        return (
+            "Error: headless fallback unavailable — "
+            "'agent-browser' CLI not found in PATH."
+        )
+
+    # 같은 봇 안에서 동시 호출이 충돌하지 않도록 PID + 이벤트 루프 시간으로 세션 격리.
+    loop = asyncio.get_event_loop()
+    session_name = f"web-fetch-{os.getpid()}-{int(loop.time() * 1000) % 1_000_000}"
+    common = [binary, "--session", session_name]
+
+    async def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *common, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            raise
+        return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+
+    try:
+        rc, _out, err = await _run(["open", url], timeout=45)
+        if rc != 0:
+            return f"Error: headless open failed — {err.strip()[:200]}"
+
+        # networkidle 대기는 슬로우 페이지에서 실패할 수 있어도 치명적이지 않음 — 무시.
+        try:
+            await _run(["wait", "--load", "networkidle"], timeout=30)
+        except asyncio.TimeoutError:
+            logger.info("agent-browser wait networkidle timed out for %s; continuing", url)
+
+        rc, out, err = await _run(["get", "text", "body"], timeout=30)
+        if rc != 0:
+            return f"Error: headless get text failed — {err.strip()[:200]}"
+
+        body = re.sub(r"\s+", " ", out).strip()
+        if len(body) > _WEB_FETCH_MAX_CHARS:
+            body = (
+                body[:_WEB_FETCH_MAX_CHARS]
+                + f"\n\n... [truncated, total {len(body)} chars]"
+            )
+        return body
+
+    except asyncio.TimeoutError:
+        return "Error: headless rendering timed out."
+    except FileNotFoundError as exc:
+        return f"Error: headless fallback unavailable — {str(exc)[:200]}"
+    except Exception as exc:
+        return f"Error: headless rendering failed — {str(exc)[:200]}"
+    finally:
+        # 브라우저 데몬에 세션이 남지 않도록 정리. 실패는 무시.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *common, "close",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=10)
+        except Exception:
+            pass
+
+
+async def handle_web_fetch(routing: dict) -> str:
+    """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
+
+    기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이면
+    `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA 대응).
+    ``force_headless=True`` 이면 정적 단계 skip.
+    """
+    url = routing.get("url", "")
+    if not url:
+        return "Error: 'url' field is required."
+
+    if _INTERNAL_URL_RE.match(url):
+        return "Error: internal/local network URLs are blocked."
+
+    force_headless = bool(routing.get("force_headless", False))
+
+    if force_headless:
+        logger.info("web_fetch force_headless=True for %s", url)
+        body = await _fetch_headless(url)
+        if body.startswith("Error:"):
+            return body
+        return f"(via headless render; force_headless=True)\n\n{body}"
+
+    static_text = await _fetch_static(url)
+    if static_text.startswith("Error:"):
+        return static_text
+
+    static_len = len(static_text.strip())
+    if static_len < STATIC_FALLBACK_THRESHOLD:
+        logger.info(
+            "web_fetch static returned %d chars (< %d), falling back to headless",
+            static_len,
+            STATIC_FALLBACK_THRESHOLD,
+        )
+        body = await _fetch_headless(url)
+        if body.startswith("Error:"):
+            # 폴백 자체가 실패하면 정적 결과라도 반환해 LLM 이 문맥을 잃지 않게.
+            return (
+                f"(headless fallback failed: {body[:200]}; returning static body)\n\n"
+                f"{static_text}"
+            )
+        return f"(via headless render; static fetch returned {static_len} chars)\n\n{body}"
+
+    return static_text
 
 
 # ------------------------------------------------------------------
