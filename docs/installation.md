@@ -48,7 +48,7 @@ llm:
 # 에이전트 동작
 agent:
   history_limit: 20          # 대화 히스토리 최대 개수
-  max_tool_iterations: 5     # 멀티턴 도구 최대 반복
+  max_tool_iterations: 15    # 멀티턴 도구 최대 반복
   workspace_dir: ".agent/workspace"  # 스킬 파일 출력 디렉토리
 
 # 데몬 설정

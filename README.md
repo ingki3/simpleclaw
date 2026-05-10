@@ -327,7 +327,7 @@ llm:
 agent:
   history_limit: 20                    # 프롬프트에 포함할 대화 수
   db_path: ".agent/conversations.db"
-  max_tool_iterations: 5               # ReAct 루프 최대 반복 횟수
+  max_tool_iterations: 15              # ReAct 루프 최대 반복 횟수
   workspace_dir: ".agent/workspace"    # 스킬 실행 결과 파일 저장 경로
 
 security:

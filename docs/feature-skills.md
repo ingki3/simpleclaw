@@ -91,7 +91,7 @@ python run.py → /path/to/skill/.venv/bin/python run.py
 
 ## 멀티턴 실행 (ReAct)
 
-하나의 메시지에서 여러 스킬을 순차 호출할 수 있습니다 (최대 `max_tool_iterations` 회, 기본 5). LLM이 각 단계에서 Thought로 추론하고, Action으로 스킬을 호출하며, Observation에서 결과를 분석합니다:
+하나의 메시지에서 여러 스킬을 순차 호출할 수 있습니다 (최대 `max_tool_iterations` 회, 기본 15). LLM이 각 단계에서 Thought로 추론하고, Action으로 스킬을 호출하며, Observation에서 결과를 분석합니다:
 
 ```
 사용자: "메일 확인하고 오늘 일정도 알려줘"

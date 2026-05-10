@@ -161,7 +161,7 @@ class AgentOrchestrator:
         self._env_passthrough = security_config.get("env_passthrough", [])
 
         # Multi-turn tool execution budget
-        self._max_tool_iterations = agent_config.get("max_tool_iterations", 5)
+        self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)
 
         # Workspace directory for skill file output.
         # BIZ-133: 기본 위치는 운영 디렉터리(`~/.simpleclaw/workspace`) — 저장소
