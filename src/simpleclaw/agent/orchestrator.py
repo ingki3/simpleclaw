@@ -184,6 +184,12 @@ class AgentOrchestrator:
         ).expanduser()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
 
+        # BIZ-162: web_fetch 의 헤드리스 폴백이 nohup PATH 축소 환경에서도 동작하도록
+        # 운영자 명시 경로를 config 에서 읽어 핸들러에 주입한다. None 이면 builtin_tools
+        # 의 ``_resolve_agent_browser`` 가 PATH + 알려진 후보 경로 자동 탐색.
+        web_fetch_cfg = agent_config.get("web_fetch", {}) or {}
+        self._headless_binary: str | None = web_fetch_cfg.get("headless_binary")
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
@@ -513,7 +519,9 @@ class AgentOrchestrator:
                 return "Error: 'command' argument is required."
             return await self._execute_command("cli", cmd)
         if name == "web_fetch":
-            return await handle_web_fetch(args)
+            return await handle_web_fetch(
+                args, headless_binary=self._headless_binary
+            )
         if name == "file_read":
             return handle_file_read(args, self._workspace_dir)
         if name == "file_write":

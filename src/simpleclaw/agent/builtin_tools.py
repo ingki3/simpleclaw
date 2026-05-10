@@ -15,6 +15,7 @@ AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
 import os
 import re
@@ -32,6 +33,20 @@ logger = logging.getLogger(__name__)
 # 정적 HTML fetch 결과가 이 길이(공백 strip 후) 미만이면 자동으로 헤드리스 폴백.
 # JS 렌더링 SPA 가 빈 셸만 반환하는 경우(2026-05-08 사고: 27자) 대응.
 STATIC_FALLBACK_THRESHOLD = 200
+
+# BIZ-162: nohup/launchd/systemd 등으로 데몬을 띄우면 PATH 가 축소돼 fnm shim
+# 디렉터리가 사라지고 ``shutil.which("agent-browser")`` 가 None 을 돌려준다.
+# `_resolve_agent_browser` 가 PATH 가 비어 있어도 알려진 위치를 글롭 탐색해
+# 헤드리스 폴백이 회귀하지 않도록 한다.
+_AGENT_BROWSER_GLOB_CANDIDATES: tuple[str, ...] = (
+    "~/.npm/_npx/*/node_modules/agent-browser/bin/agent-browser-darwin-arm64",
+    "~/.npm/_npx/*/node_modules/agent-browser/bin/agent-browser-darwin-x64",
+    "~/.npm/_npx/*/node_modules/agent-browser/bin/agent-browser-linux-x64",
+    "~/.npm/_npx/*/node_modules/agent-browser/bin/agent-browser-linux-arm64",
+    "~/.local/state/fnm_multishells/*/bin/agent-browser",
+    "/usr/local/bin/agent-browser",
+    "/opt/homebrew/bin/agent-browser",
+)
 
 # 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록
 BUILTIN_TOOL_NAMES = frozenset({
@@ -127,17 +142,73 @@ async def _fetch_static(url: str) -> str:
         return f"Error: {str(exc)[:200]}"
 
 
-async def _fetch_headless(url: str) -> str:
+def _resolve_agent_browser(
+    override: str | None = None,
+) -> tuple[str | None, list[str]]:
+    """`agent-browser` CLI 절대 경로를 탐색한다.
+
+    탐색 순서:
+      (a) ``override`` — 운영자가 ``agent.web_fetch.headless_binary`` 로 지정한 경로
+      (b) ``shutil.which("agent-browser")`` — 호출자 PATH
+      (c) 알려진 후보 위치 (`_AGENT_BROWSER_GLOB_CANDIDATES`) — npm npx 캐시,
+          fnm 셸 shim, brew 등. nohup 등 PATH 가 축소된 데몬 환경 대응.
+
+    Returns:
+        ``(path_or_None, searched)`` 튜플. ``searched`` 는 진단 메시지에 동봉할
+        수 있도록 시도한 출처 라벨 목록. 하나도 매치되지 않으면 ``path_or_None``
+        은 None.
+    """
+    searched: list[str] = []
+
+    if override:
+        expanded = os.path.expanduser(override)
+        searched.append(f"config override: {expanded}")
+        if os.access(expanded, os.X_OK):
+            return expanded, searched
+        # 명시 경로가 실행 불가능하면 디스크 상태가 변했거나 오타일 가능성 — 경고만
+        # 남기고 후순위(PATH/glob)로 넘어가 자동 복구를 시도한다.
+        logger.warning(
+            "agent.web_fetch.headless_binary set but not executable: %s",
+            expanded,
+        )
+
+    path_via_which = shutil.which("agent-browser")
+    searched.append("$PATH (shutil.which)")
+    if path_via_which:
+        return path_via_which, searched
+
+    for pattern in _AGENT_BROWSER_GLOB_CANDIDATES:
+        expanded = os.path.expanduser(pattern)
+        searched.append(expanded)
+        for hit in glob.glob(expanded):
+            if os.access(hit, os.X_OK):
+                return hit, searched
+
+    return None, searched
+
+
+async def _fetch_headless(
+    url: str,
+    *,
+    headless_binary: str | None = None,
+) -> str:
     """헤드리스 브라우저(`agent-browser` CLI)로 페이지를 렌더링하고 본문 텍스트를 반환한다.
 
     `agent-browser open <url>` → `wait --load networkidle` → `get text body` → `close`.
     CLI 미설치/실패 시 ``Error: ...`` 반환.
+
+    ``headless_binary`` 는 ``agent.web_fetch.headless_binary`` config 값. None 이면
+    PATH + 알려진 후보 경로를 자동 탐색한다.
     """
-    binary = shutil.which("agent-browser")
+    binary, searched = _resolve_agent_browser(headless_binary)
     if not binary:
+        # nohup 등 PATH 가 축소된 환경에서 첫 진단을 빠르게 할 수 있도록, 검색한
+        # 위치 목록을 그대로 동봉한다. 운영자는 이 메시지만 보고 config override
+        # 로 즉시 봉합 가능.
         return (
-            "Error: headless fallback unavailable — "
-            "'agent-browser' CLI not found in PATH."
+            "Error: headless fallback unavailable — agent-browser not found.\n"
+            f"Searched: {'; '.join(searched)}.\n"
+            "Set `agent.web_fetch.headless_binary: <path>` in config.yaml to override."
         )
 
     # 같은 봇 안에서 동시 호출이 충돌하지 않도록 PID + 이벤트 루프 시간으로 세션 격리.
@@ -203,12 +274,20 @@ async def _fetch_headless(url: str) -> str:
             pass
 
 
-async def handle_web_fetch(routing: dict) -> str:
+async def handle_web_fetch(
+    routing: dict,
+    *,
+    headless_binary: str | None = None,
+) -> str:
     """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
 
     기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이면
     `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA 대응).
     ``force_headless=True`` 이면 정적 단계 skip.
+
+    ``headless_binary`` 는 운영자가 config 로 지정한 ``agent-browser`` 절대 경로
+    (``agent.web_fetch.headless_binary``). None 이면 ``_resolve_agent_browser`` 가
+    PATH + 알려진 후보 경로를 자동 탐색한다.
     """
     url = routing.get("url", "")
     if not url:
@@ -221,7 +300,7 @@ async def handle_web_fetch(routing: dict) -> str:
 
     if force_headless:
         logger.info("web_fetch force_headless=True for %s", url)
-        body = await _fetch_headless(url)
+        body = await _fetch_headless(url, headless_binary=headless_binary)
         if body.startswith("Error:"):
             return body
         return f"(via headless render; force_headless=True)\n\n{body}"
@@ -237,7 +316,7 @@ async def handle_web_fetch(routing: dict) -> str:
             static_len,
             STATIC_FALLBACK_THRESHOLD,
         )
-        body = await _fetch_headless(url)
+        body = await _fetch_headless(url, headless_binary=headless_binary)
         if body.startswith("Error:"):
             # 폴백 자체가 실패하면 정적 결과라도 반환해 LLM 이 문맥을 잃지 않게.
             return (
