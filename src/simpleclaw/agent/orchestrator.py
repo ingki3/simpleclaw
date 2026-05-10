@@ -77,6 +77,19 @@ Before using a user-installed skill for the first time, call skill_docs to read 
 Respond in the same language as the user.
 NEVER use the `open` command. This agent runs in a headless environment."""
 
+# BIZ-160 — tool 루프가 max_tool_iterations 를 다 쓰고도 LLM 이 빈 텍스트를 돌려준
+# 사고(2026-05-08)에서 사용자에게 아무 메시지도 가지 않아 봇이 죽은 것처럼 보였음.
+# 빈 응답 자리에 안내 메시지를 채워, 채널 라우터(`if response:`)가 sendMessage 를
+# skip 하지 않도록 한다.
+_BUDGET_EXHAUSTED_EMPTY_MESSAGE = (
+    "여러 도구를 시도했지만 답을 마무리하지 못했습니다.\n"
+    "질문을 짧게 다시 표현해 주시거나, URL/파일 경로를 함께 알려 주시면 도움이 됩니다.\n"
+    "(debug: tool loop {iterations}회 반복 후 종료)"
+)
+_BUDGET_EXHAUSTED_HINT_SUFFIX = (
+    "(참고: 도구 호출 한도 {iterations}회에 도달해 추가 정보 수집을 멈췄습니다)"
+)
+
 
 class AgentOrchestrator:
     """페르소나 + 스킬 + 대화 이력 + LLM을 조합하는 중앙 오케스트레이터.
@@ -391,6 +404,10 @@ class AgentOrchestrator:
             cron_available=self._cron_scheduler is not None,
         )
 
+        # BIZ-160 — budget-exhausted 분기에서 운영자가 패턴을 추적할 수 있도록
+        # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
+        invoked_tool_sequence: list[str] = []
+
         for i in range(self._max_tool_iterations):
             try:
                 request = LLMRequest(
@@ -431,6 +448,7 @@ class AgentOrchestrator:
 
             # 각 tool_call 실행 → 결과를 tool 메시지로 추가
             for tc in response.tool_calls:
+                invoked_tool_sequence.append(tc.name)
                 logger.info("Tool call: %s(%s)", tc.name, json.dumps(tc.arguments, ensure_ascii=False)[:200])
                 result = await self._dispatch_tool_call(tc)
                 messages.append({
@@ -442,9 +460,14 @@ class AgentOrchestrator:
                 logger.info("Tool result: %s → %d chars", tc.name, len(result))
 
         # 예산 소진 — tools=None으로 최종 LLM 호출 (텍스트 강제)
+        # BIZ-160 — 사용된 도구 시퀀스를 한 줄로 박제. 운영자가 logs 검색으로
+        # 동일 패턴(예: "skill_docs → web_fetch → skill_docs → execute_skill → skill_docs")
+        # 을 추적해 max_tool_iterations / 도구 동작을 튜닝할 근거로 사용한다.
         logger.warning(
-            "Tool loop max iterations (%d) reached, forcing final answer",
+            "Tool loop max iterations (%d) reached, forcing final answer; "
+            "tool_sequence=%s",
             self._max_tool_iterations,
+            invoked_tool_sequence,
         )
         try:
             final_request = LLMRequest(
@@ -453,10 +476,25 @@ class AgentOrchestrator:
                 messages=messages,
             )
             final_response = await self._router.send(final_request)
-            return final_response.text.strip()
         except Exception as exc:
             logger.error("Tool loop final generation error: %s", exc)
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
+
+        # BIZ-160 — final_response.text 가 빈 문자열이면 채널 라우터의
+        # `if response:` 가드가 sendMessage 를 skip 한다. 사용자 채널에
+        # 항상 안내가 도달하도록 두 분기로 나눠 빈 응답을 메우거나
+        # 의미 있는 응답에 한도 도달 사실을 한 줄 부보한다.
+        final_text = (final_response.text or "").strip()
+        if not final_text:
+            return _BUDGET_EXHAUSTED_EMPTY_MESSAGE.format(
+                iterations=self._max_tool_iterations,
+            )
+        return (
+            f"{final_text}\n\n"
+            + _BUDGET_EXHAUSTED_HINT_SUFFIX.format(
+                iterations=self._max_tool_iterations,
+            )
+        )
 
     # ------------------------------------------------------------------
     # Tool dispatch
