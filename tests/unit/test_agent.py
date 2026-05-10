@@ -444,6 +444,102 @@ class TestBuiltinWebFetch:
             )
             assert "blocked" in result, f"Should block {url}"
 
+    @pytest.mark.asyncio
+    async def test_web_fetch_short_static_falls_back_to_headless(self):
+        """정적 본문이 임계값 미만이면 자동으로 headless 경로로 폴백."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="tiny")  # 4 chars < 200 threshold
+        headless_mock = AsyncMock(return_value="full rendered article body")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/spa"}
+            )
+
+        static_mock.assert_awaited_once_with("https://example.com/spa")
+        headless_mock.assert_awaited_once_with("https://example.com/spa")
+        assert "via headless render" in result
+        assert "static fetch returned 4 chars" in result
+        assert "full rendered article body" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_long_static_skips_headless(self):
+        """정적 본문이 임계값 이상이면 정적 결과를 그대로 반환 — headless 호출 없음."""
+        from simpleclaw.agent import builtin_tools
+
+        long_body = "x" * 500
+        static_mock = AsyncMock(return_value=long_body)
+        headless_mock = AsyncMock(return_value="should not be called")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/article"}
+            )
+
+        static_mock.assert_awaited_once()
+        headless_mock.assert_not_awaited()
+        assert result == long_body
+        assert "headless" not in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_force_headless_skips_static(self):
+        """force_headless=True 면 정적 경로를 호출하지 않고 곧바로 headless."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="should not be called")
+        headless_mock = AsyncMock(return_value="rendered content")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/spa", "force_headless": True}
+            )
+
+        static_mock.assert_not_awaited()
+        headless_mock.assert_awaited_once_with("https://example.com/spa")
+        assert "force_headless=True" in result
+        assert "rendered content" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_static_error_does_not_fall_back(self):
+        """정적 fetch 가 HTTP 오류를 반환하면 headless 폴백을 시도하지 않는다."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="Error: HTTP 404 — Not Found")
+        headless_mock = AsyncMock(return_value="should not be called")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/missing"}
+            )
+
+        static_mock.assert_awaited_once()
+        headless_mock.assert_not_awaited()
+        assert "Error: HTTP 404" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_headless_failure_returns_static_body(self):
+        """headless 폴백이 실패하면 LLM 이 문맥을 잃지 않도록 정적 본문이라도 반환."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="tiny")
+        headless_mock = AsyncMock(
+            return_value="Error: headless fallback unavailable — 'agent-browser' CLI not found in PATH."
+        )
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/spa"}
+            )
+
+        assert "headless fallback failed" in result
+        assert "tiny" in result
+
 
 class TestBuiltinFileRead:
     """Tests for file_read built-in tool."""
