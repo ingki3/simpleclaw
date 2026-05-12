@@ -1,0 +1,125 @@
+name: Release PR Lint
+
+# release/* → main 릴리스 PR 본문의 `(#NNN, SHA <hash>)` 항목 무결성을 검증한다.
+# 빈 SHA, unmerged PR, 본문 SHA ≠ 실제 mergeCommit.oid 인 경우 PR check 를 실패시키고
+# 위반 라인을 댓글로 단다. 2026-05-12 #153 사고(빈 SHA 로 unmerged PR 포함) 재발 방지.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  release-lint:
+    # release/* 브랜치에서 main 으로 향하는 PR 에서만 동작.
+    if: startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint release PR body
+        id: lint
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          """release PR 본문 SHA 가드.
+
+          본문에서 `(#NNN, SHA <hash>)` 패턴을 모두 추출해 각각:
+            1. SHA 가 비어있지 않은지
+            2. `gh pr view <NNN> --json state,mergeCommit` 결과가 MERGED + mergeCommit.oid 일치인지
+          확인한다. 위반이 하나라도 있으면 비-제로 종료(=PR check 빨강) + 위반 요약을
+          GITHUB_OUTPUT 의 `violations` 키로 다음 스텝에 넘긴다.
+          """
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          body = os.environ.get("PR_BODY") or ""
+          repo = os.environ.get("PR_REPO") or ""
+          # 본문 패턴: `(#123, SHA abcdef...)` 또는 `(#123, SHA `abcdef...`)`
+          # 빈 SHA `(#123, SHA )` 도 의도적으로 캡처해서 위반으로 보고한다.
+          pattern = re.compile(r"\(#(\d+),\s*SHA\s*`?(\w*)`?\s*\)")
+          matches = list(pattern.finditer(body))
+
+          if not matches:
+              print("release-lint: 본문에 `(#NNN, SHA <hash>)` 항목이 없습니다. 스킵.")
+              # 본문 형식을 강제하지는 않음(릴리스 PR 본문 자동화는 별도 사이클).
+              sys.exit(0)
+
+          violations: list[str] = []
+          for m in matches:
+              num, sha = m.group(1), m.group(2)
+              raw = m.group(0)
+              if not sha:
+                  violations.append(f"PR #{num}: 빈 SHA — `{raw}`")
+                  continue
+              try:
+                  cmd = ["gh", "pr", "view", num, "--json", "state,mergeCommit"]
+                  if repo:
+                      cmd.extend(["--repo", repo])
+                  out = subprocess.check_output(
+                      cmd,
+                      text=True,
+                      stderr=subprocess.STDOUT,
+                  )
+              except subprocess.CalledProcessError as e:
+                  violations.append(
+                      f"PR #{num}: `gh pr view` 실패 — {e.output.strip()}"
+                  )
+                  continue
+              data = json.loads(out)
+              state = data.get("state")
+              merge_commit = data.get("mergeCommit") or {}
+              oid = merge_commit.get("oid") or ""
+              if state != "MERGED":
+                  violations.append(
+                      f"PR #{num}: state=`{state}` (MERGED 아님) — `{raw}`"
+                  )
+              elif oid != sha:
+                  violations.append(
+                      f"PR #{num}: 본문 SHA=`{sha}` ≠ 실제 mergeCommit.oid=`{oid}` — `{raw}`"
+                  )
+              else:
+                  print(f"release-lint: PR #{num} OK (oid={oid})")
+
+          if violations:
+              header = "## release-lint 위반\n\n릴리스 PR 본문의 PR 참조가 머지 상태와 어긋납니다.\n\n"
+              body_md = header + "\n".join(f"- {v}" for v in violations) + (
+                  "\n\n해결 방법: 각 PR 의 `state == MERGED` 와 `mergeCommit.oid` 를 "
+                  "`gh pr view <N> --json state,mergeCommit` 로 확인 후 본문을 갱신하세요. "
+                  "머지되지 않은 PR 은 이번 릴리스에서 제외해야 합니다."
+              )
+              # 다음 스텝에서 PR 댓글로 게시할 수 있도록 GITHUB_OUTPUT 으로 전달.
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                  delim = "EOF_VIOLATIONS"
+                  f.write(f"violations<<{delim}\n{body_md}\n{delim}\n")
+              # Step Summary 에도 동일하게 기록.
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+                  f.write(body_md + "\n")
+              print(body_md, file=sys.stderr)
+              sys.exit(1)
+
+          print("release-lint: 모든 PR 참조가 MERGED + SHA 일치. 통과.")
+          PY
+
+      - name: Comment violations on PR
+        if: failure() && steps.lint.outputs.violations != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VIOLATIONS: ${{ steps.lint.outputs.violations }}
+        run: |
+          # gh pr comment 가 stdin/--body 모두 지원. 멀티라인은 임시파일이 안전.
+          printf '%s\n' "$VIOLATIONS" > /tmp/release-lint-comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/release-lint-comment.md
