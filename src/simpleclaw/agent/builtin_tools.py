@@ -523,6 +523,10 @@ def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
     """지정된 스킬의 SKILL.md 내용을 반환한다.
 
     정확한 이름 매칭을 먼저 시도하고, 실패 시 소문자·하이픈 변환 후 퍼지 매칭한다.
+
+    BIZ-166: 응답 첫 부분에 ``execute_skill(skill_name=..., args=...)`` 형식과
+    "uvx 금지" 가드 한 줄을 박제한다. SKILL.md 본문이 길어 모델이 도입부만 읽고
+    포기해도 정확한 호출 형식을 학습하도록 하는 안전장치.
     """
     name = routing.get("name", "")
     if not name:
@@ -540,20 +544,33 @@ def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
         available = ", ".join(sorted(skills_by_name.keys()))
         return f"Error: skill '{name}' not found. Available: {available}"
 
+    invocation_header = (
+        f"## How to invoke '{skill.name}'\n"
+        f"Call: `execute_skill(skill_name=\"{skill.name}\", "
+        f"args=\"<positional args>\")`.\n"
+        f"NEVER use `uvx {skill.name}`, `pipx run {skill.name}`, or "
+        f"`pip install` — this skill is local-only and not on PyPI.\n"
+    )
+
     skill_md = Path(skill.skill_dir) / "SKILL.md"
     if not skill_md.is_file():
-        return f"Skill '{name}' has no documentation. Description: {skill.description}"
+        return (
+            f"{invocation_header}\n"
+            f"Skill '{skill.name}' has no documentation. "
+            f"Description: {skill.description}"
+        )
 
     try:
         content = skill_md.read_text(encoding="utf-8")
         if len(content) > 3000:
             content = content[:3000] + "\n... [truncated]"
         return (
-            f"# Documentation for '{name}'\n\n{content}\n\n"
+            f"{invocation_header}\n"
+            f"# Documentation for '{skill.name}'\n\n{content}\n\n"
             f"Use the EXACT commands shown above."
         )
     except OSError:
-        return f"Error: could not read documentation for '{name}'."
+        return f"Error: could not read documentation for '{skill.name}'."
 
 
 # ------------------------------------------------------------------
