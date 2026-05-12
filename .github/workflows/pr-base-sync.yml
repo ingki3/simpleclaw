@@ -1,0 +1,113 @@
+name: PR Base Sync (dev)
+
+# dev 가 갱신될 때마다 base=dev 인 OPEN PR 들을 훑어
+# behind by N > 0 이면 `needs-rebase` 라벨 + 안내 코멘트를 1회 부착한다.
+# 충돌 해소 비용을 릴리스 직전이 아니라 PR 작성 직후로 당기는 것이 목적.
+#
+# 동작 예시:
+#   behind 0   → no-op. 이미 라벨이 붙어 있다면 제거(따라잡음).
+#   behind ≥ 1 → `needs-rebase` 라벨 부착(없을 때만 안내 코멘트).
+#   head ref 가 `merge/main-to-dev-*` 인 PR 은 fast-forward only 패턴이라 제외.
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write  # 라벨 부착/생성에 필요
+
+jobs:
+  notify-behind-prs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ensure `needs-rebase` label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # 멱등 생성: 이미 있으면 색상/설명만 갱신.
+          gh label create needs-rebase \
+            --repo "$REPO" \
+            --description "base 브랜치보다 뒤처져 있음 — rebase 후 push 필요" \
+            --color "fbca04" \
+            --force
+
+      - name: Scan open PRs targeting dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # base=dev, state=open 인 PR 중 merge-back 패턴 제외.
+          mapfile -t PRS < <(
+            gh pr list --repo "$REPO" --base dev --state open --limit 100 \
+              --json number,headRefName,headRepositoryOwner,labels \
+              --jq '.[]
+                | select(.headRefName | startswith("merge/main-to-dev-") | not)
+                | {number, headRefName, headOwner: (.headRepositoryOwner.login // ""), labels: [.labels[].name]}
+                | @json'
+          )
+
+          if [ "${#PRS[@]}" -eq 0 ]; then
+            echo "No eligible open PRs targeting dev."
+            exit 0
+          fi
+
+          REPO_OWNER="${REPO%/*}"
+
+          for ROW in "${PRS[@]}"; do
+            PR_NUM=$(echo "$ROW" | jq -r '.number')
+            HEAD_REF=$(echo "$ROW" | jq -r '.headRefName')
+            HEAD_OWNER=$(echo "$ROW" | jq -r '.headOwner')
+            HAS_LABEL=$(echo "$ROW" | jq -r '.labels | index("needs-rebase") // empty')
+
+            # 포크 PR 은 `owner:branch` 표기로 비교. 같은 owner 면 단순 ref.
+            if [ -n "$HEAD_OWNER" ] && [ "$HEAD_OWNER" != "$REPO_OWNER" ]; then
+              COMPARE_HEAD="${HEAD_OWNER}:${HEAD_REF}"
+            else
+              COMPARE_HEAD="$HEAD_REF"
+            fi
+
+            # behind_by: dev 가 가진 커밋 중 PR head 에 없는 개수.
+            # compare 실패(브랜치 삭제 등)는 fail-closed 로 건너뜀.
+            BEHIND=$(gh api "repos/$REPO/compare/dev...${COMPARE_HEAD}" --jq '.behind_by' 2>/dev/null || echo "")
+            if [ -z "$BEHIND" ]; then
+              echo "PR #${PR_NUM} (${COMPARE_HEAD}): compare API 실패 — skip"
+              continue
+            fi
+
+            echo "PR #${PR_NUM} (${COMPARE_HEAD}): behind_by=${BEHIND}"
+
+            if [ "$BEHIND" -gt 0 ]; then
+              if [ -z "$HAS_LABEL" ]; then
+                gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-rebase"
+                BODY=$(printf '%s\n' \
+                  "🔄 base \`dev\` 가 갱신되어 이 PR 은 **${BEHIND} 커밋 뒤처져** 있습니다." \
+                  "" \
+                  "머지 직전이 아니라 지금 rebase 해두면 충돌 해소 비용이 훨씬 작습니다." \
+                  "" \
+                  '```bash' \
+                  "git fetch origin dev" \
+                  "git rebase origin/dev" \
+                  "# 충돌 해소 후" \
+                  "git push --force-with-lease" \
+                  '```' \
+                  "" \
+                  "(이 코멘트는 라벨이 없을 때 1회만 부착됩니다 — 다시 따라잡으면 라벨이 자동 제거됩니다.)")
+                gh pr comment "$PR_NUM" --repo "$REPO" --body "$BODY"
+              else
+                echo "PR #${PR_NUM}: 이미 'needs-rebase' 라벨 있음 — 코멘트 생략"
+              fi
+            else
+              # 따라잡았다면 라벨 정리 (코멘트는 남기지 않음 — 노이즈 방지).
+              if [ -n "$HAS_LABEL" ]; then
+                gh pr edit "$PR_NUM" --repo "$REPO" --remove-label "needs-rebase"
+                echo "PR #${PR_NUM}: up-to-date — 'needs-rebase' 라벨 제거"
+              fi
+            fi
+          done
