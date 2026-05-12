@@ -69,12 +69,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # 시스템 프롬프트에 추가할 도구 사용 안내 (ReAct 형식 대신 간결한 지시)
+# BIZ-164 — 작은 모델이 과거 대화에 남은 실패 도구 호출(예: 5/10 의
+# ``link-git-summarizer``) 흔적을 보고 새 사용자 메시지에서도 같은 도구를
+# 다시 시도하는 패턴(2026-05-12 17:46 "오늘 롯데 선발투수" 사고)을 줄이기 위한
+# 프롬프트 가드. 도구 라우팅 자체는 ``_tool_loop`` 의 history 필터(#2)가 끊고,
+# 이 한 줄은 그 필터를 빠져나가는 텍스트 흔적까지 모델이 무시하게 보강한다.
 _TOOL_USAGE_INSTRUCTION = """\
 You have access to tools. Use them when you need real-time information or \
 to perform actions. Do NOT fabricate information — always use a tool to verify.
 When the user asks about real-time data (calendar, news, stocks, weather, etc.), \
 you MUST use the appropriate tool. Never answer from memory for such questions.
 Before using a user-installed skill for the first time, call skill_docs to read its usage.
+Do not re-run a skill that you saw fail in a prior turn — those traces belong to a previous, unrelated request.
 Respond in the same language as the user.
 NEVER use the `open` command. This agent runs in a headless environment."""
 
@@ -402,10 +408,25 @@ class AgentOrchestrator:
             rag_context = ""
         else:
             recent = self._store.get_recent(limit=self._history_limit)
-            messages = [
-                {"role": msg.role.value, "content": msg.content}
-                for msg in recent
-            ]
+            # BIZ-164 — 과거 턴의 ``role=tool`` 메시지와 assistant 메시지의
+            # ``tool_calls`` 필드는 다음 턴의 LLM 입력에서 잘라낸다. 5/10 의
+            # ``link-git-summarizer`` 같은 실패 도구 호출이 history 에 남아
+            # 있으면 작은 모델이 새 사용자 메시지에서도 같은 도구를 다시
+            # 시도해 max-iter 까지 낭비하는 사고(2026-05-12 17:46)가 잡힌다.
+            # 현재 ``MessageRole`` 은 user/assistant/system 만 정의하므로 실데이터
+            # 에선 no-op 이지만, 향후 store 가 tool 역할을 적재하거나 메시지에
+            # ``tool_calls`` 속성이 부착되더라도 누설되지 않도록 명시적으로 거른다.
+            # 현재 턴 내부(in-flight)의 tool exchange 는 아래 루프에서 그대로
+            # 누적되므로 정보 손실 없음.
+            messages = []
+            for msg in recent:
+                role_value = msg.role.value
+                if role_value not in ("user", "assistant", "system"):
+                    continue
+                messages.append({
+                    "role": role_value,
+                    "content": msg.content,
+                })
             messages.append({"role": "user", "content": user_content})
             # 시맨틱 회상: 최근 윈도우에 포함되지 않은 과거 메시지를 추가 컨텍스트로 회수
             recent_contents = {msg.content for msg in recent}
