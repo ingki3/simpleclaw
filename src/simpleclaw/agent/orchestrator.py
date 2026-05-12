@@ -113,6 +113,23 @@ _GUARD_OPEN_COMMAND = (
     "NEVER use the `open` command. This agent runs in a headless environment."
 )
 
+# BIZ-167 — 모델이 페이지 본문 회수에 ``execute_skill agent-browser open ... &&
+# agent-browser wait --load networkidle && agent-browser text`` composite 명령을
+# 첫 시도로 골라 ``networkidle`` 이 settle 하지 않는 SPA(wikidocs.net 등)에서
+# 60초 skill timeout 을 통째로 소진하는 사고 다발(2026-05-12). 같은 일을 하는
+# 내장 ``web_fetch`` 는 정적 fetch + 헤드리스 자동 폴백을 8초 ``load`` wait 로
+# 묶고 부분 결과라도 반환하므로, 본문 읽기는 무조건 ``web_fetch`` 가 정답.
+# ``agent-browser`` 는 클릭/폼/스크린샷처럼 상호작용이 필요한 경우에만.
+_GUARD_WEB_FETCH_PREFERRED = (
+    "To read page text (articles, blogs, search results, docs), use the "
+    "`web_fetch` tool — it auto-falls back to a headless browser when needed. "
+    "Do NOT compose `execute_skill agent-browser open ... && wait ... && text` "
+    "commands for plain text retrieval; reserve `agent-browser` for interactive "
+    "tasks (clicks, form fills, screenshots). When you do call agent-browser, "
+    "use `wait --load load` — `networkidle` rarely settles on modern SPAs and "
+    "wastes the entire skill timeout."
+)
+
 _TOOL_USAGE_INSTRUCTION = "\n".join(
     [
         _BASE_INSTRUCTION,
@@ -121,6 +138,7 @@ _TOOL_USAGE_INSTRUCTION = "\n".join(
         _GUARD_PRIOR_TURN_FAILURE,
         _GUARD_LANGUAGE,
         _GUARD_OPEN_COMMAND,
+        _GUARD_WEB_FETCH_PREFERRED,
     ]
 )
 

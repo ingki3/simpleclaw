@@ -194,7 +194,7 @@ async def _fetch_headless(
 ) -> str:
     """헤드리스 브라우저(`agent-browser` CLI)로 페이지를 렌더링하고 본문 텍스트를 반환한다.
 
-    `agent-browser open <url>` → `wait --load networkidle` → `get text body` → `close`.
+    `agent-browser open <url>` → `wait --load load` → `get text body` → `close`.
     CLI 미설치/실패 시 ``Error: ...`` 반환.
 
     ``headless_binary`` 는 ``agent.web_fetch.headless_binary`` config 값. None 이면
@@ -237,11 +237,15 @@ async def _fetch_headless(
         if rc != 0:
             return f"Error: headless open failed — {err.strip()[:200]}"
 
-        # networkidle 대기는 슬로우 페이지에서 실패할 수 있어도 치명적이지 않음 — 무시.
+        # BIZ-167: ``networkidle`` 은 wikidocs.net 처럼 background polling/analytics 가
+        # 계속 도는 SPA 에서 사실상 영영 settle 하지 않아 wait 가 통째로 timeout 으로
+        # 죽고 30 초를 낭비한다. ``load`` (DOMContentLoaded + 동기 리소스 로딩 완료)
+        # 로 바꾸면 일반 페이지에서 즉시 풀리고, 정 안 풀려도 본문 회수는 가능하다.
+        # timeout 도 8 초로 짧게 — load 자체는 보통 1~2초; 안 풀리면 빠르게 get text 단계로.
         try:
-            await _run(["wait", "--load", "networkidle"], timeout=30)
+            await _run(["wait", "--load", "load"], timeout=8)
         except asyncio.TimeoutError:
-            logger.info("agent-browser wait networkidle timed out for %s; continuing", url)
+            logger.info("agent-browser wait load timed out for %s; continuing", url)
 
         rc, out, err = await _run(["get", "text", "body"], timeout=30)
         if rc != 0:
