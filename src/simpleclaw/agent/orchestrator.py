@@ -68,25 +68,79 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 시스템 프롬프트에 추가할 도구 사용 안내 (ReAct 형식 대신 간결한 지시)
+# 시스템 프롬프트에 추가할 도구 사용 안내 (ReAct 형식 대신 간결한 지시).
+#
+# BIZ-171 — 각 가드는 별도 const 로 선언하고 ``"\n".join`` 으로 합친다.
+# 새 가드를 추가할 때는 ``_GUARD_X`` 상수 한 줄 + 아래 join 리스트 한 줄만
+# 수정한다. 이전에는 트리플-쿼트 한 줄 옆으로 두 PR 이 동시에 끼어들어 git
+# 자동 머지가 실패했음 (2026-05-12: BIZ-164 #151 ↔ BIZ-166 #152, 별도 릴리스
+# release/2026-05-12e #155 강제).
+_BASE_INSTRUCTION = (
+    "You have access to tools. Use them when you need real-time information or "
+    "to perform actions. Do NOT fabricate information — always use a tool to verify.\n"
+    "When the user asks about real-time data (calendar, news, stocks, weather, etc.), "
+    "you MUST use the appropriate tool. Never answer from memory for such questions."
+)
+
+_GUARD_SKILL_DOCS_FIRST = (
+    "Before using a user-installed skill for the first time, "
+    "call skill_docs to read its usage."
+)
+
+# BIZ-166 — 사용자 설치 스킬을 ``uvx``/``pipx run`` 으로 호출하려다 실패하는
+# 패턴 차단. 라우팅 자체는 executor 가 막지만, 이 한 줄은 모델이 첫 시도부터
+# ``execute_skill`` 을 고르도록 유도한다.
+_GUARD_SKILL_DISPATCH = (
+    "User-installed skills run from local venvs, NOT from a package registry. "
+    "Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms "
+    "always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime "
+    "resolve the venv path for you."
+)
+
 # BIZ-164 — 작은 모델이 과거 대화에 남은 실패 도구 호출(예: 5/10 의
 # ``link-git-summarizer``) 흔적을 보고 새 사용자 메시지에서도 같은 도구를
 # 다시 시도하는 패턴(2026-05-12 17:46 "오늘 롯데 선발투수" 사고)을 줄이기 위한
 # 프롬프트 가드. 도구 라우팅 자체는 ``_tool_loop`` 의 history 필터(#2)가 끊고,
 # 이 한 줄은 그 필터를 빠져나가는 텍스트 흔적까지 모델이 무시하게 보강한다.
-_TOOL_USAGE_INSTRUCTION = """\
-You have access to tools. Use them when you need real-time information or \
-to perform actions. Do NOT fabricate information — always use a tool to verify.
-When the user asks about real-time data (calendar, news, stocks, weather, etc.), \
-you MUST use the appropriate tool. Never answer from memory for such questions.
-Before using a user-installed skill for the first time, call skill_docs to read its usage.
-User-installed skills run from local venvs, NOT from a package registry. \
-Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms \
-always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime \
-resolve the venv path for you.
-Do not re-run a skill that you saw fail in a prior turn — those traces belong to a previous, unrelated request.
-Respond in the same language as the user.
-NEVER use the `open` command. This agent runs in a headless environment."""
+_GUARD_PRIOR_TURN_FAILURE = (
+    "Do not re-run a skill that you saw fail in a prior turn — "
+    "those traces belong to a previous, unrelated request."
+)
+
+_GUARD_LANGUAGE = "Respond in the same language as the user."
+
+_GUARD_OPEN_COMMAND = (
+    "NEVER use the `open` command. This agent runs in a headless environment."
+)
+
+# BIZ-167 — 모델이 페이지 본문 회수에 ``execute_skill agent-browser open ... &&
+# agent-browser wait --load networkidle && agent-browser text`` composite 명령을
+# 첫 시도로 골라 ``networkidle`` 이 settle 하지 않는 SPA(wikidocs.net 등)에서
+# 60초 skill timeout 을 통째로 소진하는 사고 다발(2026-05-12). 같은 일을 하는
+# 내장 ``web_fetch`` 는 정적 fetch + 헤드리스 자동 폴백을 8초 ``load`` wait 로
+# 묶고 부분 결과라도 반환하므로, 본문 읽기는 무조건 ``web_fetch`` 가 정답.
+# ``agent-browser`` 는 클릭/폼/스크린샷처럼 상호작용이 필요한 경우에만.
+_GUARD_WEB_FETCH_PREFERRED = (
+    "To read page text (articles, blogs, search results, docs), use the "
+    "`web_fetch` tool — it auto-falls back to a headless browser when needed. "
+    "Do NOT compose `execute_skill agent-browser open ... && wait ... && text` "
+    "commands for plain text retrieval; reserve `agent-browser` for interactive "
+    "tasks (clicks, form fills, screenshots). When you do call agent-browser, "
+    "use `wait --load load` — `networkidle` rarely settles on modern SPAs and "
+    "wastes the entire skill timeout."
+)
+
+_TOOL_USAGE_INSTRUCTION = "\n".join(
+    [
+        _BASE_INSTRUCTION,
+        _GUARD_SKILL_DOCS_FIRST,
+        _GUARD_SKILL_DISPATCH,
+        _GUARD_PRIOR_TURN_FAILURE,
+        _GUARD_LANGUAGE,
+        _GUARD_OPEN_COMMAND,
+        _GUARD_WEB_FETCH_PREFERRED,
+    ]
+)
 
 # BIZ-160 — tool 루프가 max_tool_iterations 를 다 쓰고도 LLM 이 빈 텍스트를 돌려준
 # 사고(2026-05-08)에서 사용자에게 아무 메시지도 가지 않아 봇이 죽은 것처럼 보였음.

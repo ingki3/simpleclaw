@@ -206,6 +206,19 @@ def test_tool_usage_instruction_bans_uvx():
     assert "execute_skill" in _TOOL_USAGE_INSTRUCTION
 
 
+def test_tool_usage_instruction_prefers_web_fetch_over_agent_browser():
+    """BIZ-167 — 본문 읽기는 web_fetch 우선, agent-browser networkidle 함정 경고."""
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    # web_fetch 가 본문 회수의 디폴트라는 안내가 박혀 있어야 한다.
+    assert "web_fetch" in _TOOL_USAGE_INSTRUCTION
+    # composite agent-browser 명령 첫 시도 패턴을 명시적으로 차단한다.
+    assert "agent-browser" in _TOOL_USAGE_INSTRUCTION
+    # networkidle 함정 + 권장 wait strategy 가 동시에 보여야 한다.
+    assert "networkidle" in _TOOL_USAGE_INSTRUCTION
+    assert "wait --load load" in _TOOL_USAGE_INSTRUCTION
+
+
 def test_python_script_interpreter_substitution_preserved(config_file, tmp_path):
     """`python script.py` 의 인터프리터를 venv python 으로 치환하는 기존 동작 보존."""
     orch = AgentOrchestrator(config_file)

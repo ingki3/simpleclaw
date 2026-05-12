@@ -15,6 +15,7 @@
 
 ## In Progress
 
+- [x] **BIZ-167: agent-browser `networkidle` 60초 timeout 봉합** — `_fetch_headless` 의 wait 단계를 `--load networkidle` (timeout 30s) → `--load load` (timeout 8s) 로 교체해 wikidocs.net 등 background polling 이 끊임없이 도는 SPA 에서 wait 가 영영 settle 안 되는 사고를 차단. timeout 시에도 `get text body` 가 호출돼 부분 본문 회수 동작은 그대로 유지. `_TOOL_USAGE_INSTRUCTION` 에 `_GUARD_WEB_FETCH_PREFERRED` 한 줄 추가 — 본문 회수는 `web_fetch` 가 디폴트, `agent-browser` composite 명령은 상호작용(클릭/폼/스크린샷) 한정, 부득이 호출 시 `wait --load load` 사용을 명시. 회귀 가드 단위 테스트 3개(`test_wait_uses_load_strategy_not_networkidle`, `test_wait_timeout_does_not_block_text_retrieval`, `test_tool_usage_instruction_prefers_web_fetch_over_agent_browser`) (2026-05-12)
 - [x] **BIZ-16: Subprocess 좀비 프로세스 정리 및 타임아웃 보강** — `kill_process_group` SIGKILL 폴백 검증, `waitpid(WNOHANG)` 회수, 그룹 잔존 폴링, 좀비/누수 메트릭, 행 걸린 자식 통합 테스트, `MetricsCollector` 운영 배선(`run_bot.py`) + 대시보드 카드 노출 (2026-05-01)
 - [x] **BIZ-29: 임베딩/클러스터 색인 분포 모니터링 및 토큰 절감 측정** — `ConversationStore` 분포 헬퍼(`count_with_embedding` / `embedding_dimension_distribution` / `cluster_member_counts` 등), `simpleclaw.memory.stats`(분포·RAG 로그 집계), `scripts/inspect_memory.py` CLI(텍스트/JSON), `_retrieve_relevant_context()` 구조화 로그(`rag_retrieve` action), 대시보드 `/api/memory_stats` + Memory Index 카드 (2026-05-01)
 - [x] **BIZ-25: 구조화 로깅에 Trace ID 도입** — `simpleclaw.logging.trace_context`(contextvars 기반 trace_id 발급/전파/주입), `LogEntry.trace_id` 필수 필드 + 자동 컨텍스트 채택, `process_message`/`process_cron_message` 진입점 발급, 스킬 executor·서브에이전트 spawner의 `SIMPLECLAW_TRACE_ID` 환경변수 전파, 대시보드 `/api/logs?trace_id=…` 필터 + `/api/trace` 타임라인 + Trace Timeline 카드 (2026-05-01)
@@ -65,6 +66,7 @@
 - [ ] 프로세스 매니저 도입 — systemd 또는 supervisord로 봇 안정적 운영
 - [ ] 로그 로테이션 — bot.log 파일 크기 관리
 - [x] **CI/CD** — GitHub Actions로 PR/푸시 시 단위 테스트(+DB 마이그레이션) 자동 실행 (BIZ-15에 포함, 2026-05-01)
+- [>] **BIZ-172: Feature PR 자동 base-sync** — `.github/workflows/pr-base-sync.yml`(on push: dev) — base=dev 인 OPEN PR 의 behind_by 조회, ≥ 1 이면 `needs-rebase` 라벨 + 1회 안내 코멘트, 따라잡으면 라벨 자동 제거. `merge/main-to-dev-*` 패턴은 제외. 라벨은 워크플로가 멱등 생성(`gh label create --force`), 권한 `pull-requests: write` + `issues: write` (라벨)
 - [ ] **서비스 모니터링 구성** — 1) 대시보드(`/api/metrics`) 임계치 알림(텔레그램), 2) `process_group_leaks > 0` 또는 좀비/자식 PID 단조 증가 시 자동 경보, 3) BIZ-16 후 1주 집중 관찰을 자동 스크립트로 대체. (BIZ-16에서 분리 — 후속 이슈로 등록)
 
 ### 문서

@@ -158,6 +158,17 @@ feature/xxx  ──(PR)──>  dev  ──(PR)──>  main
 ### 릴리스 자동 태깅
 `main`에 머지가 일어나면 `.github/workflows/release-tag.yml`이 calver(`vYYYY.MM.DD[.N]`) 태그와 GitHub Release를 자동 생성한다(자동 릴리스 노트 포함). 태그를 수동으로 만들 필요 없음.
 
+### 릴리스 PR 작성 DoD
+릴리스 PR(`release/*` → `main`) 본문의 `(#NNN, SHA <hash>)` 항목은 **`gh pr view NNN --json state,mergeCommit` 가 `MERGED` + 비어있지 않은 `mergeCommit.oid`** 인 PR 만 허용한다. unmerged 또는 빈 SHA 금지(2026-05-12 #153 사고 재발 방지).
+
+**릴리스 PR 작성 직전 절차** (사람/에이전트 공통):
+1. 머지 대상 PR 번호 목록 확보 (`A B C ...`).
+2. 각 PR 에 대해 `gh pr view <N> --json state,mergeCommit -q '.state + " " + .mergeCommit.oid'` 호출.
+3. 모든 PR 이 `MERGED <40자 oid>` 로 응답해야 본문에 포함. 하나라도 `OPEN`/`CLOSED` 또는 빈 oid 면 그 PR 은 이번 릴리스에서 제외.
+4. 검증 통과한 PR 만 `(#NNN, SHA <oid>)` 형식으로 본문에 기재.
+
+CI 가드(`.github/workflows/release-lint.yml`)가 같은 검증을 PR check 로 재실행하므로, 사람이 한 번 빠뜨려도 머지 단계에서 차단된다.
+
 ## graphify 코드 분석 규칙
 
 **코드베이스 구조 파악 시 반드시 graphify 결과물을 먼저 참고한다.**

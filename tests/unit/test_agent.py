@@ -621,6 +621,103 @@ class TestResolveAgentBrowser:
         assert any("/nonexistent/agent-browser" in s for s in searched)
 
 
+class TestFetchHeadlessWaitStrategy:
+    """BIZ-167 — `_fetch_headless` wait 단계가 ``load`` 전략 + 짧은 timeout 을 쓴다.
+
+    `networkidle` 은 wikidocs.net 같은 SPA 에서 background polling 으로 인해
+    영영 settle 하지 않아 wait 가 통째로 timeout 으로 30초를 낭비한다. ``load``
+    + 8초 timeout 으로 바꿔 정상 페이지는 빠르게 풀리고, 안 풀려도 곧바로
+    `get text body` 단계로 넘어가 부분 결과를 회수한다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_wait_uses_load_strategy_not_networkidle(self, tmp_path):
+        """``wait`` 단계의 인자가 ``--load load`` 여야 한다."""
+        from simpleclaw.agent import builtin_tools
+        from simpleclaw.agent.builtin_tools import _fetch_headless
+
+        # 실행 가능한 스텁 — `_resolve_agent_browser` 의 os.access 통과용.
+        stub = tmp_path / "agent-browser-stub"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+
+        captured_args: list[list[str]] = []
+
+        async def fake_exec(*args, **kwargs):
+            captured_args.append(list(args))
+            proc = MagicMock()
+            proc.communicate = AsyncMock(return_value=(b"body text", b""))
+            proc.wait = AsyncMock(return_value=0)
+            proc.returncode = 0
+            return proc
+
+        with patch.object(builtin_tools.asyncio, "create_subprocess_exec",
+                          side_effect=fake_exec):
+            await _fetch_headless(
+                "https://wikidocs.net/blog/@jaehong/12901/",
+                headless_binary=str(stub),
+            )
+
+        # open / wait / get text body / close 4번 호출.
+        # wait 호출은 두 번째 (open 다음).
+        wait_invocation = captured_args[1]
+        # invocation: [binary, --session, <name>, wait, --load, load]
+        assert "wait" in wait_invocation
+        assert "--load" in wait_invocation
+        assert "load" in wait_invocation
+        assert "networkidle" not in wait_invocation, (
+            "BIZ-167: networkidle 은 SPA 에서 영영 settle 하지 않아 사용 금지"
+        )
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout_does_not_block_text_retrieval(self, tmp_path):
+        """``wait`` 가 timeout 으로 죽어도 ``get text body`` 가 호출돼 부분 결과 회수."""
+        from simpleclaw.agent import builtin_tools
+        from simpleclaw.agent.builtin_tools import _fetch_headless
+        import asyncio as _asyncio
+
+        stub = tmp_path / "agent-browser-stub"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+
+        call_log: list[tuple[str, ...]] = []
+
+        async def fake_exec(*args, **kwargs):
+            # args = (binary, "--session", session_name, <subcommand>, ...)
+            subcommand = args[3] if len(args) > 3 else ""
+            call_log.append(tuple(args[3:]))
+            proc = MagicMock()
+            proc.wait = AsyncMock(return_value=0)
+            proc.returncode = 0
+            if subcommand == "wait":
+                async def hang(*a, **kw):
+                    # wait 가 영영 안 풀리는 SPA 시나리오 — asyncio.wait_for 가
+                    # timeout 으로 빠지도록 무한 대기.
+                    await _asyncio.sleep(60)
+                    return (b"", b"")
+                proc.communicate = hang
+                proc.kill = MagicMock()
+            elif subcommand == "get":
+                proc.communicate = AsyncMock(
+                    return_value=(b"partial body recovered", b"")
+                )
+            else:  # open, close
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            return proc
+
+        with patch.object(builtin_tools.asyncio, "create_subprocess_exec",
+                          side_effect=fake_exec):
+            result = await _fetch_headless(
+                "https://wikidocs.net/never-settle",
+                headless_binary=str(stub),
+            )
+
+        # wait 가 hang 해도 get text 가 호출돼 부분 본문이 반환된다.
+        get_calls = [c for c in call_log if c and c[0] == "get"]
+        assert get_calls, "wait timeout 후에도 get text body 가 호출돼야 한다"
+        assert "partial body recovered" in result
+
+
 class TestBuiltinFileRead:
     """Tests for file_read built-in tool."""
 
