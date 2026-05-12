@@ -65,6 +65,7 @@
 - [ ] 프로세스 매니저 도입 — systemd 또는 supervisord로 봇 안정적 운영
 - [ ] 로그 로테이션 — bot.log 파일 크기 관리
 - [x] **CI/CD** — GitHub Actions로 PR/푸시 시 단위 테스트(+DB 마이그레이션) 자동 실행 (BIZ-15에 포함, 2026-05-01)
+- [>] **BIZ-172: Feature PR 자동 base-sync** — `.github/workflows/pr-base-sync.yml`(on push: dev) — base=dev 인 OPEN PR 의 behind_by 조회, ≥ 1 이면 `needs-rebase` 라벨 + 1회 안내 코멘트, 따라잡으면 라벨 자동 제거. `merge/main-to-dev-*` 패턴은 제외. 라벨은 워크플로가 멱등 생성(`gh label create --force`), 권한 `pull-requests: write` + `issues: write` (라벨)
 - [ ] **서비스 모니터링 구성** — 1) 대시보드(`/api/metrics`) 임계치 알림(텔레그램), 2) `process_group_leaks > 0` 또는 좀비/자식 PID 단조 증가 시 자동 경보, 3) BIZ-16 후 1주 집중 관찰을 자동 스크립트로 대체. (BIZ-16에서 분리 — 후속 이슈로 등록)
 
 ### 문서
