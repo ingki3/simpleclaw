@@ -963,3 +963,86 @@ class TestToolLoop:
         response = await orchestrator.process_message("Run echo", 123, 456)
         assert "test_output" in response
         assert orchestrator._router.send.call_count == 2
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_tool_loop_strips_past_tool_traces_from_history(
+        self, config_file
+    ):
+        """BIZ-164 회귀 — 과거 턴의 ``role=tool`` 메시지와 assistant ``tool_calls`` 필드는
+        새 사용자 메시지 처리 시 LLM 입력에서 잘려야 한다.
+
+        2026-05-12 17:46 "오늘 롯데 선발투수 누구지?" 사고의 패턴: 5/10 의 옛 대화에서
+        시도했던 ``link-git-summarizer`` 스킬 흔적이 history 에 남아 작은 모델이 새
+        메시지에서도 같은 도구를 재시도하다가 max-iter 까지 낭비. 필터가 적용되면
+        다음 LLM 호출의 ``messages`` 어디에도 ``link-git-summarizer`` 가 등장하지
+        않아야 한다.
+        """
+        import json
+        from types import SimpleNamespace
+
+        orchestrator = AgentOrchestrator(config_file)
+
+        # 5/10 의 실패 도구 호출 흔적 — 향후 store 가 tool 역할/`tool_calls` 를
+        # 적재하더라도 필터가 잡아야 한다. 현재 enum 에 없는 형태를 직접 시뮬레이션.
+        stale_tool_msg = SimpleNamespace(
+            role=SimpleNamespace(value="tool"),
+            content=(
+                "Tool result: ls /Users/simplist/Dev/skills/link-git-summarizer "
+                "→ No such file or directory"
+            ),
+        )
+        stale_assistant_msg = SimpleNamespace(
+            role=SimpleNamespace(value="assistant"),
+            content="확인해보겠습니다.",
+            tool_calls=[{
+                "id": "call_old",
+                "name": "link-git-summarizer",
+                "arguments": {"url": "https://example.com"},
+            }],
+        )
+
+        orchestrator._store = MagicMock()
+        orchestrator._store.get_recent = MagicMock(
+            return_value=[stale_assistant_msg, stale_tool_msg]
+        )
+        orchestrator._store.add_message = MagicMock(return_value=1)
+
+        # 새 메시지 처리 시 LLM 은 텍스트만 반환(도구 호출 없이 즉시 답변).
+        final_response = MagicMock()
+        final_response.text = "오늘 롯데 선발투수는 박세웅입니다."
+        final_response.tool_calls = None
+        final_response.backend_name = "gemini"
+
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(return_value=final_response)
+
+        await orchestrator.process_message(
+            "오늘 롯데 선발투수 누구지?", 123, 456
+        )
+
+        request = orchestrator._router.send.call_args[0][0]
+
+        # role=tool 메시지는 history 에서 사라져야 한다.
+        assert all(m.get("role") != "tool" for m in request.messages), (
+            f"role=tool history leaked into LLM messages: {request.messages}"
+        )
+        # 과거 assistant 메시지의 tool_calls 구조 필드는 messages 에 부착되지
+        # 않아야 한다 (현재 턴 내부 in-flight 만 허용 — 본 시나리오에선 tool_calls 가
+        # 한 번도 발생하지 않으므로 어떤 메시지에도 키가 없어야 한다).
+        assert all("tool_calls" not in m for m in request.messages), (
+            f"tool_calls field leaked from history: {request.messages}"
+        )
+        # 핵심 회귀 단언: 5/10 의 스킬 이름이 LLM 입력 어디에도 등장하지 않아야 한다.
+        serialized = json.dumps(request.messages, ensure_ascii=False)
+        assert "link-git-summarizer" not in serialized, (
+            f"stale skill name leaked into LLM messages: {serialized}"
+        )
+
+    def test_tool_usage_instruction_contains_failed_skill_guard(self):
+        """BIZ-164 #3 — system prompt 가드가 ``_TOOL_USAGE_INSTRUCTION`` 에 박혀 있어야 한다."""
+        from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+        assert "fail in a prior turn" in _TOOL_USAGE_INSTRUCTION, (
+            "BIZ-164 prompt guard missing — 과거 실패 도구 재시도 가드 한 줄이 누락됨"
+        )
