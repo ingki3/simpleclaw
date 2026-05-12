@@ -75,6 +75,10 @@ to perform actions. Do NOT fabricate information — always use a tool to verify
 When the user asks about real-time data (calendar, news, stocks, weather, etc.), \
 you MUST use the appropriate tool. Never answer from memory for such questions.
 Before using a user-installed skill for the first time, call skill_docs to read its usage.
+User-installed skills run from local venvs, NOT from a package registry. \
+Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms \
+always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime \
+resolve the venv path for you.
 Respond in the same language as the user.
 NEVER use the `open` command. This agent runs in a headless environment."""
 
@@ -875,7 +879,8 @@ class AgentOrchestrator:
             (
                 "Invoke each skill via `execute_skill` with `skill_name` + `args`. "
                 "Do NOT compose your own bare command — the runtime resolves the "
-                "venv path for you."
+                "venv path for you. NEVER prefix the skill name with `uvx` or "
+                "`pipx run`; these skills are NOT on PyPI."
             ),
             "",
         ]
@@ -913,6 +918,11 @@ class AgentOrchestrator:
         성공하도록 한다. agent-browser 같이 ``&&`` 로 묶인 composite 명령은
         건드리지 않는다 (등록된 skill 이름이 아니면 통과).
 
+        BIZ-166 follow-up: ``uvx <skill-name> ...`` / ``pipx run <skill-name> ...``
+        같이 등록된 skill 을 패키지 레지스트리에서 가져오려는 패턴도 동일하게
+        venv-direct 로 치환한다 (gemini-3-flash-preview 가 시스템 프롬프트의
+        금지 안내를 무시하고 이 형태로 첫 시도하는 사고 다발 — 2026-05-12).
+
         기존 ``_fix_python_path`` 동작도 흡수 — ``python/python3 script.py`` 의
         인터프리터 부분을 스크립트 인근 venv 의 python 으로 치환한다.
         """
@@ -941,6 +951,48 @@ class AgentOrchestrator:
                         first_token, venv_python.name, script_path.name,
                     )
                     return rewritten
+
+        # BIZ-166 follow-up: ``uvx <skill-name> ...`` / ``pipx run <skill-name> ...``
+        # 형태도 등록된 .py skill 이면 venv-direct 로 치환. 첫 토큰이 prefix runner
+        # 일 때만 동작하므로 다른 ``uvx`` 사용 사례(예: 진짜 PyPI 패키지)는 통과.
+        prefix_runner = None
+        prefix_skip = 0
+        if first_token == "uvx":
+            prefix_runner = "uvx"
+            prefix_skip = 1
+        elif first_token == "pipx" and rest.split(None, 1)[:1] == ["run"]:
+            prefix_runner = "pipx run"
+            prefix_skip = 2
+
+        if prefix_runner is not None:
+            inner_tokens = command.split(None, prefix_skip + 1)
+            if len(inner_tokens) >= prefix_skip + 1:
+                inner_first = inner_tokens[prefix_skip]
+                inner_rest = (
+                    inner_tokens[prefix_skip + 1]
+                    if len(inner_tokens) > prefix_skip + 1
+                    else ""
+                )
+                inner_skill = getattr(self, "_skills_by_name", {}).get(
+                    inner_first
+                )
+                if inner_skill is not None and inner_skill.script_path:
+                    inner_script = Path(inner_skill.script_path)
+                    if (
+                        inner_script.suffix == ".py"
+                        and inner_script.is_file()
+                    ):
+                        venv_python = self._find_venv_python(inner_script)
+                        if venv_python is not None:
+                            rewritten = (
+                                f"{venv_python} {inner_script} {inner_rest}"
+                            ).rstrip()
+                            logger.info(
+                                "BIZ-166: rewrote '%s %s ...' → '%s %s ...'",
+                                prefix_runner, inner_first,
+                                venv_python.name, inner_script.name,
+                            )
+                            return rewritten
 
         # 기존 동작: python/python3 인터프리터를 venv 의 python 으로 치환.
         if first_token not in ("python", "python3"):

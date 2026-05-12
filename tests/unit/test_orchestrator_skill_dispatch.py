@@ -129,6 +129,83 @@ def test_uvx_invocation_pass_through_when_skill_unregistered(config_file):
     assert orch._normalize_skill_command(cmd) == cmd
 
 
+def test_uvx_invocation_rewritten_when_skill_registered(config_file, tmp_path):
+    """BIZ-166 follow-up: `uvx <registered-skill>` → venv-direct 치환.
+
+    gemini-3-flash-preview 가 시스템 프롬프트의 "uvx 금지" 안내를 무시하고 첫
+    시도를 ``uvx news-search-skill "..."`` 로 시도하는 패턴(2026-05-12 다발)을
+    런타임에서 강제로 봉합한다.
+    """
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+    orch._skills_by_name = {skill.name: skill}
+
+    result = orch._normalize_skill_command('uvx news-search-skill "foo bar"')
+
+    expected_python = Path(skill.skill_dir) / "venv" / "bin" / "python"
+    expected_script = Path(skill.script_path)
+    assert str(expected_python) in result, (
+        f"uvx prefix 가 제거되고 venv python 경로가 들어가야 함: {result}"
+    )
+    assert str(expected_script) in result
+    assert '"foo bar"' in result
+    # 첫 토큰이 uvx 가 아니어야 함 (셸이 venv python 을 직접 실행)
+    assert not result.lstrip().startswith("uvx ")
+
+
+def test_pipx_run_invocation_rewritten_when_skill_registered(
+    config_file, tmp_path,
+):
+    """`pipx run <registered-skill> ...` 도 동일 규칙으로 venv-direct 로 치환."""
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+    orch._skills_by_name = {skill.name: skill}
+
+    result = orch._normalize_skill_command(
+        'pipx run news-search-skill --query "hello"'
+    )
+
+    expected_python = Path(skill.skill_dir) / "venv" / "bin" / "python"
+    assert str(expected_python) in result
+    assert str(Path(skill.script_path)) in result
+    assert '"hello"' in result
+    assert not result.lstrip().startswith("pipx ")
+
+
+def test_uvx_with_unregistered_inner_skill_pass_through(config_file, tmp_path):
+    """`uvx <unknown> ...` 은 진짜 PyPI 호출일 수 있으므로 통과해야 한다."""
+    orch = AgentOrchestrator(config_file)
+    # news-search-skill 만 등록. uvx 뒤의 토큰이 등록 skill 이 아니면 통과.
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+    orch._skills_by_name = {skill.name: skill}
+
+    cmd = "uvx ruff check src/"
+    assert orch._normalize_skill_command(cmd) == cmd
+
+
+def test_format_skills_for_prompt_bans_uvx(config_file, tmp_path):
+    """`_format_skills_for_prompt` 출력에 uvx/pipx 금지 안내가 포함된다."""
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+
+    formatted = orch._format_skills_for_prompt([skill])
+
+    assert "uvx" in formatted
+    assert "pipx" in formatted
+
+
+def test_tool_usage_instruction_bans_uvx():
+    """`_TOOL_USAGE_INSTRUCTION` 에 uvx/pipx 금지 안내가 명시되어 있다.
+
+    BIZ-166: 시스템 프롬프트가 모델의 첫 시도를 venv-direct 형태로 유도해야 한다.
+    """
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    assert "uvx" in _TOOL_USAGE_INSTRUCTION
+    assert "pipx" in _TOOL_USAGE_INSTRUCTION
+    assert "execute_skill" in _TOOL_USAGE_INSTRUCTION
+
+
 def test_python_script_interpreter_substitution_preserved(config_file, tmp_path):
     """`python script.py` 의 인터프리터를 venv python 으로 치환하는 기존 동작 보존."""
     orch = AgentOrchestrator(config_file)

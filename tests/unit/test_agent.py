@@ -845,6 +845,7 @@ class TestSkillDocs:
         (skill_dir / "SKILL.md").write_text("# Test Skill\n\nUsage: run test")
 
         mock_skill = MagicMock()
+        mock_skill.name = "test-skill"
         mock_skill.skill_dir = str(skill_dir)
         mock_skill.description = "A test skill"
         skills = {"test-skill": mock_skill}
@@ -852,6 +853,49 @@ class TestSkillDocs:
         result = handle_skill_docs({"name": "test-skill"}, skills)
         assert "Usage: run test" in result
         assert "Documentation for" in result
+
+    def test_handle_skill_docs_prepends_invocation_header(self, tmp_path):
+        """BIZ-166: 응답 첫 부분에 execute_skill 호출 형식 + uvx 금지 안내가 들어간다."""
+        skill_dir = tmp_path / "news-search-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "# News Search\n\nSome usage text far from the top."
+        )
+
+        mock_skill = MagicMock()
+        mock_skill.name = "news-search-skill"
+        mock_skill.skill_dir = str(skill_dir)
+        mock_skill.description = "search news"
+        skills = {"news-search-skill": mock_skill}
+
+        result = handle_skill_docs({"name": "news-search-skill"}, skills)
+
+        # 호출 형식이 본문보다 먼저 나와야 모델이 도입부만 읽고도 학습 가능
+        header_index = result.find("execute_skill(skill_name=")
+        body_index = result.find("# News Search")
+        assert header_index != -1, f"invocation header 누락: {result[:200]}"
+        assert body_index != -1
+        assert header_index < body_index, (
+            "invocation header 가 SKILL.md 본문보다 앞에 있어야 함"
+        )
+        assert "uvx news-search-skill" in result
+        assert "pipx run news-search-skill" in result
+
+    def test_handle_skill_docs_no_skillmd_still_has_header(self, tmp_path):
+        """SKILL.md 가 없어도 invocation header 만큼은 반환한다."""
+        skill_dir = tmp_path / "no-docs-skill"
+        skill_dir.mkdir()
+
+        mock_skill = MagicMock()
+        mock_skill.name = "no-docs-skill"
+        mock_skill.skill_dir = str(skill_dir)
+        mock_skill.description = "skill without SKILL.md"
+        skills = {"no-docs-skill": mock_skill}
+
+        result = handle_skill_docs({"name": "no-docs-skill"}, skills)
+        assert 'execute_skill(skill_name="no-docs-skill"' in result
+        assert "uvx no-docs-skill" in result
+        assert "no documentation" in result
 
     def test_handle_skill_docs_missing_name(self):
         result = handle_skill_docs({}, {})
