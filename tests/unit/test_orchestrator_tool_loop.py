@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -175,3 +176,50 @@ async def test_normal_text_response_unaffected(config_file):
     assert result == "정상 답변입니다."
     assert "한도" not in result
     assert "tool loop" not in result
+
+
+@pytest.mark.asyncio
+async def test_forced_final_answer_timeout_returns_fallback(
+    config_file, monkeypatch, caplog,
+):
+    """BIZ-141 — forced final-answer 호출이 hang 하면 timeout 으로 끊고
+    사용자 친화 fallback 메시지를 반환해야 한다 (sendMessage 침묵 사고 방지).
+    """
+    import simpleclaw.agent.orchestrator as orch_mod
+
+    # 테스트가 빨리 끝나도록 타임아웃을 0.1s 로 축소
+    monkeypatch.setattr(orch_mod, "_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS", 0.1)
+
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return f"[stub result for {tc.name}]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+
+    # 도구 응답 2번 (max_tool_iterations=2) 으로 예산 소진 → 강제 final-answer.
+    # 마지막 호출에서만 hang 하도록 시퀀스 구성.
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        if i < 2:
+            # 도구 호출 응답
+            return _tool_response(f"c{i}", "web_fetch")
+        # 강제 final-answer 호출에서 hang
+        await asyncio.sleep(5)
+        return _text_response("not reached")
+
+    orch._router.send = fake_send
+
+    with caplog.at_level(logging.ERROR, logger="simpleclaw.agent.orchestrator"):
+        result = await orch.process_cron_message("뭐든 해줘")
+
+    assert "응답이 지연되어 처리를 종료했습니다" in result, (
+        "타임아웃 시 사용자에게 fallback 메시지가 전달되어야 한다"
+    )
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any(
+        "final generation timeout" in r.getMessage() for r in errors
+    ), "ERROR 로그에 timeout 사실이 박제되어야 한다"

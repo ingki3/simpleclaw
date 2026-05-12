@@ -476,6 +476,11 @@ _AGENT_DEFAULTS: dict = {
     "db_path": "~/.simpleclaw/conversations.db",
     "max_tool_iterations": 15,
     "workspace_dir": "~/.simpleclaw/workspace",
+    # BIZ-162: web_fetch 의 헤드리스 폴백 경로 — None 이면 PATH + 알려진 후보 경로
+    # 자동 탐색. nohup 등 PATH 가 축소된 데몬 환경에서 운영자가 명시적으로 지정.
+    "web_fetch": {
+        "headless_binary": None,
+    },
 }
 
 
@@ -483,20 +488,38 @@ def load_agent_config(config_path: str | Path) -> dict:
     """config.yaml에서 에이전트 오케스트레이터 설정을 로드한다."""
     config_path = Path(config_path)
     if not config_path.is_file():
-        return dict(_AGENT_DEFAULTS)
+        return _agent_with_defaults({})
 
     try:
         with open(config_path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except (yaml.YAMLError, OSError):
-        return dict(_AGENT_DEFAULTS)
+        return _agent_with_defaults({})
 
     if not isinstance(data, dict):
-        return dict(_AGENT_DEFAULTS)
+        return _agent_with_defaults({})
 
     agent = data.get("agent", {})
     if not isinstance(agent, dict):
-        return dict(_AGENT_DEFAULTS)
+        return _agent_with_defaults({})
+
+    return _agent_with_defaults(agent)
+
+
+def _agent_with_defaults(agent: dict) -> dict:
+    """에이전트 설정 dict 를 기본값으로 보강해 반환."""
+    web_fetch = agent.get("web_fetch", {})
+    if not isinstance(web_fetch, dict):
+        web_fetch = {}
+
+    headless_binary = web_fetch.get(
+        "headless_binary",
+        _AGENT_DEFAULTS["web_fetch"]["headless_binary"],
+    )
+    # 빈 문자열은 미설정으로 간주해 자동 탐색에 맡긴다 — 운영자가 일부러 빈 문자열을
+    # 박는 경우는 없고, 대개 sed/yq 등으로 키만 비워둔 사고일 가능성.
+    if isinstance(headless_binary, str) and not headless_binary.strip():
+        headless_binary = None
 
     return {
         "history_limit": agent.get(
@@ -509,6 +532,9 @@ def load_agent_config(config_path: str | Path) -> dict:
         "workspace_dir": agent.get(
             "workspace_dir", _AGENT_DEFAULTS["workspace_dir"]
         ),
+        "web_fetch": {
+            "headless_binary": headless_binary,
+        },
     }
 
 

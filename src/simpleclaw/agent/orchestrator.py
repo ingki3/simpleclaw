@@ -15,6 +15,7 @@ Hot-reload 정책:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -88,6 +89,15 @@ _BUDGET_EXHAUSTED_EMPTY_MESSAGE = (
 )
 _BUDGET_EXHAUSTED_HINT_SUFFIX = (
     "(참고: 도구 호출 한도 {iterations}회에 도달해 추가 정보 수집을 멈췄습니다)"
+)
+
+# BIZ-141 — forced final-answer LLM 호출이 provider 측에서 hang 하면 메시지가
+# 영구 침묵하는 사고를 막기 위한 hard timeout. 일반 응답 시간(통상 1~3초) 대비
+# 충분히 길고, hang 식별엔 충분히 짧은 경험적 컷.
+_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
+_FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
+    "응답이 지연되어 처리를 종료했습니다. 죄송하지만 한 번 더 말씀해 주세요. "
+    "(debug: final-answer LLM 호출이 {timeout:.0f}초 안에 응답하지 않음)"
 )
 
 
@@ -183,6 +193,12 @@ class AgentOrchestrator:
             agent_config.get("workspace_dir", "~/.simpleclaw/workspace")
         ).expanduser()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
+
+        # BIZ-162: web_fetch 의 헤드리스 폴백이 nohup PATH 축소 환경에서도 동작하도록
+        # 운영자 명시 경로를 config 에서 읽어 핸들러에 주입한다. None 이면 builtin_tools
+        # 의 ``_resolve_agent_browser`` 가 PATH + 알려진 후보 경로 자동 탐색.
+        web_fetch_cfg = agent_config.get("web_fetch", {}) or {}
+        self._headless_binary: str | None = web_fetch_cfg.get("headless_binary")
 
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
@@ -475,7 +491,20 @@ class AgentOrchestrator:
                 user_message=user_content,
                 messages=messages,
             )
-            final_response = await self._router.send(final_request)
+            # BIZ-141 — provider 측 hang 으로 메시지가 영구 침묵하는 사고를 막는
+            # 방어선. 빈 응답(BIZ-160)·예외와 별개로 hang 클래스를 처리.
+            final_response = await asyncio.wait_for(
+                self._router.send(final_request),
+                timeout=_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.error(
+                "Tool loop final generation timeout after %ss",
+                _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
+            )
+            return _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE.format(
+                timeout=_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             logger.error("Tool loop final generation error: %s", exc)
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
@@ -513,7 +542,9 @@ class AgentOrchestrator:
                 return "Error: 'command' argument is required."
             return await self._execute_command("cli", cmd)
         if name == "web_fetch":
-            return await handle_web_fetch(args)
+            return await handle_web_fetch(
+                args, headless_binary=self._headless_binary
+            )
         if name == "file_read":
             return handle_file_read(args, self._workspace_dir)
         if name == "file_write":
