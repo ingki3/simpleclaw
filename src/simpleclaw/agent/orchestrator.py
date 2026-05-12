@@ -781,7 +781,7 @@ class AgentOrchestrator:
             logger.warning("Command blocked for skill '%s': %s", skill_name, exc)
             return f"Command blocked (dangerous pattern detected): {exc.description}"
 
-        command = self._fix_python_path(command)
+        command = self._normalize_skill_command(command)
 
         logger.info("Executing skill command: %s", command)
         try:
@@ -862,30 +862,88 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def _format_skills_for_prompt(self, skills: list[SkillDefinition]) -> str:
-        """시스템 프롬프트용 스킬 개요 목록을 생성한다."""
+        """시스템 프롬프트용 스킬 개요 목록을 생성한다.
+
+        BIZ-166: 각 skill 옆에 정확한 호출 형식을 명시한다. 모델이 `uvx <name>` /
+        `<name> "..."` 같은 추측으로 첫 시도를 낭비하지 않도록.
+        """
         if not skills:
             return ""
-        lines = ["## Available Skills", ""]
+        lines = [
+            "## Available Skills",
+            "",
+            (
+                "Invoke each skill via `execute_skill` with `skill_name` + `args`. "
+                "Do NOT compose your own bare command — the runtime resolves the "
+                "venv path for you."
+            ),
+            "",
+        ]
         for skill in skills:
             lines.append(f"- **{skill.name}**: {skill.description}")
+            # script_path 가 .py 인 skill 은 venv 가 자동 해결되므로 args 만 전달하면 됨.
+            # 그렇지 않은 skill (예: agent-browser 같은 CLI 묶음) 은 SKILL.md 참조 안내.
+            script_path = Path(skill.script_path) if skill.script_path else None
+            if (
+                script_path is not None
+                and script_path.suffix == ".py"
+                and script_path.is_file()
+            ):
+                lines.append(
+                    f"  Invocation: `execute_skill(skill_name=\"{skill.name}\", "
+                    f"args=\"<positional args>\")`"
+                )
+            else:
+                lines.append(
+                    f"  Invocation: call `skill_docs(\"{skill.name}\")` first to "
+                    f"read the exact command sequence."
+                )
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _fix_python_path(command: str) -> str:
-        """python/python3 호출을 스크립트 인근 venv의 python으로 치환한다."""
+    def _normalize_skill_command(self, command: str) -> str:
+        """셸 명령을 실행 가능한 형태로 정규화한다.
+
+        BIZ-166: 모델이 ``execute_skill({"command": "news-search-skill ..."})`` 처럼
+        bare skill 이름으로 명령을 보내면 PATH 에 그런 실행 파일이 없어 실패한다.
+        이를 ``<venv>/bin/python <script_path> <rest>`` 로 자동 치환해 첫 시도가
+        성공하도록 한다. agent-browser 같이 ``&&`` 로 묶인 composite 명령은
+        건드리지 않는다 (등록된 skill 이름이 아니면 통과).
+
+        기존 ``_fix_python_path`` 동작도 흡수 — ``python/python3 script.py`` 의
+        인터프리터 부분을 스크립트 인근 venv 의 python 으로 치환한다.
+        """
         import shlex
 
         parts = command.split(None, 1)
-        if len(parts) < 2:
+        if not parts:
             return command
 
-        interpreter, rest = parts[0], parts[1]
+        first_token, rest = parts[0], parts[1] if len(parts) > 1 else ""
 
-        if interpreter not in ("python", "python3"):
+        # BIZ-166: 첫 토큰이 등록된 skill 이름이고 python 스크립트면 venv-direct 호출로 치환.
+        # ``&&`` / ``|`` 같은 shell 연산자가 포함된 composite 명령은 등록 skill 이름과
+        # 일치할 수 없으므로 자연 통과 (예: ``agent-browser open ... && agent-browser wait ...``).
+        skill = getattr(self, "_skills_by_name", {}).get(first_token)
+        if skill is not None and skill.script_path:
+            script_path = Path(skill.script_path)
+            if script_path.suffix == ".py" and script_path.is_file():
+                venv_python = self._find_venv_python(script_path)
+                if venv_python is not None:
+                    rewritten = (
+                        f"{venv_python} {script_path} {rest}".rstrip()
+                    )
+                    logger.info(
+                        "BIZ-166: rewrote bare skill invocation '%s' → '%s %s ...'",
+                        first_token, venv_python.name, script_path.name,
+                    )
+                    return rewritten
+
+        # 기존 동작: python/python3 인터프리터를 venv 의 python 으로 치환.
+        if first_token not in ("python", "python3"):
             return command
 
         try:
@@ -900,10 +958,25 @@ class AgentOrchestrator:
                 break
 
         if script_path is None:
-            if interpreter == "python":
+            if first_token == "python":
                 return f"python3 {rest}"
             return command
 
+        venv_python = self._find_venv_python(script_path)
+        if venv_python is not None:
+            return f"{venv_python} {rest}"
+
+        if first_token == "python":
+            return f"python3 {rest}"
+        return command
+
+    @staticmethod
+    def _find_venv_python(script_path: Path) -> Path | None:
+        """스크립트 인근 venv 의 python 실행 파일 경로를 찾는다.
+
+        검색 순서: ``<script_parent>/venv``, ``<script_parent.parent>/venv``,
+        그리고 ``.venv`` 변종. 없으면 None.
+        """
         for venv_dir in (
             script_path.parent / "venv",
             script_path.parent.parent / "venv",
@@ -912,11 +985,8 @@ class AgentOrchestrator:
         ):
             venv_python = venv_dir / "bin" / "python"
             if venv_python.is_file():
-                return f"{venv_python} {rest}"
-
-        if interpreter == "python":
-            return f"python3 {rest}"
-        return command
+                return venv_python
+        return None
 
     def _load_skills_config(self) -> dict:
         """config.yaml에서 skills 섹션을 로드한다."""
