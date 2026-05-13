@@ -450,7 +450,12 @@ class TestBuiltinWebFetch:
         from simpleclaw.agent import builtin_tools
 
         static_mock = AsyncMock(return_value="tiny")  # 4 chars < 200 threshold
-        headless_mock = AsyncMock(return_value="full rendered article body")
+        # BIZ-190: 블록 페이지 휴리스틱(< 400 chars) 을 트리거하지 않도록
+        # 충분히 긴 본문을 mock. 실제 운영에서도 헤드리스가 성공하면 보통 1k+.
+        rendered_body = (
+            "Full rendered article body. " * 30
+        )  # ~810 chars
+        headless_mock = AsyncMock(return_value=rendered_body)
 
         with patch.object(builtin_tools, "_fetch_static", static_mock), \
              patch.object(builtin_tools, "_fetch_headless", headless_mock):
@@ -464,7 +469,9 @@ class TestBuiltinWebFetch:
         )
         assert "via headless render" in result
         assert "static fetch returned 4 chars" in result
-        assert "full rendered article body" in result
+        assert "Full rendered article body." in result
+        # BIZ-190 회귀 가드: 정상 응답에 FETCH_BLOCKED 마커가 새지 않아야 한다.
+        assert "FETCH_BLOCKED" not in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_long_static_skips_headless(self):
@@ -492,7 +499,9 @@ class TestBuiltinWebFetch:
         from simpleclaw.agent import builtin_tools
 
         static_mock = AsyncMock(return_value="should not be called")
-        headless_mock = AsyncMock(return_value="rendered content")
+        # BIZ-190: 블록 페이지 휴리스틱(< 400 chars) 회피용 충분히 긴 본문.
+        rendered_body = "Rendered SPA content paragraph. " * 25  # ~800 chars
+        headless_mock = AsyncMock(return_value=rendered_body)
 
         with patch.object(builtin_tools, "_fetch_static", static_mock), \
              patch.object(builtin_tools, "_fetch_headless", headless_mock):
@@ -505,7 +514,8 @@ class TestBuiltinWebFetch:
             "https://example.com/spa", headless_binary=None
         )
         assert "force_headless=True" in result
-        assert "rendered content" in result
+        assert "Rendered SPA content paragraph." in result
+        assert "FETCH_BLOCKED" not in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_static_error_does_not_fall_back(self):
@@ -527,9 +537,18 @@ class TestBuiltinWebFetch:
 
     @pytest.mark.asyncio
     async def test_web_fetch_headless_failure_returns_static_body(self):
-        """headless 폴백이 실패하면 LLM 이 문맥을 잃지 않도록 정적 본문이라도 반환."""
+        """headless 폴백이 실패하면 LLM 이 문맥을 잃지 않도록 정적 본문이라도 반환.
+
+        BIZ-190: 정적 본문이 블록 페이지 모양(< 400 chars)이면 FETCH_BLOCKED 으로
+        합성되므로, 이 테스트는 "정적 본문이 짧지만 블록 페이지로 보이지 않는"
+        경계 — 정적이 200~399 chars 일 때는 STATIC_FALLBACK_THRESHOLD(200) 위라
+        애초에 헤드리스 폴백이 호출되지 않는다. 따라서 정적이 < 200 chars 이고
+        헤드리스가 실패하는 경우는 항상 블록으로 분류된다. 테스트는 이 분기 대신
+        헤드리스가 짧지만 비-에러 응답을 돌려준 일반 경로로 대체한다.
+        """
         from simpleclaw.agent import builtin_tools
 
+        # 정적은 짧고(폴백 트리거), 헤드리스도 짧지만 정상 응답.
         static_mock = AsyncMock(return_value="tiny")
         headless_mock = AsyncMock(
             return_value="Error: headless fallback unavailable — 'agent-browser' CLI not found in PATH."
@@ -541,8 +560,82 @@ class TestBuiltinWebFetch:
                 {"url": "https://example.com/spa"}
             )
 
-        assert "headless fallback failed" in result
-        assert "tiny" in result
+        # BIZ-190: 정적이 4 chars 로 블록 페이지로 보이므로 FETCH_BLOCKED 합성.
+        # 헤드리스도 실패했으므로 두 경로 모두 회수 불가 — 명시적 마커가 정답.
+        assert "FETCH_BLOCKED" in result
+        assert "https://example.com/spa" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_block_page_signature_returns_marker(self):
+        """BIZ-190 — 헤드리스 응답에 Cloudflare/anti-bot 시그니처가 있으면 FETCH_BLOCKED."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="short")  # 5 chars → triggers fallback
+        cloudflare_body = (
+            "Just a moment... Please enable JavaScript and cookies to "
+            "continue. Cloudflare is checking your browser for security. "
+            "This process is automatic. Your browser will redirect shortly. "
+            "DDoS protection by Cloudflare. " * 3  # > 400 chars but signature match
+        )
+        headless_mock = AsyncMock(return_value=cloudflare_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://wikidocs.net/3753"}
+            )
+
+        assert result.startswith("FETCH_BLOCKED: https://wikidocs.net/3753"), (
+            "차단 페이지는 FETCH_BLOCKED: 마커로 시작해야 LLM 이 재시도를 멈춘다"
+        )
+        assert "agent-browser" in result, (
+            "응답에 agent-browser 우회 금지 안내가 들어 있어야 한다"
+        )
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_force_headless_short_body_returns_marker(self):
+        """BIZ-190 — force_headless 결과가 매우 짧으면(< 400 chars) FETCH_BLOCKED."""
+        from simpleclaw.agent import builtin_tools
+
+        # 202 chars — wikidocs.net 시드 측정(2026-05-13 20:19:33) 의 실제 길이.
+        short_body = "x" * 202
+        headless_mock = AsyncMock(return_value=short_body)
+        static_mock = AsyncMock(return_value="should not be called")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://wikidocs.net/", "force_headless": True}
+            )
+
+        static_mock.assert_not_awaited()
+        assert result.startswith("FETCH_BLOCKED: https://wikidocs.net/")
+        assert "force_headless" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_normal_static_does_not_trigger_block_detection(self):
+        """BIZ-190 회귀 가드 — 정적 본문이 임계값 이상이면 휴리스틱이 동작하지 않는다.
+
+        정적 본문이 STATIC_FALLBACK_THRESHOLD(200) 이상이면 헤드리스 폴백 자체가
+        호출되지 않고 그대로 반환된다 → ``_looks_like_block_page`` 가 검사하지
+        않으므로 FETCH_BLOCKED 마커가 절대 새지 않는다.
+        """
+        from simpleclaw.agent import builtin_tools
+
+        # 200 < 길이 < 400 — 블록 휴리스틱 임계값과 폴백 임계값 사이의 경계.
+        body = "Real article content. " * 12  # ~264 chars
+        static_mock = AsyncMock(return_value=body)
+        headless_mock = AsyncMock(return_value="should not be called")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://example.com/short-article"}
+            )
+
+        headless_mock.assert_not_awaited()
+        assert "FETCH_BLOCKED" not in result
+        assert "Real article content." in result
 
 
 class TestResolveAgentBrowser:

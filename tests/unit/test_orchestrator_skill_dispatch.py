@@ -337,3 +337,192 @@ def test_tool_usage_instruction_warns_against_chained_agent_browser():
     assert "separate turns" in _TOOL_USAGE_INSTRUCTION
     # composite chain 의 위험성을 명시적으로 박아 둠.
     assert "&&" in _TOOL_USAGE_INSTRUCTION
+
+
+# ----------------------------------------------------------------------
+# BIZ-190 — composite agent-browser chain 차단 + per-turn 호출 cap
+# ----------------------------------------------------------------------
+
+
+def test_is_composite_agent_browser_chain_detects_double_ampersand():
+    """``agent-browser open ... && wait ... && evaluate ...`` chain 식별."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+
+    composite = (
+        'agent-browser open "https://wikidocs.net/3753" && '
+        'agent-browser wait --load load && '
+        'agent-browser evaluate "document.title"'
+    )
+    assert AgentOrchestrator._is_composite_agent_browser_chain(composite) is True
+
+
+def test_is_composite_agent_browser_chain_detects_semicolon():
+    """``;`` 로 묶인 chain 도 차단 대상."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+
+    cmd = "agent-browser open https://x ; agent-browser wait --load load"
+    assert AgentOrchestrator._is_composite_agent_browser_chain(cmd) is True
+
+
+def test_is_composite_agent_browser_chain_single_call_allowed():
+    """단일 ``agent-browser`` 호출은 차단하지 않음 — composite 만 거른다."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+
+    assert (
+        AgentOrchestrator._is_composite_agent_browser_chain(
+            "agent-browser open https://example.com"
+        )
+        is False
+    )
+    assert (
+        AgentOrchestrator._is_composite_agent_browser_chain(
+            "agent-browser get text body"
+        )
+        is False
+    )
+
+
+def test_is_composite_agent_browser_chain_non_agent_browser_unaffected():
+    """``agent-browser`` 가 들어 있지 않은 명령은 ``&&`` 가 있어도 통과."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+
+    cmd = 'curl https://a && curl https://b'
+    assert AgentOrchestrator._is_composite_agent_browser_chain(cmd) is False
+
+
+@pytest.mark.asyncio
+async def test_execute_command_blocks_composite_agent_browser_chain(
+    config_file, caplog,
+):
+    """``_execute_command`` 가 composite chain 을 subprocess 전에 차단한다.
+
+    BIZ-190: BIZ-187 의 180s 화이트리스트 + 가드 텍스트만으로는 작은 모델이
+    같은 chain 을 재시도하는 패턴이 잡히지 않아, 실행 직전에 합성 응답으로
+    돌려준다. 같은 turn 안에서 LLM 이 정정하도록.
+    """
+    import logging
+
+    from simpleclaw.agent import AgentOrchestrator
+    from simpleclaw.agent.orchestrator import (
+        _AGENT_BROWSER_COMPOSITE_BLOCKED_MESSAGE,
+    )
+
+    orch = AgentOrchestrator(config_file)
+    composite = (
+        'agent-browser open "https://wikidocs.net/3753" && '
+        'agent-browser wait --load load && '
+        'agent-browser evaluate "document.title"'
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="simpleclaw.agent.orchestrator"
+    ):
+        result = await orch._execute_command("agent-browser", composite)
+
+    assert result == _AGENT_BROWSER_COMPOSITE_BLOCKED_MESSAGE, (
+        "composite chain 은 명시적 안내 메시지로 즉시 응답해야 한다"
+    )
+    assert "BIZ-190: composite agent-browser chain blocked" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_execute_command_single_agent_browser_call_not_blocked(
+    config_file, monkeypatch,
+):
+    """단일 ``agent-browser`` 호출은 정상적으로 subprocess 로 흐른다."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+
+    # subprocess 진입 자체를 가짜 — async create_subprocess_shell 를 mock 한다.
+    class _FakeProc:
+        def __init__(self):
+            self.returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create(*args, **kwargs):
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_shell", fake_create,
+    )
+
+    result = await orch._execute_command(
+        "agent-browser", "agent-browser get text body",
+    )
+    # composite block 메시지가 절대 흘러나오지 않아야 한다 (회귀 가드)
+    assert "composite `agent-browser` chains are blocked" not in result
+    assert result == "ok"
+
+
+def test_call_invokes_agent_browser_detects_via_skill_name():
+    """``execute_skill(skill_name="agent-browser", ...)`` 는 카운트 대상."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+    from simpleclaw.llm.models import ToolCall
+
+    tc = ToolCall(
+        id="t1",
+        name="execute_skill",
+        arguments={"skill_name": "agent-browser", "args": "open https://x"},
+    )
+    assert AgentOrchestrator._call_invokes_agent_browser(tc) is True
+
+
+def test_call_invokes_agent_browser_detects_via_command():
+    """``execute_skill`` 의 ``command`` 가 agent-browser 호출이면 카운트."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+    from simpleclaw.llm.models import ToolCall
+
+    tc = ToolCall(
+        id="t1",
+        name="execute_skill",
+        arguments={
+            "skill_name": "other",
+            "command": "agent-browser open https://x",
+        },
+    )
+    assert AgentOrchestrator._call_invokes_agent_browser(tc) is True
+
+
+def test_call_invokes_agent_browser_detects_via_cli():
+    """``cli`` 도구로 우회 호출해도 카운트 대상."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+    from simpleclaw.llm.models import ToolCall
+
+    tc = ToolCall(
+        id="t1",
+        name="cli",
+        arguments={"command": "agent-browser get text body"},
+    )
+    assert AgentOrchestrator._call_invokes_agent_browser(tc) is True
+
+
+def test_call_invokes_agent_browser_ignores_unrelated_calls():
+    """다른 도구/명령은 카운트되지 않는다."""
+    from simpleclaw.agent.orchestrator import AgentOrchestrator
+    from simpleclaw.llm.models import ToolCall
+
+    cases = [
+        ToolCall(id="t1", name="web_fetch", arguments={"url": "https://x"}),
+        ToolCall(
+            id="t2", name="execute_skill",
+            arguments={"skill_name": "summarize", "args": "https://x"},
+        ),
+        ToolCall(id="t3", name="cli", arguments={"command": "ls -la"}),
+        ToolCall(id="t4", name="skill_docs", arguments={"name": "agent-browser"}),
+    ]
+    for tc in cases:
+        assert AgentOrchestrator._call_invokes_agent_browser(tc) is False, (
+            f"오탐 — {tc.name}({tc.arguments}) 는 agent-browser 호출이 아님"
+        )
+
+
+def test_tool_usage_instruction_includes_fetch_blocked_guidance():
+    """BIZ-190 — FETCH_BLOCKED 마커 대응 가이드가 시스템 프롬프트에 박혀 있다."""
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    assert "FETCH_BLOCKED" in _TOOL_USAGE_INSTRUCTION
+    # 재시도 금지 + graceful 대안 안내 키워드.
+    assert "Do NOT retry" in _TOOL_USAGE_INSTRUCTION
