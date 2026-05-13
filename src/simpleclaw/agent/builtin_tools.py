@@ -107,6 +107,65 @@ _INTERNAL_URL_RE = re.compile(
 
 _WEB_FETCH_MAX_CHARS = 8000
 
+# BIZ-190 — Cloudflare/anti-bot 차단 페이지 시그니처. ``_fetch_static`` /
+# ``_fetch_headless`` 양쪽 모두 200 OK 로 짧은 본문(예: 27자/202자) 을 돌려주는
+# 케이스가 wikidocs.net, npmjs.com 등에서 관측됨. 시그니처가 매치되거나 본문이
+# 매우 짧으면 LLM 이 같은 URL 을 agent-browser/cli 로 재시도해 max-iter 까지
+# 소진하는 패턴(2026-05-13 BIZ-188 잔존 4건) 의 트리거. 명시적인
+# ``FETCH_BLOCKED:`` 마커 응답으로 합성해 LLM 이 재시도를 멈추도록 한다.
+_BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
+    "just a moment",
+    "checking your browser",
+    "cloudflare",
+    "verify you are human",
+    "verifying you are human",
+    "enable javascript and cookies",
+    "access denied",
+    "attention required",
+    "please turn javascript on",
+    "ddos protection",
+)
+
+# 본문이 이 길이 미만이면 (시그니처가 안 잡혀도) 차단된 것으로 간주. 정적/헤드리스
+# 양쪽이 모두 짧은 응답을 돌려준 경우만 적용 — 정상적인 짧은 페이지(에러 404 등)
+# 까지는 잡지 않도록 ``handle_web_fetch`` 에서 fallback 경로를 거친 뒤에만 검사.
+_BLOCK_PAGE_SHORT_THRESHOLD = 400
+
+
+def _looks_like_block_page(body: str) -> bool:
+    """본문이 Cloudflare/anti-bot 차단 페이지 모양인지 휴리스틱으로 판별한다.
+
+    BIZ-190: 알려진 시그니처(소문자 매치) 또는 매우 짧은 본문(< 400 chars) 이면
+    True. 시그니처는 정적 HTML 의 가시 텍스트(``_fetch_static`` 에서 태그가 이미
+    제거된 상태) 또는 헤드리스 렌더 결과 모두에서 매치되도록 부분 문자열 검색.
+    """
+    if not body:
+        return True
+    stripped = body.strip()
+    if len(stripped) < _BLOCK_PAGE_SHORT_THRESHOLD:
+        return True
+    lower = stripped.lower()
+    return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
+
+
+def _format_block_page_response(url: str, body: str, *, via: str) -> str:
+    """차단 페이지로 판정된 응답을 LLM 이 재시도하지 않도록 합성 메시지로 포맷한다.
+
+    BIZ-190: 응답 첫 줄에 ``FETCH_BLOCKED: <url>`` 마커를 박아 system prompt
+    가드(``_GUARD_WEB_FETCH_PREFERRED``) 와 키워드 매치하도록 한다. 본문은
+    진단용으로 첫 400자까지 동봉.
+    """
+    snippet = body.strip()[:400]
+    return (
+        f"FETCH_BLOCKED: {url}\n"
+        f"This site appears to block automated fetching (detected via {via}). "
+        "Both static fetch and the headless browser fallback returned a short "
+        "or anti-bot body. Do NOT retry the same URL with agent-browser, cli, "
+        "or another skill — reply to the user that the page cannot be "
+        "retrieved automatically and offer a graceful alternative.\n"
+        f"--- diagnostic body ({len(body.strip())} chars) ---\n{snippet}"
+    )
+
 
 async def _fetch_static(url: str) -> str:
     """정적 HTML/텍스트 fetch (aiohttp). 성공 시 본문, 실패 시 ``Error: ...`` 문자열."""
@@ -307,6 +366,14 @@ async def handle_web_fetch(
         body = await _fetch_headless(url, headless_binary=headless_binary)
         if body.startswith("Error:"):
             return body
+        # BIZ-190: force_headless 경로에서도 결과가 차단 페이지 모양이면 LLM 이
+        # 같은 URL 을 agent-browser 로 재시도하지 않도록 FETCH_BLOCKED 마커로 합성.
+        if _looks_like_block_page(body):
+            logger.info(
+                "web_fetch force_headless=True returned block page for %s (%d chars)",
+                url, len(body.strip()),
+            )
+            return _format_block_page_response(url, body, via="force_headless")
         return f"(via headless render; force_headless=True)\n\n{body}"
 
     static_text = await _fetch_static(url)
@@ -323,9 +390,31 @@ async def handle_web_fetch(
         body = await _fetch_headless(url, headless_binary=headless_binary)
         if body.startswith("Error:"):
             # 폴백 자체가 실패하면 정적 결과라도 반환해 LLM 이 문맥을 잃지 않게.
+            # BIZ-190: 다만 정적 본문 자체가 차단 페이지 모양이면 FETCH_BLOCKED
+            # 마커로 합성 — LLM 이 agent-browser 로 또 시도하지 않도록.
+            if _looks_like_block_page(static_text):
+                logger.info(
+                    "web_fetch static+headless both blocked for %s (static %d chars, "
+                    "headless error: %s)",
+                    url, static_len, body[:100],
+                )
+                return _format_block_page_response(
+                    url, static_text, via="static (headless fallback failed)",
+                )
             return (
                 f"(headless fallback failed: {body[:200]}; returning static body)\n\n"
                 f"{static_text}"
+            )
+        # BIZ-190: 헤드리스 폴백 결과가 또 차단 페이지 모양이면 명시적 FETCH_BLOCKED
+        # 마커 응답으로 합성. 둘 다 시도했으니 LLM 이 추가 우회를 시도할 이유가 없음.
+        if _looks_like_block_page(body):
+            logger.info(
+                "web_fetch static+headless both returned block page for %s "
+                "(static %d chars, headless %d chars)",
+                url, static_len, len(body.strip()),
+            )
+            return _format_block_page_response(
+                url, body, via="static→headless fallback",
             )
         return f"(via headless render; static fetch returned {static_len} chars)\n\n{body}"
 

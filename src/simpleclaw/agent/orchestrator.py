@@ -136,7 +136,19 @@ _GUARD_WEB_FETCH_PREFERRED = (
     "wastes the entire skill timeout. Also issue each agent-browser step as its "
     "own tool call (open → wait → text/snapshot in separate turns) instead of "
     "chaining them with `&&`; chained chains amplify single-step timeouts and "
-    "exhaust the tool loop on SPA sites."
+    "exhaust the tool loop on SPA sites. "
+    # BIZ-190 — wikidocs.net / npmjs.com 같이 Cloudflare/anti-bot 가드를 띄우는
+    # 사이트에서 web_fetch 가 짧은 본문(예: 27자, 202자) 이나 ``FETCH_BLOCKED:``
+    # 마커를 돌려주면, 같은 URL 을 agent-browser/cli/skill 로 재시도하지 말 것.
+    # web_fetch 는 이미 정적 + 헤드리스 두 경로를 시도한 결과이므로 추가 우회는
+    # 무의미하고 tool loop 만 소진한다. 사용자에게 "사이트가 자동 회수를 차단함"
+    # 으로 보고하고 종료한다.
+    "If `web_fetch` returns a short body or a `FETCH_BLOCKED:` marker for a URL, "
+    "the site is blocking automated fetching — `web_fetch` has already tried "
+    "both static and headless paths. Do NOT retry the same URL via "
+    "`agent-browser`, `cli`, or any other skill; reply to the user that the "
+    "page cannot be retrieved automatically and offer a graceful alternative "
+    "(ask for the text directly, summarize from prior knowledge, etc.)."
 )
 
 _TOOL_USAGE_INSTRUCTION = "\n".join(
@@ -171,6 +183,40 @@ _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
 _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "응답이 지연되어 처리를 종료했습니다. 죄송하지만 한 번 더 말씀해 주세요. "
     "(debug: final-answer LLM 호출이 {timeout:.0f}초 안에 응답하지 않음)"
+)
+
+# BIZ-190 — ``agent-browser`` composite chain (``open && wait && text|evaluate``)
+# 은 BIZ-187 에서 시스템 프롬프트 가드 + 180s 화이트리스트 타임아웃으로 봉합을
+# 시도했지만, 작은 모델(gemini-2.5-flash-lite 등)이 가드 문구를 무시하고 첫 시도
+# 부터 같은 chain 을 다시 보내는 패턴이 잔존(2026-05-13 20:19~20:36 KST 시드
+# 측정 4건). 가드를 텍스트로만 두면 한 번 잘못된 시도를 못 막고 그 결과가 다시
+# tool history 에 누적돼 후속 turn 까지 같은 chain 을 유도한다. 실행 직전에
+# subprocess 전에서 차단하고 명확한 단일-호출 안내를 tool result 로 돌려 줌으로
+# 써 LLM 이 같은 turn 안에서 정정하도록 한다.
+_AGENT_BROWSER_COMPOSITE_BLOCKED_MESSAGE = (
+    "Error: composite `agent-browser` chains are blocked. Each agent-browser "
+    "step must be a SEPARATE tool call (one `execute_skill` per `open`, `wait`, "
+    "`get`/`evaluate` step). For plain page text, prefer `web_fetch` — it already "
+    "auto-falls back to a headless browser. If `web_fetch` returned a short body "
+    "for this URL, the site is blocking automated fetching; do NOT keep trying "
+    "the same URL via agent-browser. Reply to the user that the page cannot be "
+    "retrieved instead."
+)
+
+# BIZ-190 — 같은 URL 에 대해 ``agent-browser open`` 류 호출을 한 turn 안에서
+# 반복하는 패턴(시드 측정 seed-2/3/8/9 의 4건 공통) 의 cap. 첫 시도가 daemon
+# busy(os error 35) 등으로 실패하면 LLM 이 같은 명령을 재시도하면서 max-iter
+# 까지 누적 소진한다. 첫 호출 1회만 허용하고 두 번째부터는 합성 응답으로
+# 즉시 종결.
+_AGENT_BROWSER_PER_TURN_CALL_CAP = 2
+
+_AGENT_BROWSER_CAP_EXCEEDED_MESSAGE = (
+    "Error: `agent-browser` has already been attempted {count} times in this "
+    "turn and is being rate-limited to avoid exhausting the tool loop. If the "
+    "page text could not be retrieved by `web_fetch` (which already includes a "
+    "headless fallback), the site is blocking automated fetching. Reply to the "
+    "user that the page cannot be retrieved rather than retrying with "
+    "agent-browser, cli, or another skill."
 )
 
 
@@ -525,6 +571,12 @@ class AgentOrchestrator:
         # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
         invoked_tool_sequence: list[str] = []
 
+        # BIZ-190 — 같은 turn 안에서 ``agent-browser`` 호출 횟수 카운터. 첫 시도가
+        # 실패하면 LLM 이 같은 명령을 cli/execute_skill 채널로 재시도하면서 max-iter
+        # 까지 누적 소진하는 패턴(seed-2/3/8/9, 2026-05-13 20:19~20:36 KST) 을 차단.
+        # ``_AGENT_BROWSER_PER_TURN_CALL_CAP`` 초과 시 subprocess 진입 전에 합성 응답.
+        agent_browser_call_count = 0
+
         for i in range(self._max_tool_iterations):
             try:
                 request = LLMRequest(
@@ -567,6 +619,31 @@ class AgentOrchestrator:
             for tc in response.tool_calls:
                 invoked_tool_sequence.append(tc.name)
                 logger.info("Tool call: %s(%s)", tc.name, json.dumps(tc.arguments, ensure_ascii=False)[:200])
+
+                # BIZ-190: 같은 turn 안에서 ``agent-browser`` 호출 횟수가 cap 을
+                # 넘으면 subprocess 진입 전에 합성 응답으로 즉시 종결한다. cap 자체는
+                # ``execute_skill`` 의 ``command`` 또는 ``args`` 가 agent-browser 를
+                # 호출하는지로 판별 — ``cli`` 도구로 우회 호출하는 경우도 동일하게 적용.
+                if self._call_invokes_agent_browser(tc):
+                    agent_browser_call_count += 1
+                    if agent_browser_call_count > _AGENT_BROWSER_PER_TURN_CALL_CAP:
+                        result = _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE.format(
+                            count=agent_browser_call_count - 1,
+                        )
+                        logger.warning(
+                            "BIZ-190: agent-browser per-turn cap exceeded "
+                            "(%d > %d); synthesizing blocked response",
+                            agent_browser_call_count - 1,
+                            _AGENT_BROWSER_PER_TURN_CALL_CAP,
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "content": result[:3000],
+                        })
+                        continue
+
                 result = await self._dispatch_tool_call(tc)
                 messages.append({
                     "role": "tool",
@@ -880,6 +957,64 @@ class AgentOrchestrator:
                 return self._agent_browser_timeout
         return self._skill_timeout
 
+    @staticmethod
+    def _call_invokes_agent_browser(tool_call: ToolCall) -> bool:
+        """tool_call 이 ``agent-browser`` CLI 를 실행하는지 판별한다.
+
+        BIZ-190: per-turn ``agent-browser`` 호출 cap 카운터에서 사용. 라우팅
+        경로가 ``execute_skill``(``skill_name=agent-browser`` 또는 ``command``
+        문자열에 agent-browser 포함) 인 경우, ``cli``(``command`` 가 직접
+        agent-browser 호출) 인 경우 모두 동일하게 카운트한다.
+        """
+        name = tool_call.name
+        args = tool_call.arguments or {}
+        if name == "execute_skill":
+            if args.get("skill_name") == "agent-browser":
+                return True
+            cmd = str(args.get("command") or "")
+            if AgentOrchestrator._is_agent_browser_command(cmd):
+                return True
+            inner_args = str(args.get("args") or "")
+            # ``args`` 만 단독으로 agent-browser 호출을 담는 케이스(``args=
+            # "open https://..."``) 도 있으나, 그건 skill_name 으로 이미 카운트됨.
+            # 그 외 ``args`` 에 명시적으로 "agent-browser " 가 들어간 합성 형태도
+            # 포함시킨다.
+            if AgentOrchestrator._is_agent_browser_command(inner_args):
+                return True
+            return False
+        if name == "cli":
+            cmd = str(args.get("command") or "")
+            return AgentOrchestrator._is_agent_browser_command(cmd)
+        return False
+
+    @staticmethod
+    def _is_agent_browser_command(command: str) -> bool:
+        """``command`` 가 ``agent-browser`` CLI 를 호출하는지 판별한다.
+
+        BIZ-190: composite chain 차단·반복 호출 카운터에서 공유하는 단순 판별기.
+        ``agent-browser`` 가 단어 경계(공백 뒤 / 명령 끝)로 나타나야 하므로
+        우연한 부분 문자열 일치(``my-agent-browser-script`` 등) 를 배제한다.
+        """
+        return "agent-browser " in command or command.endswith("agent-browser")
+
+    @staticmethod
+    def _is_composite_agent_browser_chain(command: str) -> bool:
+        """``agent-browser`` 가 ``&&``/``||``/``;`` 로 묶인 composite chain 인지 판별.
+
+        BIZ-190: ``open && wait && evaluate`` 같은 한 줄 chain 은 BIZ-187 의 180s
+        화이트리스트로도 안정적으로 끝나지 않고(중간 단계 daemon busy 등) tool
+        loop 를 통째로 소모한다. 각 단계는 독립 tool call 로 쪼개야 함.
+
+        파이프(``|``) 는 ``agent-browser get text | grep`` 같이 합리적인 후처리
+        파이프라인으로 쓰일 가능성이 있어 차단하지 않는다.
+        """
+        if not AgentOrchestrator._is_agent_browser_command(command):
+            return False
+        # ``||`` 가 먼저 매칭되도록 substring 순서 주의 — 그리고 ``&&`` 는 ``&`` 보다
+        # 우선. ``;`` 는 단독 매칭. 셸 인용("..."/'...') 안의 ``&&`` 까지는 보지 않음:
+        # 인용 안에 ``&&`` 를 넣어 chain 흉내내는 패턴은 봇 운영 중 관찰된 적 없음.
+        return ("&&" in command) or ("||" in command) or (";" in command)
+
     async def _execute_command(
         self, skill_name: str, command: str
     ) -> str:
@@ -899,6 +1034,17 @@ class AgentOrchestrator:
         except DangerousCommandError as exc:
             logger.warning("Command blocked for skill '%s': %s", skill_name, exc)
             return f"Command blocked (dangerous pattern detected): {exc.description}"
+
+        # BIZ-190: ``agent-browser`` composite chain 은 BIZ-187 의 180s 화이트리스트
+        # 타임아웃 + 시스템 프롬프트 가드에도 불구하고 작은 모델이 첫 시도부터 다시
+        # 보내는 패턴이 잔존. subprocess 진입 전에 차단하고 명확한 단일-호출 안내를
+        # tool result 로 돌려준다 — 같은 turn 안에서 LLM 이 정정할 수 있도록.
+        if self._is_composite_agent_browser_chain(command):
+            logger.warning(
+                "BIZ-190: composite agent-browser chain blocked for skill '%s': %s",
+                skill_name, command[:200],
+            )
+            return _AGENT_BROWSER_COMPOSITE_BLOCKED_MESSAGE
 
         command = self._normalize_skill_command(command)
         # BIZ-187: 정규화 이후의 최종 command 문자열로 타임아웃을 결정한다.

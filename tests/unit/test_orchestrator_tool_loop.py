@@ -223,3 +223,112 @@ async def test_forced_final_answer_timeout_returns_fallback(
     assert any(
         "final generation timeout" in r.getMessage() for r in errors
     ), "ERROR 로그에 timeout 사실이 박제되어야 한다"
+
+
+# ----------------------------------------------------------------------
+# BIZ-190 — per-turn agent-browser 호출 cap
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_browser_per_turn_cap_synthesizes_blocked_response(
+    config_file, monkeypatch, caplog,
+):
+    """BIZ-190 — 같은 turn 안에서 ``agent-browser`` 호출이 cap 을 넘으면
+    subprocess 로 흐르지 않고 합성 차단 응답이 tool result 로 들어가야 한다.
+
+    seed-2/3/8/9 (2026-05-13 20:19~20:36 KST) 의 4건 max-iter 사고는 첫
+    agent-browser 호출 실패(daemon busy 등) 후 LLM 이 같은 명령을
+    execute_skill/cli 채널로 재시도하면서 누적 소진하는 패턴.
+    """
+    import simpleclaw.agent.orchestrator as orch_mod
+
+    # cap 을 1 로 낮춰 짧은 시퀀스로도 트리거 가능하게.
+    monkeypatch.setattr(orch_mod, "_AGENT_BROWSER_PER_TURN_CALL_CAP", 1)
+
+    orch = AgentOrchestrator(config_file)
+    # max_tool_iterations 가 2 이므로 첫 turn 에 cap 트리거 + 두 번째 turn 에서 final
+    # 텍스트가 들어가도록 시퀀스를 길게 잡는다. 카운트는 turn 단위가 아니라
+    # tool loop 진입 1회 기준이므로 2회 모두 agent-browser 호출.
+
+    dispatch_calls: list[str] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc.name)
+        return f"[stub result for {tc.name}]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+
+    responses = [
+        # 1번째 호출: agent-browser composite via execute_skill — cap 안쪽이라 dispatch 됨.
+        _tool_response(
+            "c1", "execute_skill",
+            {"skill_name": "agent-browser", "args": "open https://wikidocs.net/3753"},
+        ),
+        # 2번째 호출: 같은 turn 안에서 또 agent-browser — cap 초과, dispatch 되지 않아야 함.
+        _tool_response(
+            "c2", "execute_skill",
+            {"skill_name": "agent-browser", "args": "open https://wikidocs.net/"},
+        ),
+        # 강제 final-answer 호출에서 텍스트 반환.
+        _text_response("죄송합니다, 사이트가 자동 회수를 차단합니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    with caplog.at_level(
+        logging.WARNING, logger="simpleclaw.agent.orchestrator"
+    ):
+        result = await orch.process_cron_message("wikidocs 페이지 회수")
+
+    # cap 초과로 두 번째 agent-browser 호출은 dispatch 되지 않아야 함.
+    assert dispatch_calls == ["execute_skill"], (
+        f"두 번째 agent-browser 호출은 cap 으로 차단되어야 함, dispatch={dispatch_calls}"
+    )
+    # WARNING 로그에 cap 메시지가 박제되었는지.
+    assert "agent-browser per-turn cap exceeded" in caplog.text
+    # 사용자 응답이 정상적으로 전달되었는지 (cap 자체는 max-iter 와 무관).
+    assert "사이트가 자동 회수를 차단합니다" in result
+
+
+@pytest.mark.asyncio
+async def test_agent_browser_under_cap_dispatches_normally(
+    config_file, monkeypatch,
+):
+    """BIZ-190 회귀 가드 — cap 이내(첫 1회) 호출은 정상적으로 dispatch 된다."""
+    orch = AgentOrchestrator(config_file)
+
+    dispatch_calls: list[str] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc.name)
+        return f"[stub result for {tc.name}]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+
+    responses = [
+        _tool_response(
+            "c1", "execute_skill",
+            {"skill_name": "agent-browser", "args": "open https://x"},
+        ),
+        _text_response("정상 응답"),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("페이지 열어줘")
+    assert result == "정상 응답"
+    # cap=2 (기본) 이므로 1회는 dispatch 되어야 함.
+    assert dispatch_calls == ["execute_skill"]
