@@ -120,6 +120,12 @@ _GUARD_OPEN_COMMAND = (
 # 내장 ``web_fetch`` 는 정적 fetch + 헤드리스 자동 폴백을 8초 ``load`` wait 로
 # 묶고 부분 결과라도 반환하므로, 본문 읽기는 무조건 ``web_fetch`` 가 정답.
 # ``agent-browser`` 는 클릭/폼/스크린샷처럼 상호작용이 필요한 경우에만.
+#
+# BIZ-187 follow-up — agent-browser 가 정말 필요할 때조차도 ``open && wait && text``
+# 를 한 줄 composite 로 묶어 보내면 SPA 에서 단일 호출이 60s 를 넘기고 (max 180s
+# 로 늘렸어도) 모델이 한 turn 안에 결과를 못 보고 또 같은 chain 으로 재시도하면서
+# tool loop 가 죽는다. 단계별로 turn 을 분리하면 각 단일 명령은 안정 구간 안에
+# 끝난다 — 이 가이드를 명시적으로 박아 둠.
 _GUARD_WEB_FETCH_PREFERRED = (
     "To read page text (articles, blogs, search results, docs), use the "
     "`web_fetch` tool — it auto-falls back to a headless browser when needed. "
@@ -127,7 +133,10 @@ _GUARD_WEB_FETCH_PREFERRED = (
     "commands for plain text retrieval; reserve `agent-browser` for interactive "
     "tasks (clicks, form fills, screenshots). When you do call agent-browser, "
     "use `wait --load load` — `networkidle` rarely settles on modern SPAs and "
-    "wastes the entire skill timeout."
+    "wastes the entire skill timeout. Also issue each agent-browser step as its "
+    "own tool call (open → wait → text/snapshot in separate turns) instead of "
+    "chaining them with `&&`; chained chains amplify single-step timeouts and "
+    "exhaust the tool loop on SPA sites."
 )
 
 _TOOL_USAGE_INSTRUCTION = "\n".join(
@@ -263,6 +272,19 @@ class AgentOrchestrator:
         # 의 ``_resolve_agent_browser`` 가 PATH + 알려진 후보 경로 자동 탐색.
         web_fetch_cfg = agent_config.get("web_fetch", {}) or {}
         self._headless_binary: str | None = web_fetch_cfg.get("headless_binary")
+
+        # BIZ-187: agent-browser composite chain (예: ``agent-browser open ... &&
+        # agent-browser wait --load load && agent-browser text``) 은 SPA(wikidocs.net,
+        # npmjs.com 등)에서 60s 의 기본 ``skills.execution_timeout`` 을 정기적으로
+        # 넘어 ``Skill command timed out`` 으로 죽고, 모델이 tool loop 안에서 같은
+        # composite 를 재시도하면서 ``max_tool_iterations`` 까지 누적 소진되는
+        # 사고 다발(2026-05-13 BIZ-182 / BIZ-183 시드 측정). composite 한 호출의
+        # 실제 wall time 은 보통 60~120s 이므로 ``agent-browser`` 명령에만 별도의
+        # 더 긴 타임아웃을 화이트리스트로 적용한다. 기본 180s 는 시드 측정에서
+        # 관찰된 최악(SPA 5건) 의 약 1.5배. None 으로 두면 기본 60s 유지.
+        self._agent_browser_timeout: int = int(
+            web_fetch_cfg.get("agent_browser_command_timeout", 180)
+        )
 
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
@@ -840,6 +862,24 @@ class AgentOrchestrator:
 
         return None
 
+    def _resolve_command_timeout(self, command: str) -> int:
+        """명령 문자열에 따라 실제로 적용할 타임아웃(초) 을 결정한다.
+
+        BIZ-187: ``agent-browser`` 가 들어간 명령(특히 ``open && wait && text``
+        composite chain)은 SPA(wikidocs.net 등)에서 60s 기본값을 안정적으로 넘긴다.
+        ``agent_browser_command_timeout`` (기본 180s) 를 화이트리스트로 적용해 모델
+        tool loop 가 ``Skill command timed out`` 으로 ``max_tool_iterations`` 를
+        통째로 소진하는 패턴을 차단한다. 다른 명령은 기존 ``_skill_timeout`` 유지.
+        """
+        # ``agent-browser`` 가 들어가 있으면 합성 명령(``&&`` 로 묶인 chain)이든
+        # 단일 명령이든 동일하게 확장 타임아웃을 적용한다. 단어 경계로 잡기 위해
+        # ``"agent-browser "`` (뒤에 공백/플래그가 따라옴) 만 매치 — 우연한
+        # 부분 문자열 일치 방지.
+        if "agent-browser " in command or command.endswith("agent-browser"):
+            if self._agent_browser_timeout > self._skill_timeout:
+                return self._agent_browser_timeout
+        return self._skill_timeout
+
     async def _execute_command(
         self, skill_name: str, command: str
     ) -> str:
@@ -861,8 +901,15 @@ class AgentOrchestrator:
             return f"Command blocked (dangerous pattern detected): {exc.description}"
 
         command = self._normalize_skill_command(command)
+        # BIZ-187: 정규화 이후의 최종 command 문자열로 타임아웃을 결정한다.
+        # _normalize_skill_command 가 ``agent-browser`` chain 은 건드리지 않으므로
+        # 안전하지만, 향후 normalize 가 명령을 재작성해도 일관되게 동작하도록.
+        effective_timeout = self._resolve_command_timeout(command)
 
-        logger.info("Executing skill command: %s", command)
+        logger.info(
+            "Executing skill command (timeout=%ds): %s",
+            effective_timeout, command,
+        )
         try:
             # workspace 디렉토리가 삭제되었을 수 있으므로 실행 직전에 보장
             self._workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -879,7 +926,7 @@ class AgentOrchestrator:
                 preexec_fn=get_preexec_fn(),
             )
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=self._skill_timeout
+                proc.communicate(), timeout=effective_timeout
             )
             output = stdout.decode("utf-8", errors="replace").strip()
             error = stderr.decode("utf-8", errors="replace").strip()
@@ -899,7 +946,7 @@ class AgentOrchestrator:
         except asyncio.TimeoutError:
             logger.error("Skill command timed out: %s", command)
             await kill_process_group(proc, metrics=self._metrics)
-            return f"Command timed out after {self._skill_timeout}s"
+            return f"Command timed out after {effective_timeout}s"
         except Exception as exc:
             logger.error("Skill command error: %s", exc)
             return f"Command error: {str(exc)[:200]}"

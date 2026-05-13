@@ -270,3 +270,70 @@ def test_format_skills_falls_back_to_skill_docs_for_non_python(
 
     assert "agent-browser" in formatted
     assert 'skill_docs("agent-browser")' in formatted
+
+
+# ----------------------------------------------------------------------
+# BIZ-187 — agent-browser composite skill-command 타임아웃 화이트리스트
+# ----------------------------------------------------------------------
+
+
+def test_agent_browser_command_extends_skill_timeout(config_file):
+    """`agent-browser` 가 들어간 명령은 확장 타임아웃이 적용된다."""
+    orch = AgentOrchestrator(config_file)
+    # 기본값: skill_timeout=60, agent_browser_timeout=180
+    orch._skill_timeout = 60
+    orch._agent_browser_timeout = 180
+
+    composite = (
+        'agent-browser open "https://wikidocs.net/12345" && '
+        'agent-browser wait --load load && '
+        'agent-browser get text body'
+    )
+    assert orch._resolve_command_timeout(composite) == 180
+
+
+def test_single_agent_browser_command_uses_extended_timeout(config_file):
+    """composite 가 아닌 단일 ``agent-browser`` 호출에도 확장 타임아웃 적용."""
+    orch = AgentOrchestrator(config_file)
+    orch._skill_timeout = 60
+    orch._agent_browser_timeout = 180
+
+    assert (
+        orch._resolve_command_timeout("agent-browser get text body") == 180
+    )
+
+
+def test_non_agent_browser_command_uses_default_skill_timeout(config_file):
+    """``agent-browser`` 없는 명령은 기존 ``_skill_timeout`` 유지."""
+    orch = AgentOrchestrator(config_file)
+    orch._skill_timeout = 60
+    orch._agent_browser_timeout = 180
+
+    assert orch._resolve_command_timeout("python script.py --foo") == 60
+    assert orch._resolve_command_timeout('curl "https://example.com"') == 60
+
+
+def test_agent_browser_timeout_disabled_when_below_skill_timeout(config_file):
+    """``agent_browser_command_timeout`` 이 ``_skill_timeout`` 이하면 확장 비활성.
+
+    운영자가 ``agent_browser_command_timeout`` 을 낮추는 식으로 사실상 비활성화
+    하려는 경우 (또는 ``skills.execution_timeout`` 을 180+ 로 올려둔 경우) 에는
+    화이트리스트 분기가 동작하지 않고 기본 타임아웃을 그대로 쓰도록 한다.
+    """
+    orch = AgentOrchestrator(config_file)
+    orch._skill_timeout = 60
+    orch._agent_browser_timeout = 60  # 동일 → 분기 skip
+
+    assert (
+        orch._resolve_command_timeout("agent-browser get text body") == 60
+    )
+
+
+def test_tool_usage_instruction_warns_against_chained_agent_browser():
+    """BIZ-187 — composite chain 분해 가이드가 시스템 프롬프트에 박혀 있다."""
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    # ``open → wait → text`` 를 각자 별 turn 으로 쪼개라는 안내 키워드.
+    assert "separate turns" in _TOOL_USAGE_INSTRUCTION
+    # composite chain 의 위험성을 명시적으로 박아 둠.
+    assert "&&" in _TOOL_USAGE_INSTRUCTION
