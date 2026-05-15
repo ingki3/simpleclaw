@@ -31,6 +31,7 @@ from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
     load_persona_config,
+    load_recipes_config,
     load_telegram_config,
 )
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
@@ -132,10 +133,18 @@ async def main():
         )
         logger.info("Cron → Telegram notification enabled (chat_id=%d)", notify_chat_id)
 
+    # BIZ-202: 봇이 채팅에서 작성한 레시피와 데몬이 cron 으로 로드하는 레시피가 같은
+    # 절대 경로(`~/.simpleclaw/recipes/`)를 보도록 한다 — 데몬 CWD/봇 워크스페이스
+    # CWD 간 상대경로 미스매치(2026-05-15 krstock 사고)의 직접 봉합.
+    recipes_config = load_recipes_config(CONFIG_PATH)
+    recipes_dir = Path(recipes_config["dir"]).expanduser()
+    recipes_dir.mkdir(parents=True, exist_ok=True)
+
     cron = CronScheduler(
         daemon_store, apscheduler,
         agent_orchestrator=orchestrator,
         notifier=notifier,
+        recipes_dir=recipes_dir,
     )
 
     # Wire cron scheduler into orchestrator for /cron commands

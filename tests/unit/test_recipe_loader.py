@@ -91,3 +91,63 @@ class TestRecipeLoader:
         )
         with pytest.raises(RecipeParseError, match="Invalid on_error"):
             load_recipe(recipe_dir / "recipe.yaml")
+
+
+class TestDiscoverWithLegacyFallback:
+    """BIZ-202: primary 디렉터리가 비어도 legacy 디렉터리에서 한 번 폴백 로드한다."""
+
+    def _make_recipe(self, parent: Path, name: str) -> None:
+        rdir = parent / name
+        rdir.mkdir(parents=True)
+        (rdir / "recipe.yaml").write_text(
+            f"name: {name}\ndescription: x\nsteps: []\n"
+        )
+
+    def test_primary_only_when_legacy_missing(self, tmp_path):
+        primary = tmp_path / "new"
+        self._make_recipe(primary, "alpha")
+        recipes = discover_recipes(primary, legacy_dir=tmp_path / "no-such-dir")
+        assert {r.name for r in recipes} == {"alpha"}
+
+    def test_legacy_fallback_loads_when_primary_empty(self, tmp_path, caplog):
+        primary = tmp_path / "new"
+        primary.mkdir()
+        legacy = tmp_path / "old"
+        self._make_recipe(legacy, "krstock")
+        with caplog.at_level("WARNING"):
+            recipes = discover_recipes(primary, legacy_dir=legacy)
+        names = {r.name for r in recipes}
+        assert names == {"krstock"}
+        # deprecation 경고가 한 번 떨어져야 한다 — 봉합 한 번/제거 한 번 흐름.
+        assert any("DEPRECATED" in rec.message for rec in caplog.records)
+
+    def test_primary_wins_over_legacy_on_name_clash(self, tmp_path):
+        """같은 이름이 양쪽에 있으면 primary 가 우선 — 마이그레이션 중 사용자가
+        primary 에 손으로 새 버전을 적었다면 그게 살아야 한다."""
+        primary = tmp_path / "new"
+        legacy = tmp_path / "old"
+        self._make_recipe(primary, "krstock")
+        # legacy 의 동일 이름은 description 으로 식별 가능하게 차별화
+        leg_dir = legacy / "krstock"
+        leg_dir.mkdir(parents=True)
+        (leg_dir / "recipe.yaml").write_text(
+            "name: krstock\ndescription: LEGACY\nsteps: []\n"
+        )
+        recipes = discover_recipes(primary, legacy_dir=legacy)
+        # primary 의 한 건만, description 은 LEGACY 가 아니어야 한다.
+        assert len(recipes) == 1
+        assert recipes[0].name == "krstock"
+        assert recipes[0].description != "LEGACY"
+
+    def test_same_primary_and_legacy_path_no_double_scan(self, tmp_path):
+        """primary 와 legacy 가 같은 경로로 들어와도 중복으로 안 잡힌다."""
+        primary = tmp_path / "shared"
+        self._make_recipe(primary, "only")
+        recipes = discover_recipes(primary, legacy_dir=primary)
+        assert [r.name for r in recipes] == ["only"]
+
+    def test_no_legacy_passed_means_no_fallback(self, tmp_path):
+        primary = tmp_path / "new"
+        primary.mkdir()
+        recipes = discover_recipes(primary)
+        assert recipes == []

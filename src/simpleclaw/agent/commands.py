@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from simpleclaw.recipes.loader import discover_recipes
 
 if TYPE_CHECKING:
+    from pathlib import Path  # noqa: F401  (type annotations only)
     from simpleclaw.daemon.scheduler import CronScheduler
 
 logger = logging.getLogger(__name__)
@@ -159,11 +160,22 @@ def _cron_disable(name: str, cron_scheduler: CronScheduler) -> str:
 # ------------------------------------------------------------------
 
 async def try_recipe_command(
-    text: str, react_loop_fn
+    text: str,
+    react_loop_fn,
+    recipes_dir: str | Path = "~/.simpleclaw/recipes",
+    legacy_recipes_dir: str | Path | None = ".agent/recipes",
 ) -> tuple[str, str] | None:
     """텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.
 
     ``react_loop_fn``은 오케스트레이터의 바인딩된 ``_react_loop`` 메서드이다.
+
+    Args:
+        text: 사용자 입력.
+        react_loop_fn: 오케스트레이터 ``_tool_loop``.
+        recipes_dir: 1차 레시피 디렉터리 — BIZ-202 이후 절대 경로 권장
+            (기본 ``~/.simpleclaw/recipes``). 봇/데몬이 동일 경로를 보도록 한다.
+        legacy_recipes_dir: BIZ-202 이전 위치 폴백. 기본 ``.agent/recipes``
+            (프로젝트 working tree). ``None`` 이면 폴백 비활성.
 
     Returns:
         ``(result_text, recipe_name)`` 튜플. 레시피 명령이 아니면 *None*.
@@ -182,7 +194,7 @@ async def try_recipe_command(
     cmd_name = parts[0]
     rest = parts[1] if len(parts) > 1 else ""
 
-    recipes = discover_recipes(".agent/recipes")
+    recipes = discover_recipes(recipes_dir, legacy_dir=legacy_recipes_dir)
     recipes_by_name = {r.name: r for r in recipes}
 
     recipe = recipes_by_name.get(cmd_name)

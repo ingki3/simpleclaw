@@ -294,3 +294,132 @@ class TestRetryAndCircuitBreak:
         assert calls["n"] == 1
         assert execution.attempt == 1
         assert execution.status == ExecutionStatus.FAILURE
+
+
+class TestRecipeDirResolution:
+    """BIZ-202: cron action_reference 로 레시피 이름이 올 때 어떤 디렉터리에서 찾는가."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        from simpleclaw.daemon.models import CronJob
+        store = DaemonStore(tmp_path / "test.db")
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        return store, apscheduler, tmp_path, CronJob
+
+    def _write_recipe(self, root, name, description):
+        rdir = root / name
+        rdir.mkdir(parents=True)
+        (rdir / "recipe.yaml").write_text(
+            f"name: {name}\ndescription: {description}\nsteps: []\n"
+            f"instructions: \"go {name}\"\n"
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolves_from_configured_recipes_dir(self, setup):
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "home" / "recipes"
+        self._write_recipe(primary, "krstock", "PRIMARY")
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary,
+            legacy_recipes_dir=None,
+        )
+
+        # 가짜 agent 를 주입해 instructions 분기로 들어가게 한다.
+        captured = {}
+
+        class FakeAgent:
+            async def process_cron_message(self, instructions):
+                captured["instructions"] = instructions
+                return "ok"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="krstock-job",
+            cron_expression="0 * * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="krstock",
+        )
+        await scheduler._execute_action(job)
+        assert captured["instructions"] == "go krstock"
+
+    @pytest.mark.asyncio
+    async def test_primary_missing_falls_back_to_legacy_with_warning(
+        self, setup, caplog,
+    ):
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "home" / "recipes"
+        primary.mkdir(parents=True)
+        legacy = tmp_path / "legacy" / "recipes"
+        self._write_recipe(legacy, "old-recipe", "LEGACY")
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary,
+            legacy_recipes_dir=legacy,
+        )
+
+        captured = {}
+
+        class FakeAgent:
+            async def process_cron_message(self, instructions):
+                captured["instructions"] = instructions
+                return "ok"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="legacy-job",
+            cron_expression="0 * * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="old-recipe",
+        )
+        with caplog.at_level("WARNING"):
+            await scheduler._execute_action(job)
+        assert captured["instructions"] == "go old-recipe"
+        assert any("DEPRECATED" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_primary_wins_over_legacy_on_name_clash(self, setup):
+        """primary 에도, legacy 에도 같은 이름의 레시피가 있으면 primary 가 우선."""
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "home" / "recipes"
+        legacy = tmp_path / "legacy" / "recipes"
+        self._write_recipe(primary, "shared", "PRIMARY")
+        # legacy 쪽 instructions 는 다르게 — 어느 쪽이 로드됐는지 식별 가능하게.
+        (legacy / "shared").mkdir(parents=True)
+        (legacy / "shared" / "recipe.yaml").write_text(
+            "name: shared\ndescription: LEGACY\nsteps: []\n"
+            "instructions: \"go LEGACY\"\n"
+        )
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary,
+            legacy_recipes_dir=legacy,
+        )
+
+        captured = {}
+
+        class FakeAgent:
+            async def process_cron_message(self, instructions):
+                captured["instructions"] = instructions
+                return "ok"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="shared-job",
+            cron_expression="0 * * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="shared",
+        )
+        await scheduler._execute_action(job)
+        assert captured["instructions"] == "go shared"  # PRIMARY 의 instructions
+
+    def test_default_recipes_dir_is_home_simpleclaw(self):
+        """CronScheduler 가 명시적 recipes_dir 없이 생성되면 기본값은 ~/.simpleclaw/recipes."""
+        from pathlib import Path
+        store = MagicMock()
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        sched = CronScheduler(store, apscheduler)
+        assert sched._recipes_dir == Path("~/.simpleclaw/recipes").expanduser()

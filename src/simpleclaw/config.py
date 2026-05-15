@@ -538,6 +538,44 @@ def _agent_with_defaults(agent: dict) -> dict:
     }
 
 
+# 레시피 디렉터리 기본 설정값 (BIZ-202)
+# 봇이 채팅에서 만든 레시피가 데몬에도 곧장 보이도록, 작성 경로와 로드 경로를
+# 절대 경로로 통일한다. 기본은 `~/.simpleclaw/recipes/` — 다른 사용자 데이터
+# (`conversations.db`, `daemon.db`, `MEMORY.md`, `workspace/`) 와 같은 운영 디렉터리
+# 아래로 모은다. 레거시 `.agent/recipes/` 는 로더의 한 번 fallback 으로 살아 있다.
+_RECIPES_DEFAULTS: dict = {
+    "dir": "~/.simpleclaw/recipes",
+}
+
+
+def load_recipes_config(config_path: str | Path) -> dict:
+    """config.yaml 에서 레시피 디렉터리 설정을 로드한다 (BIZ-202).
+
+    파일이 없거나 recipes 키가 없으면 기본 경로 ``~/.simpleclaw/recipes`` 를
+    반환한다. 호출자는 ``Path(...).expanduser()`` 로 ``~`` 를 풀어야 한다.
+    """
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_RECIPES_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_RECIPES_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_RECIPES_DEFAULTS)
+
+    recipes = data.get("recipes", {})
+    if not isinstance(recipes, dict):
+        return dict(_RECIPES_DEFAULTS)
+
+    return {
+        "dir": recipes.get("dir", _RECIPES_DEFAULTS["dir"]),
+    }
+
+
 # 시맨틱 메모리(RAG) 기본 설정값
 # 모든 키는 안전한 기본값을 가진다 — config.yaml에 memory 섹션이 없어도 봇은 동작한다.
 # enabled=False가 기본인 이유: sentence-transformers는 무거운 의존성이라

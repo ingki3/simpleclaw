@@ -74,12 +74,21 @@ class CronScheduler:
         recipe_executor=None,
         agent_orchestrator=None,
         notifier: Callable[[str, str], Awaitable[None]] | None = None,
+        recipes_dir: str | Path = "~/.simpleclaw/recipes",
+        legacy_recipes_dir: str | Path | None = ".agent/recipes",
     ) -> None:
         self._store = store
         self._apscheduler = apscheduler
         self._recipe_executor = recipe_executor
         self._agent = agent_orchestrator
         self._notifier = notifier
+        # BIZ-202: cron 의 action_reference 가 이름(예: "krstock") 일 때 어느 디렉터리에서
+        # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw/recipes`)를 보도록
+        # 호출 측(run_bot.py)에서 명시적으로 주입. 레거시 `.agent/recipes/` 는 한 번 폴백.
+        self._recipes_dir = Path(recipes_dir).expanduser()
+        self._legacy_recipes_dir = (
+            Path(legacy_recipes_dir).expanduser() if legacy_recipes_dir else None
+        )
 
     def set_notifier(
         self, notifier: Callable[[str, str], Awaitable[None]]
@@ -413,8 +422,30 @@ class CronScheduler:
             # action_reference가 파일 경로 또는 레시피 이름일 수 있음
             ref_path = Path(job.action_reference)
             if not ref_path.is_file():
-                # 레시피 이름으로 해석: .agent/recipes/<name>/recipe.yaml
-                ref_path = Path(f".agent/recipes/{job.action_reference}/recipe.yaml")
+                # BIZ-202: 레시피 이름으로 해석. 봇 채팅에서 만들어 둔 레시피와
+                # 데몬이 같은 절대 경로(``~/.simpleclaw/recipes/``) 를 보도록 한다.
+                # primary 에 없으면 레거시(``.agent/recipes/``) 로 한 번 폴백 + 경고.
+                primary = self._recipes_dir / job.action_reference / "recipe.yaml"
+                if primary.is_file():
+                    ref_path = primary
+                elif self._legacy_recipes_dir is not None:
+                    legacy = (
+                        self._legacy_recipes_dir
+                        / job.action_reference
+                        / "recipe.yaml"
+                    )
+                    if legacy.is_file():
+                        logger.warning(
+                            "Cron '%s' loaded recipe from DEPRECATED path '%s' — "
+                            "move it to '%s'. The legacy fallback is scheduled for "
+                            "removal in the next minor release (BIZ-202).",
+                            job.name, legacy, primary,
+                        )
+                        ref_path = legacy
+                    else:
+                        ref_path = primary  # 호출자에게 primary 경로로 명확한 에러 메시지를 노출
+                else:
+                    ref_path = primary
             recipe = load_recipe(ref_path)
 
             # v2 레시피 (instructions 필드 사용): 내장 변수 치환 후 LLM에 직접 전달

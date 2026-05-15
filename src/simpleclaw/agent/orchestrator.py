@@ -25,6 +25,7 @@ from simpleclaw.config import (
     load_agent_config,
     load_memory_config,
     load_persona_config,
+    load_recipes_config,
 )
 from simpleclaw.llm.models import LLMRequest, ToolCall
 from simpleclaw.llm.router import create_router
@@ -249,6 +250,18 @@ class AgentOrchestrator:
         # --- 정적 설정 로드 (리스타트 시에만 갱신) ---
         agent_config = load_agent_config(config_path)
         persona_config = load_persona_config(config_path)
+        recipes_config = load_recipes_config(config_path)
+
+        # BIZ-202: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
+        # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은 ``~/.simpleclaw/recipes``
+        # — 봇 워크스페이스(`~/.simpleclaw/workspace`) 의 sandbox-write 허용 트리 안에
+        # 들어가야 봇 `cli`/`file_write` 도구가 직접 쓸 수 있다.
+        self._recipes_dir = str(
+            Path(recipes_config["dir"]).expanduser()
+        )
+        # 디렉터리는 부팅 시 자동 생성 — 없으면 봇이 새 레시피 작성을 시도하기 전에
+        # mkdir 도구를 명령 받아야 하는 흐름이 되어 사용자 흐름이 깨진다.
+        Path(self._recipes_dir).mkdir(parents=True, exist_ok=True)
 
         self._history_limit = agent_config["history_limit"]
 
@@ -413,7 +426,10 @@ class AgentOrchestrator:
                 return cron_result
 
             # /recipe-name 명령어 확인 (e.g. /ai-report)
-            recipe_outcome = await try_recipe_command(text, self._tool_loop)
+            # BIZ-202: 레시피 디렉터리는 config 기반 — 봇/데몬 양쪽이 같은 절대 경로를 본다.
+            recipe_outcome = await try_recipe_command(
+                text, self._tool_loop, recipes_dir=self._recipes_dir,
+            )
             if recipe_outcome is not None:
                 recipe_result, recipe_name = recipe_outcome
                 # BIZ-76 — 레시피 산출물은 사용자 발화가 아니라 자동/명령 트리거
