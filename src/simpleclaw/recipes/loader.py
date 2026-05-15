@@ -54,21 +54,16 @@ def _parse_on_error(value: object, source: Path) -> OnErrorPolicy | None:
         ) from e
 
 
-def discover_recipes(recipes_dir: str | Path) -> list[RecipeDefinition]:
-    """지정된 디렉터리에서 모든 레시피를 탐색한다.
+def _scan_recipes_dir(recipes_path: Path) -> list[RecipeDefinition]:
+    """단일 디렉터리만 스캔해 ``RecipeDefinition`` 리스트를 만든다.
 
-    Args:
-        recipes_dir: 레시피가 위치한 상위 디렉터리 경로
-
-    Returns:
-        파싱된 RecipeDefinition 목록 (파싱 실패한 레시피는 제외)
+    공유 헬퍼 — ``discover_recipes`` 가 primary/legacy 경로를 합치는 데 사용한다.
+    파싱 실패는 경고 로그를 남기고 건너뛴다.
     """
-    recipes_path = Path(recipes_dir).expanduser()
     if not recipes_path.is_dir():
-        logger.debug("Recipes directory does not exist: %s", recipes_path)
         return []
 
-    recipes = []
+    recipes: list[RecipeDefinition] = []
     for entry in sorted(recipes_path.iterdir()):
         if not entry.is_dir():
             continue
@@ -85,6 +80,56 @@ def discover_recipes(recipes_dir: str | Path) -> list[RecipeDefinition]:
             logger.warning("Skipping invalid recipe %s: %s", entry.name, e)
 
     return recipes
+
+
+def discover_recipes(
+    recipes_dir: str | Path,
+    legacy_dir: str | Path | None = None,
+) -> list[RecipeDefinition]:
+    """지정된 디렉터리에서 모든 레시피를 탐색한다.
+
+    Args:
+        recipes_dir: 레시피가 위치한 상위 디렉터리 경로 (1차 위치).
+        legacy_dir: BIZ-202 이전 위치 (``.agent/recipes``) 같은 폴백 디렉터리.
+            존재하고 primary 에는 없는 이름만 합쳐 반환하며 deprecation 경고를
+            한 번 남긴다. ``None`` 이면 폴백 없이 primary 만 본다.
+
+    Returns:
+        파싱된 RecipeDefinition 목록 (파싱 실패한 레시피는 제외).
+        같은 ``name`` 이 primary 와 legacy 양쪽에 있으면 **primary 우선**.
+    """
+    recipes_path = Path(recipes_dir).expanduser()
+    primary = _scan_recipes_dir(recipes_path)
+    if not primary:
+        logger.debug("Recipes directory empty or missing: %s", recipes_path)
+
+    if legacy_dir is None:
+        return primary
+
+    legacy_path = Path(legacy_dir).expanduser()
+    if legacy_path.resolve() == recipes_path.resolve():
+        # 운영자가 primary 와 legacy 를 같은 경로로 지정 — 중복 스캔 의미 없음.
+        return primary
+
+    legacy_recipes = _scan_recipes_dir(legacy_path)
+    if not legacy_recipes:
+        return primary
+
+    # primary 에 이미 있는 이름은 legacy 가 가리지 않게 한다 — 마이그레이션 도중
+    # 양쪽에 같은 레시피가 잠시 공존하더라도 사용자가 갱신한 primary 가 우선.
+    primary_names = {r.name for r in primary}
+    legacy_only = [r for r in legacy_recipes if r.name not in primary_names]
+    if legacy_only:
+        logger.warning(
+            "DEPRECATED recipes directory: %d recipe(s) loaded from legacy '%s' "
+            "(names: %s). Move them under '%s' — the legacy fallback is scheduled "
+            "for removal in the next minor release (BIZ-202).",
+            len(legacy_only),
+            legacy_path,
+            ", ".join(sorted(r.name for r in legacy_only)),
+            recipes_path,
+        )
+    return primary + legacy_only
 
 
 def load_recipe(recipe_path: str | Path) -> RecipeDefinition:

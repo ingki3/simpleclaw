@@ -20,6 +20,7 @@ from simpleclaw.config import (
     _DAEMON_DEFAULTS,
     _DEFAULTS,
     _LLM_DEFAULTS,
+    _RECIPES_DEFAULTS,
     _SUB_AGENTS_DEFAULTS,
     _TELEGRAM_DEFAULTS,
     _VOICE_DEFAULTS,
@@ -28,6 +29,7 @@ from simpleclaw.config import (
     load_daemon_config,
     load_llm_config,
     load_persona_config,
+    load_recipes_config,
     load_sub_agents_config,
     load_telegram_config,
     load_voice_config,
@@ -443,3 +445,44 @@ class TestNonDictData:
         _write_yaml(cfg, "42\n")
         result = loader(cfg)
         assert result == defaults
+
+
+# ---------------------------------------------------------------------------
+# load_recipes_config (BIZ-202)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadRecipesConfig:
+    """recipes 섹션 — 봇/데몬이 같은 절대 경로를 보도록 단일 진실점을 제공한다."""
+
+    def test_defaults_when_file_missing(self, tmp_path: Path):
+        """설정 파일이 없으면 ~/.simpleclaw/recipes 기본값."""
+        result = load_recipes_config(tmp_path / "missing.yaml")
+        assert result == _RECIPES_DEFAULTS
+        assert result["dir"] == "~/.simpleclaw/recipes"
+
+    def test_defaults_when_recipes_key_missing(self, tmp_path: Path):
+        """recipes 키 없는 yaml 도 기본값으로 폴백."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "agent:\n  history_limit: 5\n")
+        result = load_recipes_config(cfg)
+        assert result == _RECIPES_DEFAULTS
+
+    def test_reads_custom_dir(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "recipes:\n  dir: /opt/sc/recipes\n")
+        result = load_recipes_config(cfg)
+        assert result["dir"] == "/opt/sc/recipes"
+
+    def test_non_dict_recipes_falls_back_to_defaults(self, tmp_path: Path):
+        """recipes 키가 dict 가 아니면 (예: 리스트) 기본값으로 폴백."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "recipes:\n  - bogus\n")
+        result = load_recipes_config(cfg)
+        assert result == _RECIPES_DEFAULTS
+
+    def test_invalid_yaml_returns_defaults(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, ": : invalid yaml [[")
+        result = load_recipes_config(cfg)
+        assert result == _RECIPES_DEFAULTS
