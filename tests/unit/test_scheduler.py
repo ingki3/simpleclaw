@@ -12,7 +12,11 @@ from simpleclaw.daemon.models import (
     ExecutionStatus,
 )
 from simpleclaw.daemon import scheduler as scheduler_module
-from simpleclaw.daemon.scheduler import CronScheduler, _compute_backoff
+from simpleclaw.daemon.scheduler import (
+    CronScheduler,
+    _compute_backoff,
+    _translate_cron_dow_to_apscheduler,
+)
 from simpleclaw.daemon.store import DaemonStore
 
 
@@ -662,3 +666,55 @@ class TestRecipeCronInvokesLLM:
         assert any(
             "no LLM input" in rec.message for rec in caplog.records
         )
+class TestCronDowTranslation:
+    """표준 crontab day_of_week(0/7=sun, 1=mon..) → APScheduler(0=mon..6=sun) 매핑."""
+
+    @pytest.mark.parametrize(
+        "cron_field, expected",
+        [
+            ("*", "*"),
+            ("1-5", "0,1,2,3,4"),       # mon-fri
+            ("0", "6"),                   # sun
+            ("7", "6"),                   # sun alias
+            ("1", "0"),                   # mon
+            ("6", "5"),                   # sat
+            ("0,6", "5,6"),              # sun, sat → sat, sun
+            ("1,3,5", "0,2,4"),
+            ("mon-fri", "mon-fri"),     # 영문 약어는 그대로
+            ("*/2", "*/2"),               # 스텝은 그대로
+            ("1-3,5", "0,1,2,4"),
+        ],
+    )
+    def test_translate(self, cron_field, expected):
+        assert _translate_cron_dow_to_apscheduler(cron_field) == expected
+
+    def test_register_applies_translation(self, tmp_path):
+        """표준 cron '1-5' 입력 시 APScheduler 트리거의 day_of_week 가 월~금이 되어야 한다."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        store = DaemonStore(tmp_path / "t.db")
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        added_triggers = []
+
+        def _capture(func, **kw):
+            added_triggers.append(kw["trigger"])
+
+        apscheduler.add_job.side_effect = _capture
+        sched = CronScheduler(store, apscheduler)
+        sched.add_job(
+            name="weekday-job",
+            cron_expression="0 12 * * 1-5",
+            action_type=ActionType.PROMPT,
+            action_reference="x",
+        )
+        assert added_triggers, "APScheduler add_job 가 호출되어야 한다"
+        trigger = added_triggers[-1]
+
+        # 월요일(2026-05-18) 11:00 기준 다음 실행이 같은 날 12:00 이어야 함 (변환 전에는 화요일이 됨).
+        KST = ZoneInfo("Asia/Seoul")
+        monday_11 = datetime(2026, 5, 18, 11, 0, tzinfo=KST)
+        nxt = trigger.get_next_fire_time(None, monday_11)
+        assert nxt is not None
+        assert nxt.strftime("%Y-%m-%d %H:%M") == "2026-05-18 12:00"
+        assert nxt.strftime("%A") == "Monday"

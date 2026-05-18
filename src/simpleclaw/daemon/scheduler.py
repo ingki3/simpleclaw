@@ -39,6 +39,67 @@ _NO_NOTIFY_TOKEN = "[NO_NOTIFY]"
 _sleep = asyncio.sleep
 
 
+def _translate_cron_dow_to_apscheduler(field: str) -> str:
+    """표준 crontab의 day_of_week 표기를 APScheduler 표기로 변환한다.
+
+    표준 cron: 0/7=sun, 1=mon, ..., 6=sat (예: "1-5" = mon-fri).
+    APScheduler: 0=mon, 1=tue, ..., 6=sun (즉 "1-5" = tue-sat).
+
+    Why: APScheduler가 숫자 day_of_week를 그대로 받으면 사용자가 표준 cron 의미로
+    입력한 "1-5"가 화-토로 잘못 해석돼 월요일이 누락되는 사고가 발생했다(2026-05-18,
+    `krstock-auto` 잡 미실행). 등록 시점에 숫자 토큰만 안전하게 매핑해서 사용자 입력을
+    DB에 원형 그대로 보존하면서 트리거만 올바르게 등록한다.
+
+    처리 대상:
+        - 콤마 리스트 (`1,3,5`)
+        - 범위 (`1-5`) — 매핑 후 정렬된 콤마 리스트로 풀어 wrap-around 회피
+        - 단일 숫자 (`3`)
+        - `*`, 영문 약어(`mon`, `mon-fri`), 스텝 표현(`*/2`, `1-5/2`)은 그대로 통과
+          (APScheduler가 직접 해석 가능하거나 의미가 모호하므로 변환하지 않음).
+    """
+    if not field or field == "*":
+        return field
+
+    def _convert_token(token: str) -> str:
+        token = token.strip()
+        if "/" in token or not token:
+            return token  # 스텝/빈 토큰: 매핑이 모호하므로 그대로 통과
+        if "-" in token:
+            a_s, b_s = token.split("-", 1)
+            if not (a_s.isdigit() and b_s.isdigit()):
+                return token  # 영문 약어(mon-fri 등)는 APScheduler가 처리
+            a, b = int(a_s), int(b_s)
+            if not (0 <= a <= 7 and 0 <= b <= 7):
+                return token
+            days = range(a, b + 1) if a <= b else list(range(a, 8)) + list(range(0, b + 1))
+            mapped = sorted({(d - 1) % 7 for d in days})
+            return ",".join(str(m) for m in mapped)
+        if token.isdigit():
+            n = int(token)
+            if 0 <= n <= 7:
+                return str((n - 1) % 7)
+        return token  # 알 수 없는 형식은 보존
+
+    converted = [_convert_token(t) for t in field.split(",")]
+
+    # 모든 토큰이 순수 숫자/숫자리스트로 변환되면 정렬·중복 제거해 결정적 출력을 만든다.
+    # (영문 약어/스텝/* 등 비숫자 토큰이 섞이면 원본 순서를 보존.)
+    expanded: list[int] = []
+    only_numeric = True
+    for tok in converted:
+        for sub in tok.split(","):
+            if sub.isdigit():
+                expanded.append(int(sub))
+            else:
+                only_numeric = False
+                break
+        if not only_numeric:
+            break
+    if only_numeric and expanded:
+        return ",".join(str(n) for n in sorted(set(expanded)))
+    return ",".join(converted)
+
+
 def _compute_backoff(
     base_seconds: float, attempt: int, strategy: BackoffStrategy
 ) -> float:
@@ -533,7 +594,8 @@ class CronScheduler:
                 hour=parts[1],
                 day=parts[2],
                 month=parts[3],
-                day_of_week=parts[4],
+                # 표준 cron(0/7=sun, 1=mon...) ↔ APScheduler(0=mon...6=sun) 매핑 차이를 보정.
+                day_of_week=_translate_cron_dow_to_apscheduler(parts[4]),
             )
 
             self._apscheduler.add_job(
