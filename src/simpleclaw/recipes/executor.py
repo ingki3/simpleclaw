@@ -17,7 +17,12 @@ v2 동작 흐름:
 - 사용자 노출용 ``error`` 와 디버그용 ``debug_log`` 를 분리하여
   채널/노출 정책을 호출자가 결정할 수 있게 한다.
 - ``resume_from`` 으로 실패 지점부터 재실행할 수 있도록 한다(이전 단계는 SKIPPED).
-- PROMPT 스텝의 LLM 호출은 호출자의 책임 (관심사 분리)
+- PROMPT 스텝의 LLM 호출은 호출자의 책임 (관심사 분리). executor 는 변수 치환된
+  content 를 ``StepResult.output`` 에 그대로 담아 SUCCESS 로 돌려준다.
+  호출자(예: ``daemon.scheduler._execute_action``)는 step_results 의 출력들을
+  모아 LLM 입력으로 사용해야 한다. 이 책임을 이행하지 않으면 PROMPT 스텝이
+  통째로 silent no-op 으로 끝나는 사고가 발생한다(BIZ-243 의 직접 원인).
+  로더는 빈 content 의 PROMPT 스텝을 사전에 거부해 사고 표면을 좁힌다.
 - CommandGuard를 통한 위험 명령 차단으로 보안 강화
 - 내장 변수는 레시피 모듈에서 공통 관리 (Cron/슬래시 명령 모두 동일 적용)
 """
