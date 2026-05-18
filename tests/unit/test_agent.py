@@ -13,6 +13,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_file_write,
     handle_skill_docs,
     handle_web_fetch,
+    resolve_safe_path,
 )
 from simpleclaw.llm.models import ToolCall
 
@@ -811,6 +812,104 @@ class TestFetchHeadlessWaitStrategy:
         assert "partial body recovered" in result
 
 
+class TestResolveSafePath:
+    """BIZ-142: resolve_safe_path 의 경계 검증 — ``~`` 확장, persona_local_dir
+    화이트리스트, prefix-trick 방지."""
+
+    def test_expands_tilde_for_read(self, tmp_path, monkeypatch):
+        # 운영 디렉터리 모사: ``HOME/.simpleclaw`` 안에 MEMORY.md 배치.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        sclaw = fake_home / ".simpleclaw"
+        sclaw.mkdir()
+        memory = sclaw / "MEMORY.md"
+        memory.write_text("hello")
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        result = resolve_safe_path(
+            "~/.simpleclaw/MEMORY.md",
+            tmp_path / "workspace",
+            write=False,
+            persona_local_dir="~/.simpleclaw",
+        )
+        # 에러 문자열이 아니라 실제 Path 가 돌아와야 한다.
+        from pathlib import Path
+        assert isinstance(result, Path)
+        assert result == memory.resolve()
+
+    def test_persona_local_dir_read_allowed(self, tmp_path):
+        sclaw = tmp_path / "ops" / ".simpleclaw"
+        sclaw.mkdir(parents=True)
+        memory = sclaw / "MEMORY.md"
+        memory.write_text("hi")
+
+        result = resolve_safe_path(
+            str(memory),
+            tmp_path / "workspace",
+            write=False,
+            persona_local_dir=str(sclaw),
+        )
+        from pathlib import Path
+        assert isinstance(result, Path)
+        assert result == memory.resolve()
+
+    def test_persona_local_dir_write_denied(self, tmp_path):
+        # 같은 경로라도 ``write=True`` 면 workspace 밖이므로 거부.
+        sclaw = tmp_path / "ops" / ".simpleclaw"
+        sclaw.mkdir(parents=True)
+        memory = sclaw / "MEMORY.md"
+        memory.write_text("hi")
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+
+        result = resolve_safe_path(
+            str(memory),
+            ws,
+            write=True,
+            persona_local_dir=str(sclaw),
+        )
+        assert isinstance(result, str)
+        assert "restricted" in result or "workspace" in result
+
+    def test_prefix_trick_rejected(self, tmp_path, monkeypatch):
+        # 프로젝트 루트와 이름이 prefix 가 비슷한 형제 디렉터리는 거부돼야 한다.
+        project = tmp_path / "SimpleClaw"
+        project.mkdir()
+        malicious = tmp_path / "SimpleClaw-malicious"
+        malicious.mkdir()
+        secret = malicious / "secret.txt"
+        secret.write_text("oops")
+
+        monkeypatch.chdir(project)
+        result = resolve_safe_path(
+            str(secret),
+            project / "workspace",
+            write=False,
+            persona_local_dir=None,
+        )
+        assert isinstance(result, str)
+        assert "outside" in result
+
+    def test_read_falls_back_to_project_root(self, tmp_path, monkeypatch):
+        # persona_local_dir 가 주입되지 않아도 프로젝트 루트 내부 경로는 통과.
+        project = tmp_path / "project"
+        project.mkdir()
+        f = project / "config.yaml"
+        f.write_text("a: 1")
+
+        monkeypatch.chdir(project)
+        result = resolve_safe_path(
+            "config.yaml",
+            project / "workspace",
+            write=False,
+        )
+        from pathlib import Path
+        assert isinstance(result, Path)
+        assert result == f.resolve()
+
+
 class TestBuiltinFileRead:
     """Tests for file_read built-in tool."""
 
@@ -859,6 +958,27 @@ class TestBuiltinFileRead:
             {"skill_name": "file-read", "path": "/etc/passwd"}, ws
         )
         assert "outside" in result or "Error" in result
+
+    def test_file_read_persona_local_dir(self, tmp_path, monkeypatch):
+        # BIZ-142: ``~/.simpleclaw/MEMORY.md`` 가 file_read 로 통과해야 한다.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        sclaw = fake_home / ".simpleclaw"
+        sclaw.mkdir()
+        memory = sclaw / "MEMORY.md"
+        memory.write_text("line1\nline2\n")
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        result = handle_file_read(
+            {"skill_name": "file-read", "path": "~/.simpleclaw/MEMORY.md"},
+            ws,
+            persona_local_dir="~/.simpleclaw",
+        )
+        assert "Error" not in result
+        assert "line1" in result and "line2" in result
 
 
 class TestBuiltinFileWrite:
