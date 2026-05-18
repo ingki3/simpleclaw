@@ -423,3 +423,242 @@ class TestRecipeDirResolution:
         apscheduler = MagicMock(spec=AsyncIOScheduler)
         sched = CronScheduler(store, apscheduler)
         assert sched._recipes_dir == Path("~/.simpleclaw/recipes").expanduser()
+
+
+class TestRecipeCronInvokesLLM:
+    """BIZ-243 — v1 (steps 기반) RECIPE cron 이 PROMPT step content 를 실제로
+    LLM(`process_cron_message`) 으로 흘려보내는지 회귀 방지.
+
+    2026-05-18 cron-krstock-auto 사고: 미지원 키(`tool:`/`prompt:`/`args:`) 가
+    무성 폴백되어 빈 content PROMPT step 들이 생성, LLM 호출 없이 SUCCESS 만
+    반환 → 빈 'Recipe completed: 2/2' 통지가 사용자에게 노출됨.
+    """
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        from simpleclaw.daemon.models import CronJob
+        store = DaemonStore(tmp_path / "test.db")
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        return store, apscheduler, tmp_path, CronJob
+
+    def _write_v1_recipe(self, root, name, steps_yaml):
+        rdir = root / name
+        rdir.mkdir(parents=True)
+        (rdir / "recipe.yaml").write_text(
+            f"name: {name}\n"
+            f"description: v1 recipe for {name}\n"
+            f"steps:\n{steps_yaml}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_v1_recipe_with_prompt_step_calls_llm(self, setup):
+        """PROMPT step 의 변수 치환된 content 가 process_cron_message 로 흘러간다."""
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "recipes"
+        self._write_v1_recipe(
+            primary, "krstock-like",
+            "  - type: prompt\n"
+            "    name: summarize\n"
+            "    content: \"한국장 시황을 정리해줘\"\n",
+        )
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary, legacy_recipes_dir=None,
+        )
+
+        captured: list[str] = []
+
+        class FakeAgent:
+            async def process_cron_message(self, text: str) -> str:
+                captured.append(text)
+                return "ok"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="cron-krstock-auto",
+            cron_expression="0 16 * * 1-5",
+            action_type=ActionType.RECIPE,
+            action_reference="krstock-like",
+        )
+        result = await scheduler._execute_action(job)
+        # LLM 이 실제로 한 번 호출되고, PROMPT content 가 입력으로 들어가야 한다.
+        assert len(captured) == 1
+        assert "한국장 시황" in captured[0]
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_v1_recipe_command_then_prompt_joins_outputs_to_llm(self, setup):
+        """COMMAND stdout + PROMPT content 가 합쳐져 단일 LLM 호출로 전달된다."""
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "recipes"
+        self._write_v1_recipe(
+            primary, "two-step",
+            "  - type: command\n"
+            "    name: gather\n"
+            "    content: \"echo MARKET_DATA\"\n"
+            "  - type: prompt\n"
+            "    name: brief\n"
+            "    content: \"위 데이터로 브리핑 작성해줘\"\n",
+        )
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary, legacy_recipes_dir=None,
+        )
+
+        captured: list[str] = []
+
+        class FakeAgent:
+            async def process_cron_message(self, text: str) -> str:
+                captured.append(text)
+                return "briefing"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="two-step-cron",
+            cron_expression="0 9 * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="two-step",
+        )
+        await scheduler._execute_action(job)
+        assert len(captured) == 1
+        # COMMAND 의 stdout 과 PROMPT 의 content 가 모두 LLM 입력에 포함되어야 한다.
+        assert "MARKET_DATA" in captured[0]
+        assert "브리핑" in captured[0]
+
+    @pytest.mark.asyncio
+    async def test_command_only_recipe_no_output_falls_back_without_llm(
+        self, setup, caplog,
+    ):
+        """COMMAND-only 부수효과 레시피(출력 없음)는 LLM 호출 없이 폴백 통지로 가도 정상.
+
+        이 경로는 silent no-op 이 아니라 의도된 동작 — recipe.steps 에 PROMPT 가
+        없으므로 WARN 도 발생하지 않는다.
+        """
+        store, apscheduler, tmp_path, CronJob = setup
+        primary = tmp_path / "recipes"
+        self._write_v1_recipe(
+            primary, "side-effect-only",
+            "  - type: command\n"
+            "    name: silent\n"
+            "    content: \"true\"\n",  # exit 0, stdout empty
+        )
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=primary, legacy_recipes_dir=None,
+        )
+
+        captured: list[str] = []
+
+        class FakeAgent:
+            async def process_cron_message(self, text: str) -> str:
+                captured.append(text)
+                return "should-not-be-called"
+
+        scheduler._agent = FakeAgent()
+        job = CronJob(
+            name="silent-cron",
+            cron_expression="0 0 * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="side-effect-only",
+        )
+        with caplog.at_level("WARNING"):
+            result = await scheduler._execute_action(job)
+        assert captured == []  # LLM 호출 없음
+        assert "Recipe completed" in result
+        # PROMPT 가 없으므로 silent no-op 경고는 떨어지지 않아야 한다.
+        assert not any(
+            "no LLM input" in rec.message for rec in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_warn_when_prompt_step_recipe_yields_no_llm_input(
+        self, setup, caplog,
+    ):
+        """안전망: 로더 우회로 빈 PROMPT 가 들어와도 silent 가 아니라 WARN 으로 노출.
+
+        정상 경로(로더 통과)에서는 발생하지 않지만, 직접 RecipeDefinition 을 만들어
+        executor 에 넘기는 다른 호출자가 같은 함정에 빠지는 것을 대비한 안전망.
+        """
+        from simpleclaw.recipes.models import (
+            RecipeDefinition, RecipeStep, StepType,
+        )
+
+        store, apscheduler, tmp_path, CronJob = setup
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=tmp_path, legacy_recipes_dir=None,
+        )
+
+        # 로더를 우회한 합성 레시피 — 빈 content PROMPT step.
+        synthetic = RecipeDefinition(
+            name="synthetic",
+            steps=[
+                RecipeStep(
+                    step_type=StepType.PROMPT, name="ghost", content=""
+                ),
+            ],
+        )
+
+        class FakeAgent:
+            async def process_cron_message(self, text: str) -> str:
+                raise AssertionError("LLM 호출이 발생해서는 안 된다")
+
+        scheduler._agent = FakeAgent()
+
+        async def fake_load(_path):
+            return synthetic
+
+        async def fake_exec(recipe, **_kwargs):
+            from simpleclaw.recipes.models import (
+                RecipeResult, StepResult, StepStatus,
+            )
+            return RecipeResult(
+                recipe_name=recipe.name,
+                success=True,
+                step_results=[
+                    StepResult(
+                        step_name="ghost",
+                        status=StepStatus.SUCCESS,
+                        output="",  # 빈 PROMPT content
+                    )
+                ],
+            )
+
+        # 패치 — scheduler 내부의 lazy import 를 가로채서 합성 레시피를 흘려 넣는다.
+        import simpleclaw.recipes.loader as loader_mod
+        import simpleclaw.recipes.executor as executor_mod
+        original_load = loader_mod.load_recipe
+        original_exec = executor_mod.execute_recipe
+
+        def sync_load(_path):
+            return synthetic
+
+        async def patched_exec(recipe, **kw):
+            return await fake_exec(recipe, **kw)
+
+        loader_mod.load_recipe = sync_load
+        executor_mod.execute_recipe = patched_exec
+        try:
+            # action_reference 가 파일이어야 lazy load 로직이 통과
+            ref = tmp_path / "synthetic.yaml"
+            ref.write_text("name: synthetic")
+            job = CronJob(
+                name="synthetic-cron",
+                cron_expression="0 0 * * *",
+                action_type=ActionType.RECIPE,
+                action_reference=str(ref),
+            )
+            with caplog.at_level("WARNING"):
+                result = await scheduler._execute_action(job)
+        finally:
+            loader_mod.load_recipe = original_load
+            executor_mod.execute_recipe = original_exec
+
+        assert "Recipe completed" in result
+        # silent no-op 회귀 시 운영자가 즉시 알 수 있도록 WARN 이 떨어져야 한다.
+        assert any(
+            "no LLM input" in rec.message for rec in caplog.records
+        )

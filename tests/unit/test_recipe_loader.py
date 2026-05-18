@@ -93,6 +93,125 @@ class TestRecipeLoader:
             load_recipe(recipe_dir / "recipe.yaml")
 
 
+class TestStrictStepValidation:
+    """BIZ-243 — 미지원 키 무성 폴백과 빈 PROMPT content 가 silent no-op 으로
+    이어지지 않도록 로더가 명시적으로 실패한다."""
+
+    def test_unsupported_step_key_raises(self, tmp_path):
+        """`prompt:`/`tool:`/`args:` 같이 비슷한 이름의 미지원 키는 로드 시 즉시 실패.
+
+        2026-05-18 cron-krstock-auto 사고 — `tool:`/`args:`/`prompt:` 키가 무성으로
+        무시되어 빈 content PROMPT 스텝이 생성, LLM 호출 없이 SUCCESS 종료된 회귀.
+        """
+        recipe_dir = tmp_path / "krstock-like"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: krstock-like\n"
+            "steps:\n"
+            "  - name: search_market\n"
+            "    tool: news-search-skill\n"
+            "    args: \"오늘 한국 증시 시황\"\n"
+        )
+        with pytest.raises(RecipeParseError) as excinfo:
+            load_recipe(recipe_dir / "recipe.yaml")
+        msg = str(excinfo.value)
+        assert "search_market" in msg
+        # 미지원 키 명단을 노출해야 운영자가 즉시 원인을 알 수 있다.
+        assert "tool" in msg
+        assert "args" in msg
+
+    def test_unsupported_prompt_alias_raises(self, tmp_path):
+        """`content:` 대신 `prompt:` 로 작성한 PROMPT 스텝은 명시적으로 거부."""
+        recipe_dir = tmp_path / "prompt-alias"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: prompt-alias\n"
+            "steps:\n"
+            "  - name: summarize\n"
+            "    type: prompt\n"
+            "    prompt: \"오늘 시황 요약해줘\"\n"
+        )
+        with pytest.raises(RecipeParseError) as excinfo:
+            load_recipe(recipe_dir / "recipe.yaml")
+        assert "prompt" in str(excinfo.value)
+
+    def test_empty_prompt_content_raises(self, tmp_path):
+        """PROMPT 스텝의 content 가 비면 LLM 입력이 사라져 호출이 스킵된다 — 즉시 실패."""
+        recipe_dir = tmp_path / "empty-prompt"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: empty-prompt\n"
+            "steps:\n"
+            "  - name: ghost\n"
+            "    type: prompt\n"
+            "    content: \"\"\n"
+        )
+        with pytest.raises(RecipeParseError, match="empty"):
+            load_recipe(recipe_dir / "recipe.yaml")
+
+    def test_missing_prompt_content_raises(self, tmp_path):
+        """content 키 자체가 없어도 빈 PROMPT 로 폴백되지 않고 명시적 실패."""
+        recipe_dir = tmp_path / "missing-content"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: missing-content\n"
+            "steps:\n"
+            "  - name: ghost\n"
+            "    type: prompt\n"
+        )
+        with pytest.raises(RecipeParseError, match="empty"):
+            load_recipe(recipe_dir / "recipe.yaml")
+
+    def test_whitespace_only_prompt_content_raises(self, tmp_path):
+        """공백/줄바꿈만 있는 content 도 LLM 입력으로는 무의미하므로 거부."""
+        recipe_dir = tmp_path / "whitespace-prompt"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: whitespace-prompt\n"
+            "steps:\n"
+            "  - name: ghost\n"
+            "    type: prompt\n"
+            "    content: \"   \\n\\t  \"\n"
+        )
+        with pytest.raises(RecipeParseError, match="empty"):
+            load_recipe(recipe_dir / "recipe.yaml")
+
+    def test_command_empty_content_still_allowed(self, tmp_path):
+        """COMMAND 스텝의 빈 content 는 운영적으로 의미가 있을 수 있어
+        검증 대상에서 제외(에러 발생은 PROMPT 한정).
+
+        예: 부수효과만 있는 외부 스크립트 호출 자리 표시자.
+        """
+        recipe_dir = tmp_path / "empty-cmd"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: empty-cmd\n"
+            "steps:\n"
+            "  - name: noop\n"
+            "    type: command\n"
+            "    content: \"\"\n"
+        )
+        recipe = load_recipe(recipe_dir / "recipe.yaml")
+        assert recipe.steps[0].content == ""
+
+    def test_valid_step_keys_accepted(self, tmp_path):
+        """``type``/``name``/``content``/``on_error``/``rollback`` 모두 지정해도 통과."""
+        recipe_dir = tmp_path / "all-keys"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: all-keys\n"
+            "steps:\n"
+            "  - type: command\n"
+            "    name: full\n"
+            "    content: echo hi\n"
+            "    on_error: continue\n"
+            "    rollback: echo undo\n"
+        )
+        recipe = load_recipe(recipe_dir / "recipe.yaml")
+        assert recipe.steps[0].name == "full"
+        assert recipe.steps[0].rollback == "echo undo"
+
+
 class TestDiscoverWithLegacyFallback:
     """BIZ-202: primary 디렉터리가 비어도 legacy 디렉터리에서 한 번 폴백 로드한다."""
 

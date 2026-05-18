@@ -29,6 +29,7 @@ from simpleclaw.daemon.models import (
     ExecutionStatus,
 )
 from simpleclaw.daemon.store import DaemonStore
+from simpleclaw.recipes.models import StepType
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +415,15 @@ class CronScheduler:
 
         에이전트 오케스트레이터가 있으면 process_cron_message를 통해
         대화 히스토리와 격리된 컨텍스트에서 실행한다.
+
+        v1 레시피(steps 기반) 처리 규약 — BIZ-243:
+        - 각 스텝의 SUCCESS 출력(COMMAND 의 stdout, PROMPT 의 변수 치환된 content)
+          을 줄바꿈으로 합쳐 단일 LLM 호출(`process_cron_message`) 입력으로 사용.
+        - 합친 입력이 비어 있으면 LLM 을 호출하지 않고 "Recipe completed" 통지로
+          폴백한다. 이는 부수효과만 있는 COMMAND-only 레시피를 위한 의도된 경로.
+        - PROMPT 스텝이 있는데 입력이 비는 경우는 로더가 빈 content 를 거부하므로
+          정상적으로는 발생할 수 없다. 그래도 안전망으로 WARN 을 남긴다(silent
+          no-op 재발 방지).
         """
         if job.action_type == ActionType.RECIPE:
             from simpleclaw.recipes.loader import load_recipe
@@ -472,6 +482,20 @@ class CronScheduler:
                 )
                 if prompt_output:
                     return await self._agent.process_cron_message(prompt_output)
+
+                # BIZ-243 — PROMPT 스텝이 있는데 LLM 으로 보낼 입력이 비는
+                # 상태는 로더 검증 이후로는 정상 경로에서 발생하지 않아야 한다.
+                # 그래도 silent no-op 재발 시 운영자가 즉시 인지할 수 있도록 WARN.
+                if any(
+                    s.step_type == StepType.PROMPT for s in recipe.steps
+                ):
+                    logger.warning(
+                        "Cron '%s' recipe '%s' has PROMPT step(s) but produced "
+                        "no LLM input — LLM call skipped, falling back to "
+                        "'Recipe completed' notification. Check the recipe "
+                        "definition for empty PROMPT content.",
+                        job.name, recipe.name,
+                    )
 
             succeeded = sum(1 for s in result.step_results if s.success)
             total = len(result.step_results)
