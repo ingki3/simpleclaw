@@ -31,6 +31,13 @@ from simpleclaw.recipes.models import (
 
 logger = logging.getLogger(__name__)
 
+# 스텝 dict 에 허용되는 키 집합. BIZ-243 — `tool:`/`prompt:`/`args:` 등
+# 미지원 키를 만나면 빈 content PROMPT 스텝으로 무성 폴백되어 silent no-op 사고가
+# 발생했음(2026-05-18 cron-krstock-auto). 의도치 않은 키는 즉시 실패로 노출시킨다.
+_VALID_STEP_KEYS = frozenset(
+    {"type", "name", "content", "on_error", "rollback"}
+)
+
 
 def _parse_on_error(value: object, source: Path) -> OnErrorPolicy | None:
     """``on_error`` 문자열을 ``OnErrorPolicy`` 로 변환한다.
@@ -174,16 +181,40 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
     steps = []
     for sdata in data.get("steps", []):
         if isinstance(sdata, dict):
+            # BIZ-243 — 미지원 키는 즉시 실패. `prompt:`/`tool:`/`args:` 처럼
+            # 비슷한 이름으로 잘못 작성된 키가 무성 폴백되어 빈 content PROMPT 로
+            # 파싱되던 silent failure 를 차단한다.
+            unknown_keys = sorted(set(sdata.keys()) - _VALID_STEP_KEYS)
+            if unknown_keys:
+                step_label = sdata.get("name") or "<unnamed>"
+                raise RecipeParseError(
+                    f"Unsupported step key(s) {unknown_keys} in step "
+                    f"'{step_label}' of {recipe_path}. "
+                    f"Valid keys: {sorted(_VALID_STEP_KEYS)}"
+                )
+
             try:
                 step_type = StepType(sdata.get("type", "prompt"))
             except ValueError:
                 raise RecipeParseError(
                     f"Invalid step type '{sdata.get('type')}' in {recipe_path}"
                 )
+
+            content = sdata.get("content", "")
+            # BIZ-243 — PROMPT 스텝의 content 가 비면 LLM 에 전달할 입력이 사라져
+            # 호출자(scheduler) 가 LLM 호출을 건너뛰는 silent no-op 으로 직결된다.
+            # 의도된 빈 PROMPT 는 거의 없으므로 명시적 에러로 노출.
+            if step_type == StepType.PROMPT and not str(content).strip():
+                step_label = sdata.get("name") or "<unnamed>"
+                raise RecipeParseError(
+                    f"PROMPT step '{step_label}' in {recipe_path} has empty "
+                    "content — provide a non-empty 'content' string."
+                )
+
             steps.append(RecipeStep(
                 step_type=step_type,
                 name=sdata.get("name", ""),
-                content=sdata.get("content", ""),
+                content=content,
                 on_error=_parse_on_error(sdata.get("on_error"), recipe_path),
                 rollback=str(sdata.get("rollback") or ""),
             ))

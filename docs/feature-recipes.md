@@ -48,6 +48,27 @@ steps:
     content: "Generate a report for ${date}."
 ```
 
+#### v1 스텝의 허용 키
+
+스텝 dict 에는 다음 키만 사용할 수 있습니다 — `type`, `name`, `content`, `on_error`, `rollback`.
+다른 키(예: `prompt:`, `tool:`, `args:`) 를 적으면 로더가 즉시 `RecipeParseError` 로 실패합니다.
+이전에는 이런 미지원 키가 무성으로 무시되어 빈 content PROMPT 스텝이 생성되고 LLM 호출이
+스킵되는 silent no-op 사고가 있었습니다(BIZ-243, 2026-05-18 cron-krstock-auto).
+
+`type: prompt` 스텝의 `content` 가 비거나 공백만 있으면 동일하게 거부됩니다 — PROMPT 스텝의
+content 는 호출자(Cron 스케줄러 등)가 LLM 으로 보내는 입력이므로 비어있는 경우 의미가 없습니다.
+
+#### v1 호출자 책임 (Cron 실행 경로)
+
+`daemon/scheduler.py` 의 `_execute_action` 은 v1 레시피 실행 후 각 스텝의 SUCCESS 출력
+(COMMAND 의 stdout, PROMPT 의 변수 치환된 content) 을 줄바꿈으로 합쳐 `process_cron_message`
+로 단일 LLM 호출을 발생시킵니다. 합친 입력이 비어 있으면 LLM 호출 없이 `"Recipe completed: N/N"`
+통지로 폴백합니다 — 이는 부수효과만 있는 COMMAND-only 레시피를 위한 의도된 경로입니다.
+
+PROMPT 스텝이 있는 레시피가 LLM 입력을 만들어내지 못하는 상태는 로더 검증 이후로는 정상
+경로에서 발생할 수 없지만, 다른 호출자가 RecipeDefinition 을 직접 생성해 executor 에 넘기는
+케이스를 대비해 안전망으로 WARN 로그가 남도록 했습니다.
+
 ## 실행 방법
 
 ### 슬래시 명령어
