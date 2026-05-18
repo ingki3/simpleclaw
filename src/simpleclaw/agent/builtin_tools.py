@@ -59,36 +59,80 @@ BUILTIN_TOOL_NAMES = frozenset({
 # 경로 안전성 검증
 # ------------------------------------------------------------------
 
+def _is_within(path: Path, root: Path) -> bool:
+    """``path`` 가 ``root`` 의 자손(또는 동일) 인지 안전하게 검사한다.
+
+    BIZ-142: 기존 ``str(target).startswith(str(root))`` prefix 매칭은
+    ``/Users/simplist/Dev/SimpleClaw`` 와 ``/Users/simplist/Dev/SimpleClaw-x``
+    를 구별하지 못해 boundary 우회가 가능했다. ``Path.relative_to`` 는 부모
+    체인을 따라 비교하므로 디렉터리 경계가 정확히 일치할 때만 True.
+    """
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def resolve_safe_path(
     raw_path: str,
     workspace_dir: Path,
     *,
     write: bool = False,
+    persona_local_dir: str | Path | None = None,
 ) -> Path | str:
     """사용자가 제공한 경로를 해석하고 안전 경계를 검증한다.
 
-    읽기는 프로젝트 루트 내, 쓰기는 워크스페이스 디렉토리 내로 제한한다.
+    BIZ-142:
+    - ``~`` 를 사용자 홈 디렉터리로 확장한다 (운영 디렉터리 ``~/.simpleclaw/``
+      가 프로젝트 루트 외부에 있어 필수).
+    - 읽기 허용 루트에 프로젝트 루트 외에 ``persona_local_dir`` (보통
+      ``~/.simpleclaw``) 을 화이트리스트로 추가한다.
+    - 경계 검사를 ``Path.relative_to`` 기반으로 바꿔 prefix-trick 을 차단한다.
+
+    쓰기는 워크스페이스 디렉터리 내부로만 제한된다 (변경 없음).
+
+    Args:
+        raw_path: 호출자가 전달한 원본 경로 문자열.
+        workspace_dir: 쓰기 허용 루트 (스킬·도구 출력 디렉터리).
+        write: True 면 쓰기 경계, False 면 읽기 경계로 검증.
+        persona_local_dir: 페르소나 운영 디렉터리. 읽기 허용 루트에
+            추가된다. ``None`` 이면 프로젝트 루트만 허용.
 
     Returns:
         성공 시 해석된 ``Path``, 경계 위반 시 에러 문자열.
     """
     project_root = Path.cwd().resolve()
     workspace = workspace_dir.resolve()
-    target = (project_root / raw_path).resolve()
+
+    # BIZ-142: ``~`` 확장은 절대/상대 분기 전에 수행해야 한다 — 그러지 않으면
+    # ``Path.cwd() / "~/.simpleclaw/..."`` 가 리터럴 ``~`` 디렉터리로 풀린다.
+    expanded = Path(raw_path).expanduser()
+    target = (
+        expanded.resolve()
+        if expanded.is_absolute()
+        else (project_root / expanded).resolve()
+    )
 
     if write:
-        if not str(target).startswith(str(workspace)):
+        if not _is_within(target, workspace):
             return (
                 f"Error: write operations are restricted to the workspace "
                 f"directory ({workspace_dir}). "
                 f"Requested path: {raw_path}"
             )
-    else:
-        if not str(target).startswith(str(project_root)):
-            return (
-                f"Error: path is outside the project directory. "
-                f"Requested path: {raw_path}"
-            )
+        return target
+
+    allowed_read_roots = [project_root]
+    if persona_local_dir is not None:
+        allowed_read_roots.append(Path(persona_local_dir).expanduser().resolve())
+
+    if not any(_is_within(target, root) for root in allowed_read_roots):
+        return (
+            f"Error: path is outside allowed read roots "
+            f"({[str(r) for r in allowed_read_roots]}). "
+            f"Requested path: {raw_path}"
+        )
     return target
 
 
@@ -425,16 +469,27 @@ async def handle_web_fetch(
 # file-read — 파일 읽기
 # ------------------------------------------------------------------
 
-def handle_file_read(routing: dict, workspace_dir: Path) -> str:
+def handle_file_read(
+    routing: dict,
+    workspace_dir: Path,
+    *,
+    persona_local_dir: str | Path | None = None,
+) -> str:
     """파일의 텍스트 내용을 줄 번호와 함께 반환한다.
 
     offset/limit으로 읽을 범위를 제어할 수 있으며, 음수 offset은 파일 끝 기준이다.
+
+    BIZ-142: ``persona_local_dir`` (보통 ``~/.simpleclaw``) 도 읽기 허용 루트에
+    포함된다. 호출자 (오케스트레이터) 가 ``persona.local_dir`` 설정값을 주입.
     """
     raw_path = routing.get("path", "")
     if not raw_path:
         return "Error: 'path' field is required."
 
-    result = resolve_safe_path(raw_path, workspace_dir, write=False)
+    result = resolve_safe_path(
+        raw_path, workspace_dir,
+        write=False, persona_local_dir=persona_local_dir,
+    )
     if isinstance(result, str):
         return result
     target = result
@@ -509,10 +564,17 @@ def handle_file_write(routing: dict, workspace_dir: Path) -> str:
 # file-manage — 파일 관리
 # ------------------------------------------------------------------
 
-def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
+def handle_file_manage(
+    routing: dict,
+    workspace_dir: Path,
+    *,
+    persona_local_dir: str | Path | None = None,
+) -> str:
     """파일 관리 작업을 처리한다 (list, mkdir, delete, info).
 
-    list/info는 프로젝트 전체에서, mkdir/delete는 워크스페이스 내에서만 허용된다.
+    list/info는 프로젝트 + 페르소나 운영 디렉터리에서, mkdir/delete는 워크스페이스
+    내에서만 허용된다. BIZ-142: ``persona_local_dir`` 가 주입되면 list/info 의
+    허용 루트에 포함된다.
     """
     operation = routing.get("operation", "")
     raw_path = routing.get("path", "")
@@ -523,7 +585,10 @@ def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
         return "Error: 'path' field is required."
 
     if operation == "list":
-        result = resolve_safe_path(raw_path, workspace_dir, write=False)
+        result = resolve_safe_path(
+            raw_path, workspace_dir,
+            write=False, persona_local_dir=persona_local_dir,
+        )
         if isinstance(result, str):
             return result
         target = result
@@ -579,7 +644,10 @@ def handle_file_manage(routing: dict, workspace_dir: Path) -> str:
             return f"Error deleting: {str(exc)[:200]}"
 
     elif operation == "info":
-        result = resolve_safe_path(raw_path, workspace_dir, write=False)
+        result = resolve_safe_path(
+            raw_path, workspace_dir,
+            write=False, persona_local_dir=persona_local_dir,
+        )
         if isinstance(result, str):
             return result
         target = result
