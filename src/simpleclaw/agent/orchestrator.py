@@ -740,11 +740,17 @@ class AgentOrchestrator:
                 args, headless_binary=self._headless_binary
             )
         if name == "file_read":
-            return handle_file_read(args, self._workspace_dir)
+            return handle_file_read(
+                args, self._workspace_dir,
+                persona_local_dir=self._persona_config["local_dir"],
+            )
         if name == "file_write":
             return handle_file_write(args, self._workspace_dir)
         if name == "file_manage":
-            return handle_file_manage(args, self._workspace_dir)
+            return handle_file_manage(
+                args, self._workspace_dir,
+                persona_local_dir=self._persona_config["local_dir"],
+            )
         if name == "skill_docs":
             return handle_skill_docs(args, self._skills_by_name)
         if name == "cron":
