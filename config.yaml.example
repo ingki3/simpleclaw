@@ -114,7 +114,12 @@ admin_api:
   token_secret: "keyring:admin_api_token"
   read_timeout_seconds: 30
   request_max_body_kb: 256
-  cors_origins: []  # 예: ["http://localhost:8088"]
+  # Admin UI dev 서버 origin 을 명시한다 — 비어 있으면 브라우저 직호출이 CORS 로
+  # 막혀 일부 페이지가 401/403 으로 깨진다(BIZ-246). 기본값은 현행 OLD admin
+  # (web/admin, :8088) 과 admin-2 컷오버 대비(:8089) 두 origin 을 모두 허용한다.
+  cors_origins:
+    - "http://localhost:8088"  # web/admin (OLD)
+    - "http://localhost:8089"  # web/admin-2 (cutover 대비)
 
 webhook:
   enabled: true

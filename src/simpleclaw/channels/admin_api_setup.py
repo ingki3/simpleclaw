@@ -88,6 +88,16 @@ def build_admin_api_server(
             "발급 예시: SecretsManager().store('keyring', 'admin_api_token', secrets.token_urlsafe(32))"
         )
 
+    # BIZ-246 — cors_origins 가 비어 있으면 Admin UI(별도 dev 포트)의 브라우저 직호출이
+    # CORS preflight 단계에서 차단된다. 부팅을 막을 정도의 문제는 아니지만, 운영자가
+    # 알아채지 못한 채 401/403 디버깅에 시간을 쓰는 일을 줄이기 위해 한 줄 경고를 남긴다.
+    if not cfg["cors_origins"]:
+        logger.warning(
+            "admin_api.cors_origins 가 비어 있습니다 — Admin UI(예: http://localhost:8088) "
+            "의 브라우저 직호출은 CORS preflight 에서 차단됩니다. "
+            "config.yaml 의 admin_api.cors_origins 에 Admin UI dev 서버 origin 을 추가하세요."
+        )
+
     # BIZ-245 — admin_api_token 회전 시 ``web/admin/.env.local`` 자동 동기화 콜백을 기본으로
     # 주입한다. 회전이 vault 에는 반영됐는데 Next 프록시(.env.local) 가 stale 토큰을 계속
     # forward 해 모든 admin UI 패널이 401 로 빈 상태가 됐던 BIZ-244 사고의 재발 방지.
