@@ -8,6 +8,8 @@
    부팅이 명시적으로 실패한다 — silent insecure 운용을 막기 위함.
 3. ``admin_api.enabled=false``면 헬퍼가 ``None``을 반환해 봇이 포트를 바인딩하지
    않는다.
+4. ``cors_origins`` 가 비어 있으면 부팅은 통과하되 경고 로그가 남는다 — BIZ-246
+   에서 운영자가 stale 포트를 그대로 두고 admin UI 가 깨졌던 사고 재발 방지.
 
 실제 ``scripts/run_bot.py``는 텔레그램·LLM·DB까지 들어 통합 테스트 격리가 어렵기
 때문에, 동일 코드 경로를 공유하는 ``build_admin_api_server`` 헬퍼를 직접 호출해
@@ -16,6 +18,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 
 import aiohttp
@@ -86,7 +89,14 @@ def isolated_secrets():
         set_default_manager(None)
 
 
-def _write_config(tmp_path, *, enabled: bool, token_ref: str, port: int) -> str:
+def _write_config(
+    tmp_path,
+    *,
+    enabled: bool,
+    token_ref: str,
+    port: int,
+    cors_origins: list[str] | None = None,
+) -> str:
     """admin_api 섹션이 포함된 최소 config.yaml을 임시 디렉토리에 만든다."""
     cfg = {
         "admin_api": {
@@ -96,7 +106,7 @@ def _write_config(tmp_path, *, enabled: bool, token_ref: str, port: int) -> str:
             "token_secret": token_ref,
             "read_timeout_seconds": 30,
             "request_max_body_kb": 256,
-            "cors_origins": [],
+            "cors_origins": list(cors_origins) if cors_origins is not None else [],
         },
         "agent": {
             "history_limit": 20,
@@ -258,3 +268,74 @@ class TestAdminAPIDisabled:
                 pytest.fail(
                     f"disabled mode인데 포트 {port}가 바인딩돼 있다: {exc}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# 4) cors_origins 비어 있으면 부팅은 통과 + 경고 로그 (BIZ-246)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminAPICorsOriginsWarning:
+    def test_empty_cors_origins_emits_warning(
+        self, tmp_path, isolated_secrets, caplog
+    ):
+        # 토큰은 등록돼 있어 부팅 자체는 성공해야 하지만, cors_origins 가 비어 있어
+        # 운영자에게 즉시 보이는 한 줄 경고가 남아야 한다 (silent UI breakage 방지).
+        isolated_secrets["keyring"].set("admin_api_token", "warn-test-token")
+        config_path = _write_config(
+            tmp_path,
+            enabled=True,
+            token_ref="keyring:admin_api_token",
+            port=_free_port(),
+            cors_origins=[],
+        )
+
+        with caplog.at_level(logging.WARNING, logger="simpleclaw.channels.admin_api_setup"):
+            srv = build_admin_api_server(
+                config_path,
+                secrets_manager=isolated_secrets["manager"],
+                audit_log=AuditLog(tmp_path / "audit"),
+                admin_state_dir=tmp_path / "admin",
+            )
+
+        assert srv is not None, "cors_origins 가 비어도 부팅은 통과해야 한다"
+        warnings = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and "cors_origins" in r.getMessage()
+        ]
+        assert warnings, (
+            "cors_origins=[] 일 때 admin_api_setup 이 경고를 남겨야 한다 — "
+            f"got records: {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_populated_cors_origins_silent(
+        self, tmp_path, isolated_secrets, caplog
+    ):
+        # 운영자가 cors_origins 를 명시했으면 경고는 나오지 않아야 한다 — 그래야
+        # 정상 상태에서 운영 로그 잡음이 생기지 않는다.
+        isolated_secrets["keyring"].set("admin_api_token", "warn-test-token")
+        config_path = _write_config(
+            tmp_path,
+            enabled=True,
+            token_ref="keyring:admin_api_token",
+            port=_free_port(),
+            cors_origins=["http://localhost:8088"],
+        )
+
+        with caplog.at_level(logging.WARNING, logger="simpleclaw.channels.admin_api_setup"):
+            srv = build_admin_api_server(
+                config_path,
+                secrets_manager=isolated_secrets["manager"],
+                audit_log=AuditLog(tmp_path / "audit"),
+                admin_state_dir=tmp_path / "admin",
+            )
+
+        assert srv is not None
+        cors_warns = [
+            r for r in caplog.records
+            if r.levelno == logging.WARNING and "cors_origins" in r.getMessage()
+        ]
+        assert not cors_warns, (
+            "cors_origins 가 채워져 있으면 경고가 나와서는 안 된다 — "
+            f"unexpected: {[r.getMessage() for r in cors_warns]}"
+        )
