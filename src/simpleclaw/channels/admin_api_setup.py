@@ -20,8 +20,9 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from simpleclaw.channels.admin_api import AdminAPIServer
+from simpleclaw.channels.admin_api import AdminAPIServer, SecretRotationCallback
 from simpleclaw.channels.admin_audit import AuditLog
+from simpleclaw.channels.admin_env_local import make_secret_rotation_callback
 from simpleclaw.config import load_admin_api_config
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming_runs import DreamingRunStore
@@ -53,6 +54,7 @@ def build_admin_api_server(
     suggestion_writer: Callable[[str], None] | None = None,
     dreaming_run_store: DreamingRunStore | None = None,
     dreaming_status_provider: Callable[[], dict] | None = None,
+    secret_rotation_callback: SecretRotationCallback | None = None,
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -86,6 +88,13 @@ def build_admin_api_server(
             "발급 예시: SecretsManager().store('keyring', 'admin_api_token', secrets.token_urlsafe(32))"
         )
 
+    # BIZ-245 — admin_api_token 회전 시 ``web/admin/.env.local`` 자동 동기화 콜백을 기본으로
+    # 주입한다. 회전이 vault 에는 반영됐는데 Next 프록시(.env.local) 가 stale 토큰을 계속
+    # forward 해 모든 admin UI 패널이 401 로 빈 상태가 됐던 BIZ-244 사고의 재발 방지.
+    # 테스트는 인자로 ``no-op`` 콜백을 넘겨 디스크 접근을 차단할 수 있다.
+    if secret_rotation_callback is None:
+        secret_rotation_callback = make_secret_rotation_callback()
+
     return AdminAPIServer(
         host=cfg["bind_host"],
         port=cfg["bind_port"],
@@ -100,6 +109,7 @@ def build_admin_api_server(
         health_provider=health_provider,
         cors_origins=cfg["cors_origins"],
         request_max_body_bytes=cfg["request_max_body_kb"] * 1024,
+        secret_rotation_callback=secret_rotation_callback,
         # BIZ-77 — 인사이트 source 역추적 엔드포인트가 사용하는 의존성.
         # 둘 중 하나라도 None 이면 핸들러가 503 으로 명시적 disabled 응답.
         conversation_store=conversation_store,

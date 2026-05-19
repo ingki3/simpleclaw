@@ -16,6 +16,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  markDaemonUnreachable,
+  markTokenChecked,
+  markTokenMismatch,
+  markTokenMissing,
+} from "@/lib/adminTokenStatus";
+
 const DEFAULT_BASE = "http://127.0.0.1:8082";
 
 function resolveBase(): string {
@@ -30,6 +37,9 @@ async function proxy(
   const { path } = await ctx.params;
   const token = process.env.ADMIN_API_TOKEN;
   if (!token) {
+    // BIZ-245 — 토큰 미설정 상태도 부팅 훅과 같은 채널로 기록해 운영자가 콘솔/배너에서
+    // 즉시 감지하도록 한다.
+    markTokenMissing();
     return NextResponse.json(
       {
         error:
@@ -66,14 +76,26 @@ async function proxy(
       cache: "no-store",
     });
   } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    // BIZ-245 — 데몬 도달 실패는 토큰 미스매치와 분리해서 추적한다(운영자 액션이 다름).
+    markDaemonUnreachable(`${method} ${upstream} 실패: ${cause}`);
     return NextResponse.json(
       {
         error:
           "데몬에 연결할 수 없어요. 데몬이 실행 중인지, ADMIN_API_BASE가 올바른지 확인해 주세요.",
-        cause: err instanceof Error ? err.message : String(err),
+        cause,
       },
       { status: 502 },
     );
+  }
+
+  // BIZ-245 — 401 은 ``.env.local`` 의 ``ADMIN_API_TOKEN`` 이 데몬과 어긋났을 때
+  // 가장 흔하게 발생한다 (BIZ-244 사고 원인). 부팅 시점에는 헬스 체크가 200 이었어도
+  // 운영 중 회전이 일어나면 여기서 처음 잡힌다.
+  if (upstreamResp.status === 401) {
+    markTokenMismatch(`${method} ${upstream} → 401`);
+  } else if (upstreamResp.ok) {
+    markTokenChecked(`${method} ${upstream} → ${upstreamResp.status}`);
   }
 
   // 응답 그대로 forward — content-type 보존.

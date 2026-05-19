@@ -368,6 +368,59 @@ class TestSecrets:
         # 아닐 수 있으나, target에서 시크릿 이름을 별도 보존하는 게 핵심.
         assert "super-secret-1234" not in entries[0].to_json()
 
+    # BIZ-245 — 회전 후 외부 sink (예: ``web/admin/.env.local``) 동기화 후크 검증.
+    @pytest.mark.asyncio
+    async def test_rotate_invokes_secret_rotation_callback(self, tmp_state, aiohttp_client):
+        captured: list[tuple[str, str, str]] = []
+
+        def cb(backend: str, name: str, value: str) -> None:
+            captured.append((backend, name, value))
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            secret_rotation_callback=cb,
+        )
+        client = await aiohttp_client(srv.get_app())
+        resp = await client.post(
+            "/admin/v1/secrets/admin_api_token/rotate",
+            headers=HEADERS,
+            json={"value": "fresh-token", "backend": "file"},
+        )
+        assert resp.status == 200
+        assert captured == [("file", "admin_api_token", "fresh-token")]
+
+    @pytest.mark.asyncio
+    async def test_rotate_callback_failure_does_not_break_rotation(
+        self, tmp_state, aiohttp_client
+    ):
+        # 콜백이 예외를 던져도 회전은 이미 백엔드에 적용된 상태이므로 응답은 성공이어야 한다.
+        # 운영자가 ``.env.local`` 디스크 쓰기 실패로 401 보다 더 큰 장애(rotate 실패) 로
+        # 떨어지지 않도록 한다.
+        def cb(backend: str, name: str, value: str) -> None:
+            raise RuntimeError("disk full")
+
+        manager = _make_secrets_manager()
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=manager,
+            admin_state_dir=tmp_state["state_dir"],
+            secret_rotation_callback=cb,
+        )
+        client = await aiohttp_client(srv.get_app())
+        resp = await client.post(
+            "/admin/v1/secrets/admin_api_token/rotate",
+            headers=HEADERS,
+            json={"value": "fresh-token", "backend": "file"},
+        )
+        assert resp.status == 200
+        assert manager.get_backend("file").get("admin_api_token") == "fresh-token"
+
 
 # ---------------------------------------------------------------------------
 # Audit
