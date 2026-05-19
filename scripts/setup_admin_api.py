@@ -3,24 +3,28 @@
 `run_bot.py`가 띄우는 ``AdminAPIServer``(BIZ-58)와 Admin UI(`web/admin`)를 같은 머신에
 서 처음 켤 때 필요한 세 가지 환경 셋업을 한 번의 호출로 처리한다:
 
-1. **keyring에 ``admin_api_token`` 발급** — 이미 있으면 재사용, 없으면 32바이트
-   url-safe 토큰을 생성해 저장한다.
+1. **시크릿 매니저에 ``admin_api_token`` 발급** — ``admin_api.token_secret`` 참조가
+   가리키는 백엔드(``keyring`` / ``file`` / ``env``)에 토큰을 저장한다. 이미 있으면
+   재사용, 없거나 ``--force`` 면 32바이트 url-safe 토큰을 새로 발급한다.
 2. **``web/admin/.env.local`` 동기화** — 토큰을 ``ADMIN_API_TOKEN`` 으로 주입하고,
    필요 시 ``ADMIN_API_BASE`` 기본값(``http://127.0.0.1:8082``)도 채워 넣는다.
    기존 파일은 키 단위로 보존하면서 토큰 라인만 갱신해 운영자 로컬 커스텀이 사라지지
-   않도록 한다.
+   않도록 한다. 본 동기화 로직은 ``simpleclaw.channels.admin_env_local`` 에 SoT 로
+   두어 admin_api 회전 핸들러도 같은 함수를 호출한다 (BIZ-244 재발 방지).
 3. **``config.yaml``에 ``admin_api`` 블록 보강** — 키가 누락된 경우에만 기본값을 추가
    하고 ``cors_origins``에 Admin UI dev 서버 origin(``http://localhost:8088``)을 합친다.
    이미 사용자가 작성한 값이 있으면 건드리지 않는다.
 
 설계 결정:
 
+- **백엔드는 config.yaml 의 ``token_secret`` 참조가 결정** — 운영자가 prod 에서
+  ``file:admin_api_token`` 으로 운용 중인데 본 스크립트가 keyring 으로만 발급하면
+  데몬은 옛 file 백엔드 값을 계속 읽어 토큰이 어긋난다 (BIZ-244 와 같은 부류).
+  참조가 없거나 ``plain:`` 이면 운영자에게 안전한 기본값을 안내한다.
 - **idempotent**: 이미 모든 게 갖춰져 있으면 변경 없이 안내만 출력한다 — `--force`
   플래그로 토큰을 명시적으로 재발급할 수 있다.
 - **secrets 모듈에 위임**: 백엔드 가용성/저장 실패는 ``SecretsManager``가 던지는 예외
   를 그대로 전파해 운영자가 keyring 미설정 등을 즉시 인지하도록 한다.
-- **DRY**: ``.env.local`` 파싱은 단순한 ``KEY=VALUE`` 라인만 다루며, Next의 dotenv
-  파서와 동일한 의미론을 보장한다(주석/빈 라인 보존).
 
 사용 예::
 
@@ -38,97 +42,119 @@ from pathlib import Path
 
 import yaml
 
-from simpleclaw.security.secrets import SecretsManager
+# scripts/ 는 패키지가 아니므로 src 를 명시적으로 추가 — 단독 실행 시에도 동작.
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from simpleclaw.channels.admin_env_local import (  # noqa: E402
+    DEFAULT_ADMIN_BASE,
+    DEFAULT_ENV_LOCAL_PATH,
+    sync_env_local,
+)
+from simpleclaw.security.secrets import (  # noqa: E402
+    SecretReference,
+    SecretsError,
+    SecretsManager,
+)
+
+REPO_ROOT = ROOT
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config.yaml"
-DEFAULT_ENV_LOCAL_PATH = REPO_ROOT / "web" / "admin" / ".env.local"
-DEFAULT_ENV_EXAMPLE_PATH = REPO_ROOT / "web" / "admin" / ".env.local.example"
 
 ADMIN_TOKEN_KEY = "admin_api_token"
-DEFAULT_ADMIN_BASE = "http://127.0.0.1:8082"
 ADMIN_UI_ORIGIN = "http://localhost:8088"
 
+# config.yaml 미작성 시 ``--force`` 등으로 기본 폴백할 백엔드.
+# keyring 은 헤드리스 환경에서 실패할 수 있지만 macOS 등 인터랙티브 환경의 최초 셋업
+# 시 가장 안전한 선택이므로 유지한다 (file 백엔드는 마스터 키 노출 면적이 더 큼).
+_FALLBACK_BACKEND = "keyring"
 
-def ensure_token(*, force: bool = False) -> tuple[str, bool]:
-    """keyring에서 토큰을 읽고 없으면 생성해 저장한다.
+# 본 스크립트가 직접 발급/회전을 지원하는 백엔드 — env 백엔드는 프로세스 환경변수
+# 라서 영속성이 없어 회전 대상에서 제외한다.
+_WRITABLE_BACKENDS = ("keyring", "file")
+
+
+def _resolve_token_backend(config_path: Path) -> tuple[str, str]:
+    """``admin_api.token_secret`` 참조에서 (backend, key) 를 결정한다.
+
+    Returns:
+        (backend, key_name). 참조가 비었거나 ``plain:`` 이면 안전한 폴백으로 떨어진다.
+
+    Why: BIZ-244 — 운영자가 ``file:admin_api_token`` 으로 운용 중인데 스크립트가
+    keyring 만 갱신하면 회전이 무의미하다. 참조 그대로를 따라야 ``--force`` 가
+    실제 데몬이 읽는 백엔드에 반영된다.
+    """
+    if not config_path.is_file():
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    admin = data.get("admin_api") if isinstance(data, dict) else None
+    if not isinstance(admin, dict):
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    ref_str = admin.get("token_secret")
+    if not isinstance(ref_str, str) or not ref_str:
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    ref = SecretReference.parse(ref_str)
+    if ref is None:
+        # 레거시 평문 — 회전 시 어디에 넣어야 할지 모호하므로 안전한 폴백 백엔드로.
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    if ref.scheme == "plain":
+        # ``plain:`` 으로 박힌 토큰은 회전 의미 자체가 없음 (config.yaml 평문). 폴백.
+        return _FALLBACK_BACKEND, ADMIN_TOKEN_KEY
+
+    if ref.scheme not in _WRITABLE_BACKENDS:
+        # env 백엔드 — 영속성 없음. 본 스크립트가 영속 저장할 곳을 결정하지 못하므로
+        # 운영자에게 알리고 폴백한다.
+        print(
+            f"[경고] admin_api.token_secret 가 '{ref.scheme}:{ref.name}' 인데, "
+            f"본 스크립트는 영속 백엔드(keyring/file)만 회전합니다. "
+            f"{_FALLBACK_BACKEND} 로 발급하니 필요 시 config.yaml 을 갱신하세요."
+        )
+        return _FALLBACK_BACKEND, ref.name
+
+    return ref.scheme, ref.name
+
+
+def ensure_token(
+    *,
+    force: bool = False,
+    backend: str = _FALLBACK_BACKEND,
+    key: str = ADMIN_TOKEN_KEY,
+) -> tuple[str, bool]:
+    """시크릿 매니저에서 토큰을 읽고 없으면 생성해 저장한다.
+
+    Args:
+        force: 기존 값이 있어도 새 토큰으로 덮어쓴다.
+        backend: ``keyring`` 또는 ``file``. 기본은 ``keyring``.
+        key: 백엔드 내 시크릿 키 이름. 기본 ``admin_api_token``.
 
     Returns:
         (token, created): created=True면 새 토큰을 발급한 것.
     """
     manager = SecretsManager()
-    backend = manager.get_backend("keyring")
-    existing = backend.get(ADMIN_TOKEN_KEY)
+    storage = manager.get_backend(backend)
+    existing = storage.get(key)
     if existing and not force:
         return existing, False
 
     new_token = secrets.token_urlsafe(32)
-    backend.set(ADMIN_TOKEN_KEY, new_token)
+    storage.set(key, new_token)
     return new_token, True
 
 
 def update_env_local(token: str, *, env_path: Path = DEFAULT_ENV_LOCAL_PATH) -> bool:
-    """``web/admin/.env.local`` 의 ``ADMIN_API_TOKEN``/``ADMIN_API_BASE`` 라인을 갱신한다.
+    """``web/admin/.env.local`` 의 ``ADMIN_API_TOKEN``/``ADMIN_API_BASE`` 를 갱신한다.
 
-    파일이 없으면 ``.env.local.example`` 을 시드로 복사한 뒤 토큰을 채운다. 기존 파일은
-    라인 단위로 읽어 동일 키만 교체하고, 누락된 키는 끝에 추가한다.
-
-    Returns:
-        실제로 디스크 내용이 바뀌었는지 여부.
+    실제 로직은 ``simpleclaw.channels.admin_env_local.sync_env_local`` 에 있다 —
+    회전 핸들러와 SoT 를 공유하기 위함.
     """
-    desired = {
-        "ADMIN_API_TOKEN": token,
-        "ADMIN_API_BASE": DEFAULT_ADMIN_BASE,
-    }
-
-    if env_path.exists():
-        original = env_path.read_text(encoding="utf-8")
-        lines = original.splitlines()
-    elif DEFAULT_ENV_EXAMPLE_PATH.exists():
-        original = DEFAULT_ENV_EXAMPLE_PATH.read_text(encoding="utf-8")
-        lines = original.splitlines()
-    else:
-        original = ""
-        lines = []
-
-    seen_keys: set[str] = set()
-    new_lines: list[str] = []
-    for line in lines:
-        stripped = line.lstrip()
-        # 주석/빈 줄은 그대로 보존 — 운영자 메모를 잃지 않는다.
-        if not stripped or stripped.startswith("#"):
-            new_lines.append(line)
-            continue
-        if "=" not in stripped:
-            new_lines.append(line)
-            continue
-        key, _, _ = stripped.partition("=")
-        key = key.strip()
-        if key in desired and key not in seen_keys:
-            new_lines.append(f"{key}={desired[key]}")
-            seen_keys.add(key)
-        else:
-            new_lines.append(line)
-
-    # 미존재 키는 파일 끝에 단순 KEY=VALUE 라인으로 추가한다.
-    for key, value in desired.items():
-        if key in seen_keys:
-            continue
-        if new_lines and new_lines[-1] != "":
-            new_lines.append("")
-        new_lines.append(f"{key}={value}")
-        seen_keys.add(key)
-
-    new_text = "\n".join(new_lines)
-    if not new_text.endswith("\n"):
-        new_text += "\n"
-
-    if new_text == original:
-        return False
-
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(new_text, encoding="utf-8")
-    return True
+    return sync_env_local(token, env_path=env_path)
 
 
 def update_config_yaml(*, config_path: Path = DEFAULT_CONFIG_PATH) -> bool:
@@ -170,9 +196,9 @@ def update_config_yaml(*, config_path: Path = DEFAULT_CONFIG_PATH) -> bool:
         "read_timeout_seconds": 30,
         "request_max_body_kb": 256,
     }
-    for key, value in defaults.items():
-        if key not in admin:
-            admin[key] = value
+    for k, value in defaults.items():
+        if k not in admin:
+            admin[k] = value
             changed = True
 
     cors = admin.get("cors_origins")
@@ -205,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="keyring에 토큰이 있어도 새로 발급해 덮어쓴다",
+        help="시크릿 매니저에 토큰이 있어도 새로 발급해 덮어쓴다",
     )
     parser.add_argument(
         "--print-token",
@@ -222,18 +248,40 @@ def main(argv: list[str] | None = None) -> int:
         default=str(DEFAULT_ENV_LOCAL_PATH),
         help="대상 .env.local 경로 (기본: web/admin/.env.local)",
     )
+    parser.add_argument(
+        "--backend",
+        choices=_WRITABLE_BACKENDS,
+        default=None,
+        help=(
+            "시크릿 저장 백엔드. 기본은 config.yaml 의 admin_api.token_secret 참조를 "
+            "따른다 (없으면 keyring)."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    token, created = ensure_token(force=args.force)
+    config_path = Path(args.config)
+    if args.backend is not None:
+        backend, key = args.backend, ADMIN_TOKEN_KEY
+    else:
+        backend, key = _resolve_token_backend(config_path)
+
+    try:
+        token, created = ensure_token(force=args.force, backend=backend, key=key)
+    except SecretsError as exc:
+        print(f"[오류] 토큰 저장 실패 ({backend}:{key}): {exc}", file=sys.stderr)
+        return 1
     if args.print_token:
         print(token)
         return 0
 
     env_changed = update_env_local(token, env_path=Path(args.env_local))
-    config_changed = update_config_yaml(config_path=Path(args.config))
+    config_changed = update_config_yaml(config_path=config_path)
 
     print("Admin API 셋업 완료:")
-    print(f"  - keyring/{ADMIN_TOKEN_KEY}: {'새로 발급' if created else '기존 토큰 재사용'}")
+    print(
+        f"  - {backend}:{key}: "
+        f"{'새로 발급' if created else '기존 토큰 재사용'}"
+    )
     print(f"  - {args.env_local}: {'갱신' if env_changed else '변경 없음'}")
     print(f"  - {args.config}: {'보강' if config_changed else '변경 없음'}")
     print()

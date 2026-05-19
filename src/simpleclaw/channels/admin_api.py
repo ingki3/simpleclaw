@@ -229,6 +229,11 @@ ReloadCallback = Callable[[str, dict], "Awaitable[None] | None"]
 # 결과는 최소 ``{ok: bool, status_code: int, latency_ms: int}`` 형태이며,
 # 실패 시 ``error: str``을 추가한다. 미지정 시 admin_api 내부 기본 구현이 동작한다.
 ChannelTestCallback = Callable[[str, dict], "Awaitable[dict] | dict"]
+# BIZ-245 — 시크릿 회전 후크: ``(backend, name, new_value)`` 를 받아 외부 동기화(예:
+# ``web/admin/.env.local`` 의 ``ADMIN_API_TOKEN`` 갱신)를 수행한다. 회전 자체는
+# 이미 성공한 상태에서 호출되므로 콜백 실패는 회전을 되돌리지 않으며 (로그만) — 새 토큰
+# 값이 sink 에 도달하지 않아도 데몬 측 백엔드는 이미 갱신된 상태.
+SecretRotationCallback = Callable[[str, str, str], None]
 
 
 class AdminAPIServer:
@@ -261,6 +266,7 @@ class AdminAPIServer:
         suggestion_writer: Callable[[str], None] | None = None,
         dreaming_run_store: DreamingRunStore | None = None,
         dreaming_status_provider: Callable[[], dict] | None = None,
+        secret_rotation_callback: SecretRotationCallback | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -314,6 +320,12 @@ class AdminAPIServer:
         #   미주입 시 status 응답에 None 으로 비워둔다(엔드포인트 자체는 동작).
         self._dreaming_run_store = dreaming_run_store
         self._dreaming_status_provider = dreaming_status_provider
+
+        # BIZ-245 — 시크릿 회전 후 외부 동기화 후크 (예: ``web/admin/.env.local`` 의
+        # ``ADMIN_API_TOKEN`` 갱신). vault 만 회전되고 Next 프록시가 옛 토큰으로 forward
+        # 하는 사고(BIZ-244)를 재발 방지하려면 회전 시점에 sink 도 함께 갱신해야 한다.
+        # 미주입 시 후크 자체가 비활성화되며 회전 응답에는 영향 없음.
+        self._secret_rotation_cb = secret_rotation_callback
 
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
@@ -876,6 +888,21 @@ class AdminAPIServer:
             self._secrets.store(backend, name, value)
         except SecretsError as exc:
             return _json_error(400, str(exc))
+
+        # BIZ-245 — 회전 직후 외부 sink 동기화 (예: ``web/admin/.env.local`` 의
+        # ``ADMIN_API_TOKEN``). 회전은 이미 백엔드에 반영됐으므로 콜백 실패는 ERROR 로그만
+        # 남기고 응답에는 영향을 주지 않는다 — 운영자가 401 보다 더 큰 장애(rotate 실패)
+        # 로 떨어지는 것을 피한다.
+        if self._secret_rotation_cb is not None:
+            try:
+                self._secret_rotation_cb(backend, name, value)
+            except Exception as exc:  # noqa: BLE001 — 콜백 임의 구현
+                logger.warning(
+                    "시크릿 회전 후 동기화 콜백 실패 (%s:%s): %s",
+                    backend,
+                    name,
+                    exc,
+                )
 
         self._metrics.secret_rotations += 1
         # 시크릿 회전의 ``after``는 평문 자체이므로 키 이름과 무관하게 강제 마스킹.
