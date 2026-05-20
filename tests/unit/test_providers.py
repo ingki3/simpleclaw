@@ -348,6 +348,27 @@ class TestGeminiProvider:
         # 문자열 결과가 {"result": ...} 딕셔너리로 감싸져야 한다
         assert part.function_response.response == {"result": "rainy, 18C"}
 
+    def test_convert_messages_tool_result_forwards_tool_call_id(self):
+        """BIZ-249 — Gemini 3.5 는 ``FunctionResponse.id`` 가 직전 턴의
+        ``FunctionCall.id`` 와 매칭되어야 한다. orchestrator 가 tool 결과 메시지에
+        박아 둔 ``tool_call_id`` 가 그대로 ``FunctionResponse.id`` 로 옮겨져야 한다.
+        """
+        provider = GeminiProvider(model="gemini-3.5-flash", api_key="test-key")
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "fc-abc-123",
+                "name": "get_weather",
+                "content": "rainy, 18C",
+            },
+        ]
+        result = provider._convert_messages(messages)
+        assert len(result) == 1
+        part = result[0].parts[0]
+        assert part.function_response is not None
+        assert part.function_response.id == "fc-abc-123"
+        assert part.function_response.name == "get_weather"
+
     def test_convert_messages_raw_content_passthrough(self):
         """_raw_content가 있는 assistant 메시지는 원본 객체를 그대로 통과시켜야 한다.
 
@@ -374,7 +395,8 @@ class TestGeminiProvider:
         """도구가 포함된 send 호출 시, Gemini 응답에서 ToolCall이 올바르게 파싱되어야 한다.
 
         Gemini는 FunctionCall Part를 통해 도구 호출을 반환하며,
-        ID가 없으므로 UUID가 자동 생성되어야 한다.
+        BIZ-249 — 모델이 반환한 ``fc.id`` 가 그대로 ``ToolCall.id`` 로 보존되어
+        다음 턴 FunctionResponse 매칭에 쓰일 수 있어야 한다.
         또한 raw_assistant_message에 원본 content가 보존되어야 한다.
         """
         provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
@@ -382,6 +404,7 @@ class TestGeminiProvider:
         # Gemini 응답 mock: text Part + FunctionCall Part
         fc_part = MagicMock()
         fc_part.function_call = MagicMock()
+        fc_part.function_call.id = "fc-gemini-xyz"
         fc_part.function_call.name = "get_weather"
         fc_part.function_call.args = {"location": "Busan"}
         fc_part.text = None
@@ -414,7 +437,41 @@ class TestGeminiProvider:
         assert isinstance(tc, ToolCall)
         assert tc.name == "get_weather"
         assert tc.arguments == {"location": "Busan"}
-        # Gemini는 tool_call ID를 제공하지 않으므로 UUID가 자동 생성되어야 한다
-        assert tc.id
+        # BIZ-249 — 모델이 반환한 fc.id 가 그대로 보존된다
+        assert tc.id == "fc-gemini-xyz"
         # 멀티턴 대화에서 thought_signature 보존을 위해 원본 content가 저장되어야 한다
         assert result.raw_assistant_message is content
+
+    @pytest.mark.asyncio
+    async def test_send_function_call_fallback_uuid(self):
+        """모델이 fc.id 를 비워서 돌려준 경우(legacy/3 이전) fallback UUID 가 발급되어야 한다."""
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        fc_part = MagicMock()
+        fc_part.function_call = MagicMock()
+        fc_part.function_call.id = None
+        fc_part.function_call.name = "search"
+        fc_part.function_call.args = {}
+        fc_part.text = None
+
+        content = MagicMock()
+        content.parts = [fc_part]
+
+        candidate = MagicMock()
+        candidate.content = content
+
+        mock_response = MagicMock()
+        mock_response.candidates = [candidate]
+        mock_response.usage_metadata = MagicMock(
+            prompt_token_count=5, candidates_token_count=2
+        )
+
+        provider._client.aio.models.generate_content = AsyncMock(
+            return_value=mock_response
+        )
+
+        result = await provider.send("sys", "search?", tools=SAMPLE_TOOLS)
+        assert result.tool_calls is not None
+        tc = result.tool_calls[0]
+        assert tc.id  # fallback UUID
+        assert tc.id != "None"

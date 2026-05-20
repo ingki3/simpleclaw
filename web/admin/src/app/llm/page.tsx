@@ -56,7 +56,7 @@ const MODEL_OPTIONS: Record<string, string[]> = {
     "claude-opus-4-20250514",
   ],
   openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-  gemini: ["gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+  gemini: ["gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
 };
 
 // secrets 메타데이터에서 한 프로바이더의 ``api_key`` 후보를 찾는 휴리스틱.

@@ -16,7 +16,7 @@ llm:
       api_key: "keyring:openai_api_key"
     gemini:
       type: "api"
-      model: "gemini-3-flash-preview"
+      model: "gemini-3.5-flash"
       api_key: "env:GOOGLE_API_KEY"
 
 # BIZ-133 — 운영 데이터(SQLite, 페르소나 라이브 파일, dreaming sidecar 등)는 모두
