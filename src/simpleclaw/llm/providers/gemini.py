@@ -80,13 +80,16 @@ class GeminiProvider(LLMProvider):
             role = msg.get("role", "user")
 
             if role == "tool":
-                # 도구 실행 결과 → FunctionResponse
+                # 도구 실행 결과 → FunctionResponse. BIZ-249: Gemini 3.5 부터 동일
+                # FunctionCall.id 와의 매칭이 필수이므로 orchestrator 가 박아 둔
+                # ``tool_call_id`` 를 그대로 옮긴다. 없으면 None (구버전 호환).
                 contents.append(
                     types.Content(
                         role="user",
                         parts=[
                             types.Part(
                                 function_response=types.FunctionResponse(
+                                    id=msg.get("tool_call_id") or None,
                                     name=msg.get("name", ""),
                                     response={"result": msg.get("content", "")},
                                 )
@@ -100,12 +103,14 @@ class GeminiProvider(LLMProvider):
                 if raw is not None:
                     contents.append(raw)
                 else:
-                    # fallback: raw가 없으면 수동 구성
+                    # fallback: raw가 없으면 수동 구성. BIZ-249 — FunctionCall.id 도
+                    # 같이 보존해 다음 턴 FunctionResponse.id 와 매칭되게 한다.
                     parts = []
                     for tc in msg["tool_calls"]:
                         parts.append(
                             types.Part(
                                 function_call=types.FunctionCall(
+                                    id=tc.get("id") or None,
                                     name=tc["name"],
                                     args=tc.get("arguments", {}),
                                 )
@@ -172,9 +177,13 @@ class GeminiProvider(LLMProvider):
                 for part in candidate.content.parts:
                     if part.function_call:
                         fc = part.function_call
+                        # BIZ-249 — Gemini 3.5 부터 FunctionResponse.id 가 FunctionCall.id
+                        # 와 매칭되어야 하므로, 모델이 반환한 id 가 있으면 그대로 보존하고
+                        # 없을 때만 fallback uuid 를 발급한다.
+                        fc_id = getattr(fc, "id", None) or str(uuid.uuid4())
                         fc_list.append(
                             ToolCall(
-                                id=str(uuid.uuid4()),
+                                id=fc_id,
                                 name=fc.name,
                                 arguments=dict(fc.args) if fc.args else {},
                             )
