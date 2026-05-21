@@ -60,18 +60,34 @@ class ToolCall:
 
 
 @dataclass
+class SystemBlock:
+    """시스템 프롬프트의 한 세그먼트.
+
+    BIZ-252 — Anthropic prompt caching 적용을 위해 시스템 프롬프트를 의미 단위(페르소나,
+    스킬, RAG 등) 로 쪼개기 위한 컨테이너. ``cache=True`` 인 블록 끝에 캐시 경계 마커가
+    부착되어 해당 지점까지의 누적 prefix 가 캐시 키가 된다.
+    Anthropic 외 프로바이더는 ``cache`` 플래그를 무시하고 ``text`` 만 사용한다.
+    """
+    text: str
+    cache: bool = False
+
+
+@dataclass
 class LLMRequest:
     """LLM에 보낼 요청 데이터.
 
     backend_name이 None이면 라우터의 기본 백엔드가 사용된다.
     messages가 주어지면 멀티턴 대화로 전송하고, 없으면 user_message 단일 턴으로 전송한다.
     tools가 주어지면 Native Function Calling 모드로 동작한다.
+    system_blocks 가 주어지면 system_prompt 대신 사용되며, Anthropic 프로바이더는
+    각 블록의 ``cache`` 플래그를 캐시 경계로 해석한다. 그 외 프로바이더는 단일 문자열로 합친다.
     """
     system_prompt: str = ""
     user_message: str = ""
     backend_name: str | None = None
     messages: list[dict] | None = None
     tools: list[ToolDefinition] | None = None
+    system_blocks: list[SystemBlock] | None = None
 
 
 @dataclass

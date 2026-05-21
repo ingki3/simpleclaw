@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from simpleclaw.llm.models import LLMConfigError, LLMRequest, LLMResponse
+from simpleclaw.llm.models import LLMConfigError, LLMRequest, LLMResponse, SystemBlock
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
 
@@ -22,8 +22,17 @@ class MockProvider(LLMProvider):
             )
         )
 
-    async def send(self, system_prompt: str, user_message: str, messages: list[dict] | None = None, tools=None) -> LLMResponse:
-        return await self._mock_send(system_prompt, user_message, messages, tools)
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+        tools=None,
+        system_blocks=None,
+    ) -> LLMResponse:
+        return await self._mock_send(
+            system_prompt, user_message, messages, tools, system_blocks
+        )
 
 
 class TestLLMRouter:
@@ -74,5 +83,20 @@ class TestLLMRouter:
         )
         await router.send(request)
         router._providers["provider_a"]._mock_send.assert_called_once_with(
-            "You are helpful.", "hello", None, None
+            "You are helpful.", "hello", None, None, None
+        )
+
+    @pytest.mark.asyncio
+    async def test_system_blocks_passed_through(self, router):
+        """BIZ-252 — LLMRequest.system_blocks 가 프로바이더 send() 까지 전달되어야
+        Anthropic prompt caching 마커가 부착될 수 있다."""
+        blocks = [SystemBlock(text="persona", cache=True)]
+        request = LLMRequest(
+            system_prompt="legacy fallback",
+            user_message="hello",
+            system_blocks=blocks,
+        )
+        await router.send(request)
+        router._providers["provider_a"]._mock_send.assert_called_once_with(
+            "legacy fallback", "hello", None, None, blocks
         )
