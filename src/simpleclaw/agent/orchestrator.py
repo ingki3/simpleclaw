@@ -64,6 +64,11 @@ from simpleclaw.agent.builtin_tools import (
     handle_web_fetch,
 )
 from simpleclaw.agent.commands import try_cron_command, try_recipe_command
+from simpleclaw.agent.file_mutation_tracker import (
+    FileMutationTracker,
+    TrackedRoot,
+    format_footer,
+)
 from simpleclaw.agent.tool_schemas import build_tool_definitions
 
 if TYPE_CHECKING:
@@ -224,6 +229,15 @@ _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE = (
     "agent-browser, cli, or another skill."
 )
 
+# BIZ-251 — verifier footer 가 "변경 없음" 마커를 명시적으로 부착해야 하는
+# tool 이름. 이들 도구는 디스크/외부 상태를 바꿀 *수* 있으므로, 호출 직후
+# diff 가 비었다는 사실 자체가 LLM 의 silent-fail/환각 인지에 가치가 있다.
+# read-only 도구(web_fetch, skill_docs, cron list, file_read) 는 빈 diff 가
+# 정상 경로이므로 footer 를 생략해 토큰을 절약한다.
+_FILE_MUTATING_TOOLS = frozenset(
+    {"file_write", "file_manage", "execute_skill", "cli"}
+)
+
 
 class AgentOrchestrator:
     """페르소나 + 스킬 + 대화 이력 + LLM을 조합하는 중앙 오케스트레이터.
@@ -347,6 +361,24 @@ class AgentOrchestrator:
         # 관찰된 최악(SPA 5건) 의 약 1.5배. None 으로 두면 기본 60s 유지.
         self._agent_browser_timeout: int = int(
             web_fetch_cfg.get("agent_browser_command_timeout", 180)
+        )
+
+        # BIZ-251: per-turn file mutation verifier footer.
+        # 워크스페이스는 재귀 walk, 페르소나 dir 은 명시 파일 화이트리스트
+        # (AGENT.md / USER.md / MEMORY.md) 만 추적해 SQLite/dreaming 부산물이
+        # footer 노이즈로 새는 것을 차단한다. ``~/.simpleclaw/`` 가 persona
+        # local_dir 인 BIZ-133 경로 가정 — 화이트리스트면 overlap 도 안전.
+        persona_local = Path(
+            self._persona_config["local_dir"]
+        ).expanduser()
+        persona_filenames = tuple(
+            f["name"] for f in self._persona_config["files"] if "name" in f
+        )
+        self._mutation_tracker = FileMutationTracker(
+            [
+                TrackedRoot(".agent/workspace", self._workspace_dir),
+                TrackedRoot(".agent", persona_local, files=persona_filenames),
+            ]
         )
 
         logger.info(
@@ -597,6 +629,13 @@ class AgentOrchestrator:
         # ``_AGENT_BROWSER_PER_TURN_CALL_CAP`` 초과 시 subprocess 진입 전에 합성 응답.
         agent_browser_call_count = 0
 
+        # BIZ-251 — per-turn file mutation verifier footer.
+        # 매 iteration 의 tool call 직후, 워크스페이스/페르소나 디스크 상태를
+        # diff 하여 마지막 tool result 메시지에 footer 로 부착한다. 다음
+        # iteration 의 LLM 입력에서 디스크 사실(SoT) 을 강제 노출함으로써
+        # "파일 저장했다" 류 환각과 스킬 silent-fail 을 잡는다.
+        prev_snapshot = self._mutation_tracker.snapshot()
+
         for i in range(self._max_tool_iterations):
             try:
                 request = LLMRequest(
@@ -677,6 +716,41 @@ class AgentOrchestrator:
                     "content": sanitized[:3000],
                 })
                 logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
+
+            # BIZ-251 — verifier footer.
+            # iteration 안의 모든 tool call 직후 워크스페이스/페르소나 dir 의
+            # 디스크 사실을 캡처해 마지막 tool result 메시지에 부착한다.
+            # 다음 iteration 의 LLM 컨텍스트가 이전 step 에서 *실제로*
+            # 무엇이 디스크에 쓰였는지를 SoT 로 본다.
+            #
+            # 변경 없음 + 파일-쓰기 도구 호출이 *있었다* → 명시적 "none"
+            # 마커를 부착해 LLM 이 silent-fail/환각을 다음 step 에서 인지
+            # 하도록 한다. 어느 쪽도 아니면 footer 를 생략해 토큰을 절약
+            # 한다 (DoD: "변경 없음 시 footer 생략").
+            try:
+                new_snapshot = self._mutation_tracker.snapshot(
+                    previous=prev_snapshot,
+                )
+                file_diff = self._mutation_tracker.diff(
+                    prev_snapshot, new_snapshot,
+                )
+                footer = format_footer(file_diff)
+                iteration_had_mutating_call = any(
+                    tc.name in _FILE_MUTATING_TOOLS
+                    for tc in response.tool_calls
+                )
+                if not footer and iteration_had_mutating_call:
+                    footer = "[file changes this turn: none]"
+                if footer and messages and messages[-1].get("role") == "tool":
+                    messages[-1]["content"] = (
+                        messages[-1]["content"] + "\n\n" + footer
+                    )
+                prev_snapshot = new_snapshot
+            except Exception as exc:  # noqa: BLE001 — verifier 는 best-effort
+                # 추적기는 보조 신호이므로 실패해도 turn 을 막지 않는다.
+                logger.warning(
+                    "FileMutationTracker footer 부착 실패: %s", exc,
+                )
 
         # 예산 소진 — tools=None으로 최종 LLM 호출 (텍스트 강제)
         # BIZ-160 — 사용된 도구 시퀀스를 한 줄로 박제. 운영자가 logs 검색으로
