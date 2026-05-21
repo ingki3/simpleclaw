@@ -49,9 +49,10 @@
 **참고:** Hermes Agent (`tools/approval.py`, `tools/environments/local.py`, `run_agent.py`)
 
 #### 3.5.1. 위험 명령 감지 (Dangerous Command Guard)
-- 모든 subprocess 명령 실행 전, 35개 이상의 정규식 패턴으로 위험 명령을 감지하여 차단.
-- 대상 카테고리: 파일 삭제(`rm -rf`), Git 파괴(`push --force`, `reset --hard`), DB 파괴(`DROP TABLE`), 권한 변경(`chmod 777`), pipe-to-shell(`curl|bash`), 시스템 명령(`reboot`, `shutdown`) 등.
+- 모든 subprocess 명령 실행 전, 45개 이상의 정규식 패턴으로 위험 명령을 감지하여 차단.
+- 대상 카테고리: 파일 삭제(`rm -rf`, `find -exec(?:dir)? rm`, `find -delete`), Git 파괴(`push --force`, `reset --hard`), DB 파괴(`DROP TABLE`), 권한 변경(`chmod 777`), 권한 상승 우회(`sudo -S/-A`, `sudo --stdin/--askpass`, packed short-flag `-nS`), 시스템 설정 변경(`/etc/`, macOS `/private/etc/` 미러), pipe-to-shell(`curl|bash`), 시스템 명령(`reboot`, `shutdown`) 등.
 - ANSI 이스케이프 제거, 유니코드 NFKC 정규화, null 바이트 제거로 우회 방지.
+- macOS 의 `/etc → /private/etc` symlink 미러는 `_SYSTEM_CONFIG_PATH` 공유 fragment 로 한꺼번에 커버 (Hermes Agent PR #26829).
 - `config.yaml`의 `security.command_guard.allowlist`에 패턴 키를 등록하여 특정 명령을 예외 처리.
 - 적용 범위: Agent 명령 실행(`agent.py`), Recipe 단계 실행(`recipes/executor.py`).
 
@@ -77,6 +78,14 @@
 #### 3.5.5. 스마트 Python 경로 감지
 - `_fix_python_path()` 함수가 스킬 스크립트 근처의 venv를 자동 탐지하여 올바른 Python 인터프리터로 실행.
 - 스킬별 독립 가상환경 지원을 별도 설정 없이 자동화.
+
+#### 3.5.6. Tool 에러/출력 sanitization (Prompt-Injection 방어)
+- 도구가 던진 stderr / Exception / 외부 응답이 ReAct Observation 으로 LLM 컨텍스트에 재주입되기 직전에 구조적 framing 토큰을 제거하는 4번째 보안 레이어. (Hermes Agent PR #26823 적용.)
+- 제거 대상: XML 역할 태그(`<tool_call>`, `<assistant>`, `<system>`, `<user>` 등), ChatML separator(`<|im_start|>`, `<|im_end|>`), CDATA 섹션, 마크다운 코드 펜스, ANSI 이스케이프, C0 제어 문자(`\t`, `\n`, `\r` 제외).
+- 길이 캡: 에러 envelope 은 `TOOL_ERROR_MAX_LEN`(=2000) 자로 잘라 `[TOOL_ERROR] ...` prefix 부착.
+- Instruction-hijack 패턴 감지: `Ignore previous instructions` / `Disregard everything above` 류 패턴이 발견되면 `[SUSPICIOUS_INPUT]` 경고 prefix 를 추가 (원문은 보존). 성공 출력 경로에서는 false positive 회피를 위해 flag 부착 생략.
+- 적용 지점: `orchestrator._tool_loop` 가 도구 결과를 `role=tool` 메시지로 append 하는 직전(`sanitize_tool_output`), 그리고 subprocess stderr 가 에러 envelope 으로 포장될 때(`sanitize_tool_error`).
+- 모듈: `simpleclaw/security/sanitize.py` — `sanitize_tool_error` / `sanitize_tool_output` 두 변형 제공.
 
 ### 3.6. 스케줄링, 이벤트 트리거 및 비동기 워크플로우
 **참고:** Hermes Agent / Paperclip
@@ -119,7 +128,7 @@
 - **메신저 채널 보안 접근 제어**: 복잡한 로그인 연동을 배제하고 설정 파일 내 지정된 소유자의 텔레그램 식별자(User ID / Chat ID)를 화이트리스트 방식으로 매칭. 비인가 접근 시도는 패킷 선에서 즉시 DROP.
 - **에이전트 제어 및 명시적 보안 (Permission Scope)**: 복잡한 내부 통신 프로토콜 규격(gRPC 등) 대신 범용성 높은 **표준 JSON 규격 텍스트** 입출력을 채택. 메인이 서브를 호출할 땐 무조건 권한 정보(허용 디스크 범위, Network IO 활성 상태) 파라미터를 주입하여 컨테이너 없이도 소프트-샌드박스를 강제.
 - **민감 정보 관리 (Secret Management)**: 환경 변수(`.env`) 또는 자체 보안 관리 도구(Vault)를 이용해 토큰과 API 키를 관리. 파일 저장 접근 권한 통제를 병행하여 평문 유출 차단. **subprocess 실행 시 API 키, 토큰 등 민감 환경변수를 자동 스트리핑**하여 스킬/레시피 스크립트에 시크릿 노출 차단.
-- **명령 실행 안전성 (Command Execution Safety)**: LLM이 생성한 셸 명령을 실행하기 전 **패턴 기반 위험 명령 감지(35개+ regex)**로 차단. 모든 subprocess는 **프로세스 그룹 격리(`os.setsid`)**로 실행하여 timeout 시 좀비 프로세스 방지. Hermes Agent의 보안 모델을 참고.
+- **명령 실행 안전성 (Command Execution Safety)**: LLM이 생성한 셸 명령을 실행하기 전 **패턴 기반 위험 명령 감지(45개+ regex)**로 차단. 모든 subprocess는 **프로세스 그룹 격리(`os.setsid`)**로 실행하여 timeout 시 좀비 프로세스 방지. 도구 stderr / Exception 은 LLM 다음 턴에 들어가기 전에 **prompt-injection sanitization** 으로 framing 토큰 제거(§3.5.6). Hermes Agent v0.14.0 의 보안 모델(PR #23736, #26823, #26829) 을 참고.
 - **로깅 및 가시성 (Logging & Telemetry)**: 실행 결과와 에이전트의 Reasoning(사고) 과정을 `.logs/execution_YYYYMMDD.log` 형태로 아카이빙. CLI 또는 웹 대시보드 환경에서 토큰 소비량, 에러 발생 빈도 등 가시적 지표 확인 체계 지원.
 
 ## 5. 아키텍처 및 참고 사례 (References)

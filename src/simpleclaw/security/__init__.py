@@ -5,11 +5,13 @@
 2. guard: 위험한 셸 명령어를 패턴 기반으로 탐지·차단
 3. process: 프로세스 그룹 격리 및 좀비 프로세스 방지
 4. secrets: API 키/토큰을 OS 자격 증명 저장소(keyring) 또는 암호화 파일에 보관
+5. sanitize: 도구 에러/출력 문자열에서 prompt-injection framing 토큰 제거
 """
 
 from simpleclaw.security.env_filter import filter_env
 from simpleclaw.security.guard import CommandGuard, DangerousCommandError
 from simpleclaw.security.process import KillResult, get_preexec_fn, kill_process_group
+from simpleclaw.security.sanitize import sanitize_tool_error, sanitize_tool_output
 from simpleclaw.security.secrets import (
     EncryptedFileBackend,
     EnvBackend,
@@ -37,5 +39,7 @@ __all__ = [
     "get_preexec_fn",
     "kill_process_group",
     "resolve_secret",
+    "sanitize_tool_error",
+    "sanitize_tool_output",
     "set_default_manager",
 ]
