@@ -83,6 +83,71 @@ class TestAgentOrchestrator:
         prompt = orchestrator._build_system_prompt()
         assert "SimpleClaw" in prompt
 
+    # -- BIZ-252 prompt caching: segmented system blocks --
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_build_system_blocks_emits_cache_boundaries(self, config_file):
+        """페르소나·스킬 끝에만 cache=True 가 부착되고, RAG·ReAct 는 캐시 마커 뒤에 있어야 한다."""
+        orchestrator = AgentOrchestrator(config_file)
+        # 스킬 목록을 비워두지 않도록 합성 텍스트 주입 — 빈 스킬은 블록 자체가 빠지므로
+        # 캐시 마커 개수가 줄어든다(설계 의도).
+        orchestrator._skills_prompt = "## Skills\n\n- placeholder"
+
+        blocks = orchestrator._build_system_blocks(rag_context="## RAG\n관련 과거")
+
+        # 페르소나, 스킬, RAG, ReAct 4개 블록
+        assert len(blocks) == 4
+        # cache=True 는 처음 두 블록(페르소나, 스킬)뿐 — DoD §"두 지점에 마커"
+        cached = [i for i, b in enumerate(blocks) if b.cache]
+        assert cached == [0, 1]
+        # 페르소나에 AGENT.md 내용이 들어가야 한다
+        assert "SimpleClaw" in blocks[0].text
+        # 스킬 블록
+        assert "placeholder" in blocks[1].text
+        # RAG 블록은 캐시 마커 뒤에 위치하고 cache=False (매번 변하므로)
+        assert "관련 과거" in blocks[2].text
+        assert blocks[2].cache is False
+        # ReAct 지시문이 마지막 블록에 들어가야 한다
+        assert blocks[3].cache is False
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_flatten_blocks_byte_identical_to_legacy_prompt(self, config_file):
+        """SystemBlock 합치기는 기존 ``_build_system_prompt`` 결과와 byte-identical 해야
+        한다 — 비 Claude 프로바이더 호환성 보장."""
+        orchestrator = AgentOrchestrator(config_file)
+        orchestrator._skills_prompt = "## Skills\n\n- placeholder"
+
+        legacy = orchestrator._build_system_prompt(rag_context="rag-ctx")
+        blocks = orchestrator._build_system_blocks(rag_context="rag-ctx")
+        flattened = orchestrator._flatten_system_blocks(blocks)
+        assert flattened == legacy
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_build_system_blocks_prefix_deterministic(self, config_file):
+        """페르소나·스킬 텍스트가 같으면 캐시 prefix 도 byte-identical 해야 한다.
+
+        SimpleClaw Lazy-Loading 정책상 매 메시지마다 디스크에서 재로드되므로,
+        동일 입력 → 동일 prefix 해시가 보장되어야 Anthropic 캐시가 hit 된다.
+        """
+        import hashlib
+
+        orchestrator = AgentOrchestrator(config_file)
+        orchestrator._skills_prompt = "## Skills\n\n- placeholder"
+
+        def _prefix_hash(rag: str) -> str:
+            blocks = orchestrator._build_system_blocks(rag_context=rag)
+            cached_text = "".join(b.text for b in blocks if b.cache)
+            return hashlib.sha256(cached_text.encode("utf-8")).hexdigest()
+
+        # 동일 페르소나·스킬에서 RAG 만 바꿔도 캐시 prefix 해시는 변하지 않아야 한다.
+        assert _prefix_hash("") == _prefix_hash("some rag context")
+        assert _prefix_hash("other rag") == _prefix_hash("")
+
+        # 페르소나가 바뀌면 prefix 해시는 변해야 한다 (캐시 자동 무효화 — DoD §3)
+        baseline = _prefix_hash("")
+        orchestrator._persona_prompt = orchestrator._persona_prompt + "\n변경됨"
+        assert _prefix_hash("") != baseline
+
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
     async def test_process_message_text_response(self, config_file):

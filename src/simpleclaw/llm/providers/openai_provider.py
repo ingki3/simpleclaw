@@ -21,10 +21,11 @@ from simpleclaw.llm.models import (
     LLMAuthError,
     LLMProviderError,
     LLMResponse,
+    SystemBlock,
     ToolCall,
     ToolDefinition,
 )
-from simpleclaw.llm.providers.base import LLMProvider
+from simpleclaw.llm.providers.base import LLMProvider, flatten_system_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +111,16 @@ class OpenAIProvider(LLMProvider):
         user_message: str,
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
+        system_blocks: list[SystemBlock] | None = None,
     ) -> LLMResponse:
         """Chat Completions API로 메시지를 전송하고 응답을 반환한다."""
+        # BIZ-252 — OpenAI 는 prompt caching 마커가 없는 단일 문자열만 받으므로
+        # system_blocks 가 있으면 캐시 플래그를 무시하고 텍스트만 이어 붙인다.
+        effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
         # 시스템 프롬프트를 맨 앞에 배치한 뒤 대화 메시지를 이어붙임
         msg_list: list[dict] = []
-        if system_prompt:
-            msg_list.append({"role": "system", "content": system_prompt})
+        if effective_system:
+            msg_list.append({"role": "system", "content": effective_system})
         if messages is not None:
             msg_list.extend(self._convert_messages(messages))
         else:

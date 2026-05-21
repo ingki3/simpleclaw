@@ -21,8 +21,9 @@ from simpleclaw.llm.models import (
     LLMProviderError,
     LLMResponse,
     LLMTimeoutError,
+    SystemBlock,
 )
-from simpleclaw.llm.providers.base import LLMProvider
+from simpleclaw.llm.providers.base import LLMProvider, flatten_system_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +59,12 @@ class CLIProvider(LLMProvider):
         user_message: str,
         messages: list[dict] | None = None,
         tools: list | None = None,
+        system_blocks: list[SystemBlock] | None = None,
     ) -> LLMResponse:
         """CLI 도구에 메시지를 stdin으로 전달하고 stdout 응답을 반환한다.
 
-        NOTE: CLI 프로바이더는 function calling을 지원하지 않으므로 tools는 무시된다.
+        NOTE: CLI 프로바이더는 function calling 과 prompt caching 마커를 지원하지 않는다.
+        ``system_blocks`` 가 주어지면 텍스트만 이어 붙여 ``system_prompt`` 처럼 사용한다.
         """
         # 실행 전 바이너리 존재 여부를 확인하여 명확한 에러 메시지 제공
         if not shutil.which(self._command):
@@ -72,17 +75,19 @@ class CLIProvider(LLMProvider):
 
         cmd_args = [self._command, *self._args]
 
+        effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
+
         # 멀티턴 대화를 단일 텍스트로 직렬화하여 stdin에 전달
         if messages is not None:
             parts = []
-            if system_prompt:
-                parts.append(f"System: {system_prompt}")
+            if effective_system:
+                parts.append(f"System: {effective_system}")
             for msg in messages:
                 role = msg["role"].capitalize()
                 parts.append(f"{role}: {msg['content']}")
             input_text = "\n\n".join(parts)
-        elif system_prompt:
-            input_text = f"System: {system_prompt}\n\nUser: {user_message}"
+        elif effective_system:
+            input_text = f"System: {effective_system}\n\nUser: {user_message}"
         else:
             input_text = user_message
 
