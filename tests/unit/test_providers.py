@@ -5,7 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from simpleclaw.llm.models import LLMAuthError, LLMProviderError, ToolCall, ToolDefinition
+from simpleclaw.llm.models import (
+    LLMAuthError,
+    LLMProviderError,
+    SystemBlock,
+    ToolCall,
+    ToolDefinition,
+)
+from simpleclaw.llm.providers.base import flatten_system_blocks
 from simpleclaw.llm.providers.claude import ClaudeProvider
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 from simpleclaw.llm.providers.gemini import GeminiProvider
@@ -167,6 +174,153 @@ class TestClaudeProvider:
         assert tc.id == "toolu_abc"
         assert tc.name == "get_weather"
         assert tc.arguments == {"location": "Seoul"}
+
+    # -- BIZ-252 prompt caching tests --
+
+    def test_build_system_param_string_fallback(self):
+        """system_blocks 가 없으면 기존처럼 단일 문자열을 반환해야 한다."""
+        assert ClaudeProvider._build_system_param(None, "hello") == "hello"
+        # 빈 문자열은 None 으로 변환 (Anthropic 은 system 파라미터를 생략하면 안 보냄)
+        assert ClaudeProvider._build_system_param(None, "") is None
+
+    def test_build_system_param_with_cache_markers(self):
+        """cache=True 블록 끝에 ttl=1h ephemeral cache_control 이 부착되어야 한다."""
+        blocks = [
+            SystemBlock(text="persona text", cache=True),
+            SystemBlock(text="skills text", cache=True),
+            SystemBlock(text="rag text", cache=False),
+        ]
+        result = ClaudeProvider._build_system_param(blocks, "")
+        assert isinstance(result, list)
+        assert len(result) == 3
+        assert result[0] == {
+            "type": "text",
+            "text": "persona text",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+        assert result[1] == {
+            "type": "text",
+            "text": "skills text",
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+        # cache=False 블록에는 cache_control 이 없어야 한다 (RAG 등 가변 컨텍스트 보호)
+        assert result[2] == {"type": "text", "text": "rag text"}
+        assert "cache_control" not in result[2]
+
+    def test_build_system_param_empty_blocks_skipped(self):
+        """빈 텍스트 블록은 API 요청에서 제외되어야 한다."""
+        blocks = [
+            SystemBlock(text="", cache=True),
+            SystemBlock(text="real text", cache=True),
+        ]
+        result = ClaudeProvider._build_system_param(blocks, "")
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["text"] == "real text"
+
+    @pytest.mark.asyncio
+    async def test_send_with_system_blocks_emits_cache_control(self):
+        """system_blocks 가 주어지면 Anthropic 호출 페이로드에 cache_control 마커와
+        extended-cache-ttl beta 헤더가 동시에 들어가야 한다."""
+        provider = ClaudeProvider(model="claude-sonnet-4-20250514", api_key="test-key")
+
+        mock_message = MagicMock()
+        text_block = MagicMock(type="text", text="ok")
+        mock_message.content = [text_block]
+        mock_message.usage = MagicMock(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=2048,
+            cache_read_input_tokens=0,
+        )
+        create = AsyncMock(return_value=mock_message)
+        provider._client.messages.create = create
+
+        blocks = [
+            SystemBlock(text="persona", cache=True),
+            SystemBlock(text="skills", cache=True),
+            SystemBlock(text="react", cache=False),
+        ]
+        result = await provider.send(
+            system_prompt="",
+            user_message="hi",
+            system_blocks=blocks,
+        )
+
+        # call_args 의 kwargs 에서 페이로드 확인
+        kwargs = create.call_args.kwargs
+        assert isinstance(kwargs["system"], list)
+        assert kwargs["system"][0]["cache_control"]["ttl"] == "1h"
+        assert kwargs["system"][1]["cache_control"]["ttl"] == "1h"
+        assert "cache_control" not in kwargs["system"][2]
+        # 1h TTL 은 베타 surface — 헤더 부재 시 API 가 400 으로 거절한다.
+        assert kwargs["extra_headers"]["anthropic-beta"] == "extended-cache-ttl-2025-04-11"
+        # usage 에 cache 메트릭이 노출되어야 운영자가 hit rate 를 추적할 수 있다
+        assert result.usage["cache_creation_input_tokens"] == 2048
+        assert result.usage["cache_read_input_tokens"] == 0
+
+    @pytest.mark.asyncio
+    async def test_send_without_cache_blocks_omits_beta_header(self):
+        """캐시 마커가 없으면 베타 헤더를 보내지 않아야 한다 (불필요한 surface 노출 방지)."""
+        provider = ClaudeProvider(model="claude-sonnet-4-20250514", api_key="test-key")
+
+        mock_message = MagicMock()
+        mock_message.content = [MagicMock(type="text", text="ok")]
+        mock_message.usage = MagicMock(input_tokens=5, output_tokens=1)
+        create = AsyncMock(return_value=mock_message)
+        provider._client.messages.create = create
+
+        await provider.send("plain system", "hi")
+        kwargs = create.call_args.kwargs
+        assert "extra_headers" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_send_cache_read_metric_exposed(self):
+        """후속 호출에서 cache_read_input_tokens 가 응답 usage 로 전파되어야 한다."""
+        provider = ClaudeProvider(model="claude-sonnet-4-20250514", api_key="test-key")
+
+        mock_message = MagicMock()
+        mock_message.content = [MagicMock(type="text", text="ok")]
+        mock_message.usage = MagicMock(
+            input_tokens=10,
+            output_tokens=2,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=2048,
+        )
+        provider._client.messages.create = AsyncMock(return_value=mock_message)
+
+        result = await provider.send(
+            "",
+            "hi",
+            system_blocks=[SystemBlock(text="persona", cache=True)],
+        )
+        assert result.usage["cache_read_input_tokens"] == 2048
+        assert result.usage["cache_creation_input_tokens"] == 0
+
+
+class TestFlattenSystemBlocks:
+    """BIZ-252 — 비 Claude 프로바이더가 사용하는 공용 평탄화 헬퍼."""
+
+    def test_empty_blocks_returns_fallback(self):
+        assert flatten_system_blocks(None, fallback="orig") == "orig"
+        assert flatten_system_blocks([], fallback="orig") == "orig"
+
+    def test_blocks_joined_with_separator(self):
+        blocks = [SystemBlock(text="A"), SystemBlock(text="B")]
+        assert flatten_system_blocks(blocks) == "A\n\n---\n\nB"
+
+    def test_empty_text_blocks_skipped(self):
+        blocks = [
+            SystemBlock(text="A"),
+            SystemBlock(text=""),
+            SystemBlock(text="C"),
+        ]
+        assert flatten_system_blocks(blocks) == "A\n\n---\n\nC"
+
+    def test_cache_flag_ignored_by_flatten(self):
+        """평탄화 경로는 cache 플래그를 무시한다 (텍스트만 사용)."""
+        blocks = [SystemBlock(text="A", cache=True), SystemBlock(text="B", cache=False)]
+        assert flatten_system_blocks(blocks) == "A\n\n---\n\nB"
 
 
 class TestOpenAIProvider:

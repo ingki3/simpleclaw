@@ -27,7 +27,7 @@ from simpleclaw.config import (
     load_persona_config,
     load_recipes_config,
 )
-from simpleclaw.llm.models import LLMRequest, ToolCall
+from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.router import create_router
 from simpleclaw.logging.trace_context import trace_scope
 from simpleclaw.memory.conversation_store import ConversationStore
@@ -612,8 +612,11 @@ class AgentOrchestrator:
                 text, exclude_contents=recent_contents,
             )
 
-        # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과
-        system_prompt = self._build_system_prompt(rag_context=rag_context)
+        # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
+        # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
+        # cache 경계: 페르소나 끝 / 스킬 목록 끝. ReAct 지시문과 RAG 블록은 마커 뒤에 둔다.
+        system_blocks = self._build_system_blocks(rag_context=rag_context)
+        system_prompt = self._flatten_system_blocks(system_blocks)
         tools = build_tool_definitions(
             self._skills,
             cron_available=self._cron_scheduler is not None,
@@ -643,6 +646,7 @@ class AgentOrchestrator:
                     user_message=user_content,
                     messages=messages,
                     tools=tools,
+                    system_blocks=system_blocks,
                 )
                 response = await self._router.send(request)
             except Exception as exc:
@@ -767,6 +771,7 @@ class AgentOrchestrator:
                 system_prompt=system_prompt,
                 user_message=user_content,
                 messages=messages,
+                system_blocks=system_blocks,
             )
             # BIZ-141 — provider 측 hang 으로 메시지가 영구 침묵하는 사고를 막는
             # 방어선. 빈 응답(BIZ-160)·예외와 별개로 hang 클래스를 처리.
@@ -854,30 +859,60 @@ class AgentOrchestrator:
     # Prompt building
     # ------------------------------------------------------------------
 
-    def _build_system_prompt(self, rag_context: str = "") -> str:
-        """캐시된 페르소나·스킬 텍스트와(선택) RAG 회상 블록을 조합하여 시스템 프롬프트를 반환한다.
+    # BIZ-252 — Anthropic prompt caching 경계.
+    # 시스템 프롬프트를 (persona, skills, rag, react) 세그먼트로 쪼개되,
+    # 각 세그먼트의 trailing separator 를 텍스트에 포함시켜 단순 합치기(``"".join``)가
+    # 기존 ``"\n\n---\n\n".join(parts)`` 와 byte-identical 한 결과를 내도록 한다.
+    # 이 덕분에 Claude 가 content blocks 리스트로 받아도, 비-Claude 프로바이더가
+    # 평탄화 문자열로 받아도 동일한 prefix 가 노출된다.
+    _SYSTEM_BLOCK_SEPARATOR = "\n\n---\n\n"
 
-        도구 정의는 API의 tools 파라미터로 별도 전달되므로,
-        여기서는 페르소나 + 스킬 개요 + 시맨틱 회상 + 간결한 도구 사용 안내만 포함한다.
+    def _build_system_blocks(self, rag_context: str = "") -> list[SystemBlock]:
+        """페르소나·스킬·RAG·ReAct 지시문을 세그먼트(SystemBlock)로 반환한다.
+
+        캐시 경계:
+          - 1차: 페르소나 끝 (AGENT.md + USER.md + MEMORY.md)
+          - 2차: 스킬 목록 끝
+        ReAct 지시문과 RAG 블록은 캐시 마커 뒤에 둔다 (RAG 는 요청마다 변하므로
+        무효화 회피, ReAct 는 작아 별도 마커가 불필요).
 
         Args:
             rag_context: ``_retrieve_relevant_context()`` 결과. 빈 문자열이면 블록을 생략한다.
         """
-        parts = []
-
+        # (text, cache) 쌍을 모은 뒤 마지막 블록을 제외한 모든 블록 끝에 separator 를 부착한다.
+        segments: list[tuple[str, bool]] = []
         if self._persona_prompt:
-            parts.append(self._persona_prompt)
-
+            segments.append((self._persona_prompt, True))
         if self._skills_prompt:
-            parts.append(self._skills_prompt)
-
-        # RAG 블록은 페르소나 다음, 도구 안내 직전에 위치 — 모델이 회상 정보를 응답 근거로 활용
+            segments.append((self._skills_prompt, True))
         if rag_context:
-            parts.append(rag_context)
+            segments.append((rag_context, False))
+        segments.append((_TOOL_USAGE_INSTRUCTION, False))
 
-        parts.append(_TOOL_USAGE_INSTRUCTION)
+        blocks: list[SystemBlock] = []
+        last = len(segments) - 1
+        for idx, (text, cache) in enumerate(segments):
+            suffix = self._SYSTEM_BLOCK_SEPARATOR if idx < last else ""
+            blocks.append(SystemBlock(text=text + suffix, cache=cache))
+        return blocks
 
-        return "\n\n---\n\n".join(parts)
+    @staticmethod
+    def _flatten_system_blocks(blocks: list[SystemBlock]) -> str:
+        """``_build_system_blocks`` 결과를 단일 문자열로 합친다.
+
+        각 블록 텍스트가 자체 separator 를 포함하므로 빈 문자열로 합쳐도
+        기존 ``_build_system_prompt`` 와 byte-identical 한 결과를 낸다.
+        """
+        return "".join(b.text for b in blocks)
+
+    def _build_system_prompt(self, rag_context: str = "") -> str:
+        """레거시 단일-문자열 system prompt API.
+
+        ``_build_system_blocks`` + ``_flatten_system_blocks`` 를 합친 얇은 래퍼.
+        BIZ-252 이전 호출자(tests, docs) 호환용. 신규 호출 경로는
+        ``_build_system_blocks`` 를 사용해 prompt caching 경계를 보존해야 한다.
+        """
+        return self._flatten_system_blocks(self._build_system_blocks(rag_context=rag_context))
 
     async def _retrieve_relevant_context(
         self,

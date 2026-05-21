@@ -22,10 +22,11 @@ from simpleclaw.llm.models import (
     LLMAuthError,
     LLMProviderError,
     LLMResponse,
+    SystemBlock,
     ToolCall,
     ToolDefinition,
 )
-from simpleclaw.llm.providers.base import LLMProvider
+from simpleclaw.llm.providers.base import LLMProvider, flatten_system_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +137,15 @@ class GeminiProvider(LLMProvider):
         user_message: str,
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
+        system_blocks: list[SystemBlock] | None = None,
     ) -> LLMResponse:
         """Gemini API로 메시지를 전송하고 응답을 반환한다."""
+        # BIZ-252 — Gemini 는 prompt caching 마커가 없는 단일 문자열만 받으므로
+        # system_blocks 가 있으면 텍스트만 이어 붙인다.
+        effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
         try:
             config = types.GenerateContentConfig(
-                system_instruction=system_prompt if system_prompt else None,
+                system_instruction=effective_system if effective_system else None,
             )
 
             # 도구 정의가 있으면 config에 추가
