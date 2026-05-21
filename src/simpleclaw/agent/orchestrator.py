@@ -47,6 +47,10 @@ from simpleclaw.security import (
     get_preexec_fn,
     kill_process_group,
 )
+from simpleclaw.security.sanitize import (
+    sanitize_tool_error,
+    sanitize_tool_output,
+)
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import SkillDefinition
@@ -661,13 +665,18 @@ class AgentOrchestrator:
                         continue
 
                 result = await self._dispatch_tool_call(tc)
+                # PRD §3.5.6 — 다음 턴의 ``role=tool`` 메시지로 들어가기
+                # 직전에 구조적 framing 토큰 / 제어문자를 제거한다. 도구
+                # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
+                # 출력 변형(envelope 없음) 만 사용.
+                sanitized = sanitize_tool_output(result)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "name": tc.name,
-                    "content": result[:3000],
+                    "content": sanitized[:3000],
                 })
-                logger.info("Tool result: %s → %d chars", tc.name, len(result))
+                logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
 
         # 예산 소진 — tools=None으로 최종 LLM 호출 (텍스트 강제)
         # BIZ-160 — 사용된 도구 시퀀스를 한 줄로 박제. 운영자가 logs 검색으로
@@ -1104,7 +1113,12 @@ class AgentOrchestrator:
                     "Skill command failed (exit %d): %s",
                     proc.returncode, error,
                 )
-                return f"Command failed (exit {proc.returncode}): {error[:500]}"
+                # subprocess 의 stderr 는 외부 도구/원격 응답을 그대로 전달할
+                # 수 있어 prompt-injection 가장 큰 surface. envelope + 길이
+                # 캡 + framing 제거를 적용. (PRD §3.5.6)
+                return sanitize_tool_error(
+                    f"Command failed (exit {proc.returncode}): {error[:500]}"
+                )
 
             logger.info(
                 "Skill command succeeded: %d chars output", len(output)
@@ -1117,7 +1131,7 @@ class AgentOrchestrator:
             return f"Command timed out after {effective_timeout}s"
         except Exception as exc:
             logger.error("Skill command error: %s", exc)
-            return f"Command error: {str(exc)[:200]}"
+            return sanitize_tool_error(f"Command error: {str(exc)[:200]}")
 
     async def _execute_skill(
         self, skill_name: str, args_str: str

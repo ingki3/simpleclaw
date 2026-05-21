@@ -28,6 +28,13 @@ class DangerousCommandError(Exception):
         super().__init__(f"Dangerous command blocked ({pattern_key}): {description}")
 
 
+# 시스템 설정 경로 — macOS 의 /private/{etc,var,tmp,home}/ symlink 미러를
+# 포함한다. /etc/sudoers 같은 파일은 macOS 에선 실제로 /private/etc/sudoers
+# 에 있고 ``echo x > /private/etc/sudoers`` 는 동일하게 동작한다.
+# Hermes Agent PR #26829 (Claude Code 2.1.113 영향) 에서 도입.
+_SYSTEM_CONFIG_PATH = r"(?:/etc/|/private/(?:etc|var|tmp|home)/)"
+
+
 # 각 항목: (컴파일된 정규식, 패턴 키, 사람이 읽을 수 있는 설명)
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # --- 파일시스템 파괴 ---
@@ -78,7 +85,35 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
     # --- 시크릿/환경변수 유출 ---
     (re.compile(r"\benv\s*>", re.I), "env_dump", "Dump environment to file"),
     (re.compile(r"printenv\s*\|", re.I), "printenv_pipe", "Pipe environment variables"),
-    (re.compile(r"cat.*/etc/(shadow|passwd)", re.I), "read_shadow", "Read system credentials"),
+    # macOS 의 /etc → /private/etc symlink 우회를 같은 패턴으로 막는다.
+    # Hermes Agent PR #26829 적용.
+    (re.compile(rf"cat[^|;&\n]*{_SYSTEM_CONFIG_PATH}(?:shadow|passwd|sudoers)", re.I),
+     "read_shadow", "Read system credentials"),
+
+    # --- 시스템 설정 파일 수정 (Hermes PR #26829: macOS /private/ 미러 포함) ---
+    (re.compile(rf">\s*{_SYSTEM_CONFIG_PATH}", re.I),
+     "write_system_config", "Overwrite system config"),
+    (re.compile(rf"\btee\b[^|;&\n]*\s{_SYSTEM_CONFIG_PATH}", re.I),
+     "tee_system_config", "Overwrite system config via tee"),
+    (re.compile(rf"\b(cp|mv|install)\b[^|;&\n]*\s{_SYSTEM_CONFIG_PATH}", re.I),
+     "copy_system_config", "Copy/move file into system config path"),
+    (re.compile(rf"\bsed\s+-[^\s]*i[^|;&\n]*\s{_SYSTEM_CONFIG_PATH}", re.I),
+     "sed_inplace_system_config", "In-place edit of system config"),
+    (re.compile(rf"\bsed\s+--in-place\b[^|;&\n]*\s{_SYSTEM_CONFIG_PATH}", re.I),
+     "sed_inplace_system_config_long", "In-place edit of system config (long flag)"),
+
+    # --- 권한 상승 우회: sudo brute-force / askpass (Hermes PR #23736) ---
+    # LLM-driven agent 는 TTY 가 없으므로 sudo 가 사람 개입 없이 성공하는
+    # 형태는 stdin 으로 비밀번호를 흘려넣는 ``-S`` / ``--stdin`` 또는
+    # askpass helper 를 쓰는 ``-A`` / ``--askpass`` 뿐. 둘 다 차단한다.
+    # lazy [^;|&\n]*? 로 ``sudo -u root -S`` 같이 플래그 인자가 끼어들어도
+    # 매칭되지만 ``;`` / ``|`` / ``&`` 같은 명령 구분자는 넘어가지 않는다.
+    (re.compile(r"\bsudo\b[^;|&\n]*?\s+(?:-S\b|--stdin\b|-A\b|--askpass\b)", re.I),
+     "sudo_stdin", "sudo with stdin/askpass (password guessing)"),
+    # 단축 플래그 묶음: ``-nS``, ``-Su``, ``-SA`` — S/A 가 [a-z]* 안에 끼어든
+    # 형태. 같은 위협 클래스를 packed 형태로 잡는다.
+    (re.compile(r"\bsudo\b[^;|&\n]*?\s+-[a-z]*[sa][a-z]*\b", re.I),
+     "sudo_combined_flag", "sudo with combined-flag (stdin/askpass packed)"),
 
     # --- 컨테이너 탈출 ---
     (re.compile(r"--privileged", re.I), "privileged_container", "Privileged container"),
@@ -86,6 +121,14 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str, str]] = [
 
     # --- 포크 폭탄 ---
     (re.compile(r":\(\)\{.*\|.*\};:", re.I), "fork_bomb", "Fork bomb"),
+
+    # --- find 파괴적 액션 (Hermes PR #26829: -execdir / -delete 보강) ---
+    # -execdir 은 -exec 과 동일하게 매칭된 경로마다 명령을 실행하지만
+    # 각 경로의 디렉토리에서 실행된다. 두 형태 모두 차단.
+    (re.compile(r"\bfind\b.*-exec(?:dir)?\s+(?:/\S*/)?rm\b", re.I),
+     "find_exec_rm", "find -exec/-execdir rm"),
+    (re.compile(r"\bfind\b.*-delete\b", re.I),
+     "find_delete", "find -delete"),
 
     # --- GUI / 대화형 명령 ---
     (re.compile(r"^open\s+(https?://|/)", re.I | re.M), "open_url", "macOS open (launches GUI browser/app)"),
