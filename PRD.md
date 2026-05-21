@@ -74,6 +74,10 @@
 - 작업이 완료되면 **Answer**를 생성하여 최종 응답.
 - `config.yaml`의 `agent.max_tool_iterations`로 최대 반복 횟수 제한 (기본: 15).
 - 단일 도구만 필요한 경우 루프가 1회만 실행되어 기존 동작과 완전히 호환.
+- **Per-turn 파일 변경 검증 footer** (Hermes Agent PR #24498 적용 — BIZ-251): 매 iteration 의 모든 tool call 직후, 워크스페이스(`~/.simpleclaw/workspace/`)와 페르소나 화이트리스트 파일(`AGENT.md` / `USER.md` / `MEMORY.md`)의 디스크 사실(mtime + size + 라인 카운트)을 캡처해 직전 iteration 의 스냅샷과 diff 한다. 비어 있지 않은 diff 는 마지막 `role=tool` 메시지에 `[file changes this turn]\n+ <path> (N lines)\nM <path> (X → Y lines)\n- <path> (was Z lines)` 형식 footer 로 부착되어 다음 iteration 의 LLM 컨텍스트가 *실제* 디스크 상태를 SoT 로 본다 — LLM 의 "파일 저장했다" 환각과 스킬 silent-fail 인식 누락을 잡는다.
+  - 파일-쓰기 도구(`file_write` / `file_manage` / `execute_skill` / `cli`) 호출이 있었지만 diff 가 비었을 때만 `[file changes this turn: none]` 명시 마커를 부착해 LLM 이 silent-fail 을 명시적으로 인지하도록 한다. read-only 호출(예: `web_fetch`, `skill_docs`) 의 빈 diff 는 footer 자체를 생략해 토큰을 절약한다.
+  - 구현: `simpleclaw/agent/file_mutation_tracker.py` (`FileMutationTracker` / `TrackedRoot` / `format_footer`). 라인 카운트는 변경 없는 파일에 대해 이전 스냅샷에서 재사용되어 large workspace 의 매 턴 비용을 stat 호출 한도로 묶는다 (벤치: 1024 파일 워크스페이스 median 5ms, 5120 파일에서도 25ms — DoD 50ms 충족).
+  - 노이즈 가지치기: `.git` / `__pycache__` / `.pytest_cache` / `node_modules` 등 빌드/캐시 디렉터리와 SQLite WAL/SHM sidecar (`*-wal`, `*-shm`) 는 walk 에서 배제 — dreaming/conversation DB 의 매 턴 mtime 갱신이 footer 노이즈로 새는 것을 차단.
 
 #### 3.5.5. 스마트 Python 경로 감지
 - `_fix_python_path()` 함수가 스킬 스크립트 근처의 venv를 자동 탐지하여 올바른 Python 인터프리터로 실행.
