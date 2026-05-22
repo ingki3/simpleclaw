@@ -114,6 +114,9 @@ async def main():
         whitelist_user_ids=whitelist["user_ids"],
         whitelist_chat_ids=whitelist["chat_ids"],
         message_handler=orchestrator.process_message,
+        # BIZ-260: clarify 도구 호출 시 인라인 키보드 렌더용 — 오케스트레이터의
+        # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
+        clarify_provider=orchestrator.pop_pending_clarify,
     )
 
     # Cron scheduler — notifier is the only external wiring.
