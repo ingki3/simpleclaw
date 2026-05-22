@@ -32,7 +32,7 @@ from simpleclaw.llm.models import (
     ToolCall,
     ToolDefinition,
 )
-from simpleclaw.llm.providers.base import LLMProvider
+from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,127 @@ class ClaudeProvider(LLMProvider):
             model=self._model,
             usage=usage,
             tool_calls=tool_calls,
+        )
+
+    async def stream(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        system_blocks: list[SystemBlock] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> LLMResponse:
+        """Claude Messages API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
+
+        BIZ-259: ``client.messages.stream`` 컨텍스트 매니저로 SSE 이벤트를 받아
+        ``text_delta`` 이벤트마다 콜백을 await 한다. ``tool_use`` 블록은 누적해
+        최종 LLMResponse 의 tool_calls 로 반환한다. 콜백이 None 이면 그냥 누적만
+        해서 send() 와 동일한 동작이 된다 — 호출 측 통일 인터페이스.
+
+        스트림 중 콜백 예외는 흡수해 누적은 완수한다 (sink rate-limit guard 가
+        간헐적 텔레그램 API 오류로 죽지 않도록).
+        """
+        if messages is not None:
+            msg_list = self._convert_messages(messages)
+        else:
+            msg_list = [{"role": "user", "content": user_message}]
+
+        system_param = self._build_system_param(system_blocks, system_prompt)
+        has_cached_block = bool(
+            system_blocks and any(b.cache and b.text for b in system_blocks)
+        )
+
+        kwargs: dict = {
+            "model": self._model,
+            "max_tokens": 4096,
+            "messages": msg_list,
+        }
+        if system_param is not None:
+            kwargs["system"] = system_param
+        if tools:
+            kwargs["tools"] = self._convert_tools(tools)
+        if has_cached_block:
+            kwargs["extra_headers"] = {"anthropic-beta": _EXTENDED_CACHE_TTL_BETA}
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        final_message = None
+        try:
+            async with self._client.messages.stream(**kwargs) as stream:
+                async for event in stream:
+                    # text 델타: ``content_block_delta`` 의 ``text_delta`` 변형.
+                    delta_text = ""
+                    if getattr(event, "type", "") == "content_block_delta":
+                        delta = getattr(event, "delta", None)
+                        if delta is not None and getattr(delta, "type", "") == "text_delta":
+                            delta_text = getattr(delta, "text", "") or ""
+                    if delta_text:
+                        text_parts.append(delta_text)
+                        if on_text_delta is not None:
+                            try:
+                                await on_text_delta(delta_text)
+                            except Exception as exc:  # noqa: BLE001
+                                # sink 측 일시 오류(텔레그램 rate limit 등) 가 LLM
+                                # 응답 자체를 깨뜨리지 않도록 흡수. 운영자 점검용으로 한 줄만.
+                                logger.warning(
+                                    "Claude stream on_text_delta callback raised: %s",
+                                    exc,
+                                )
+                final_message = await stream.get_final_message()
+        except anthropic.AuthenticationError as e:
+            raise LLMAuthError(f"Claude auth failed: {e}") from e
+        except anthropic.APIError as e:
+            raise LLMProviderError(f"Claude API error: {e}") from e
+
+        # 최종 메시지에서 tool_use 블록을 추출. text 는 누적된 델타로부터.
+        text = "".join(text_parts)
+        usage: dict = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+        if final_message is not None:
+            if final_message.content:
+                for block in final_message.content:
+                    if block.type == "tool_use":
+                        tool_calls.append(
+                            ToolCall(
+                                id=block.id,
+                                name=block.name,
+                                arguments=block.input
+                                if isinstance(block.input, dict)
+                                else {},
+                            )
+                        )
+            if final_message.usage is not None:
+                usage["input_tokens"] = final_message.usage.input_tokens
+                usage["output_tokens"] = final_message.usage.output_tokens
+                cache_creation = getattr(
+                    final_message.usage, "cache_creation_input_tokens", None
+                )
+                cache_read = getattr(
+                    final_message.usage, "cache_read_input_tokens", None
+                )
+                if cache_creation is not None:
+                    usage["cache_creation_input_tokens"] = cache_creation
+                if cache_read is not None:
+                    usage["cache_read_input_tokens"] = cache_read
+                if has_cached_block and (
+                    cache_creation is not None or cache_read is not None
+                ):
+                    logger.info(
+                        "Claude prompt cache (stream): read=%s created=%s base_input=%s",
+                        cache_read or 0,
+                        cache_creation or 0,
+                        final_message.usage.input_tokens,
+                    )
+
+        return LLMResponse(
+            text=text,
+            backend_name=self._name,
+            model=self._model,
+            usage=usage,
+            tool_calls=tool_calls or None,
         )
 
     @staticmethod
