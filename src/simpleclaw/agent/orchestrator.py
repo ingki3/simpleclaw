@@ -28,6 +28,7 @@ from simpleclaw.config import (
     load_recipes_config,
 )
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
+from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.llm.router import create_router
 from simpleclaw.logging.trace_context import trace_scope
 from simpleclaw.memory.conversation_store import ConversationStore
@@ -455,7 +456,12 @@ class AgentOrchestrator:
             return await self._tool_loop(text, isolated=True)
 
     async def process_message(
-        self, text: str, user_id: int, chat_id: int
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        *,
+        on_text_delta: TextDeltaCallback | None = None,
     ) -> str:
         """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
@@ -463,6 +469,10 @@ class AgentOrchestrator:
         (도구 실행, RAG 회상, 백그라운드 임베딩, 서브에이전트/스킬 등) 전체에
         전파한다. ``trace_scope``는 ``with`` 블록 종료 시 이전 trace_id를
         복원하므로 동일 프로세스에서 후속 메시지가 깨끗한 컨텍스트로 시작된다.
+
+        BIZ-259: ``on_text_delta`` 콜백이 주어지면 ``_tool_loop`` 가 LLM 응답 텍스트
+        델타를 콜백으로 흘려보낸다. ``/cron``, ``/recipe-*`` 명령어 분기는 즉답 분기
+        이므로 콜백을 무시한다 — 부분 결과로 알림 트리거되는 사고 방지(``final_only``).
         """
         with trace_scope() as trace_id:
             logger.info(
@@ -503,7 +513,9 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                response_text = await self._tool_loop(text)
+                response_text = await self._tool_loop(
+                    text, on_text_delta=on_text_delta,
+                )
 
                 # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
                 # 종결했을 수 있다. 대화 이력 저장은 항상 "질문 + 번호 옵션"
@@ -595,7 +607,11 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     async def _tool_loop(
-        self, text: str, isolated: bool = False
+        self,
+        text: str,
+        isolated: bool = False,
+        *,
+        on_text_delta: TextDeltaCallback | None = None,
     ) -> str:
         """Native Function Calling 루프를 실행한다.
 
@@ -605,7 +621,13 @@ class AgentOrchestrator:
 
         Args:
             text: 사용자 원본 메시지
-            isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등)
+            isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등). 크론 분기는
+                ``final_only_for_cron`` 정책에 따라 호출 측에서 ``on_text_delta`` 를
+                None 으로 넘긴다 — 본 함수는 콜백 유무로만 동작 분기.
+            on_text_delta: BIZ-259 — 텍스트 델타 콜백. 주어지면 라우터의 ``stream()``
+                경로로 전환되어 각 iteration 의 텍스트 델타가 콜백으로 흐른다.
+                tool-call iteration 의 ReAct thought 텍스트도 그대로 흐르므로 sink
+                측에서 finalize 시 최종 텍스트로 덮어쓰는 패턴을 따른다.
         """
         # 현재 시각을 KST로 주입
         from datetime import datetime, timezone, timedelta
@@ -684,7 +706,14 @@ class AgentOrchestrator:
                     tools=tools,
                     system_blocks=system_blocks,
                 )
-                response = await self._router.send(request)
+                # BIZ-259 — 콜백이 있을 때만 streaming 경로로 분기.
+                # 기존 호출 시그니처 호환성 유지(테스트 mock 회귀 0).
+                if on_text_delta is not None:
+                    response = await self._router.send(
+                        request, on_text_delta=on_text_delta,
+                    )
+                else:
+                    response = await self._router.send(request)
             except Exception as exc:
                 logger.error("Tool loop LLM error: %s", exc)
                 return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
@@ -827,8 +856,16 @@ class AgentOrchestrator:
             )
             # BIZ-141 — provider 측 hang 으로 메시지가 영구 침묵하는 사고를 막는
             # 방어선. 빈 응답(BIZ-160)·예외와 별개로 hang 클래스를 처리.
+            # BIZ-259 — forced-final 호출도 sink 가 마지막으로 받을 텍스트이므로
+            # 콜백을 그대로 흘려보낸다. 콜백이 None 이면 기존 호출 시그니처 유지.
+            if on_text_delta is not None:
+                final_send = self._router.send(
+                    final_request, on_text_delta=on_text_delta,
+                )
+            else:
+                final_send = self._router.send(final_request)
             final_response = await asyncio.wait_for(
-                self._router.send(final_request),
+                final_send,
                 timeout=_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:

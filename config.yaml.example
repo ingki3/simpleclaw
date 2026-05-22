@@ -93,6 +93,21 @@ telegram:
   whitelist:
     user_ids: []
     chat_ids: []
+  # BIZ-259 — LLM 응답 점진 스트리밍 (텔레그램 native draft + safe edit).
+  # 기본 enabled=false (회귀 0 디폴트). 환경별로 켜고 끈다.
+  # Phase 1: Claude 백엔드에서만 실제 스트리밍. Gemini/OpenAI/CLI 는 자동 fallback.
+  streaming:
+    # true 면 응답을 placeholder 로 먼저 보내고 editMessageText 로 점진 갱신.
+    # false 면 기존 동작(완성 후 1회 sendMessage) 유지.
+    enabled: false
+    # editMessageText 최소 간격(ms). Telegram chat 당 ~1초/회 rate limit 회피용.
+    min_interval_ms: 800
+    # 이 글자 수만큼 새 토큰이 쌓여야 edit 호출 — 잦은 1~2자 갱신을 막아 시각 흔들림 완화.
+    min_delta_chars: 40
+    # 첫 메시지 본문 (스트리밍 시작 표시). 비워두지 말 것 — Telegram 은 빈 메시지 거부.
+    initial_placeholder: "…"
+    # Cron 트리거 응답은 강제로 비스트리밍 — 자동 알림이 부분 결과로 푸시되는 사고 방지.
+    final_only_for_cron: true
 
 # Admin API (BIZ-41 / BIZ-58) — Admin UI 백엔드.
 # 단일 운영자 가정으로 ``127.0.0.1`` 로컬 바인딩만 권장. 토큰은 시크릿 매니저 참조로

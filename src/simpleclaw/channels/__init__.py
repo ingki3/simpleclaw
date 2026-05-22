@@ -18,7 +18,7 @@ from simpleclaw.channels.models import (
     WebhookError,
     WebhookEvent,
 )
-from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.channels.telegram_bot import TelegramBot, TelegramStreamSink
 from simpleclaw.channels.webhook_server import WebhookServer
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "SERVICE_RESTART",
     "TelegramBot",
     "TelegramError",
+    "TelegramStreamSink",
     "WebhookError",
     "WebhookEvent",
     "WebhookServer",

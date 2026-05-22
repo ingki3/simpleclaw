@@ -331,6 +331,46 @@ telegram:
         assert result["whitelist"]["user_ids"] == [111, 222]
         assert result["whitelist"]["chat_ids"] == [-100333]
 
+    def test_streaming_defaults_present_when_block_omitted(self, tmp_path: Path):
+        """BIZ-259 — streaming 키가 누락되어도 안전 기본값으로 채워진다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+telegram:
+  bot_token: "x"
+""",
+        )
+        result = load_telegram_config(cfg)
+        assert result["streaming"]["enabled"] is False
+        assert result["streaming"]["min_interval_ms"] == 800
+        assert result["streaming"]["min_delta_chars"] == 40
+        assert result["streaming"]["initial_placeholder"]
+        assert result["streaming"]["final_only_for_cron"] is True
+
+    def test_streaming_values_overridden(self, tmp_path: Path):
+        """BIZ-259 — streaming 키가 명시되면 값이 그대로 로드된다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+telegram:
+  bot_token: "x"
+  streaming:
+    enabled: true
+    min_interval_ms: 1200
+    min_delta_chars: 64
+    initial_placeholder: "처리 중…"
+    final_only_for_cron: false
+""",
+        )
+        result = load_telegram_config(cfg)
+        assert result["streaming"]["enabled"] is True
+        assert result["streaming"]["min_interval_ms"] == 1200
+        assert result["streaming"]["min_delta_chars"] == 64
+        assert result["streaming"]["initial_placeholder"] == "처리 중…"
+        assert result["streaming"]["final_only_for_cron"] is False
+
 
 # ---------------------------------------------------------------------------
 # 7. load_webhook_config

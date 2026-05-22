@@ -332,3 +332,59 @@ async def test_agent_browser_under_cap_dispatches_normally(
     assert result == "정상 응답"
     # cap=2 (기본) 이므로 1회는 dispatch 되어야 함.
     assert dispatch_calls == ["execute_skill"]
+
+
+# ---------------------------------------------------------------------------
+# BIZ-259 — streaming wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_message_threads_on_text_delta_to_router(
+    config_file, monkeypatch,
+):
+    """``process_message(on_text_delta=...)`` 가 라우터까지 콜백을 전달해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    seen_callback = {"cb": None}
+
+    async def fake_send(request, on_text_delta=None):
+        # 라우터 send 가 콜백을 받아 첫 델타를 흘려보낸 뒤 final 텍스트로 종료.
+        seen_callback["cb"] = on_text_delta
+        if on_text_delta is not None:
+            await on_text_delta("hello ")
+            await on_text_delta("world")
+        return _text_response("hello world")
+
+    orch._router.send = fake_send
+
+    collected: list[str] = []
+
+    async def cb(d: str) -> None:
+        collected.append(d)
+
+    result = await orch.process_message(
+        "ping", user_id=1, chat_id=1, on_text_delta=cb,
+    )
+    assert result == "hello world"
+    assert collected == ["hello ", "world"]
+    assert seen_callback["cb"] is cb
+
+
+@pytest.mark.asyncio
+async def test_process_message_without_callback_uses_send_signature(
+    config_file, monkeypatch,
+):
+    """BIZ-259 — 콜백 미지정 시 기존 1-인자 ``router.send(request)`` 시그니처 유지.
+
+    fake_send 가 ``request`` 단일 인자만 받아도 호출이 성공해야 한다 (회귀 가드).
+    """
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_send(_request):  # 단일 인자
+        return _text_response("plain answer")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_message("hi", user_id=1, chat_id=1)
+    assert result == "plain answer"
