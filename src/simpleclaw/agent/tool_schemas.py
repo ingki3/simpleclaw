@@ -143,6 +143,46 @@ _SKILL_DOCS_TOOL = ToolDefinition(
     },
 )
 
+# BIZ-260 — clarify 다지선다 도구. 텔레그램 등 인라인 키보드를 지원하는 채널은
+# ``options`` 를 버튼으로 렌더한다. 호출 즉시 ReAct 루프가 종결되어 LLM 의 다음
+# 텍스트 응답을 기다리지 않는다 — clarify 의 본 의도가 "사용자에게 되묻기" 이므로
+# 후속 도구 호출 / 텍스트 응답은 의미가 없다.
+_CLARIFY_TOOL = ToolDefinition(
+    name="clarify",
+    description=(
+        "사용자에게 다지선다 질문을 던진다. 답변 후보가 명확히 짧고 셀 수 있을 때 "
+        "(예: '어느 메일/캘린더 이벤트/파일을 선택?') 사용. 채널이 지원하면 인라인 "
+        "키보드 버튼으로 렌더되고, 사용자가 버튼 탭 또는 텍스트('1'/'2'/본문) 로 "
+        "답하면 다음 메시지로 도착한다. 호출 즉시 이 turn 은 종료되며 LLM 의 "
+        "후속 응답 / 도구 호출은 발생하지 않는다 — clarify 호출이 곧 사용자에게 "
+        "되묻는 행위 자체이다. 자유형 질문(이름·주제 등) 에는 사용하지 말 것."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "사용자에게 보여줄 짧은 질문 문구.",
+            },
+            "options": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "string",
+                    "description": "옵션 본문 (버튼 라벨 + 사용자 응답에 사용).",
+                },
+                "description": (
+                    "1~8개의 다지선다 옵션. 각 항목은 짧은 문자열이며 모바일 버튼"
+                    "에 들어가도록 가능하면 30자 이내로."
+                ),
+            },
+        },
+        "required": ["question", "options"],
+    },
+)
+
+
 _CRON_TOOL = ToolDefinition(
     name="cron",
     description="크론 스케줄 관리. 반복/예약 작업을 등록, 조회, 삭제, 활성화/비활성화한다. "
@@ -202,6 +242,7 @@ def build_tool_definitions(
         _FILE_WRITE_TOOL,
         _FILE_MANAGE_TOOL,
         _SKILL_DOCS_TOOL,
+        _CLARIFY_TOOL,
     ]
 
     if cron_available:
