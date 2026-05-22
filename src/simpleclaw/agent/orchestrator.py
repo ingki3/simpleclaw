@@ -56,6 +56,7 @@ from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import SkillDefinition
 
 from simpleclaw.agent.builtin_tools import (
+    handle_clarify,
     handle_cron_action,
     handle_file_manage,
     handle_file_read,
@@ -63,6 +64,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_skill_docs,
     handle_web_fetch,
 )
+from simpleclaw.agent.clarify import ClarifyRequest, clarify_chat_id_var
 from simpleclaw.agent.commands import try_cron_command, try_recipe_command
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
@@ -161,6 +163,18 @@ _GUARD_WEB_FETCH_PREFERRED = (
     "(ask for the text directly, summarize from prior knowledge, etc.)."
 )
 
+# BIZ-260 — clarify 다지선다 도구 사용 가이드. 사용자가 명확하지 않은 의도
+# (예: 후보가 여러 개인 메일/캘린더/파일/주식 종목 선택) 를 보일 때 LLM 이
+# clarify 도구를 잡도록 유도. 자유형 질문(이름·주제 등) 에는 평문 응답이 더
+# 자연스럽다.
+_GUARD_CLARIFY_TOOL = (
+    "When the user's request has multiple short, enumerable candidate answers "
+    "(which email/event/file/ticker to act on), call `clarify(question, options)` "
+    "instead of asking in plain text. On channels that support it, the options "
+    "render as tap buttons. Calling clarify ends the turn — do NOT also send a "
+    "text response in the same turn."
+)
+
 _TOOL_USAGE_INSTRUCTION = "\n".join(
     [
         _BASE_INSTRUCTION,
@@ -170,6 +184,7 @@ _TOOL_USAGE_INSTRUCTION = "\n".join(
         _GUARD_LANGUAGE,
         _GUARD_OPEN_COMMAND,
         _GUARD_WEB_FETCH_PREFERRED,
+        _GUARD_CLARIFY_TOOL,
     ]
 )
 
@@ -381,6 +396,11 @@ class AgentOrchestrator:
             ]
         )
 
+        # BIZ-260 — clarify 도구의 pending 요청 레지스트리. chat_id → ClarifyRequest.
+        # ``_dispatch_tool_call`` 이 채워 넣고, 채널이 ``pop_pending_clarify`` 로 회수.
+        # 동일 chat 안에서는 한 번에 하나만 대기 — 새 clarify 가 호출되면 덮어쓴다.
+        self._pending_clarify: dict[int, ClarifyRequest] = {}
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
@@ -451,38 +471,54 @@ class AgentOrchestrator:
             )
             self._reload_dynamic_files()
 
-            # /cron 명령어 확인
-            cron_result = try_cron_command(text, self._cron_scheduler)
-            if cron_result is not None:
-                # BIZ-76 — cron 관리 명령(/cron list 등) 응답은 자동 트리거
-                # 카테고리로 묶어 dreaming 의 사용자 관심 추론에서 분리한다.
-                self._save_turn(
-                    text, cron_result, channel=CHANNEL_CRON_ADMIN,
-                )
-                return cron_result
+            # BIZ-260 — clarify 도구가 발생시킬 ClarifyRequest 를 chat_id 키로
+            # 적재할 수 있도록 contextvar 에 chat_id 를 매단다. tool 핸들러는
+            # 자기 시그니처를 바꾸지 않고도 contextvar 로 chat_id 를 얻는다.
+            clarify_token = clarify_chat_id_var.set(chat_id)
+            try:
+                # /cron 명령어 확인
+                cron_result = try_cron_command(text, self._cron_scheduler)
+                if cron_result is not None:
+                    # BIZ-76 — cron 관리 명령(/cron list 등) 응답은 자동 트리거
+                    # 카테고리로 묶어 dreaming 의 사용자 관심 추론에서 분리한다.
+                    self._save_turn(
+                        text, cron_result, channel=CHANNEL_CRON_ADMIN,
+                    )
+                    return cron_result
 
-            # /recipe-name 명령어 확인 (e.g. /ai-report)
-            # BIZ-202: 레시피 디렉터리는 config 기반 — 봇/데몬 양쪽이 같은 절대 경로를 본다.
-            recipe_outcome = await try_recipe_command(
-                text, self._tool_loop, recipes_dir=self._recipes_dir,
-            )
-            if recipe_outcome is not None:
-                recipe_result, recipe_name = recipe_outcome
-                # BIZ-76 — 레시피 산출물은 사용자 발화가 아니라 자동/명령 트리거
-                # 결과이므로 ``recipe:<name>`` 채널로 태깅한다. dreaming 코퍼스
-                # 로더가 이 prefix 를 보고 분리 또는 가중치 다운한다.
-                self._save_turn(
-                    text,
-                    recipe_result,
-                    channel=f"{CHANNEL_RECIPE_PREFIX}{recipe_name}",
+                # /recipe-name 명령어 확인 (e.g. /ai-report)
+                # BIZ-202: 레시피 디렉터리는 config 기반 — 봇/데몬 양쪽이 같은 절대 경로를 본다.
+                recipe_outcome = await try_recipe_command(
+                    text, self._tool_loop, recipes_dir=self._recipes_dir,
                 )
-                return recipe_result
+                if recipe_outcome is not None:
+                    recipe_result, recipe_name = recipe_outcome
+                    # BIZ-76 — 레시피 산출물은 사용자 발화가 아니라 자동/명령 트리거
+                    # 결과이므로 ``recipe:<name>`` 채널로 태깅한다. dreaming 코퍼스
+                    # 로더가 이 prefix 를 보고 분리 또는 가중치 다운한다.
+                    self._save_turn(
+                        text,
+                        recipe_result,
+                        channel=f"{CHANNEL_RECIPE_PREFIX}{recipe_name}",
+                    )
+                    return recipe_result
 
-            response_text = await self._tool_loop(text)
-            # 일반 사용자 발화는 채널을 명시하지 않는다(=organic). 이후 BIZ-76
-            # 후속에서 telegram/webhook/console 같은 origin 메타로 확장될 수 있음.
-            self._save_turn(text, response_text)
-            return response_text
+                response_text = await self._tool_loop(text)
+
+                # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
+                # 종결했을 수 있다. 대화 이력 저장은 항상 "질문 + 번호 옵션"
+                # 텍스트로 — 다음 turn 의 LLM 컨텍스트에 옵션이 보존되어 사용자가
+                # 텍스트로 "1" / 본문으로 답해도 매칭 가능 (DoD backward compat).
+                pending = self._pending_clarify.get(chat_id)
+                if pending is not None:
+                    response_text = pending.format_user_visible()
+
+                # 일반 사용자 발화는 채널을 명시하지 않는다(=organic). 이후 BIZ-76
+                # 후속에서 telegram/webhook/console 같은 origin 메타로 확장될 수 있음.
+                self._save_turn(text, response_text)
+                return response_text
+            finally:
+                clarify_chat_id_var.reset(clarify_token)
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
@@ -721,6 +757,22 @@ class AgentOrchestrator:
                 })
                 logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
 
+            # BIZ-260 — clarify 가 이번 iteration 안에서 호출됐다면 추가 LLM
+            # 호출 없이 즉시 종결한다. clarify 는 그 자체로 "사용자에게 되묻기"
+            # 의도이므로 다음 도구 호출 / 텍스트 응답이 의미 없다. 반환 텍스트는
+            # 빈 문자열 — ``process_message`` 가 ``_pending_clarify`` 에서
+            # ``format_user_visible`` 로 다시 조립한다.
+            chat_id_for_clarify = clarify_chat_id_var.get()
+            if (
+                chat_id_for_clarify is not None
+                and chat_id_for_clarify in self._pending_clarify
+            ):
+                logger.info(
+                    "Tool loop [%d] terminated by clarify call (chat=%d)",
+                    i + 1, chat_id_for_clarify,
+                )
+                return ""
+
             # BIZ-251 — verifier footer.
             # iteration 안의 모든 tool call 직후 워크스페이스/페르소나 dir 의
             # 디스크 사실을 캡처해 마지막 tool result 메시지에 부착한다.
@@ -843,7 +895,24 @@ class AgentOrchestrator:
             return handle_skill_docs(args, self._skills_by_name)
         if name == "cron":
             return handle_cron_action(args, self._cron_scheduler)
+        if name == "clarify":
+            return handle_clarify(
+                args,
+                self._pending_clarify,
+                chat_id=clarify_chat_id_var.get(),
+            )
         return f"Error: unknown tool '{name}'."
+
+    def pop_pending_clarify(self, chat_id: int) -> ClarifyRequest | None:
+        """채널이 ``process_message`` 후 호출 — pending clarify 를 회수·제거한다.
+
+        BIZ-260: 한 chat 의 다음 메시지가 도착하기 전까지 ``_pending_clarify[chat_id]``
+        에 머무르지만, 채널이 인라인 키보드 렌더에 성공하면 즉시 제거해 다음 호출이
+        깨끗한 상태에서 시작되도록 한다. 인라인 키보드를 지원하지 않는 채널
+        (webhook 등) 은 이 메서드를 호출하지 않고 ``format_user_visible`` 텍스트를
+        그대로 사용자에게 노출한다.
+        """
+        return self._pending_clarify.pop(chat_id, None)
 
     async def _dispatch_external_skill(self, args: dict) -> str:
         """execute_skill 도구 호출을 처리한다."""

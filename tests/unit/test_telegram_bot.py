@@ -1,7 +1,14 @@
 """Tests for the Telegram bot."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
+from simpleclaw.agent.clarify import (
+    ClarifyRequest,
+    encode_callback_data,
+    normalize_options,
+)
 from simpleclaw.channels.telegram_bot import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramBot,
@@ -138,3 +145,205 @@ class TestSplitForTelegram:
         assert len(result) > 1
         for part in result:
             assert len(part) <= TELEGRAM_MESSAGE_LIMIT
+
+
+# ----------------------------------------------------------------------
+# BIZ-260 — clarify 인라인 키보드 + callback_query 화이트리스트
+# ----------------------------------------------------------------------
+
+
+def _build_clarify_request(*option_bodies: str) -> ClarifyRequest:
+    return ClarifyRequest(
+        question="Which one?",
+        options=normalize_options(list(option_bodies)),
+    )
+
+
+def _mock_query(
+    *, user_id: int, chat_id: int, message_id: int, data: str
+):
+    """python-telegram-bot 의 ``CallbackQuery`` 형상을 흉내내는 mock 객체.
+
+    실제 라이브러리 의존 없이 ``_on_callback_query`` 의 흐름을 검증한다.
+    """
+    query = MagicMock()
+    query.from_user = MagicMock()
+    query.from_user.id = user_id
+    query.message = MagicMock()
+    query.message.chat_id = chat_id
+    query.message.message_id = message_id
+    query.message.reply_text = AsyncMock()
+    query.data = data
+    query.answer = AsyncMock()
+    return query
+
+
+class TestClarifyKeyboardRendering:
+    @pytest.mark.asyncio
+    async def test_send_response_renders_inline_keyboard_when_pending(self):
+        request = _build_clarify_request("Foo", "Bar")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            clarify_provider=lambda chat_id: request,
+        )
+
+        sent_message = MagicMock()
+        sent_message.message_id = 5001
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock(return_value=sent_message)
+
+        # The library's InlineKeyboardMarkup needs python-telegram-bot installed —
+        # the repo declares it as a runtime dep, so import succeeds at test time.
+        await bot._send_response(update, "unused response", chat_id=42)
+
+        # 응답 본문은 질문 (옵션 라벨이 키보드로 빠진다).
+        update.message.reply_text.assert_awaited_once()
+        kwargs = update.message.reply_text.await_args.kwargs
+        assert update.message.reply_text.await_args.args[0] == "Which one?"
+        assert kwargs.get("reply_markup") is not None
+        # 옵션 캐시에 본문이 적재됐어야 한다.
+        assert bot._clarify_cache[(42, 5001)] == request.options
+
+    @pytest.mark.asyncio
+    async def test_send_response_falls_back_to_text_when_no_clarify(self):
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            clarify_provider=lambda chat_id: None,
+        )
+        update = MagicMock()
+        update.message = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        await bot._send_response(update, "plain text", chat_id=42)
+        update.message.reply_text.assert_awaited_once_with("plain text")
+
+    def test_clarify_cache_lru_eviction(self):
+        from simpleclaw.channels.telegram_bot import (
+            _CLARIFY_CACHE_MAX_ENTRIES,
+        )
+
+        bot = TelegramBot("token", whitelist_user_ids=[1])
+        opts = normalize_options(["A"])
+
+        # 한계의 +5 개 입력 → 가장 오래된 5개가 evict 되어야 한다.
+        for mid in range(_CLARIFY_CACHE_MAX_ENTRIES + 5):
+            bot._cache_clarify_options(1, mid, opts)
+        assert len(bot._clarify_cache) == _CLARIFY_CACHE_MAX_ENTRIES
+        # 오래된 (1, 0..4) 키는 빠지고 최근 (1, max..max+4) 가 남아야 한다.
+        for evicted in range(5):
+            assert (1, evicted) not in bot._clarify_cache
+        for kept in range(5, _CLARIFY_CACHE_MAX_ENTRIES + 5):
+            assert (1, kept) in bot._clarify_cache
+
+
+class TestCallbackQueryWhitelist:
+    @pytest.mark.asyncio
+    async def test_unauthorized_callback_silently_dropped(self):
+        """화이트리스트 외부 사용자의 callback_query 는 silent drop + 로그."""
+        handler = AsyncMock(return_value="should not be called")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+        )
+        opts = normalize_options(["A", "B"])
+        bot._cache_clarify_options(999, 5, opts)
+
+        query = _mock_query(
+            user_id=789,  # not in whitelist
+            chat_id=999,
+            message_id=5,
+            data=encode_callback_data(0),
+        )
+        update = MagicMock()
+        update.callback_query = query
+
+        await bot._on_callback_query(update, MagicMock())
+
+        # message_handler 는 호출되지 않아야 한다 (보안 회귀 면).
+        handler.assert_not_called()
+        # spinner 제거용 빈 answer 만 호출.
+        query.answer.assert_awaited_once_with()
+        # 비인가 로그가 access log 에 남아야 한다.
+        assert any(not a.authorized for a in bot.get_access_log())
+
+    @pytest.mark.asyncio
+    async def test_authorized_callback_dispatches_option_body(self):
+        handler = AsyncMock(return_value="ok")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+            clarify_provider=lambda chat_id: None,
+        )
+        opts = normalize_options(["Foo body", "Bar body"])
+        bot._cache_clarify_options(999, 5, opts)
+
+        query = _mock_query(
+            user_id=123,
+            chat_id=999,
+            message_id=5,
+            data=encode_callback_data(1),
+        )
+        update = MagicMock()
+        update.callback_query = query
+
+        await bot._on_callback_query(update, MagicMock())
+
+        # 선택된 옵션 본문이 message_handler 로 흘러야 한다.
+        handler.assert_awaited_once_with("Bar body", 123, 999)
+        query.answer.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_expired_or_missing_cache_entry_shows_toast(self):
+        handler = AsyncMock()
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+        )
+
+        query = _mock_query(
+            user_id=123,
+            chat_id=999,
+            message_id=42,  # never cached
+            data=encode_callback_data(0),
+        )
+        update = MagicMock()
+        update.callback_query = query
+
+        await bot._on_callback_query(update, MagicMock())
+
+        handler.assert_not_called()
+        # 만료 안내가 사용자에게 노출되어야 한다.
+        query.answer.assert_awaited()
+        kwargs = query.answer.await_args.kwargs
+        assert "만료" in kwargs.get("text", "")
+
+    @pytest.mark.asyncio
+    async def test_invalid_callback_data_dropped(self):
+        handler = AsyncMock()
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+        )
+        opts = normalize_options(["A"])
+        bot._cache_clarify_options(999, 5, opts)
+
+        query = _mock_query(
+            user_id=123,
+            chat_id=999,
+            message_id=5,
+            data="not:a:c:payload",
+        )
+        update = MagicMock()
+        update.callback_query = query
+
+        await bot._on_callback_query(update, MagicMock())
+
+        handler.assert_not_called()
+        query.answer.assert_awaited()

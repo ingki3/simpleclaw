@@ -283,6 +283,93 @@ class TestAgentOrchestrator:
         cron_call = orchestrator._router.send.call_args[0][0]
         assert len(cron_call.messages) == 1
 
+    # ------------------------------------------------------------------
+    # BIZ-260 — clarify 다지선다 도구
+    # ------------------------------------------------------------------
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_clarify_tool_breaks_tool_loop_and_returns_question(
+        self, config_file
+    ):
+        """LLM 이 clarify 도구를 호출하면 추가 LLM 호출 없이 turn 이 종결되고,
+        반환 텍스트는 질문 + 번호 옵션이 enumerated 된 형태여야 한다.
+
+        대화 이력에 옵션이 보존되므로 사용자가 다음 turn 에서 "1" 로 답해도 LLM
+        이 매칭 가능 (DoD §"backward compat")."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        clarify_call = ToolCall(
+            id="t1",
+            name="clarify",
+            arguments={
+                "question": "어느 메일에 답장?",
+                "options": ["Foo", "Bar"],
+            },
+        )
+        clarify_response = MagicMock()
+        clarify_response.text = ""
+        clarify_response.tool_calls = [clarify_call]
+        clarify_response.backend_name = "gemini"
+        clarify_response.raw_assistant_message = None
+
+        # 두 번째 send 가 호출되면 안 된다 — clarify 가 루프를 끝낸다.
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(
+            side_effect=[clarify_response, AssertionError("should not be called")]
+        )
+
+        response = await orchestrator.process_message(
+            "메일에 답장해줘", user_id=1, chat_id=42,
+        )
+
+        assert "어느 메일에 답장?" in response
+        assert "1. Foo" in response
+        assert "2. Bar" in response
+
+        # pop_pending_clarify 가 채널에 ClarifyRequest 를 넘긴다.
+        pending = orchestrator.pop_pending_clarify(42)
+        assert pending is not None
+        assert pending.question == "어느 메일에 답장?"
+        assert [o.body for o in pending.options] == ["Foo", "Bar"]
+        # 한 번 pop 하면 다음엔 None.
+        assert orchestrator.pop_pending_clarify(42) is None
+
+        # 두 번째 send 가 호출되지 않았는지 확인.
+        assert orchestrator._router.send.await_count == 1
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_clarify_tool_chat_id_isolation_between_chats(
+        self, config_file
+    ):
+        """동일 오케스트레이터 인스턴스에서 두 chat 의 clarify 가 서로의 chat_id
+        키로만 저장되어야 한다 — contextvar 누설 없음."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        clarify_call = ToolCall(
+            id="t1",
+            name="clarify",
+            arguments={"question": "?", "options": ["A"]},
+        )
+        clarify_response = MagicMock()
+        clarify_response.text = ""
+        clarify_response.tool_calls = [clarify_call]
+        clarify_response.backend_name = "gemini"
+        clarify_response.raw_assistant_message = None
+
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(return_value=clarify_response)
+
+        await orchestrator.process_message("x", user_id=1, chat_id=10)
+        await orchestrator.process_message("y", user_id=2, chat_id=20)
+
+        assert orchestrator.pop_pending_clarify(10) is not None
+        # chat 20 의 호출은 별도 키로 저장되어야 한다.
+        assert orchestrator.pop_pending_clarify(20) is not None
+        # 둘 다 pop 됐으면 비어 있다.
+        assert orchestrator._pending_clarify == {}
+
 
 class TestCronCommands:
     """Tests for /cron command handling in AgentOrchestrator."""
