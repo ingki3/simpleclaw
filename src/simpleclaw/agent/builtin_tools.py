@@ -48,10 +48,12 @@ _AGENT_BROWSER_GLOB_CANDIDATES: tuple[str, ...] = (
     "/opt/homebrew/bin/agent-browser",
 )
 
-# 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록
+# 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록.
+# BIZ-260: ``clarify`` 추가 — LLM 이 사용자에게 다지선다 질문을 던질 때 인라인
+# 키보드로 렌더하는 채널 브리지.
 BUILTIN_TOOL_NAMES = frozenset({
     "cron", "cli", "web-fetch", "file-read", "file-write", "file-manage",
-    "skill-docs",
+    "skill-docs", "clarify",
 })
 
 
@@ -809,6 +811,53 @@ def handle_cron_action(
             return f"Error: job '{name}' not found."
 
     return f"Error: unknown cron_action '{cron_action}'."
+
+
+# ------------------------------------------------------------------
+# clarify — 다지선다 질문 (BIZ-260)
+# ------------------------------------------------------------------
+
+def handle_clarify(
+    routing: dict,
+    pending_clarify: dict,
+    *,
+    chat_id: int | None,
+) -> str:
+    """LLM 이 호출한 ``clarify(question, options)`` 를 채널 브리지에 적재한다.
+
+    - ``chat_id`` 가 None (cron 잡 등 비-사용자 채널 진입점) 이면 오류 응답:
+      cron 컨텍스트에서 사용자에게 되묻는 것은 의미 없음.
+    - 옵션 정규화·라벨 cap 검증은 ``normalize_options`` 가 담당.
+    - ``pending_clarify[chat_id]`` 를 덮어써 한 chat 에서 동시에 두 clarify 가
+      대기 상태가 되는 일을 막는다 (LLM 이 한 turn 안에 clarify 를 두 번 부르면
+      마지막 호출만 사용자에게 도달 — 일관 동작).
+    """
+    from simpleclaw.agent.clarify import ClarifyRequest, normalize_options
+
+    if chat_id is None:
+        return (
+            "Error: clarify is not supported in this context (no chat). "
+            "Use clarify only in interactive messaging channels."
+        )
+
+    question = (routing.get("question") or "").strip()
+    if not question:
+        return "Error: 'question' field is required (non-empty string)."
+
+    raw_options = routing.get("options")
+    try:
+        options = normalize_options(raw_options)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    pending_clarify[chat_id] = ClarifyRequest(
+        question=question, options=options,
+    )
+    return (
+        f"Clarification posted to user with {len(options)} options. "
+        "The tool loop will end now; the user's reply (button tap or text) "
+        "arrives as the next message."
+    )
 
 
 def _cron_list(cron_scheduler: CronScheduler) -> str:

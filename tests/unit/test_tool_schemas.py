@@ -41,16 +41,19 @@ def _make_skill(name: str = "test_skill", description: str = "A test skill") -> 
 class TestToolCount:
     """cron 사용 가능 여부에 따른 내장 도구 개수를 검증한다."""
 
-    def test_without_cron_returns_6_tools(self):
-        """cron 비활성 시 기본 내장 도구 6개만 반환되어야 한다."""
-        tools = build_tool_definitions(skills=[], cron_available=False)
-        # 기본 내장 도구: memory_read, memory_write, file_read, file_write, web_search, shell_exec
-        assert len(tools) == 6
+    def test_without_cron_returns_7_tools(self):
+        """cron 비활성 시 기본 내장 도구 7개만 반환되어야 한다.
 
-    def test_with_cron_returns_7_tools(self):
-        """cron 활성 시 기본 6개 + cron 1개 = 7개가 반환되어야 한다."""
-        tools = build_tool_definitions(skills=[], cron_available=True)
+        기본 내장 도구: cli, web_fetch, file_read, file_write, file_manage,
+        skill_docs, clarify (BIZ-260).
+        """
+        tools = build_tool_definitions(skills=[], cron_available=False)
         assert len(tools) == 7
+
+    def test_with_cron_returns_8_tools(self):
+        """cron 활성 시 기본 7개 + cron 1개 = 8개가 반환되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        assert len(tools) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -74,16 +77,16 @@ class TestExecuteSkill:
         assert "execute_skill" not in tool_names
 
     def test_with_skills_total_count(self):
-        """스킬이 있으면 기본 6 + execute_skill 1 = 7."""
+        """스킬이 있으면 기본 7 + execute_skill 1 = 8 (BIZ-260: clarify 추가)."""
         skills = [_make_skill()]
         tools = build_tool_definitions(skills=skills, cron_available=False)
-        assert len(tools) == 7
+        assert len(tools) == 8
 
     def test_with_skills_and_cron_total_count(self):
-        """스킬 + cron이면 기본 6 + cron 1 + execute_skill 1 = 8."""
+        """스킬 + cron이면 기본 7 + cron 1 + execute_skill 1 = 9 (BIZ-260)."""
         skills = [_make_skill()]
         tools = build_tool_definitions(skills=skills, cron_available=True)
-        assert len(tools) == 8
+        assert len(tools) == 9
 
 
 # ---------------------------------------------------------------------------
