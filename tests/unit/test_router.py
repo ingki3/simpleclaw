@@ -100,3 +100,34 @@ class TestLLMRouter:
         router._providers["provider_a"]._mock_send.assert_called_once_with(
             "legacy fallback", "hello", None, None, blocks
         )
+
+    @pytest.mark.asyncio
+    async def test_send_without_callback_does_not_invoke_stream(self, router):
+        """BIZ-259 — on_text_delta 미지정 시 send() 경로 유지 (회귀 0)."""
+        provider = router._providers["provider_a"]
+        # MockProvider 에는 stream() 오버라이드가 없으므로 호출 여부 확인을 위해 spy 부착.
+        provider._mock_stream_called = False
+        original_stream = provider.stream
+
+        async def spy_stream(*args, **kwargs):
+            provider._mock_stream_called = True
+            return await original_stream(*args, **kwargs)
+
+        provider.stream = spy_stream  # type: ignore[assignment]
+        request = LLMRequest(user_message="hi")
+        await router.send(request)
+        assert provider._mock_stream_called is False
+
+    @pytest.mark.asyncio
+    async def test_send_with_callback_routes_to_provider_stream(self, router):
+        """BIZ-259 — on_text_delta 지정 시 provider.stream() 으로 라우팅."""
+        collected: list[str] = []
+
+        async def cb(delta: str) -> None:
+            collected.append(delta)
+
+        # MockProvider 의 send() 가 "Response from provider_a" 텍스트를 돌려주므로
+        # base 의 fallback stream() 이 그대로 콜백으로 흘려보낸다.
+        request = LLMRequest(user_message="hi")
+        await router.send(request, on_text_delta=cb)
+        assert collected == ["Response from provider_a"]

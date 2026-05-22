@@ -21,7 +21,7 @@ from simpleclaw.llm.models import (
     LLMRequest,
     LLMResponse,
 )
-from simpleclaw.llm.providers.base import LLMProvider
+from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,17 @@ class LLMRouter:
         self._providers = providers
         self._default = default_backend
 
-    async def send(self, request: LLMRequest) -> LLMResponse:
-        """요청을 적절한 백엔드로 라우팅하고 응답을 반환한다."""
+    async def send(
+        self,
+        request: LLMRequest,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> LLMResponse:
+        """요청을 적절한 백엔드로 라우팅하고 응답을 반환한다.
+
+        BIZ-259: ``on_text_delta`` 콜백이 주어지면 프로바이더의 ``stream()`` 경로로
+        전환되어 텍스트 델타가 생성될 때마다 콜백이 호출된다. 콜백이 None 이면
+        기존 ``send()`` 경로를 그대로 사용 — 호출 측 회귀 0.
+        """
         backend_name = request.backend_name or self._default
 
         if backend_name not in self._providers:
@@ -79,16 +88,26 @@ class LLMRouter:
             )
 
         provider = self._providers[backend_name]
-        logger.info("Routing request to backend '%s'", backend_name)
 
-        response = await provider.send(
+        if on_text_delta is not None:
+            logger.info("Routing streaming request to backend '%s'", backend_name)
+            return await provider.stream(
+                request.system_prompt,
+                request.user_message,
+                request.messages,
+                request.tools,
+                system_blocks=request.system_blocks,
+                on_text_delta=on_text_delta,
+            )
+
+        logger.info("Routing request to backend '%s'", backend_name)
+        return await provider.send(
             request.system_prompt,
             request.user_message,
             request.messages,
             request.tools,
             system_blocks=request.system_blocks,
         )
-        return response
 
     def list_backends(self) -> list[str]:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""

@@ -1,5 +1,7 @@
 """Tests for the Telegram bot."""
 
+import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,8 +14,43 @@ from simpleclaw.agent.clarify import (
 from simpleclaw.channels.telegram_bot import (
     TELEGRAM_MESSAGE_LIMIT,
     TelegramBot,
+    TelegramStreamSink,
     split_for_telegram,
 )
+
+
+class _FakeBot:
+    """python-telegram-bot 의 ``Bot`` 호환 fake — 호출 기록만 누적한다.
+
+    BIZ-259 sink 테스트용. send/edit 콜백은 awaitable 이어야 하므로 ``async def`` 로
+    정의하고, 반환값에 ``message_id`` 속성을 흉내내 sink 의 다음 edit 호출에 필요한
+    핸들을 만들어준다. ``edit_failures`` 카운트가 0 이상이면 그만큼 edit 이 실패한
+    뒤 정상화 — flood-wait / parse-error 시나리오를 흉내.
+    """
+
+    def __init__(self, edit_failures: int = 0, send_failures: int = 0):
+        self.sent: list[dict] = []
+        self.edits: list[dict] = []
+        self._edit_failures = edit_failures
+        self._send_failures = send_failures
+        self._next_id = 100
+
+    async def send_message(self, chat_id, text, **kwargs):
+        if self._send_failures > 0:
+            self._send_failures -= 1
+            raise RuntimeError("simulated send failure")
+        msg = SimpleNamespace(message_id=self._next_id, chat_id=chat_id, text=text)
+        self._next_id += 1
+        self.sent.append({"chat_id": chat_id, "text": text, "kwargs": kwargs})
+        return msg
+
+    async def edit_message_text(self, chat_id, message_id, text, **kwargs):
+        if self._edit_failures > 0:
+            self._edit_failures -= 1
+            raise RuntimeError("simulated edit failure")
+        self.edits.append(
+            {"chat_id": chat_id, "message_id": message_id, "text": text}
+        )
 
 
 class TestTelegramBot:
@@ -347,3 +384,187 @@ class TestCallbackQueryWhitelist:
 
         handler.assert_not_called()
         query.answer.assert_awaited()
+
+
+class TestTelegramStreamSink:
+    """BIZ-259 — LLM 응답 점진 스트리밍 sink."""
+
+    @pytest.mark.asyncio
+    async def test_start_sends_placeholder_and_captures_message_id(self):
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=42, initial_placeholder="…",
+        )
+        await sink.start()
+        assert len(fake.sent) == 1
+        assert fake.sent[0]["chat_id"] == 42
+        assert fake.sent[0]["text"] == "…"
+        assert sink.message_id == 100
+
+    @pytest.mark.asyncio
+    async def test_min_interval_buffers_until_window_elapses(self):
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=1,
+            min_interval_ms=500, min_delta_chars=1,  # delta gate off
+        )
+        await sink.start()
+        # 첫 델타 — 직후 window 미경과로 edit 안 됨.
+        await sink.on_text_delta("hello")
+        assert fake.edits == []
+        # min_interval 경과를 흉내내기 위해 sink 내부 last_edit_ts 를 과거로 당긴다.
+        sink._last_edit_ts = time.monotonic() - 1.0
+        await sink.on_text_delta(" world")
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_min_delta_chars_buffers_until_threshold(self):
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=1,
+            min_interval_ms=0, min_delta_chars=10,
+        )
+        await sink.start()
+        # 누적 9자 — 임계치 미달, edit 안 됨.
+        await sink.on_text_delta("123456789")
+        assert fake.edits == []
+        # 1자 추가 → 누적 10자 / placeholder("…", 1자) 대비 9자 차이는 여전히 임계 미달.
+        # → 한 글자 더 추가해 차이가 10이 되도록 한다.
+        await sink.on_text_delta("a")  # 누적 10
+        assert fake.edits == []
+        await sink.on_text_delta("b")  # 누적 11 — 차이 10 → edit
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "1234567890ab"[:11] or fake.edits[0]["text"] == "123456789ab"
+
+    @pytest.mark.asyncio
+    async def test_finalize_short_text_edits_placeholder_once(self):
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=7, min_interval_ms=10000, min_delta_chars=1000,
+        )
+        await sink.start()
+        # 게이트 통과 안 되는 작은 델타들 — buffer 만 누적.
+        await sink.on_text_delta("partial")
+        assert fake.edits == []
+        sent = await sink.finalize("final answer")
+        # finalize 는 placeholder 를 edit 해서 final 로 교체.
+        assert sent == ["final answer"]
+        assert len(fake.edits) == 1
+        assert fake.edits[-1]["text"] == "final answer"
+        # 추가 send 는 없어야 함 (단일 청크).
+        assert len(fake.sent) == 1  # placeholder 만
+
+    @pytest.mark.asyncio
+    async def test_finalize_oversized_splits_via_biz253(self):
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+        long_text = "x" * 8000
+        sent = await sink.finalize(long_text)
+        # BIZ-253 분할 — 2 청크. 첫 청크는 edit, 두 번째는 send.
+        assert len(sent) == 2
+        assert sent[0].startswith("(1/2)\n")
+        assert sent[1].startswith("(2/2)\n")
+        assert len(fake.edits) == 1  # 첫 청크
+        assert len(fake.sent) == 2  # placeholder + 두 번째 청크
+        for chunk in sent:
+            assert len(chunk) <= TELEGRAM_MESSAGE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_finalize_idempotent(self):
+        """finalize 두 번 호출해도 두 번째는 no-op (메시지 중복 방지)."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=9)
+        await sink.start()
+        first = await sink.finalize("answer")
+        second = await sink.finalize("answer again")
+        assert first == ["answer"]
+        assert second == []
+        # 'answer again' 이 어디에도 누설되지 않아야 함.
+        assert all("again" not in e["text"] for e in fake.edits)
+        assert all("again" not in s["text"] for s in fake.sent)
+
+    @pytest.mark.asyncio
+    async def test_edit_failure_does_not_abort_stream(self):
+        """텔레그램 API 가 일시 거부하면 (FloodWait 등) WARN 만 남기고 buffer 는 살아있다."""
+        fake = _FakeBot(edit_failures=1)
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=3,
+            min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+        # 첫 edit 시도는 실패 (시뮬). buffer/accumulator 는 보존.
+        await sink.on_text_delta("hello")
+        assert sink.accumulated_text == "hello"
+        # 다음 시도는 성공해야 한다.
+        sink._last_edit_ts = time.monotonic() - 1.0
+        await sink.on_text_delta(" world")
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_finalize_empty_response_shows_explicit_marker(self):
+        """빈 응답이 들어와도 placeholder 가 남지 않도록 명시적 메시지로 교체."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=11)
+        await sink.start()
+        sent = await sink.finalize("")
+        assert sent and "빈 응답" in sent[0]
+
+    @pytest.mark.asyncio
+    async def test_overflow_during_stream_truncates_then_finalize_splits(self):
+        """4096 초과 누적 — stream 중에는 truncate, finalize 에서 자연 분할."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=2,
+            min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+        # 5000자 한 번에 흘려보내기 — edit 호출 시점에 truncate 가 적용된다.
+        await sink.on_text_delta("y" * 5000)
+        assert fake.edits[-1]["text"].endswith("…")
+        assert len(fake.edits[-1]["text"]) <= TELEGRAM_MESSAGE_LIMIT
+        # finalize 에서는 BIZ-253 분할.
+        sent = await sink.finalize("y" * 5000)
+        assert len(sent) == 2  # 5000 → 2 청크
+        for chunk in sent:
+            assert len(chunk) <= TELEGRAM_MESSAGE_LIMIT
+
+
+class TestTelegramBotStreaming:
+    """BIZ-259 — TelegramBot 의 handle_message 가 on_text_delta 콜백을 흘려보낸다."""
+
+    @pytest.mark.asyncio
+    async def test_handle_message_forwards_on_text_delta(self):
+        deltas_seen: list[str] = []
+
+        async def handler(text, user_id, chat_id, *, on_text_delta=None):
+            assert on_text_delta is not None
+            await on_text_delta("hello ")
+            await on_text_delta("world")
+            return "hello world"
+
+        async def sink_cb(delta: str) -> None:
+            deltas_seen.append(delta)
+
+        bot = TelegramBot(
+            "token", whitelist_user_ids=[1], message_handler=handler,
+        )
+        response = await bot.handle_message(
+            "ping", 1, 1, on_text_delta=sink_cb,
+        )
+        assert response == "hello world"
+        assert deltas_seen == ["hello ", "world"]
+
+    @pytest.mark.asyncio
+    async def test_handle_message_no_callback_path_unchanged(self):
+        """on_text_delta 미지정 시 기존 핸들러 시그니처(3-arg) 와 회귀 0."""
+        async def handler(text, user_id, chat_id):
+            return f"got {text}"
+
+        bot = TelegramBot(
+            "token", whitelist_user_ids=[1], message_handler=handler,
+        )
+        response = await bot.handle_message("ping", 1, 1)
+        assert response == "got ping"

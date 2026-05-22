@@ -297,6 +297,127 @@ class TestClaudeProvider:
         assert result.usage["cache_read_input_tokens"] == 2048
         assert result.usage["cache_creation_input_tokens"] == 0
 
+    # -- BIZ-259: Streaming --
+
+    @pytest.mark.asyncio
+    async def test_stream_invokes_callback_per_delta(self):
+        """``stream()`` 이 SSE text_delta 이벤트마다 ``on_text_delta`` 를 호출한다."""
+        provider = ClaudeProvider(model="claude-sonnet-4-20250514", api_key="test-key")
+
+        # 가짜 SSE 이벤트 시퀀스 — content_block_delta (text_delta) 두 번.
+        delta1 = MagicMock(type="text_delta", text="Hello")
+        delta2 = MagicMock(type="text_delta", text=", world")
+        evt1 = MagicMock(type="content_block_delta", delta=delta1)
+        evt2 = MagicMock(type="content_block_delta", delta=delta2)
+
+        # 최종 메시지 (get_final_message): tool_use 없음, usage 채움.
+        final_msg = MagicMock()
+        final_msg.content = []
+        final_msg.usage = MagicMock(
+            input_tokens=12, output_tokens=4,
+        )
+        # cache_* 속성 부재 시 getattr 가 None 을 돌려주도록 spec 제한.
+        del final_msg.usage.cache_creation_input_tokens
+        del final_msg.usage.cache_read_input_tokens
+
+        class _FakeStreamCtx:
+            def __init__(self, events, final):
+                self._events = events
+                self._final = final
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            def __aiter__(self):
+                async def gen():
+                    for e in self._events:
+                        yield e
+                return gen()
+
+            async def get_final_message(self):
+                return self._final
+
+        ctx = _FakeStreamCtx([evt1, evt2], final_msg)
+        provider._client.messages.stream = MagicMock(return_value=ctx)
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "system", "hi", on_text_delta=on_delta,
+        )
+        assert collected == ["Hello", ", world"]
+        assert result.text == "Hello, world"
+        assert result.backend_name == "claude"
+        assert result.usage["input_tokens"] == 12
+        assert result.usage["output_tokens"] == 4
+        assert result.tool_calls is None
+
+    @pytest.mark.asyncio
+    async def test_stream_callback_exception_does_not_abort(self):
+        """sink 콜백 예외(텔레그램 rate-limit 일시 거부)는 흡수돼야 한다."""
+        provider = ClaudeProvider(model="m", api_key="k")
+
+        delta = MagicMock(type="text_delta", text="x")
+        evt = MagicMock(type="content_block_delta", delta=delta)
+        final_msg = MagicMock()
+        final_msg.content = []
+        final_msg.usage = MagicMock(input_tokens=1, output_tokens=1)
+        del final_msg.usage.cache_creation_input_tokens
+        del final_msg.usage.cache_read_input_tokens
+
+        class _Ctx:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def __aiter__(self):
+                async def gen():
+                    yield evt
+                return gen()
+
+            async def get_final_message(self):
+                return final_msg
+
+        provider._client.messages.stream = MagicMock(return_value=_Ctx())
+
+        async def boom(_d: str) -> None:
+            raise RuntimeError("flood wait")
+
+        # 콜백 예외에도 stream 은 LLMResponse 를 정상 반환해야 한다.
+        result = await provider.stream("s", "u", on_text_delta=boom)
+        assert result.text == "x"
+
+    @pytest.mark.asyncio
+    async def test_stream_fallback_invokes_on_text_delta_once(self):
+        """Base 의 fallback stream(): send() 결과를 한 번에 콜백으로 흘려보낸다."""
+        # OpenAI provider 는 stream() 오버라이드가 없으므로 base 의 fallback 을 탄다.
+        # send() 를 mock 해서 LLMResponse 를 반환하게 한다.
+        from simpleclaw.llm.models import LLMResponse
+        provider = OpenAIProvider(model="gpt-4o", api_key="k")
+
+        async def fake_send(*args, **kwargs):
+            return LLMResponse(text="full answer", backend_name="openai")
+
+        provider.send = fake_send  # type: ignore[assignment]
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "sys", "msg", on_text_delta=on_delta,
+        )
+        assert collected == ["full answer"]
+        assert result.text == "full answer"
+
 
 class TestFlattenSystemBlocks:
     """BIZ-252 — 비 Claude 프로바이더가 사용하는 공용 평탄화 헬퍼."""

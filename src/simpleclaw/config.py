@@ -698,13 +698,62 @@ def load_voice_config(config_path: str | Path) -> dict:
 
 
 # 텔레그램 봇 기본 설정값
+# BIZ-259 — streaming 기본값: 끄고(enabled=False) 들어와 옵트인. 봇 재기동만으로
+# 회귀가 되지 않도록 보수적 기본을 둔다. 운영자가 환경별 튜닝 후 켠다.
+_TELEGRAM_STREAMING_DEFAULTS: dict = {
+    "enabled": False,
+    "min_interval_ms": 800,
+    "min_delta_chars": 40,
+    "initial_placeholder": "…",
+    "final_only_for_cron": True,
+}
+
 _TELEGRAM_DEFAULTS: dict = {
     "bot_token": "",
     "whitelist": {
         "user_ids": [],
         "chat_ids": [],
     },
+    "streaming": dict(_TELEGRAM_STREAMING_DEFAULTS),
 }
+
+
+def _coerce_streaming_config(raw: object) -> dict:
+    """``telegram.streaming`` 서브블록을 기본값으로 채워 정규화한다.
+
+    누락 키는 ``_TELEGRAM_STREAMING_DEFAULTS`` 로 보강하고, 잘못된 타입은
+    기본값으로 복원한다. raw 가 dict 가 아니면 (또는 None 이면) 기본값 전체.
+    """
+    merged = dict(_TELEGRAM_STREAMING_DEFAULTS)
+    if not isinstance(raw, dict):
+        return merged
+
+    try:
+        merged["enabled"] = bool(raw.get("enabled", merged["enabled"]))
+    except (TypeError, ValueError):
+        pass
+    try:
+        merged["min_interval_ms"] = int(
+            raw.get("min_interval_ms", merged["min_interval_ms"])
+        )
+    except (TypeError, ValueError):
+        pass
+    try:
+        merged["min_delta_chars"] = int(
+            raw.get("min_delta_chars", merged["min_delta_chars"])
+        )
+    except (TypeError, ValueError):
+        pass
+    placeholder = raw.get("initial_placeholder", merged["initial_placeholder"])
+    if isinstance(placeholder, str) and placeholder:
+        merged["initial_placeholder"] = placeholder
+    try:
+        merged["final_only_for_cron"] = bool(
+            raw.get("final_only_for_cron", merged["final_only_for_cron"])
+        )
+    except (TypeError, ValueError):
+        pass
+    return merged
 
 
 def load_telegram_config(config_path: str | Path) -> dict:
@@ -739,6 +788,7 @@ def load_telegram_config(config_path: str | Path) -> dict:
             "user_ids": whitelist.get("user_ids", []),
             "chat_ids": whitelist.get("chat_ids", []),
         },
+        "streaming": _coerce_streaming_config(tg.get("streaming")),
     }
 
 
