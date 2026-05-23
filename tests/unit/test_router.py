@@ -131,3 +131,75 @@ class TestLLMRouter:
         request = LLMRequest(user_message="hi")
         await router.send(request, on_text_delta=cb)
         assert collected == ["Response from provider_a"]
+
+    @pytest.mark.asyncio
+    async def test_send_with_callback_routes_to_gemini_stream(self):
+        """BIZ-284 — ``backend=gemini`` + on_text_delta 시 GeminiProvider.stream() 으로 라우팅.
+
+        base 의 fallback (send 결과를 한 번에 콜백) 이 아니라 실제 stream() override 가
+        호출되어 청크별 델타가 그대로 흘러야 한다 — Claude 와 동일 패턴.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from simpleclaw.llm.providers.gemini import GeminiProvider
+
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        def _text_part(text: str) -> MagicMock:
+            part = MagicMock()
+            part.function_call = None
+            part.text = text
+            return part
+
+        def _chunk(parts, usage=None):
+            chunk = MagicMock()
+            content = MagicMock()
+            content.parts = parts
+            candidate = MagicMock()
+            candidate.content = content
+            chunk.candidates = [candidate] if parts is not None else []
+            chunk.usage_metadata = usage
+            return chunk
+
+        chunks = [
+            _chunk([_text_part("Hello")]),
+            _chunk([_text_part(" Gemini")]),
+            _chunk(
+                None,
+                usage=MagicMock(prompt_token_count=4, candidates_token_count=2),
+            ),
+        ]
+
+        class _Iter:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def __aiter__(self):
+                async def gen():
+                    for c in self._items:
+                        yield c
+                return gen()
+
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=_Iter(chunks)
+        )
+
+        router = LLMRouter(
+            backends={},
+            providers={"gemini": provider},
+            default_backend="gemini",
+        )
+
+        collected: list[str] = []
+
+        async def cb(delta: str) -> None:
+            collected.append(delta)
+
+        request = LLMRequest(user_message="hi", backend_name="gemini")
+        result = await router.send(request, on_text_delta=cb)
+
+        # 청크 단위 델타가 그대로 콜백에 흘러야 한다 — fallback 이면 ["Hello Gemini"] 한 덩이.
+        assert collected == ["Hello", " Gemini"]
+        assert result.text == "Hello Gemini"
+        assert result.backend_name == "gemini"
+        assert result.usage == {"input_tokens": 4, "output_tokens": 2}
