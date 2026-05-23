@@ -750,3 +750,253 @@ class TestGeminiProvider:
         tc = result.tool_calls[0]
         assert tc.id  # fallback UUID
         assert tc.id != "None"
+
+    # -- BIZ-284: Streaming --
+
+    @staticmethod
+    def _make_text_part(text: str) -> MagicMock:
+        part = MagicMock()
+        part.function_call = None
+        part.text = text
+        return part
+
+    @staticmethod
+    def _make_fc_part(
+        name: str, args: dict, fc_id: str | None = "fc-1"
+    ) -> MagicMock:
+        part = MagicMock()
+        part.function_call = MagicMock()
+        part.function_call.id = fc_id
+        part.function_call.name = name
+        part.function_call.args = args
+        part.text = None
+        return part
+
+    @classmethod
+    def _make_chunk(
+        cls,
+        parts: list[MagicMock] | None,
+        usage_metadata: MagicMock | None = None,
+    ) -> MagicMock:
+        chunk = MagicMock()
+        if parts is None:
+            chunk.candidates = []
+        else:
+            content = MagicMock()
+            content.parts = parts
+            candidate = MagicMock()
+            candidate.content = content
+            chunk.candidates = [candidate]
+            # raw_content 식별을 위해 content 자체를 chunk 에 노출.
+            chunk._content = content
+        chunk.usage_metadata = usage_metadata
+        return chunk
+
+    @staticmethod
+    def _stream_iter(chunks: list[MagicMock]):
+        """``await client.aio.models.generate_content_stream(...)`` 형태를 흉내낸다.
+
+        SDK 는 ``async def`` 가 ``AsyncIterator`` 를 반환하므로, AsyncMock 의
+        ``return_value`` 에 ``__aiter__/__anext__`` 가 달린 객체를 둔다.
+        """
+        class _Iter:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def __aiter__(self):
+                async def gen():
+                    for c in self._items:
+                        yield c
+                return gen()
+
+        return _Iter(chunks)
+
+    @pytest.mark.asyncio
+    async def test_stream_text_only_invokes_callback_per_chunk(self):
+        """text-only 스트림: 각 청크의 ``part.text`` 가 on_text_delta 로 흐른다."""
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        chunks = [
+            self._make_chunk([self._make_text_part("Hello")]),
+            self._make_chunk([self._make_text_part(", world")]),
+            self._make_chunk(
+                None,
+                usage_metadata=MagicMock(
+                    prompt_token_count=7, candidates_token_count=4
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream("sys", "hi", on_text_delta=on_delta)
+        assert collected == ["Hello", ", world"]
+        assert result.text == "Hello, world"
+        assert result.backend_name == "gemini"
+        assert result.tool_calls is None
+        assert result.raw_assistant_message is None
+        assert result.usage == {"input_tokens": 7, "output_tokens": 4}
+
+    @pytest.mark.asyncio
+    async def test_stream_function_call_only(self):
+        """function_call-only 스트림: on_text_delta 호출 0회, tool_calls 정상 추출."""
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        fc_chunk = self._make_chunk(
+            [self._make_fc_part("get_weather", {"location": "Busan"}, "fc-xyz")]
+        )
+        chunks = [
+            fc_chunk,
+            self._make_chunk(
+                None,
+                usage_metadata=MagicMock(
+                    prompt_token_count=15, candidates_token_count=10
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "sys", "weather?", tools=SAMPLE_TOOLS, on_text_delta=on_delta
+        )
+        assert collected == []  # text delta 없음
+        assert result.text == ""
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        tc = result.tool_calls[0]
+        assert tc.id == "fc-xyz"
+        assert tc.name == "get_weather"
+        assert tc.arguments == {"location": "Busan"}
+        # thought_signature 보존을 위해 마지막 content 가 raw_assistant_message 로 노출.
+        assert result.raw_assistant_message is fc_chunk._content
+
+    @pytest.mark.asyncio
+    async def test_stream_text_and_function_call_mixed(self):
+        """text + function_call 혼합: text 누적과 tool_calls 가 분리 수집된다."""
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        chunks = [
+            self._make_chunk([self._make_text_part("Let me check.")]),
+            self._make_chunk(
+                [
+                    self._make_fc_part(
+                        "get_weather", {"location": "Seoul"}, "fc-1"
+                    ),
+                ],
+                usage_metadata=MagicMock(
+                    prompt_token_count=20, candidates_token_count=8
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "sys", "weather?", tools=SAMPLE_TOOLS, on_text_delta=on_delta
+        )
+        assert collected == ["Let me check."]
+        assert result.text == "Let me check."
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "get_weather"
+        assert result.tool_calls[0].arguments == {"location": "Seoul"}
+        # tool_calls 가 있을 때만 raw_assistant_message 가 마지막 청크 content 로 채워진다.
+        assert result.raw_assistant_message is chunks[-1]._content
+        assert result.usage == {"input_tokens": 20, "output_tokens": 8}
+
+    @pytest.mark.asyncio
+    async def test_stream_callback_exception_does_not_abort(self):
+        """sink 콜백 예외(텔레그램 rate-limit) 가 stream() 전체를 깨면 안 된다."""
+        provider = GeminiProvider(model="m", api_key="k")
+
+        chunks = [
+            self._make_chunk([self._make_text_part("partial")]),
+            self._make_chunk(
+                None,
+                usage_metadata=MagicMock(
+                    prompt_token_count=1, candidates_token_count=1
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        async def boom(_d: str) -> None:
+            raise RuntimeError("flood wait")
+
+        result = await provider.stream("s", "u", on_text_delta=boom)
+        # 콜백이 예외를 던져도 누적 결과는 정상 반환된다.
+        assert result.text == "partial"
+        assert result.usage == {"input_tokens": 1, "output_tokens": 1}
+
+    @pytest.mark.asyncio
+    async def test_stream_usage_from_final_chunk(self):
+        """종료 청크의 ``usage_metadata`` 가 LLMResponse.usage 로 반영된다."""
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        chunks = [
+            self._make_chunk([self._make_text_part("a")]),
+            self._make_chunk([self._make_text_part("b")]),
+            # 종료 청크: candidates 없이 usage_metadata 만.
+            self._make_chunk(
+                None,
+                usage_metadata=MagicMock(
+                    prompt_token_count=33, candidates_token_count=11
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        result = await provider.stream("sys", "hi")
+        assert result.text == "ab"
+        assert result.usage == {"input_tokens": 33, "output_tokens": 11}
+
+    @pytest.mark.asyncio
+    async def test_stream_callback_none_matches_send_shape(self):
+        """``on_text_delta=None`` 이어도 누적 결과는 send() 와 동일한 모양이어야 한다.
+
+        회귀 0 — 호출 측이 콜백을 안 줘도 LLMResponse 가 정상 LLMResponse 로
+        돌아온다 (base fallback 과 의미적으로 동일).
+        """
+        provider = GeminiProvider(model="gemini-2.0-flash", api_key="test-key")
+
+        chunks = [
+            self._make_chunk([self._make_text_part("Hello from stream")]),
+            self._make_chunk(
+                None,
+                usage_metadata=MagicMock(
+                    prompt_token_count=5, candidates_token_count=3
+                ),
+            ),
+        ]
+        provider._client.aio.models.generate_content_stream = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        result = await provider.stream("sys", "hi", on_text_delta=None)
+        assert result.text == "Hello from stream"
+        assert result.tool_calls is None
+        assert result.backend_name == "gemini"
+        assert result.usage == {"input_tokens": 5, "output_tokens": 3}

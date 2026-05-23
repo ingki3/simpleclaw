@@ -26,7 +26,11 @@ from simpleclaw.llm.models import (
     ToolCall,
     ToolDefinition,
 )
-from simpleclaw.llm.providers.base import LLMProvider, flatten_system_blocks
+from simpleclaw.llm.providers.base import (
+    LLMProvider,
+    TextDeltaCallback,
+    flatten_system_blocks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +211,123 @@ class GeminiProvider(LLMProvider):
             usage = {
                 "input_tokens": response.usage_metadata.prompt_token_count or 0,
                 "output_tokens": response.usage_metadata.candidates_token_count or 0,
+            }
+
+        return LLMResponse(
+            text=text,
+            backend_name=self._name,
+            model=self._model,
+            usage=usage,
+            tool_calls=tool_calls,
+            raw_assistant_message=raw_content,
+        )
+
+    async def stream(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        system_blocks: list[SystemBlock] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> LLMResponse:
+        """Gemini API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
+
+        BIZ-284: ``client.aio.models.generate_content_stream`` async iterator 를
+        받아 각 청크의 ``candidates[0].content.parts`` 를 순회한다. ``part.text``
+        델타마다 콜백을 await 하고, ``part.function_call`` 은 청크 단위로 누적해
+        최종 LLMResponse 의 tool_calls 로 반환한다. ``raw_assistant_message`` 는
+        마지막 청크의 ``candidate.content`` 를 보존 — 다음 턴에서
+        ``thought_signature`` 가 살아 있어야 Gemini 3.x 멀티턴이 깨지지 않는다.
+
+        스트림 중 콜백 예외는 흡수해 누적은 완수한다 (Claude 와 동일 정책).
+        ``on_text_delta=None`` 이면 그냥 누적만 해서 send() 와 동일 결과 — 호출
+        측 통일 인터페이스.
+        """
+        effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
+
+        config = types.GenerateContentConfig(
+            system_instruction=effective_system if effective_system else None,
+        )
+        if tools:
+            config.tools = self._convert_tools(tools)
+
+        if messages is not None:
+            contents = self._convert_messages(messages)
+        else:
+            contents = user_message
+
+        text_parts: list[str] = []
+        fc_parts: list[object] = []  # 누적된 raw FunctionCall (마지막 청크까지)
+        last_content = None  # raw_assistant_message 보존용 (thought_signature)
+        usage_metadata = None  # 종료 청크의 usage_metadata
+
+        try:
+            stream_iter = await self._client.aio.models.generate_content_stream(
+                model=self._model,
+                contents=contents,
+                config=config,
+            )
+            async for chunk in stream_iter:
+                if chunk.candidates:
+                    candidate = chunk.candidates[0]
+                    if candidate.content is not None:
+                        # 매 청크의 content 를 갱신 — 마지막 청크가 최종 raw.
+                        last_content = candidate.content
+                        if candidate.content.parts:
+                            for part in candidate.content.parts:
+                                if part.function_call is not None:
+                                    fc_parts.append(part.function_call)
+                                    continue
+                                delta_text = part.text or ""
+                                if not delta_text:
+                                    continue
+                                text_parts.append(delta_text)
+                                if on_text_delta is not None:
+                                    try:
+                                        await on_text_delta(delta_text)
+                                    except Exception as exc:  # noqa: BLE001
+                                        # sink 측 일시 오류(텔레그램 rate limit 등) 가
+                                        # LLM 응답 자체를 깨뜨리지 않도록 흡수.
+                                        logger.warning(
+                                            "Gemini stream on_text_delta callback "
+                                            "raised: %s",
+                                            exc,
+                                        )
+                if chunk.usage_metadata is not None:
+                    usage_metadata = chunk.usage_metadata
+        except Exception as e:
+            # send() 와 동일한 매핑 — 통합 에러 계층이 없으므로 이름 기반 분기.
+            error_name = type(e).__name__
+            if "auth" in error_name.lower() or "permission" in error_name.lower():
+                raise LLMAuthError(f"Gemini auth failed: {e}") from e
+            raise LLMProviderError(f"Gemini API error: {e}") from e
+
+        text = "".join(text_parts)
+
+        tool_calls: list[ToolCall] | None = None
+        raw_content = None
+        if fc_parts:
+            tc_list: list[ToolCall] = []
+            for fc in fc_parts:
+                # BIZ-249 — 모델이 반환한 fc.id 가 있으면 그대로 보존, 없으면 fallback.
+                fc_id = getattr(fc, "id", None) or str(uuid.uuid4())
+                tc_list.append(
+                    ToolCall(
+                        id=fc_id,
+                        name=fc.name,
+                        arguments=dict(fc.args) if fc.args else {},
+                    )
+                )
+            tool_calls = tc_list
+            # tool call 이 있으면 thought_signature 보존을 위해 마지막 content 를 노출.
+            raw_content = last_content
+
+        usage = None
+        if usage_metadata is not None:
+            usage = {
+                "input_tokens": usage_metadata.prompt_token_count or 0,
+                "output_tokens": usage_metadata.candidates_token_count or 0,
             }
 
         return LLMResponse(
