@@ -397,16 +397,20 @@ class TestClaudeProvider:
 
     @pytest.mark.asyncio
     async def test_stream_fallback_invokes_on_text_delta_once(self):
-        """Base 의 fallback stream(): send() 결과를 한 번에 콜백으로 흘려보낸다."""
-        # OpenAI provider 는 stream() 오버라이드가 없으므로 base 의 fallback 을 탄다.
-        # send() 를 mock 해서 LLMResponse 를 반환하게 한다.
+        """Base 의 fallback stream(): send() 결과를 한 번에 콜백으로 흘려보낸다.
+
+        OpenAI/Claude/Gemini 모두 stream() 을 오버라이드한 이후로 fallback 경로를
+        검증하려면 stream() 미오버라이드 provider 가 필요하므로, 테스트 내 dummy
+        subclass 로 base.py:51-76 의 동작을 직접 확인한다.
+        """
         from simpleclaw.llm.models import LLMResponse
-        provider = OpenAIProvider(model="gpt-4o", api_key="k")
+        from simpleclaw.llm.providers.base import LLMProvider as _Base
 
-        async def fake_send(*args, **kwargs):
-            return LLMResponse(text="full answer", backend_name="openai")
+        class _DummyProvider(_Base):
+            async def send(self, *args, **kwargs):
+                return LLMResponse(text="full answer", backend_name="dummy")
 
-        provider.send = fake_send  # type: ignore[assignment]
+        provider = _DummyProvider()
         collected: list[str] = []
 
         async def on_delta(d: str) -> None:
@@ -545,6 +549,298 @@ class TestOpenAIProvider:
         assert tc.name == "get_weather"
         # JSON 문자열이 dict로 파싱되어야 한다
         assert tc.arguments == {"location": "Tokyo"}
+
+    # -- BIZ-290: Streaming --
+
+    @staticmethod
+    def _make_text_chunk(text: str | None) -> MagicMock:
+        delta = MagicMock()
+        delta.content = text
+        delta.tool_calls = None
+        choice = MagicMock()
+        choice.delta = delta
+        chunk = MagicMock()
+        chunk.choices = [choice]
+        chunk.usage = None
+        return chunk
+
+    @staticmethod
+    def _make_tc_chunk(
+        index: int,
+        tc_id: str | None = None,
+        name: str | None = None,
+        arguments: str | None = None,
+    ) -> MagicMock:
+        fn = MagicMock()
+        fn.name = name
+        fn.arguments = arguments
+        tc = MagicMock()
+        tc.index = index
+        tc.id = tc_id
+        tc.function = fn
+        delta = MagicMock()
+        delta.content = None
+        delta.tool_calls = [tc]
+        choice = MagicMock()
+        choice.delta = delta
+        chunk = MagicMock()
+        chunk.choices = [choice]
+        chunk.usage = None
+        return chunk
+
+    @staticmethod
+    def _make_usage_chunk(prompt_tokens: int, completion_tokens: int) -> MagicMock:
+        # OpenAI 종료 청크: choices=[] 이고 usage 만 채움 (stream_options.include_usage).
+        chunk = MagicMock()
+        chunk.choices = []
+        chunk.usage = MagicMock(
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        )
+        return chunk
+
+    @staticmethod
+    def _stream_iter(chunks: list[MagicMock]):
+        """``await client.chat.completions.create(stream=True)`` 형태 흉내.
+
+        SDK 는 코루틴이 AsyncStream 을 반환 → ``async for`` 로 순회. AsyncMock 의
+        ``return_value`` 에 ``__aiter__`` 를 단 객체를 둔다.
+        """
+        class _Iter:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def __aiter__(self):
+                async def gen():
+                    for c in self._items:
+                        yield c
+                return gen()
+
+        return _Iter(chunks)
+
+    @pytest.mark.asyncio
+    async def test_stream_text_only_invokes_callback_per_chunk(self):
+        """text-only 스트림: 각 청크의 ``delta.content`` 가 on_text_delta 로 흐른다."""
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        chunks = [
+            self._make_text_chunk("Hello"),
+            self._make_text_chunk(", world"),
+            self._make_usage_chunk(prompt_tokens=7, completion_tokens=4),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream("sys", "hi", on_text_delta=on_delta)
+        assert collected == ["Hello", ", world"]
+        assert result.text == "Hello, world"
+        assert result.backend_name == "openai"
+        assert result.tool_calls is None
+        assert result.usage == {"input_tokens": 7, "output_tokens": 4}
+
+    @pytest.mark.asyncio
+    async def test_stream_passes_include_usage_option(self):
+        """``stream_options={"include_usage": True}`` 가 SDK 호출에 들어가야 한다.
+
+        없으면 종료 청크에 usage 가 빠져 input/output_tokens 추적이 불가능해진다.
+        """
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        create = AsyncMock(return_value=self._stream_iter([]))
+        provider._client.chat.completions.create = create
+
+        await provider.stream("sys", "hi")
+        kwargs = create.call_args.kwargs
+        assert kwargs["stream"] is True
+        assert kwargs["stream_options"] == {"include_usage": True}
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_accumulates_split_arguments(self):
+        """tool_call 의 arguments JSON 이 청크 분할되어 와도 누적·파싱돼야 한다."""
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        # 첫 청크: id + name + arguments 의 일부
+        # 두 번째 청크: arguments 의 나머지 (id/name 없음)
+        chunks = [
+            self._make_tc_chunk(
+                index=0,
+                tc_id="call_xyz",
+                name="get_weather",
+                arguments='{"locat',
+            ),
+            self._make_tc_chunk(index=0, arguments='ion": "Seoul"}'),
+            self._make_usage_chunk(prompt_tokens=12, completion_tokens=8),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "sys", "weather?", tools=SAMPLE_TOOLS, on_text_delta=on_delta
+        )
+        assert collected == []  # text delta 없음
+        assert result.text == ""
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        tc = result.tool_calls[0]
+        assert isinstance(tc, ToolCall)
+        assert tc.id == "call_xyz"
+        assert tc.name == "get_weather"
+        # 분할된 JSON 조각이 합쳐져 dict 로 파싱되어야 한다
+        assert tc.arguments == {"location": "Seoul"}
+        assert result.usage == {"input_tokens": 12, "output_tokens": 8}
+
+    @pytest.mark.asyncio
+    async def test_stream_text_and_tool_call_mixed(self):
+        """text + tool_call 혼합: text 누적과 tool_calls 가 분리 수집된다."""
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        chunks = [
+            self._make_text_chunk("Let me check."),
+            self._make_tc_chunk(
+                index=0,
+                tc_id="call_1",
+                name="get_weather",
+                arguments='{"location": "Busan"}',
+            ),
+            self._make_usage_chunk(prompt_tokens=20, completion_tokens=8),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        collected: list[str] = []
+
+        async def on_delta(d: str) -> None:
+            collected.append(d)
+
+        result = await provider.stream(
+            "sys", "weather?", tools=SAMPLE_TOOLS, on_text_delta=on_delta
+        )
+        assert collected == ["Let me check."]
+        assert result.text == "Let me check."
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].name == "get_weather"
+        assert result.tool_calls[0].arguments == {"location": "Busan"}
+        assert result.usage == {"input_tokens": 20, "output_tokens": 8}
+
+    @pytest.mark.asyncio
+    async def test_stream_multiple_tool_calls_by_index(self):
+        """index 다른 tool_call 들이 각각 별도 ToolCall 로 분리되어야 한다."""
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        chunks = [
+            self._make_tc_chunk(
+                index=0, tc_id="call_a", name="get_weather", arguments='{"x":1}'
+            ),
+            self._make_tc_chunk(
+                index=1, tc_id="call_b", name="search", arguments='{"q":"hi"}'
+            ),
+            self._make_usage_chunk(prompt_tokens=5, completion_tokens=5),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        result = await provider.stream("sys", "go", tools=SAMPLE_TOOLS)
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 2
+        # sorted(index) 순서를 따른다 — 호출 측 결정성 보장.
+        assert [tc.id for tc in result.tool_calls] == ["call_a", "call_b"]
+        assert result.tool_calls[0].arguments == {"x": 1}
+        assert result.tool_calls[1].arguments == {"q": "hi"}
+
+    @pytest.mark.asyncio
+    async def test_stream_callback_exception_does_not_abort(self):
+        """sink 콜백 예외(텔레그램 rate-limit) 가 stream() 전체를 깨면 안 된다."""
+        provider = OpenAIProvider(model="m", api_key="k")
+
+        chunks = [
+            self._make_text_chunk("partial"),
+            self._make_usage_chunk(prompt_tokens=1, completion_tokens=1),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        async def boom(_d: str) -> None:
+            raise RuntimeError("flood wait")
+
+        result = await provider.stream("s", "u", on_text_delta=boom)
+        # 콜백이 예외를 던져도 누적 결과는 정상 반환된다.
+        assert result.text == "partial"
+        assert result.usage == {"input_tokens": 1, "output_tokens": 1}
+
+    @pytest.mark.asyncio
+    async def test_stream_callback_none_matches_send_shape(self):
+        """``on_text_delta=None`` 이어도 LLMResponse 가 send() 와 동일 모양이어야 한다.
+
+        회귀 0 — 호출 측이 콜백을 안 줘도 정상 LLMResponse 가 돌아온다.
+        """
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        chunks = [
+            self._make_text_chunk("Hello from stream"),
+            self._make_usage_chunk(prompt_tokens=5, completion_tokens=3),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        result = await provider.stream("sys", "hi", on_text_delta=None)
+        assert result.text == "Hello from stream"
+        assert result.tool_calls is None
+        assert result.backend_name == "openai"
+        assert result.usage == {"input_tokens": 5, "output_tokens": 3}
+
+    @pytest.mark.asyncio
+    async def test_stream_invalid_json_arguments_fallback_to_empty(self):
+        """깨진 JSON arguments 는 send() 와 동일하게 빈 dict 로 fallback 해야 한다."""
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        chunks = [
+            self._make_tc_chunk(
+                index=0,
+                tc_id="call_broken",
+                name="get_weather",
+                arguments='{not-json',
+            ),
+            self._make_usage_chunk(prompt_tokens=2, completion_tokens=2),
+        ]
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=self._stream_iter(chunks)
+        )
+
+        result = await provider.stream("sys", "hi", tools=SAMPLE_TOOLS)
+        assert result.tool_calls is not None
+        assert result.tool_calls[0].arguments == {}
+
+    @pytest.mark.asyncio
+    async def test_stream_auth_error_mapped(self):
+        """OpenAI AuthenticationError 가 LLMAuthError 로 매핑되어야 한다."""
+        import openai as _openai
+
+        provider = OpenAIProvider(model="gpt-4o", api_key="bad-key")
+        provider._client.chat.completions.create = AsyncMock(
+            side_effect=_openai.AuthenticationError(
+                message="Invalid API key",
+                response=MagicMock(status_code=401),
+                body={"error": {"message": "Invalid API key"}},
+            )
+        )
+        with pytest.raises(LLMAuthError):
+            await provider.stream("sys", "hi")
 
 
 class TestGeminiProvider:

@@ -203,3 +203,73 @@ class TestLLMRouter:
         assert result.text == "Hello Gemini"
         assert result.backend_name == "gemini"
         assert result.usage == {"input_tokens": 4, "output_tokens": 2}
+
+    @pytest.mark.asyncio
+    async def test_send_with_callback_routes_to_openai_stream(self):
+        """BIZ-290 — ``backend=openai`` + on_text_delta 시 OpenAIProvider.stream() 으로 라우팅.
+
+        base 의 fallback (send 결과를 한 번에 콜백) 이 아니라 실제 stream() override 가
+        호출되어 청크별 델타가 그대로 흘러야 한다 — Claude/Gemini 와 동일 패턴.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from simpleclaw.llm.providers.openai_provider import OpenAIProvider
+
+        provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
+
+        def _text_chunk(text: str) -> MagicMock:
+            delta = MagicMock()
+            delta.content = text
+            delta.tool_calls = None
+            choice = MagicMock()
+            choice.delta = delta
+            chunk = MagicMock()
+            chunk.choices = [choice]
+            chunk.usage = None
+            return chunk
+
+        def _usage_chunk(p: int, c: int) -> MagicMock:
+            chunk = MagicMock()
+            chunk.choices = []
+            chunk.usage = MagicMock(prompt_tokens=p, completion_tokens=c)
+            return chunk
+
+        chunks = [
+            _text_chunk("Hello"),
+            _text_chunk(" OpenAI"),
+            _usage_chunk(4, 2),
+        ]
+
+        class _Iter:
+            def __init__(self, items):
+                self._items = list(items)
+
+            def __aiter__(self):
+                async def gen():
+                    for c in self._items:
+                        yield c
+                return gen()
+
+        provider._client.chat.completions.create = AsyncMock(
+            return_value=_Iter(chunks)
+        )
+
+        router = LLMRouter(
+            backends={},
+            providers={"openai": provider},
+            default_backend="openai",
+        )
+
+        collected: list[str] = []
+
+        async def cb(delta: str) -> None:
+            collected.append(delta)
+
+        request = LLMRequest(user_message="hi", backend_name="openai")
+        result = await router.send(request, on_text_delta=cb)
+
+        # 청크 단위 델타가 그대로 콜백에 흘러야 한다 — fallback 이면 ["Hello OpenAI"] 한 덩이.
+        assert collected == ["Hello", " OpenAI"]
+        assert result.text == "Hello OpenAI"
+        assert result.backend_name == "openai"
+        assert result.usage == {"input_tokens": 4, "output_tokens": 2}
