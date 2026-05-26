@@ -81,6 +81,10 @@ class LLMRequest:
     tools가 주어지면 Native Function Calling 모드로 동작한다.
     system_blocks 가 주어지면 system_prompt 대신 사용되며, Anthropic 프로바이더는
     각 블록의 ``cache`` 플래그를 캐시 경계로 해석한다. 그 외 프로바이더는 단일 문자열로 합친다.
+
+    BIZ-297 — ``max_tokens`` 가 None 이 아니면 프로바이더가 해당 값을 출력 토큰 cap
+    으로 사용한다. None 이면 각 프로바이더의 기존 기본값(Claude 4096, OpenAI/Gemini
+    는 API 모델 기본값) 으로 fallback — 호환성 1순위.
     """
     system_prompt: str = ""
     user_message: str = ""
@@ -88,6 +92,7 @@ class LLMRequest:
     messages: list[dict] | None = None
     tools: list[ToolDefinition] | None = None
     system_blocks: list[SystemBlock] | None = None
+    max_tokens: int | None = None
 
 
 @dataclass

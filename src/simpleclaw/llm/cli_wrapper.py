@@ -60,10 +60,12 @@ class CLIProvider(LLMProvider):
         messages: list[dict] | None = None,
         tools: list | None = None,
         system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """CLI 도구에 메시지를 stdin으로 전달하고 stdout 응답을 반환한다.
 
-        NOTE: CLI 프로바이더는 function calling 과 prompt caching 마커를 지원하지 않는다.
+        NOTE: CLI 프로바이더는 function calling 과 prompt caching 마커, max_tokens 를
+        지원하지 않는다 — ``max_tokens`` 인자는 시그니처 통일을 위해 받지만 무시된다.
         ``system_blocks`` 가 주어지면 텍스트만 이어 붙여 ``system_prompt`` 처럼 사용한다.
         """
         # 실행 전 바이너리 존재 여부를 확인하여 명확한 에러 메시지 제공

@@ -142,6 +142,7 @@ class GeminiProvider(LLMProvider):
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Gemini API로 메시지를 전송하고 응답을 반환한다."""
         # BIZ-252 — Gemini 는 prompt caching 마커가 없는 단일 문자열만 받으므로
@@ -151,6 +152,10 @@ class GeminiProvider(LLMProvider):
             config = types.GenerateContentConfig(
                 system_instruction=effective_system if effective_system else None,
             )
+            # BIZ-297 — max_tokens 가 지정되면 출력 토큰 cap 으로 사용. None 이면
+            # max_output_tokens 를 비워 두고 모델 기본값에 맡긴다 (회귀 0).
+            if max_tokens:
+                config.max_output_tokens = max_tokens
 
             # 도구 정의가 있으면 config에 추가
             if tools:
@@ -230,6 +235,7 @@ class GeminiProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Gemini API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -249,6 +255,9 @@ class GeminiProvider(LLMProvider):
         config = types.GenerateContentConfig(
             system_instruction=effective_system if effective_system else None,
         )
+        # BIZ-297 — stream() 도 send() 와 동일하게 max_tokens 를 그대로 매핑.
+        if max_tokens:
+            config.max_output_tokens = max_tokens
         if tools:
             config.tools = self._convert_tools(tools)
 

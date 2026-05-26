@@ -209,6 +209,19 @@ _DAEMON_DEFAULTS: dict = {
             "min_ratio": 0.3,
             "per_file": {},
         },
+        # BIZ-297 (parent BIZ-296): 파일별 dreaming 출력 토큰 cap. BIZ-299 의 파일별
+        # 분리 dreaming 이 각 호출에서 해당 키를 ``LLMRequest.max_tokens`` 로 사용한다.
+        # 값이 None / 0 / 음수면 fallback (프로바이더 기본값) — 0 으로 cap 을 거는
+        # 실수는 의미 있는 응답을 거의 보장 못 하므로 None 으로 떨어뜨려 회귀 0.
+        # ``cluster`` 는 BIZ-299 의 cluster summary 호출용 — 단일 클러스터 요약은
+        # USER 류 인사이트보다 짧게 잘려도 손실이 적어 1024 로 둔다.
+        "max_tokens": {
+            "memory": 2048,
+            "user": 1024,
+            "soul": 512,
+            "agent": 512,
+            "cluster": 1024,
+        },
     },
     "wait_state": {
         "default_timeout": 3600,
@@ -239,6 +252,33 @@ def _coerce_default_ttl_days(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if n > 0 else None
+
+
+def _coerce_dreaming_max_tokens(raw: object) -> dict:
+    """BIZ-297 — ``dreaming.max_tokens`` 입력을 정규화한다.
+
+    각 파일 키(memory/user/soul/agent/cluster) 별로 양수 int 만 유효값으로
+    인정한다. None / 0 / 음수 / 비-수치 입력은 fallback 으로 None 으로 떨어뜨려
+    프로바이더 기본값(예: Claude 4096) 으로 회귀 — 운영자가 부주의하게 0 을
+    박아 출력이 잘리는 사고를 피한다. 누락된 키는 ``_DAEMON_DEFAULTS`` 의
+    추천값으로 채운다.
+    """
+    defaults = _DAEMON_DEFAULTS["dreaming"]["max_tokens"]
+    merged: dict[str, int | None] = {}
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    for key, default_val in defaults.items():
+        value = raw.get(key, default_val)
+        if value is None:
+            merged[key] = None
+            continue
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            merged[key] = default_val
+            continue
+        merged[key] = n if n > 0 else None
+    return merged
 
 
 def _coerce_language_policy(raw: dict) -> dict:
@@ -419,6 +459,9 @@ def load_daemon_config(config_path: str | Path) -> dict:
             # 코드("ko"/"en") 면 dreaming 출력을 해당 언어로 강제. ``min_ratio`` 는
             # 0.0~1.0 으로 클램프. ``per_file`` 은 파일 식별자→언어 코드 dict 만 허용.
             "language": _coerce_language_policy(language),
+            # BIZ-297: 파일별 dreaming 출력 토큰 cap. 양수만 의미 있는 값 — 0/음수/
+            # 잘못된 타입은 None 으로 떨어뜨려 프로바이더 기본값으로 fallback.
+            "max_tokens": _coerce_dreaming_max_tokens(dreaming.get("max_tokens")),
             # BIZ-133: dreaming sidecar 파일 경로 — 모두 운영 디렉터리(`~/.simpleclaw/`)
             # 기본 경로로 떨어진다. 호출자(run_bot.py 등) 는 *반드시* config 값을
             # 읽어 DreamingPipeline 에 주입해야 한다 (코드 하드코드 금지).
