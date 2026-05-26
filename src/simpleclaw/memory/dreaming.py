@@ -34,6 +34,7 @@ import json
 import logging
 import re
 import shutil
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -159,7 +160,28 @@ _VALID_AUTO_TRIGGER_MODES = frozenset({
 # 명시된다.
 
 
+def _coerce_meta_items(raw: object) -> list[dict]:
+    """LLM 이 반환한 ``user_insights_meta`` 를 정상화한다 (BIZ-299).
+
+    형식이 맞지 않는 항목은 silently drop — 한 항목이 잘못됐다고 전체 메타를
+    잃는 것은 다른 dreaming 산출물까지 못 보게 만든다. ``None`` 입력은 빈 리스트.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if (
+            isinstance(item, dict)
+            and isinstance(item.get("topic"), str)
+            and isinstance(item.get("text"), str)
+        ):
+            out.append({"topic": item["topic"], "text": item["text"]})
+    return out
+
+
 # Phase 3 — 클러스터별 LLM 요약 프롬프트 (기존 + 신규 메시지를 받아 갱신된 라벨/요약 산출)
+# BIZ-299 — 본 상수는 ``cluster.yaml`` 로 이전됐다. 모듈 임포트 호환을 위해 남겨두지만
+# 신규 호출은 모두 ``load_dreaming_prompt("cluster")`` 를 거친다. 폐기 예정.
 _CLUSTER_SUMMARY_PROMPT = """\
 다음은 한 시맨틱 클러스터(주제 묶음)의 기존 요약과 새 메시지입니다.
 기존 요약을 갱신하여 새 정보를 반영하되, 핵심 사실만 유지하고 중복은 제거하세요.
@@ -232,6 +254,7 @@ class DreamingPipeline:
         language_policy: LanguagePolicy | None = None,
         safety_backup_manager: SafetyBackupManager | None = None,
         memory_backup_dir: str | Path | None = None,
+        max_tokens: dict[str, int | None] | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -446,6 +469,18 @@ class DreamingPipeline:
         # ``dreaming_runs.jsonl`` 의 ``details["recovered_from"]`` 에 기록한다.
         self._last_recovered_files: dict[str, str] = {}
 
+        # BIZ-299 — 파일별 출력 토큰 cap. None / 빠진 키는 프로바이더 기본값으로
+        # 회귀 (Claude 4096 등). 값은 ``LLMRequest.max_tokens`` (BIZ-297) 로 전달.
+        # 키: ``memory`` / ``user`` / ``soul`` / ``agent`` / ``active_projects`` / ``cluster``.
+        # ``active_projects`` 키가 빠지면 ``user`` 캡으로 떨어진다(USER.md 산출물이라 의미상 동일).
+        self._max_tokens: dict[str, int | None] = dict(max_tokens or {})
+
+        # BIZ-299 — 한 회차의 파일별 LLM 호출 메트릭(duration_ms, 토큰 사용량 등).
+        # ``run()`` 시점에 초기화되고, 정상/예외 종료 직전에 ``run_record.details``
+        # 에 ``per_file`` 키로 합쳐진다. 운영자가 Admin UI 에서 어느 호출이 느렸는지
+        # 또는 토큰을 많이 썼는지 한눈에 본다.
+        self._per_file_metrics: dict[str, dict] = {}
+
     def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
         """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
 
@@ -614,131 +649,244 @@ class DreamingPipeline:
         return self._runs_store
 
     async def summarize(self, messages: list) -> dict:
-        """LLM을 사용하여 대화 요약을 생성한다.
+        """LLM을 사용하여 대화 요약을 생성한다 — BIZ-299 부터는 파일별 다회 호출 오케스트레이터.
 
-        LLM 호출이 실패하거나 라우터가 없으면 단순 텍스트 요약으로 폴백한다.
+        라우터가 있으면 memory/user/soul/agent/active_projects 각각의 YAML 프롬프트를
+        로드해 별도 호출을 발사한다 (BIZ-299 §1). 호출 중 하나라도 실패하면 ``run`` 의
+        outer try/except 가 잡아 사이클 자체를 abort 한다 — fail-closed 시맨틱.
+
+        라우터가 없으면 단순 텍스트 폴백을 사용한다 (회귀 호환 — 기존 ``test_dreaming``
+        의 no-router 경로).
 
         Args:
             messages: 요약 대상 대화 메시지 리스트.
 
         Returns:
-            'memory'와 'user_insights' 키를 포함하는 딕셔너리.
+            ``memory`` / ``user_insights`` / ``user_insights_meta`` / ``soul_updates`` /
+            ``agent_updates`` / ``active_projects`` 6 키를 포함하는 딕셔너리.
+            모든 키는 항상 존재하며, 빈 값은 각 타입의 기본값(빈 문자열 또는 빈 리스트).
         """
+        # BIZ-299 — 파일별 메트릭은 매 호출 사이클마다 초기화. ``run`` 이 종료 시점에
+        # ``run_record.details["per_file"]`` 로 영속한다.
+        self._per_file_metrics = {}
+
         if not messages:
-            return {"memory": "", "user_insights": "", "user_insights_meta": [], "active_projects": []}
+            return {
+                "memory": "",
+                "user_insights": "",
+                "user_insights_meta": [],
+                "soul_updates": "",
+                "agent_updates": "",
+                "active_projects": [],
+            }
 
-        if self._router:
-            try:
-                result = await self._summarize_with_llm(messages)
-            except Exception:
-                logger.exception("LLM summarization failed, using fallback")
-            else:
-                # BIZ-80: LLM 산출물에 1차 언어 정책을 강제 적용. 정책이 비활성이면
-                # 입력을 그대로 반환한다(레거시 테스트 fixture 와 동일 동작).
-                return self._enforce_language_policy(result)
+        if not self._router:
+            # 라우터 부재 — 폴백 텍스트로 memory 만 채우고 나머지는 빈 값 (기존 동작 호환).
+            return {
+                "memory": self._summarize_fallback(messages),
+                "user_insights": "",
+                "user_insights_meta": [],
+                "soul_updates": "",
+                "agent_updates": "",
+                "active_projects": [],
+            }
 
-        return {
-            "memory": self._summarize_fallback(messages),
-            "user_insights": "",
-            "user_insights_meta": [],
-            "active_projects": [],
+        # BIZ-299 §3 — 1차는 순차 실행. ``asyncio.gather`` 병렬화는 follow-up sub-issue
+        # 에서 rate-limit 정책 측정 후 도입.
+        mem_part = await self.summarize_memory(messages)
+        user_part = await self.summarize_user(messages)
+        soul_part = await self.summarize_soul(messages)
+        agent_part = await self.summarize_agent(messages)
+        ap_part = await self.summarize_active_projects(messages)
+
+        merged: dict = {
+            "memory": mem_part.get("memory", ""),
+            "user_insights": user_part.get("user_insights", ""),
+            "user_insights_meta": user_part.get("user_insights_meta", []) or [],
+            "soul_updates": soul_part.get("soul_updates", ""),
+            "agent_updates": agent_part.get("agent_updates", ""),
+            "active_projects": ap_part.get("active_projects", []) or [],
         }
 
-    async def _summarize_with_llm(self, messages: list) -> dict:
-        """LLM을 호출하여 대화를 분석하고 memory/user/soul/agent 업데이트를 추출한다."""
-        from simpleclaw.llm.models import LLMRequest
+        # BIZ-80: LLM 산출물에 1차 언어 정책 강제 적용. 정책 비활성이면 입력을 그대로 통과.
+        return self._enforce_language_policy(merged)
 
-        existing_user_md = ""
-        if self._user_file and self._user_file.is_file():
-            existing_user_md = self._user_file.read_text(encoding="utf-8")
+    async def summarize_memory(self, messages: list) -> dict:
+        """MEMORY.md (journal) 갱신용 LLM 호출 (BIZ-299).
 
-        existing_soul_md = ""
-        if self._soul_file and self._soul_file.is_file():
-            existing_soul_md = self._soul_file.read_text(encoding="utf-8")
-
-        existing_agent_md = ""
-        if self._agent_file and self._agent_file.is_file():
-            existing_agent_md = self._agent_file.read_text(encoding="utf-8")
-
-        conv_lines = []
-        for msg in messages:
-            role = msg.role.value.upper()
-            conv_lines.append(f"[{role}] {msg.content}")
-        # LLM 컨텍스트 윈도우 초과를 방지하기 위해 8000자로 제한
-        conversations = "\n".join(conv_lines)[:8000]
-
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        # BIZ-80: 정책이 활성이면 ``language_instruction_block`` 이 한 단락의 한국어
-        # 강제 지시문을 만들어 프롬프트 본문에 끼워 넣는다. 비활성이면 빈 문자열.
-        language_instruction = language_instruction_block(self._language_policy)
-        # BIZ-298: 프롬프트는 ``memory.yaml`` 에서 로드. 운영자 override 가
-        # ``~/.simpleclaw/prompts/dreaming/memory.yaml`` 에 있으면 그쪽이 우선한다.
-        prompt_spec = load_dreaming_prompt("memory")
-        prompt = prompt_spec.format(
-            existing_soul_md=existing_soul_md or "(없음)",
-            existing_agent_md=existing_agent_md or "(없음)",
-            existing_user_md=existing_user_md or "(없음)",
-            conversations=conversations,
-            date=date_str,
-            language_instruction=language_instruction,
-        )
-
-        request = LLMRequest(
-            system_prompt=prompt_spec.system_prompt,
-            user_message=prompt,
-            backend_name=self._dreaming_model,
-        )
-        response = await self._router.send(request)
-        return self._parse_llm_result(response.text.strip())
-
-    def _parse_llm_result(self, raw: str) -> dict:
-        """LLM의 JSON 응답을 파싱하여 memory/user/soul/agent 업데이트를 추출한다.
-
-        LLM이 마크다운 코드 블록으로 감싼 경우에도 처리할 수 있다.
-        JSON 파싱 실패 시 원본 텍스트 앞 500자를 memory로 사용한다.
+        Returns:
+            ``{"memory": str}`` — 오늘 날짜 헤더 + bullet 본문. 비어 있으면 빈 문자열.
         """
-        # LLM이 ```json ... ``` 형태로 감싸는 경우 코드 블록 내용만 추출
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
+        raw = await self._call_dreaming_llm(
+            prompt_name="memory",
+            prompt_vars={
+                "language_instruction": language_instruction_block(self._language_policy),
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "conversations": self._format_conversations(messages),
+            },
+            max_tokens_key="memory",
+        )
+        result = self._extract_json_object(raw)
+        return {"memory": result.get("memory", "") if isinstance(result, dict) else ""}
 
-        try:
-            result = json.loads(raw)
-            # user_insights_meta — 객체 배열만 받아들이고, 형식에 안 맞는 항목은 silently drop.
-            raw_meta = result.get("user_insights_meta") or []
-            meta_items: list[dict] = []
-            if isinstance(raw_meta, list):
-                for item in raw_meta:
-                    if (
-                        isinstance(item, dict)
-                        and isinstance(item.get("topic"), str)
-                        and isinstance(item.get("text"), str)
-                    ):
-                        meta_items.append(
-                            {"topic": item["topic"], "text": item["text"]}
-                        )
-            # BIZ-74: active_projects는 list[dict]로 들어와야 한다. LLM이 잘못된 타입
-            # (문자열, dict 등)으로 반환하면 빈 리스트로 강등 — 본 단계에서 fail하면
-            # 다른 dreaming 산출물(memory/insights)까지 같이 잃는다.
-            raw_projects = result.get("active_projects") or []
-            if not isinstance(raw_projects, list):
+    async def summarize_user(self, messages: list) -> dict:
+        """USER.md insights 갱신용 LLM 호출 (BIZ-299).
+
+        Returns:
+            ``{"user_insights": str, "user_insights_meta": list[dict]}``.
+            ``user_insights_meta`` 는 ``{"topic": str, "text": str}`` 객체 배열 — 형식
+            오류 항목은 silently drop.
+        """
+        raw = await self._call_dreaming_llm(
+            prompt_name="user",
+            prompt_vars={
+                "language_instruction": language_instruction_block(self._language_policy),
+                "existing_user_md": self._read_existing(self._user_file),
+                "conversations": self._format_conversations(messages),
+            },
+            max_tokens_key="user",
+        )
+        result = self._extract_json_object(raw)
+        if not isinstance(result, dict):
+            return {"user_insights": "", "user_insights_meta": []}
+        return {
+            "user_insights": result.get("user_insights", "") or "",
+            "user_insights_meta": _coerce_meta_items(result.get("user_insights_meta")),
+        }
+
+    async def summarize_soul(self, messages: list) -> dict:
+        """SOUL.md 갱신용 LLM 호출 (BIZ-299).
+
+        Returns:
+            ``{"soul_updates": str}`` — 사용자가 명시적으로 지시한 성격/말투 변경 bullet.
+        """
+        raw = await self._call_dreaming_llm(
+            prompt_name="soul",
+            prompt_vars={
+                "language_instruction": language_instruction_block(self._language_policy),
+                "existing_soul_md": self._read_existing(self._soul_file),
+                "conversations": self._format_conversations(messages),
+            },
+            max_tokens_key="soul",
+        )
+        result = self._extract_json_object(raw)
+        return {"soul_updates": (result.get("soul_updates") or "") if isinstance(result, dict) else ""}
+
+    async def summarize_agent(self, messages: list) -> dict:
+        """AGENT.md 갱신용 LLM 호출 (BIZ-299).
+
+        Returns:
+            ``{"agent_updates": str}`` — 사용자가 명시적으로 지시한 행동/도구 설정 변경.
+        """
+        raw = await self._call_dreaming_llm(
+            prompt_name="agent",
+            prompt_vars={
+                "language_instruction": language_instruction_block(self._language_policy),
+                "existing_agent_md": self._read_existing(self._agent_file),
+                "conversations": self._format_conversations(messages),
+            },
+            max_tokens_key="agent",
+        )
+        result = self._extract_json_object(raw)
+        return {"agent_updates": (result.get("agent_updates") or "") if isinstance(result, dict) else ""}
+
+    async def summarize_active_projects(self, messages: list) -> dict:
+        """USER.md active-projects 섹션 갱신용 LLM 호출 (BIZ-299).
+
+        Returns:
+            ``{"active_projects": list[dict]}`` — ``{"name", "role", "recent_summary"}``
+            객체 배열. 잘못된 타입은 빈 리스트로 강등 (다른 산출물까지 같이 잃지 않도록).
+        """
+        raw = await self._call_dreaming_llm(
+            prompt_name="active_projects",
+            prompt_vars={
+                "language_instruction": language_instruction_block(self._language_policy),
+                "existing_user_md": self._read_existing(self._user_file),
+                "conversations": self._format_conversations(messages),
+            },
+            # ``active_projects`` 키가 없으면 ``user`` 캡으로 떨어뜨려 본다 — USER.md
+            # 산출물이라 의미상 동일한 길이 경향.
+            max_tokens_key="active_projects",
+            max_tokens_fallback_key="user",
+        )
+        result = self._extract_json_object(raw)
+        if not isinstance(result, dict):
+            return {"active_projects": []}
+        raw_projects = result.get("active_projects")
+        if not isinstance(raw_projects, list):
+            if raw_projects is not None:
                 logger.warning(
                     "active_projects field is not a list (got %s); ignoring",
                     type(raw_projects).__name__,
                 )
-                raw_projects = []
-            return {
-                "memory": result.get("memory", ""),
-                "user_insights": result.get("user_insights", ""),
-                "user_insights_meta": meta_items,
-                "soul_updates": result.get("soul_updates", ""),
-                "agent_updates": result.get("agent_updates", ""),
-                "active_projects": raw_projects,
-            }
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse dreaming JSON: %s", raw[:200])
+            raw_projects = []
+        return {"active_projects": raw_projects}
+
+    async def _call_dreaming_llm(
+        self,
+        *,
+        prompt_name: str,
+        prompt_vars: dict,
+        max_tokens_key: str,
+        max_tokens_fallback_key: str | None = None,
+    ) -> str:
+        """파일별 dreaming LLM 호출의 단일 진입점 (BIZ-299).
+
+        - YAML 프롬프트 로더(BIZ-298) 로 ``{prompt_name}.yaml`` 을 가져와 ``system_prompt``
+          와 ``user_prompt`` 를 구성한다.
+        - ``LLMRequest.max_tokens`` (BIZ-297) 에 운영자 config 의 ``dreaming.max_tokens.{key}``
+          값을 박는다. ``None`` / 누락이면 프로바이더 기본값으로 fallback.
+        - 호출 시간/토큰 사용량을 ``self._per_file_metrics[prompt_name]`` 에 기록 —
+          ``DreamingRunStore`` 가 행 메타로 영속한다.
+
+        호출 자체의 예외는 호출자(``summarize_*``) 로 그대로 전파한다 — ``run()`` 의
+        outer try/except 가 사이클 abort + 메트릭 error 기록을 책임진다.
+        """
+        max_tokens_used_key = max_tokens_key
+        if (
+            self._max_tokens.get(max_tokens_key) is None
+            and max_tokens_fallback_key is not None
+            and self._max_tokens.get(max_tokens_fallback_key) is not None
+        ):
+            max_tokens_used_key = max_tokens_fallback_key
+        return await self._call_dreaming_llm_for_key(
+            prompt_name=prompt_name,
+            prompt_vars=prompt_vars,
+            max_tokens_key=max_tokens_used_key,
+            metric_key=prompt_name,
+        )
+
+    def _read_existing(self, file_path: Path | None) -> str:
+        """파일이 존재하면 본문을, 없으면 ``"(없음)"`` placeholder 를 반환한다.
+
+        BIZ-299 — 파일별 LLM 호출이 기존 md 본문을 컨텍스트로 받기 위한 공용 헬퍼.
+        """
+        if file_path and file_path.is_file():
+            text = file_path.read_text(encoding="utf-8")
+            return text or "(없음)"
+        return "(없음)"
+
+    @staticmethod
+    def _format_conversations(messages: list) -> str:
+        """대화 메시지 리스트를 LLM 입력 문자열로 직렬화한다.
+
+        BIZ-299 — 기존 ``[:8000]`` 하드 truncation 을 *제거*. 누락 기간 backlog 가
+        길더라도 입력은 그대로 흘려보내고 모델 자체의 컨텍스트 한계에 의존한다.
+        (적응형 chunking / catch-up 윈도우 클램프는 별도 후속 sub-issue.)
+        """
+        lines = [f"[{msg.role.value.upper()}] {msg.content}" for msg in messages]
+        return "\n".join(lines)
+
+    def _parse_llm_result(self, raw: str) -> dict:
+        """레거시 6-필드 dreaming 응답 파서 — BIZ-299 이전 단일 호출 시그니처 보존용.
+
+        BIZ-299 부터 dreaming 은 파일별 다회 호출로 분리됐고, 각 파일은 자기 키만
+        파싱한다. 본 메서드는 기존 단위 테스트 (``test_dreaming.py`` 의
+        ``test_parse_llm_result_*``) 와 외부 검수 스크립트 호환을 위해 6 필드 합본
+        dict 를 반환한다. 신규 코드는 파일별 ``summarize_*`` 를 직접 호출하라.
+        """
+        obj = self._extract_json_object(raw)
+        if obj is None:
             return {
                 "memory": raw[:500],
                 "user_insights": "",
@@ -747,6 +895,49 @@ class DreamingPipeline:
                 "agent_updates": "",
                 "active_projects": [],
             }
+        raw_projects = obj.get("active_projects")
+        if not isinstance(raw_projects, list):
+            if raw_projects is not None:
+                logger.warning(
+                    "active_projects field is not a list (got %s); ignoring",
+                    type(raw_projects).__name__,
+                )
+            raw_projects = []
+        return {
+            "memory": obj.get("memory", "") or "",
+            "user_insights": obj.get("user_insights", "") or "",
+            "user_insights_meta": _coerce_meta_items(obj.get("user_insights_meta")),
+            "soul_updates": obj.get("soul_updates", "") or "",
+            "agent_updates": obj.get("agent_updates", "") or "",
+            "active_projects": raw_projects,
+        }
+
+    @staticmethod
+    def _extract_json_object(raw: str) -> dict | None:
+        """LLM 응답 텍스트에서 JSON 객체를 추출한다.
+
+        BIZ-299 — 파일별 호출이 각자의 파싱을 가지지 않도록 한 곳에서 처리. 마크다운
+        코드블록(``` ```)으로 감싼 경우와 JSON 파싱 실패 케이스 모두 처리하며, 실패
+        시 ``None`` 을 반환해 호출자가 빈 결과로 떨어뜨릴 수 있게 한다.
+        """
+        if not raw:
+            return None
+        text = raw
+        if "```" in text:
+            parts = text.split("```")
+            if len(parts) >= 2:
+                text = parts[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse dreaming JSON: %s", raw[:200])
+            return None
+        if not isinstance(obj, dict):
+            return None
+        return obj
 
     def _enforce_language_policy(self, result: dict) -> dict:
         """BIZ-80 — 추출된 dreaming 산출물에 1차 언어 정책을 적용한다.
@@ -1531,33 +1722,86 @@ class DreamingPipeline:
         existing_label: str,
         existing_summary: str,
     ) -> dict[str, str]:
-        """LLM에게 클러스터 메시지를 분석시켜 갱신된 라벨/요약을 받는다."""
-        from simpleclaw.llm.models import LLMRequest
+        """LLM에게 클러스터 메시지를 분석시켜 갱신된 라벨/요약을 받는다.
 
-        conv_lines = []
+        BIZ-299:
+        - 프롬프트는 ``cluster.yaml`` (BIZ-298 로더) 에서 로드 — 운영자 override 우선.
+        - ``LLMRequest.max_tokens`` 에 ``dreaming.max_tokens.cluster`` 값을 적용.
+        - 입력 ``[:6000]`` 하드 truncation 제거 — 누락 backlog 가 길어도 그대로 흘려보낸다.
+        - 호출 메트릭은 ``self._per_file_metrics["cluster_<cid?>"]`` 에 누적. cluster 갯수가
+          가변이라 key 충돌을 피하기 위해 누적 횟수 suffix 를 붙인다.
+        """
+        conv_lines: list[str] = []
         for msg in messages:
             role = msg.role.value.upper()
             ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
             conv_lines.append(f"[{ts} {role}] {msg.content}")
-        new_block = "\n".join(conv_lines)[:6000]
+        new_block = "\n".join(conv_lines)
 
-        prompt = _CLUSTER_SUMMARY_PROMPT.format(
-            existing_label=existing_label or "(없음)",
-            existing_summary=existing_summary or "(없음)",
-            new_messages=new_block,
+        # 같은 사이클 안에서 여러 cluster 가 호출될 수 있다 — metric key 충돌 방지를
+        # 위해 ``cluster_0``, ``cluster_1`` 식으로 누적 인덱스를 붙인다.
+        suffix = sum(1 for k in self._per_file_metrics if k.startswith("cluster_"))
+        metric_key = f"cluster_{suffix}"
+        raw = await self._call_dreaming_llm_for_key(
+            prompt_name="cluster",
+            prompt_vars={
+                "existing_label": existing_label or "(없음)",
+                "existing_summary": existing_summary or "(없음)",
+                "new_messages": new_block,
+            },
+            max_tokens_key="cluster",
+            metric_key=metric_key,
         )
+        return self._parse_cluster_result(raw, existing_label, existing_summary)
+
+    async def _call_dreaming_llm_for_key(
+        self,
+        *,
+        prompt_name: str,
+        prompt_vars: dict,
+        max_tokens_key: str,
+        metric_key: str,
+    ) -> str:
+        """``_call_dreaming_llm`` 의 cluster-친화 변형 — metric key 를 외부에서 지정.
+
+        cluster 호출은 한 사이클에 여러 번 일어나므로 ``prompt_name`` 단일 키로는
+        덮어쓰기가 발생한다. 이 헬퍼는 메트릭 키를 caller 가 결정한다.
+        """
+        from simpleclaw.llm.models import LLMRequest
+
+        spec = load_dreaming_prompt(prompt_name)
+        user_prompt = spec.format(**prompt_vars)
+
+        max_tokens = self._max_tokens.get(max_tokens_key)
         request = LLMRequest(
-            system_prompt=(
-                "You are a memory clustering assistant. "
-                "Respond with valid JSON only."
-            ),
-            user_message=prompt,
+            system_prompt=spec.system_prompt,
+            user_message=user_prompt,
             backend_name=self._dreaming_model,
+            max_tokens=max_tokens,
         )
-        response = await self._router.send(request)
-        return self._parse_cluster_result(
-            response.text.strip(), existing_label, existing_summary
-        )
+        started = time.monotonic()
+        try:
+            response = await self._router.send(request)
+        except Exception as exc:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            self._per_file_metrics[metric_key] = {
+                "duration_ms": elapsed_ms,
+                "max_tokens": max_tokens,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            raise
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        usage = response.usage if isinstance(response.usage, dict) else {}
+        metric: dict = {
+            "duration_ms": elapsed_ms,
+            "max_tokens": max_tokens,
+        }
+        if "input_tokens" in usage:
+            metric["input_tokens"] = usage.get("input_tokens")
+        if "output_tokens" in usage:
+            metric["output_tokens"] = usage.get("output_tokens")
+        self._per_file_metrics[metric_key] = metric
+        return response.text.strip()
 
     def _parse_cluster_result(
         self,
@@ -1891,10 +2135,17 @@ class DreamingPipeline:
             # 만 보는 게 아니라 *왜* 실패했는지 즉시 확인 가능.
             logger.exception("Dreaming cycle raised unexpected error")
             if run_record is not None and self._runs_store is not None:
+                # BIZ-299 — 예외로 abort 된 경우에도 이미 발사된 파일별 호출 메트릭이
+                # 있으면 어느 호출에서 실패했는지 행 메타로 남긴다.
+                details: dict = {}
+                per_file = self._snapshot_per_file_metrics()
+                if per_file:
+                    details["per_file"] = per_file
                 self._runs_store.finish(
                     run_record,
                     input_msg_count=len(id_pairs),
                     error=f"{type(exc).__name__}: {exc}",
+                    details=details or None,
                 )
             # 의도적으로 raise 하지 않는다 — 트리거 루프가 다음 사이클을 정상 시도해야 한다.
             return None
@@ -2000,13 +2251,17 @@ class DreamingPipeline:
             )
             self._restore_from_backups(backups)
             if run_record is not None and self._runs_store is not None:
+                details = {"message": str(exc)}
+                per_file = self._snapshot_per_file_metrics()
+                if per_file:
+                    details["per_file"] = per_file
                 self._runs_store.finish(
                     run_record,
                     input_msg_count=len(source_msg_ids),
                     generated_insight_count=len(changed_meta),
                     rejected_count=self._last_rejected_count,
                     skip_reason=SKIP_MIDWRITE_ABORTED,
-                    details={"message": str(exc)},
+                    details=details,
                 )
             return None
 
@@ -2018,12 +2273,17 @@ class DreamingPipeline:
              cluster_summary_text, active_projects_rendered]
         ):
             if run_record is not None and self._runs_store is not None:
+                details: dict = {}
+                per_file = self._snapshot_per_file_metrics()
+                if per_file:
+                    details["per_file"] = per_file
                 self._runs_store.finish(
                     run_record,
                     input_msg_count=len(source_msg_ids),
                     generated_insight_count=len(changed_meta),
                     rejected_count=self._last_rejected_count,
                     skip_reason=SKIP_EMPTY_RESULTS,
+                    details=details or None,
                 )
             return None
 
@@ -2031,17 +2291,32 @@ class DreamingPipeline:
         # 클러스터 모드에서 memory_summary가 비어있다면 클러스터 요약 통합본을 담는다.
         entry_summary = memory_summary or cluster_summary_text
         if run_record is not None and self._runs_store is not None:
-            # 정상 종료 — 메트릭 행을 success 로 마감.
+            # 정상 종료 — 메트릭 행을 success 로 마감. BIZ-299: 파일별 호출 메트릭을
+            # ``details["per_file"]`` 로 영속한다.
+            details: dict = {}
+            per_file = self._snapshot_per_file_metrics()
+            if per_file:
+                details["per_file"] = per_file
             self._runs_store.finish(
                 run_record,
                 input_msg_count=len(source_msg_ids),
                 generated_insight_count=len(changed_meta),
                 rejected_count=self._last_rejected_count,
+                details=details or None,
             )
         return MemoryEntry(
             summary=entry_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",
         )
+
+    def _snapshot_per_file_metrics(self) -> dict[str, dict]:
+        """BIZ-299 — 이번 사이클의 파일별 LLM 호출 메트릭을 dict 로 복사한다.
+
+        ``run_record.details["per_file"]`` 에 그대로 영속되며, Admin UI 가 "어떤 호출이
+        느렸나" / "토큰을 어디서 많이 썼나" 를 한 행에서 보여줄 수 있게 한다. 호출이 한
+        번도 일어나지 않으면 빈 dict.
+        """
+        return {k: dict(v) for k, v in self._per_file_metrics.items()}
 
     @staticmethod
     def _restore_from_backups(backups: list[tuple[Path, Path | None]]) -> None:
