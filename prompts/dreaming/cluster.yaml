@@ -1,16 +1,11 @@
-# BIZ-298 — 패키지 내장 default dreaming 프롬프트.
+# Phase 3 — 시맨틱 클러스터 요약 dreaming 프롬프트.
 #
-# 운영자가 ~/.simpleclaw/prompts/dreaming/{name}.yaml 를 만들면 그쪽이 우선한다.
-# 본 파일은 source-of-truth 가 아니라 *fallback default* — BIZ-298 시점에는
-# dreaming.py 의 단일 _DREAMING_PROMPT (또는 _CLUSTER_SUMMARY_PROMPT) 본문을
-# 그대로 옮긴 형태로 시드되어 있다.
-#
-# BIZ-299 에서 파일별로 본문을 분할하면, memory/user/soul/agent/active_projects
-# 각각의 system_prompt 와 user_prompt 를 그 목적에 맞게 좁힌다 (예: memory.yaml
-# 은 MEMORY.md 갱신용 필드만 추출하도록).
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지 (BIZ-301). 한 클러스터(주제 묶음)
+# 의 기존 라벨/요약과 이번 사이클에 새로 들어온 메시지를 받아 갱신된 라벨·요약
+# 을 산출한다 (MEMORY.md 의 cluster 섹션에 in-place 렌더링).
 
 version: 1
-description: Phase 3 cluster summary (BIZ-298 시드 — _CLUSTER_SUMMARY_PROMPT 본문)
+description: Phase 3 cluster summary — 한 클러스터의 기존 요약과 새 메시지를 받아 라벨/요약 갱신
 system_prompt: |-
   You are a memory clustering assistant. Respond with valid JSON only.
 user_prompt: |-

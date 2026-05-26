@@ -1,8 +1,8 @@
-# BIZ-299 — USER.md active-projects 섹션 전용 dreaming 프롬프트.
+# USER.md active-projects 섹션 전용 dreaming 프롬프트.
 #
-# 운영자가 ~/.simpleclaw/prompts/dreaming/active_projects.yaml 를 만들면 그쪽이
-# 우선한다. 출력은 USER.md 의 managed:dreaming:active-projects 섹션에 in-place
-# 렌더링되며, 같은 정보가 active_projects sidecar JSONL 에도 영속된다.
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지 (BIZ-301). 출력은 USER.md 의
+# managed:dreaming:active-projects 섹션에 in-place 렌더링되며, 같은 정보가
+# active_projects sidecar JSONL 에도 영속된다.
 
 version: 2
 description: USER.md active-projects 섹션 갱신용 — 사용자가 현재 집중 중인 프로젝트 엔티티 추출
