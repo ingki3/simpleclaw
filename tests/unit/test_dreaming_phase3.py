@@ -295,18 +295,34 @@ class TestRunIntegration:
     async def test_run_cluster_mode_with_llm(self, setup):
         store, pipeline, memory_file, user_file = setup
 
-        # LLM router 모킹 — 단일 dreaming prompt 와 _CLUSTER_SUMMARY_PROMPT 두 종류 응답
-        # send가 호출 순서대로 응답하도록 side_effect 사용
-        dreaming_resp = MagicMock()
-        dreaming_resp.text = (
-            '{"memory": "## today\\n- talked", "user_insights": "- likes mac",'
-            ' "soul_updates": "", "agent_updates": ""}'
+        # BIZ-299 — dreaming 은 파일별 5회(memory/user/soul/agent/active_projects) +
+        # cluster 모드는 영향받은 클러스터 수만큼 추가 호출. 본 테스트는 1개 클러스터.
+        memory_resp = MagicMock()
+        memory_resp.text = '{"memory": "## today\\n- talked"}'
+        user_resp = MagicMock()
+        user_resp.text = (
+            '{"user_insights": "- likes mac", "user_insights_meta": []}'
         )
+        soul_resp = MagicMock()
+        soul_resp.text = '{"soul_updates": ""}'
+        agent_resp = MagicMock()
+        agent_resp.text = '{"agent_updates": ""}'
+        ap_resp = MagicMock()
+        ap_resp.text = '{"active_projects": []}'
         cluster_resp = MagicMock()
         cluster_resp.text = '{"label": "맥북", "summary": "- 맥북 구매 논의"}'
 
         mock_router = MagicMock()
-        mock_router.send = AsyncMock(side_effect=[dreaming_resp, cluster_resp])
+        mock_router.send = AsyncMock(
+            side_effect=[
+                memory_resp,
+                user_resp,
+                soul_resp,
+                agent_resp,
+                ap_resp,
+                cluster_resp,
+            ]
+        )
         pipeline._router = mock_router
 
         _add_msg_with_embedding(store, "macbook?", [1.0, 0.0])

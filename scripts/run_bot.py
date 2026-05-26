@@ -302,6 +302,10 @@ async def main():
         language_policy=language_policy,
         # BIZ-132: 사이클 직전 safety backup 매니저 + preflight 자가 복원 입력.
         safety_backup_manager=safety_backup_manager,
+        # BIZ-297 / BIZ-299: 파일별 출력 토큰 cap (config: dreaming.max_tokens.{name}).
+        # ``DreamingPipeline`` 의 ``summarize_*`` 호출이 각자 자기 key 의 max_tokens 를
+        # ``LLMRequest.max_tokens`` 로 전달 — None / 0 / 음수는 프로바이더 기본값으로 회귀.
+        max_tokens=dreaming_config.get("max_tokens"),
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))
