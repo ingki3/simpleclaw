@@ -105,6 +105,7 @@ class ClaudeProvider(LLMProvider):
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Claude Messages API로 메시지를 전송하고 응답을 반환한다."""
         if messages is not None:
@@ -120,7 +121,7 @@ class ClaudeProvider(LLMProvider):
         try:
             kwargs: dict = {
                 "model": self._model,
-                "max_tokens": 4096,
+                "max_tokens": max_tokens if max_tokens else 4096,
                 "messages": msg_list,
             }
             if system_param is not None:
@@ -194,6 +195,7 @@ class ClaudeProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Claude Messages API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -217,7 +219,7 @@ class ClaudeProvider(LLMProvider):
 
         kwargs: dict = {
             "model": self._model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens if max_tokens else 4096,
             "messages": msg_list,
         }
         if system_param is not None:

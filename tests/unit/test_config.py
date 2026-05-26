@@ -255,6 +255,130 @@ daemon:
         assert result["dreaming"]["enable_clusters"] is False
         assert result["dreaming"]["cluster_threshold"] == 0.75
 
+    # -- BIZ-297: dreaming.max_tokens --
+
+    def test_dreaming_max_tokens_defaults(self, tmp_path: Path):
+        """``dreaming.max_tokens`` 누락 시 5개 키 모두 추천 기본값으로 채워져야 한다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    overnight_hour: 4
+""",
+        )
+        result = load_daemon_config(cfg)
+        mt = result["dreaming"]["max_tokens"]
+        assert mt == {
+            "memory": 2048,
+            "user": 1024,
+            "soul": 512,
+            "agent": 512,
+            "cluster": 1024,
+        }
+
+    def test_dreaming_max_tokens_yaml_override(self, tmp_path: Path):
+        """운영자가 YAML 에 박은 값이 그대로 반영되어야 한다 (파일별 cap 조정 가능)."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    max_tokens:
+      memory: 4096
+      user: 3000
+      soul: 256
+      agent: 256
+      cluster: 1500
+""",
+        )
+        result = load_daemon_config(cfg)
+        mt = result["dreaming"]["max_tokens"]
+        assert mt["memory"] == 4096
+        assert mt["user"] == 3000
+        assert mt["soul"] == 256
+        assert mt["agent"] == 256
+        assert mt["cluster"] == 1500
+
+    def test_dreaming_max_tokens_partial_override_merges_defaults(
+        self, tmp_path: Path
+    ):
+        """일부 키만 override 한 경우, 나머지는 기본값으로 채워져야 한다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    max_tokens:
+      memory: 8000
+""",
+        )
+        result = load_daemon_config(cfg)
+        mt = result["dreaming"]["max_tokens"]
+        assert mt["memory"] == 8000
+        # 나머지는 기본값 유지
+        assert mt["user"] == 1024
+        assert mt["soul"] == 512
+        assert mt["agent"] == 512
+        assert mt["cluster"] == 1024
+
+    def test_dreaming_max_tokens_invalid_values_fall_back_to_none(
+        self, tmp_path: Path
+    ):
+        """0 / 음수 / 잘못된 타입은 None 으로 떨어져 프로바이더 기본값으로 fallback."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    max_tokens:
+      memory: 0
+      user: -1
+      soul: "not-a-number"
+      agent: null
+      cluster: 1024
+""",
+        )
+        result = load_daemon_config(cfg)
+        mt = result["dreaming"]["max_tokens"]
+        # 0/음수는 None — 운영자가 cap 을 0 으로 박는 사고는 방지.
+        assert mt["memory"] is None
+        assert mt["user"] is None
+        # 잘못된 타입은 기본값으로 복원 (사용자가 의도한 cap 이 있을 가능성 보존).
+        assert mt["soul"] == 512
+        # 명시적 None 은 None 그대로 — 운영자가 의도해 비활성한 cap.
+        assert mt["agent"] is None
+        # 정상값은 그대로 통과.
+        assert mt["cluster"] == 1024
+
+    def test_dreaming_max_tokens_non_dict_falls_back_to_defaults(
+        self, tmp_path: Path
+    ):
+        """max_tokens 값이 dict 가 아닌 경우(예: 단일 정수) 전체가 기본값으로 떨어진다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    max_tokens: 2048
+""",
+        )
+        result = load_daemon_config(cfg)
+        mt = result["dreaming"]["max_tokens"]
+        # 잘못된 구조는 추천 기본값 전체로 fallback.
+        assert mt == {
+            "memory": 2048,
+            "user": 1024,
+            "soul": 512,
+            "agent": 512,
+            "cluster": 1024,
+        }
+
 
 # ---------------------------------------------------------------------------
 # 5. load_voice_config

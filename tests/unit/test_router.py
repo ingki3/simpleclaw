@@ -29,9 +29,10 @@ class MockProvider(LLMProvider):
         messages: list[dict] | None = None,
         tools=None,
         system_blocks=None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         return await self._mock_send(
-            system_prompt, user_message, messages, tools, system_blocks
+            system_prompt, user_message, messages, tools, system_blocks, max_tokens
         )
 
 
@@ -83,7 +84,7 @@ class TestLLMRouter:
         )
         await router.send(request)
         router._providers["provider_a"]._mock_send.assert_called_once_with(
-            "You are helpful.", "hello", None, None, None
+            "You are helpful.", "hello", None, None, None, None
         )
 
     @pytest.mark.asyncio
@@ -98,7 +99,7 @@ class TestLLMRouter:
         )
         await router.send(request)
         router._providers["provider_a"]._mock_send.assert_called_once_with(
-            "legacy fallback", "hello", None, None, blocks
+            "legacy fallback", "hello", None, None, blocks, None
         )
 
     @pytest.mark.asyncio
