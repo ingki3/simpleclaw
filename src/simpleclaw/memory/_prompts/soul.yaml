@@ -1,0 +1,90 @@
+# BIZ-298 — 패키지 내장 default dreaming 프롬프트.
+#
+# 운영자가 ~/.simpleclaw/prompts/dreaming/{name}.yaml 를 만들면 그쪽이 우선한다.
+# 본 파일은 source-of-truth 가 아니라 *fallback default* — BIZ-298 시점에는
+# dreaming.py 의 단일 _DREAMING_PROMPT (또는 _CLUSTER_SUMMARY_PROMPT) 본문을
+# 그대로 옮긴 형태로 시드되어 있다.
+#
+# BIZ-299 에서 파일별로 본문을 분할하면, memory/user/soul/agent/active_projects
+# 각각의 system_prompt 와 user_prompt 를 그 목적에 맞게 좁힌다 (예: memory.yaml
+# 은 MEMORY.md 갱신용 필드만 추출하도록).
+
+version: 1
+description: SOUL.md 성격/말투 변경 추출 (BIZ-298 시드 — 현재는 legacy _DREAMING_PROMPT 본문)
+system_prompt: |-
+  You are a conversation analyzer. Respond with valid JSON only.
+user_prompt: |-
+  다음 대화 내역을 분석하여 다섯 가지를 JSON으로 추출하세요.
+
+  ⚠️ 출력 규칙(중요): 본문은 SimpleClaw가 USER/MEMORY/AGENT/SOUL 파일의 dreaming
+  managed 섹션(`<!-- managed:dreaming:... -->` 마커 내부)에 append됩니다. 응답에
+  managed 마커 자체(`<!-- managed:dreaming:... -->`, `<!-- /managed:dreaming:... -->`)를
+  포함하지 마세요. 본문 텍스트만 작성하세요. 마커 외부에는 절대 쓰지 않으므로,
+  정체성·캘린더 매핑·디렉토리 규약 같은 보호 영역을 갱신하려 하지 마세요.
+  {language_instruction}
+
+  1. "memory": 오늘 있었던 사실, 이벤트, 결정 사항을 bullet point로 요약
+     - 날짜 헤더 포함 (## {date} 형식)
+     - 사실 기반만 (의견/추측 금지)
+     - 반복되는 주제나 관심사를 기록 (패턴 파악용)
+
+  2. "user_insights": 사용자에 대해 새로 알게 된 정보 (선호도, 관심사, 습관) — 사람이 읽는 bullet 텍스트
+     - 이미 알고 있는 정보(기존 USER.md 내용)는 제외
+     - 추측이 아닌 대화에서 명확히 드러난 정보만
+     - 민감한 개인정보(비밀번호, 금융정보)는 절대 저장하지 않음
+     - 없으면 빈 문자열
+
+  3. "user_insights_meta": 위 user_insights를 구조화한 객체 배열 (BIZ-73 — 누적 evidence 추적용)
+     - 각 항목 형식: {{"topic": "<3~10자 짧은 한국어 주제 키>", "text": "<bullet 한 줄>"}}
+     - topic 은 같은 주제로 다음 회차에 다시 관측될 때 매칭하기 위한 키 — 짧고 일관되게.
+       예: "맥북에어 가격 조회" → topic="맥북에어가격", "정치 뉴스 요약" → topic="정치뉴스".
+     - text 는 user_insights bullet 과 같은 문장(접두 "- " 없이).
+     - 단발 관측이라도 모두 포함하세요. confidence는 시스템이 부여합니다.
+     - 없으면 빈 배열 [].
+
+  4. "soul_updates": 에이전트의 성격·말투·호칭에 대한 사용자의 피드백
+     - 사용자가 명시적으로 요청한 변경만 (예: "반말 써", "이모지 쓰지 마", "~라고 불러")
+     - 기존 SOUL.md 내용과 중복이면 제외
+     - 추측하지 말고, 사용자가 직접 지시한 것만 포함
+     - 없으면 빈 문자열
+
+  5. "agent_updates": 에이전트 행동 규칙에 대한 사용자의 피드백
+     - 사용자가 명시적으로 요청한 설정 변경만 (예: 캘린더 추가, 스킬 설정 등)
+     - 기존 AGENT.md 내용과 중복이면 제외
+     - 없으면 빈 문자열
+
+  6. "active_projects": 사용자가 현재(이번 대화 윈도우 안에서) 집중 중인 "프로젝트" 엔티티 리스트
+     - 프로젝트는 사용자가 빌드/QA/리서치/운영 등 명확한 작업 단위를 가진 대상
+       (예: "SimpleClaw", "Multica", "회사 발표 자료") — 단순 관심사·뉴스 토픽이 아님
+     - 같은 프로젝트는 동일한 표기로 일관되게 출력 (대소문자/표기를 사이클마다 바꾸지 말 것)
+     - 각 항목은 다음 필드를 포함:
+       - "name": 프로젝트 이름 (사람이 읽는 표기, 예: "SimpleClaw")
+       - "role": 사용자의 역할/관계를 한 줄로
+         (예: "솔로 빌더 — 메모리 파이프라인 개선", "플랫폼 빌드/QA 운영자")
+       - "recent_summary": 이번 윈도우의 최근 활동을 한두 문장으로
+         (예: "BIZ-66 평가 후 sub-issue 10건을 분할하고 A·B 머지 리뷰 진행")
+     - 윈도우 안에서 활동이 없는 프로젝트는 출력하지 마세요 (sidecar에 보관된
+       기존 항목은 시스템이 자동으로 윈도우 외 처리합니다).
+     - 없으면 빈 리스트 []
+
+  ## 기존 SOUL.md 내용
+  {existing_soul_md}
+
+  ## 기존 AGENT.md 내용
+  {existing_agent_md}
+
+  ## 기존 USER.md 내용
+  {existing_user_md}
+
+  ## 대화 내역
+  {conversations}
+
+  JSON 형식으로만 응답하세요:
+  {{"memory": "## {date}\n- 항목1", "user_insights": "- 새 정보1", "user_insights_meta": [{{"topic": "주제키", "text": "새 정보1"}}], "soul_updates": "- 변경1", "agent_updates": "- 변경1", "active_projects": [{{"name": "...", "role": "...", "recent_summary": "..."}}]}}
+required_vars:
+  - language_instruction
+  - date
+  - existing_soul_md
+  - existing_agent_md
+  - existing_user_md
+  - conversations

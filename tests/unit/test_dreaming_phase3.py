@@ -295,7 +295,7 @@ class TestRunIntegration:
     async def test_run_cluster_mode_with_llm(self, setup):
         store, pipeline, memory_file, user_file = setup
 
-        # LLM router 모킹 — _DREAMING_PROMPT용과 _CLUSTER_SUMMARY_PROMPT용 두 종류 응답
+        # LLM router 모킹 — 단일 dreaming prompt 와 _CLUSTER_SUMMARY_PROMPT 두 종류 응답
         # send가 호출 순서대로 응답하도록 side_effect 사용
         dreaming_resp = MagicMock()
         dreaming_resp.text = (
