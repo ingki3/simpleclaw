@@ -1,26 +1,25 @@
-"""BIZ-298 — dreaming 프롬프트 YAML 외부화 로더.
+"""BIZ-301 — dreaming 프롬프트 YAML 로더 (repo-root SoT).
 
-운영자가 ``dreaming.py`` 의 코드를 손대지 않고도 LLM 프롬프트(시스템/유저)와
-필수 변수 명세를 ``~/.simpleclaw/prompts/dreaming/{name}.yaml`` 에서 덮어쓸 수
-있게 해 준다. 운영자 디렉터리에 파일이 없으면 패키지 내장 default
-(``simpleclaw/memory/_prompts/{name}.yaml``) 로 fallback 한다.
+dreaming 의 system/user prompt 와 required_vars 명세는 레포 루트 아래
+``prompts/dreaming/{name}.yaml`` 단일 위치에서만 관리한다. 운영자는 이 파일을
+직접 편집 + PR 으로 반영하며, 별도의 운영자 override 디렉터리나 패키지 내장
+fallback 은 없다 (BIZ-298 의 2단 fallback 폐지).
 
 설계 결정:
-- 운영자 override 가 *우선* — 디스크에 파일이 있으면 무조건 그쪽을 쓴다. 잘못
-  작성된 YAML 은 fail-closed (``PromptLoadError``) — 사이클 진입 직전에 발견되도록.
-- ``required_vars`` 는 YAML 메타 필드와 ``user_prompt`` 안의 ``{var}`` placeholder
-  집합이 *정확히* 일치할 때만 통과한다. 누락/오타로 인한 런타임 ``KeyError`` 를
-  사이클이 절반쯤 진행된 뒤가 아니라 로드 시점에 잡는다.
+- *Source of truth = repo root* — git 으로 추적/리뷰되는 first-class 파일. 같은
+  콘텐츠를 두 곳에서 유지하지 않는다.
+- repo root 해소는 ``SIMPLECLAW_ROOT`` env 우선, 없으면 모듈 위치에서 ``pyproject.toml``
+  까지 walk-up. 둘 다 실패하면 ``PromptLoadError`` (fail-closed).
+- ``required_vars`` 는 ``user_prompt`` 안의 ``{var}`` placeholder 집합과 *정확히*
+  일치할 때만 통과. 런타임 ``KeyError`` 를 로드 시점에 잡는다.
 - 한 프로세스(=한 dreaming 사이클) 안에서는 결과를 캐시한다. 운영자가 YAML 을
-  수정하면 *다음* 사이클에 반영된다 (hot-reload 는 BIZ-298 범위 밖, 별도 sub).
-- 패키지 내장 default 는 BIZ-298 시드 단계에서 현재 ``_DREAMING_PROMPT`` /
-  ``_CLUSTER_SUMMARY_PROMPT`` 본문을 그대로 옮겨 놓은 형태. 파일별 분기와
-  내용 분할은 BIZ-299 의 책임.
+  수정해도 데몬 재시작 / 다음 사이클까지는 반영되지 않는다 (hot-reload 는 별도 sub).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,12 +29,14 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-# 패키지 내장 default 디렉터리. ``simpleclaw/memory/_prompts/`` 에 6개 시드 YAML 이
-# 함께 배포된다 (setuptools package-data 로 포함).
-_PACKAGE_PROMPTS_DIR: Path = Path(__file__).parent / "_prompts"
+# repo root 를 명시적으로 주입할 때 쓰는 env. 테스트 격리 / 운영 배포 분리용.
+_REPO_ROOT_ENV: str = "SIMPLECLAW_ROOT"
 
-# 운영자 override 디렉터리. 부재해도 무방하며, 운영자가 커스터마이즈할 때만 채워진다.
-_DEFAULT_OPERATOR_PROMPTS_DIR: Path = Path("~/.simpleclaw/prompts/dreaming")
+# walk-up 시 발견하면 그 디렉터리를 repo root 로 채택할 marker.
+_REPO_ROOT_MARKER: str = "pyproject.toml"
+
+# repo root 아래 dreaming 프롬프트 디렉터리 (SoT).
+_PROMPTS_SUBPATH: tuple[str, ...] = ("prompts", "dreaming")
 
 
 class PromptLoadError(RuntimeError):
@@ -76,38 +77,38 @@ class DreamingPromptSpec:
             ) from exc
 
 
-# 프로세스 단위 캐시. 키는 ``(name, operator_dir resolved str)``.
+# 프로세스 단위 캐시. 키는 ``(name, repo_root resolved str)``.
 _CACHE: dict[tuple[str, str], DreamingPromptSpec] = {}
 
 
 def load_dreaming_prompt(
     name: str,
     *,
-    operator_dir: str | Path | None = None,
+    repo_root: str | Path | None = None,
     refresh: bool = False,
 ) -> DreamingPromptSpec:
-    """``{name}.yaml`` 을 운영자 디렉터리 → 패키지 내장 순으로 찾아 로드한다.
+    """``<repo_root>/prompts/dreaming/{name}.yaml`` 을 로드한다.
 
     Args:
         name: YAML basename (확장자 제외). 예: ``"memory"``, ``"cluster"``.
-        operator_dir: 운영자 override 디렉터리. ``None`` 이면 기본 경로
-            (``~/.simpleclaw/prompts/dreaming``) 사용. 테스트에서 격리 경로를
-            주입하기 위해 노출.
+        repo_root: repo root override. ``None`` 이면 ``SIMPLECLAW_ROOT`` env →
+            ``pyproject.toml`` walk-up 순으로 해소. 테스트가 격리된 레포 트리를
+            주입할 때 명시적으로 전달.
         refresh: True 면 캐시를 무시하고 디스크에서 다시 읽는다.
 
     Returns:
         해석된 :class:`DreamingPromptSpec`.
 
     Raises:
-        PromptLoadError: 운영자/패키지 양쪽 모두에 파일이 없거나, YAML 파싱/
-            스키마 검증에 실패한 경우.
+        PromptLoadError: repo root 해소 실패, YAML 파일 부재, 또는 YAML 파싱/
+            스키마 검증 실패 시.
     """
-    resolved_operator_dir = _resolve_operator_dir(operator_dir)
-    cache_key = (name, str(resolved_operator_dir))
+    resolved_root = _resolve_repo_root(repo_root)
+    cache_key = (name, str(resolved_root))
     if not refresh and cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    spec = _load_uncached(name, resolved_operator_dir)
+    spec = _load_uncached(name, resolved_root)
     _CACHE[cache_key] = spec
     return spec
 
@@ -117,27 +118,47 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
-def _resolve_operator_dir(operator_dir: str | Path | None) -> Path:
-    if operator_dir is None:
-        return _DEFAULT_OPERATOR_PROMPTS_DIR.expanduser()
-    return Path(operator_dir).expanduser()
+def _resolve_repo_root(repo_root: str | Path | None) -> Path:
+    """repo root 를 결정한다. override > env > walk-up.
+
+    walk-up 은 본 모듈 위치에서 시작하여 부모 디렉터리를 거슬러 올라가며
+    ``pyproject.toml`` 을 찾는다. editable install (`pip install -e .`) 과
+    source clone 양쪽에서 동작.
+    """
+    if repo_root is not None:
+        return Path(repo_root).expanduser().resolve()
+
+    env_value = os.environ.get(_REPO_ROOT_ENV)
+    if env_value:
+        return Path(env_value).expanduser().resolve()
+
+    found = _walk_up_for(Path(__file__).resolve(), _REPO_ROOT_MARKER)
+    if found is None:
+        raise PromptLoadError(
+            f"could not resolve simpleclaw repo root: "
+            f"{_REPO_ROOT_ENV} env unset and no {_REPO_ROOT_MARKER} found "
+            f"walking up from {Path(__file__).resolve()}"
+        )
+    return found
 
 
-def _load_uncached(name: str, operator_dir: Path) -> DreamingPromptSpec:
-    operator_path = operator_dir / f"{name}.yaml"
-    if operator_path.is_file():
-        logger.debug("loading dreaming prompt %r from operator override: %s",
-                     name, operator_path)
-        return _parse_yaml(name, operator_path)
+def _walk_up_for(start: Path, marker: str) -> Path | None:
+    """``start`` 의 부모를 거슬러 올라가며 marker 파일을 가진 첫 디렉터리를 반환."""
+    for candidate in (start, *start.parents):
+        if (candidate / marker).is_file():
+            return candidate
+    return None
 
-    package_path = _PACKAGE_PROMPTS_DIR / f"{name}.yaml"
-    if package_path.is_file():
-        return _parse_yaml(name, package_path)
 
-    raise PromptLoadError(
-        f"dreaming prompt {name!r} not found "
-        f"(looked in operator dir {operator_path} and package default {package_path})"
-    )
+def _load_uncached(name: str, repo_root: Path) -> DreamingPromptSpec:
+    path = repo_root.joinpath(*_PROMPTS_SUBPATH, f"{name}.yaml")
+    if not path.is_file():
+        raise PromptLoadError(
+            f"dreaming prompt {name!r} not found at {path} "
+            f"(repo_root={repo_root})"
+        )
+    logger.debug("loading dreaming prompt %r from %s", name, path)
+    return _parse_yaml(name, path)
 
 
 _FORMAT_FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

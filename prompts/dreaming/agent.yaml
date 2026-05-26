@@ -1,7 +1,6 @@
-# BIZ-299 — AGENT.md (행동 규칙/도구 설정) 전용 dreaming 프롬프트.
+# AGENT.md (행동 규칙/도구 설정) 전용 dreaming 프롬프트.
 #
-# 운영자가 ~/.simpleclaw/prompts/dreaming/agent.yaml 를 만들면 그쪽이 우선한다.
-# 본 파일은 패키지 내장 fallback default — 출력은 AGENT.md 의
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지 (BIZ-301). 출력은 AGENT.md 의
 # managed:dreaming:dreaming-updates 섹션에 append 된다. 사용자가 명시적으로
 # 지시한 도구/캘린더/스킬 등 *행동 규칙* 변경만 잡는다.
 

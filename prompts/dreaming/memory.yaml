@@ -1,9 +1,8 @@
-# BIZ-299 — MEMORY.md (시간순 journal) 전용 dreaming 프롬프트.
+# MEMORY.md (시간순 journal) 전용 dreaming 프롬프트.
 #
-# 운영자가 ~/.simpleclaw/prompts/dreaming/memory.yaml 를 만들면 그쪽이 우선한다.
-# 본 파일은 패키지 내장 fallback default — SoT 가 아니라 *시드*. 이 프롬프트의
-# 출력은 BIZ-72 managed:dreaming:journal 섹션에 append 되며, 그 외 파일
-# (USER/SOUL/AGENT/active-projects) 는 각자 다른 YAML/호출이 담당한다.
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지 (BIZ-301). 출력은 BIZ-72
+# managed:dreaming:journal 섹션에 append 되며, 그 외 파일 (USER/SOUL/AGENT/
+# active-projects) 는 각자 다른 YAML/호출이 담당한다.
 
 version: 2
 description: MEMORY.md (journal) 갱신용 — 오늘 있었던 사실/이벤트/결정을 bullet 으로 추출

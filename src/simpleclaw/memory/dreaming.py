@@ -145,14 +145,10 @@ _VALID_AUTO_TRIGGER_MODES = frozenset({
 })
 
 
-# BIZ-298 — dreaming 프롬프트는 ``src/simpleclaw/memory/_prompts/*.yaml`` 패키지 default
-# 로 이동했고, 운영자는 ``~/.simpleclaw/prompts/dreaming/{name}.yaml`` 에서 system/user
-# prompt 와 required_vars 를 덮어쓸 수 있다 (loader 가 운영자 → 패키지 순으로 해소).
-#
-# 본 모듈은 단일 호출용으로 ``memory.yaml`` 을 로드한다 — 파일별 분기(memory/user/
-# soul/agent/active_projects 4~5회 호출)는 BIZ-299 의 책임이며, 그 시점에 5개 YAML
-# 의 본문이 각 파일 목적에 맞게 좁혀진다. BIZ-298 시점에는 5개 모두 legacy 본문을
-# 그대로 담고 있다.
+# BIZ-301 — dreaming 프롬프트는 레포 루트 ``prompts/dreaming/{name}.yaml`` 단일
+# SoT 에서 관리된다 (BIZ-298 의 운영자 override / 패키지 fallback 2단 폐지).
+# ``prompt_loader.load_dreaming_prompt(name)`` 가 ``SIMPLECLAW_ROOT`` env → 모듈
+# 위치에서 ``pyproject.toml`` walk-up 순으로 root 를 해소한다.
 #
 # BIZ-80: ``{language_instruction}`` placeholder 는 정책이 비활성(primary=None) 이면
 # 빈 문자열로 대체되어 프롬프트에 어떤 언어 강제도 들어가지 않는다(레거시 호환).
@@ -177,27 +173,6 @@ def _coerce_meta_items(raw: object) -> list[dict]:
         ):
             out.append({"topic": item["topic"], "text": item["text"]})
     return out
-
-
-# Phase 3 — 클러스터별 LLM 요약 프롬프트 (기존 + 신규 메시지를 받아 갱신된 라벨/요약 산출)
-# BIZ-299 — 본 상수는 ``cluster.yaml`` 로 이전됐다. 모듈 임포트 호환을 위해 남겨두지만
-# 신규 호출은 모두 ``load_dreaming_prompt("cluster")`` 를 거친다. 폐기 예정.
-_CLUSTER_SUMMARY_PROMPT = """\
-다음은 한 시맨틱 클러스터(주제 묶음)의 기존 요약과 새 메시지입니다.
-기존 요약을 갱신하여 새 정보를 반영하되, 핵심 사실만 유지하고 중복은 제거하세요.
-요약은 마크다운 bullet point로 작성합니다.
-
-## 기존 라벨
-{existing_label}
-
-## 기존 요약
-{existing_summary}
-
-## 새 메시지(이번 드리밍 회차에 추가된 대화)
-{new_messages}
-
-JSON으로만 응답하세요:
-{{"label": "10자 이내 짧은 한국어 라벨", "summary": "- 핵심 사실 1\\n- 핵심 사실 2\\n- ..."}}"""
 
 
 # Phase 3 — MEMORY.md 클러스터 섹션 마커. 정규식이 아닌 단순 문자열 식별자로 검색.
