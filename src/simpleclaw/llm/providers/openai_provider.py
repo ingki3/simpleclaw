@@ -34,6 +34,19 @@ from simpleclaw.llm.providers.base import (
 logger = logging.getLogger(__name__)
 
 
+def _max_tokens_field(model: str) -> str:
+    """OpenAI 모델군에 따라 출력 cap 필드 이름을 결정한다 (BIZ-297).
+
+    o1/o3 reasoning 모델은 ``max_completion_tokens`` 를 요구하며 ``max_tokens`` 는
+    400 으로 거절된다. 그 외(gpt-4o, gpt-4, gpt-3.5 등) 는 ``max_tokens`` 를 사용.
+    호출자가 모델별 분기를 신경 쓰지 않도록 프로바이더 안에서 흡수한다.
+    """
+    name = (model or "").lower()
+    if name.startswith(("o1", "o3")):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI ChatGPT API 프로바이더."""
 
@@ -116,6 +129,7 @@ class OpenAIProvider(LLMProvider):
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Chat Completions API로 메시지를 전송하고 응답을 반환한다."""
         # BIZ-252 — OpenAI 는 prompt caching 마커가 없는 단일 문자열만 받으므로
@@ -137,6 +151,10 @@ class OpenAIProvider(LLMProvider):
             }
             if tools:
                 kwargs["tools"] = self._convert_tools(tools)
+            # BIZ-297 — max_tokens 가 지정되면 모델 종류에 맞는 필드명으로 cap 을
+            # 박는다. None 이면 기존 동작(필드 미지정 → API 기본값) 유지.
+            if max_tokens:
+                kwargs[_max_tokens_field(self._model)] = max_tokens
 
             response = await self._client.chat.completions.create(**kwargs)
         except openai.AuthenticationError as e:
@@ -189,6 +207,7 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Chat Completions streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -220,6 +239,9 @@ class OpenAIProvider(LLMProvider):
         }
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
+        # BIZ-297 — send() 와 동일하게 모델 종류에 맞는 cap 필드 매핑.
+        if max_tokens:
+            kwargs[_max_tokens_field(self._model)] = max_tokens
 
         text_parts: list[str] = []
         # index 별 누적 슬롯. OpenAI 는 tool_call 의 id/name/arguments 를 첫 청크

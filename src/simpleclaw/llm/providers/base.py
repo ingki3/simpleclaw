@@ -32,6 +32,7 @@ class LLMProvider(ABC):
         messages: list[dict] | None = None,
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """LLM에 메시지를 전송하고 응답을 반환한다.
 
@@ -43,6 +44,7 @@ class LLMProvider(ABC):
             system_blocks: 시스템 프롬프트의 세그먼트 목록. Anthropic 프로바이더는
                 ``cache=True`` 블록 끝에 prompt caching 경계 마커를 부착한다.
                 그 외 프로바이더는 모든 블록을 단일 문자열로 합친다.
+            max_tokens: 출력 토큰 cap. None 이면 프로바이더 기본값을 사용한다 (BIZ-297).
 
         Returns:
             LLMResponse: 텍스트 응답(또는 tool_calls)과 메타데이터를 담은 객체.
@@ -56,6 +58,7 @@ class LLMProvider(ABC):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """LLM 응답을 스트리밍하면서 ``on_text_delta`` 로 텍스트 델타를 흘려보낸다.
 
@@ -70,6 +73,7 @@ class LLMProvider(ABC):
             messages=messages,
             tools=tools,
             system_blocks=system_blocks,
+            max_tokens=max_tokens,
         )
         if on_text_delta is not None and response.text:
             await on_text_delta(response.text)
