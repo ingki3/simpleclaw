@@ -1,7 +1,6 @@
-# BIZ-299 — USER.md insights 전용 dreaming 프롬프트.
+# USER.md insights 전용 dreaming 프롬프트.
 #
-# 운영자가 ~/.simpleclaw/prompts/dreaming/user.yaml 를 만들면 그쪽이 우선한다.
-# 본 파일은 패키지 내장 fallback default — 출력은 USER.md 의
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지 (BIZ-301). 출력은 USER.md 의
 # managed:dreaming:insights 섹션과 InsightStore sidecar (BIZ-73 evidence 추적)
 # 두 곳에 모두 흘러간다. MEMORY/SOUL/AGENT/active-projects 는 각자 다른 호출.
 
