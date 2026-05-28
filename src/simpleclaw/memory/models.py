@@ -112,17 +112,17 @@ class MemoryEntry:
 
 
 class MemoryItemType(Enum):
-    """DB-backed 장기기억 항목의 논리 타입.
-
-    MEMORY/USER는 사람이 읽는 MEMORY.md/USER.md의 장기기억 성격을 구분하고,
-    SUGGESTION/INSIGHT는 드리밍 검토 루프의 후보·관측 메타를 같은 read model에서
-    조회하기 위한 타입이다. Phase 1에서는 UI 전환 없이 저장소 기반만 먼저 둔다.
-    """
+    """DB-backed 장기기억 항목의 논리 타입."""
 
     MEMORY = "memory"
     USER = "user"
     SUGGESTION = "suggestion"
     INSIGHT = "insight"
+    ACCEPTED_USER_INSIGHT = "accepted_user_insight"
+    ACTIVE_PROJECT = "active_project"
+    CLUSTER_SUMMARY = "cluster_summary"
+    DECISION = "decision"
+    PREFERENCE = "preference"
 
 
 class MemoryItemStatus(Enum):
@@ -130,6 +130,8 @@ class MemoryItemStatus(Enum):
 
     ACTIVE = "active"
     ARCHIVED = "archived"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
 
 
 @dataclass
@@ -153,7 +155,14 @@ class MemoryItem:
     type: MemoryItemType
     text: str
     source: str = ""
+    source_ref: str = ""
+    confidence: float = 0.0
+    importance: float = 0.0
     status: MemoryItemStatus = MemoryItemStatus.ACTIVE
+    first_seen: datetime = field(default_factory=datetime.now)
+    last_seen: datetime = field(default_factory=datetime.now)
+    last_accessed: datetime | None = None
+    embedding: np.ndarray | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     archived_at: datetime | None = None

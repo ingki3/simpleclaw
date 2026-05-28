@@ -44,6 +44,12 @@ def test_memory_items_schema_and_indexes_are_created(tmp_path):
     ConversationStore(db_path)
 
     assert "memory_items" in _table_names(db_path)
+    with sqlite3.connect(db_path) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_items)").fetchall()}
+    assert {
+        "id", "type", "text", "source", "source_ref", "confidence", "importance",
+        "status", "first_seen", "last_seen", "last_accessed", "embedding",
+    } <= cols
     indexes = _index_names(db_path)
     assert "idx_memory_items_type_status_updated" in indexes
     assert "idx_memory_items_source" in indexes
@@ -185,3 +191,36 @@ def test_memory_items_migration_is_additive_for_legacy_db(tmp_path):
         source="migration-test",
     )
     assert store.get_memory_item(created.id) == created
+
+def test_memory_item_embedding_search_filters_and_updates_last_accessed(tmp_path):
+    """active/confidence 필터를 통과한 memory item만 cosine search 되고 hit 메타를 갱신한다."""
+    store = ConversationStore(tmp_path / "memory-items-search.db")
+    keep = store.create_memory_item(
+        item_type=MemoryItemType.ACCEPTED_USER_INSIGHT,
+        text="사용자는 한국어 존댓말을 선호합니다.",
+        source="insight_store",
+        source_ref="topic:korean-tone",
+        confidence=0.9,
+        importance=0.8,
+        embedding=[1.0, 0.0],
+    )
+    store.create_memory_item(
+        item_type=MemoryItemType.PREFERENCE,
+        text="낮은 confidence 항목",
+        confidence=0.3,
+        embedding=[1.0, 0.0],
+    )
+    archived = store.create_memory_item(
+        item_type=MemoryItemType.DECISION,
+        text="아카이브된 결정",
+        confidence=0.95,
+        status=MemoryItemStatus.ARCHIVED,
+        embedding=[1.0, 0.0],
+    )
+
+    hits = store.search_memory_items([1.0, 0.0], k=5, min_confidence=0.7)
+
+    assert [(item.id, round(score, 3)) for item, score in hits] == [(keep.id, 1.0)]
+    assert store.get_memory_item(archived.id).status is MemoryItemStatus.ARCHIVED
+    accessed = store.mark_memory_item_accessed(keep.id)
+    assert accessed.last_accessed is not None

@@ -76,46 +76,60 @@ memory:
 - `enable_clusters` 플래그로 점진 도입 (BIZ-28부터 dev/main 기본 True, OFF로 두려면 명시적으로 false 지정)
 
 
-## 장기기억 항목 저장소 (`memory_items`, BIZ-307 Phase 1)
+## 장기기억 Retrieval 통합 (`memory_items`, BIZ-307 Phase 1)
 
-Phase 1은 MEMORY.md/USER.md bullet 파서나 Admin UI를 즉시 교체하지 않고,
-후속 Phase에서 안정적인 id 기반 CRUD/read model로 전환할 수 있도록
-`conversations.db`에 `memory_items` 테이블을 additive migration으로 추가합니다.
+Phase 1은 응답 시점의 `_retrieve_relevant_context()`가 기존 raw conversation RAG에 더해
+Dreaming이 만든 durable memory를 함께 회상하도록 통합합니다. 대상 source는
+`InsightStore` accepted/promoted USER insights, active projects sidecar, semantic cluster
+summary, 그리고 DB-backed `memory_items` read model입니다.
 
-### 스키마 책임
+### Retrieval pipeline
+
+1. `memory.rag.enabled=false`이면 기존처럼 RAG 전체를 건너뜁니다.
+2. query embedding을 한 번 생성한 뒤 source별로 독립 검색합니다.
+   - raw message embedding search
+   - `InsightStore`/active-project sidecar lexical relevance fallback
+   - `memory_items` embedding search
+   - `semantic_clusters` centroid/summary search
+3. archived/rejected/blocked, low-confidence, promotion threshold 미달 항목은 제외합니다.
+4. 동일 텍스트 또는 최근 윈도우에 이미 들어간 텍스트는 중복 주입하지 않습니다.
+5. source별 top_k, per-item 길이, 전체 context budget을 적용해 prompt bloat를 막습니다.
+6. sidecar 누락·손상·DB source 일부 실패는 warning/structured log로 남기고 나머지 source는 계속 사용합니다.
+
+프롬프트 섹션은 `## 장기기억`, `## 관련 과거 대화`, `## 클러스터 요약`으로 구분됩니다.
+
+### `memory_items` 스키마 책임
 
 `memory_items`는 다음 필드를 보존합니다:
 
-- `id` — 위치 기반 bullet id가 아니라 SQLite가 부여하는 안정적인 행 id
-- `type` — `memory`, `user`, `suggestion`, `insight`
+- `id` — SQLite가 부여하는 안정적인 행 id
+- `type` — `accepted_user_insight`, `active_project`, `cluster_summary`, `decision`, `preference` 등
 - `text` — 사람이 읽는 장기기억 본문
-- `source` — `dreaming`, `manual`, `admin` 같은 생성 출처
-- `status` / `archived_at` — 삭제 대신 active/archive 상태 전환으로 추적성 보존
-- `source_msg_ids` — 근거 대화 `messages.id` 목록(JSON TEXT)
-- `metadata` — 후속 UI/검토 루프 확장 메타(JSON TEXT)
+- `source` / `source_ref` — `insight_store`, `active_projects`, `semantic_cluster` 같은 생성 출처와 원천 id
+- `confidence` / `importance` — retrieval filter/rerank에 사용하는 신뢰도·중요도
+- `status` — `active`, `archived`, `rejected`, `blocked`; active retrieval은 active만 대상
+- `first_seen` / `last_seen` / `last_accessed` — 관측·접근 메타데이터
+- `embedding` — 기존 message embedding 규약과 같은 float32 BLOB
+- `source_msg_ids`, `metadata` — 근거 메시지와 후속 UI/검토 루프 확장 메타
 
-조회 인덱스는 `type + status + updated_at`, `status + updated_at`, `source` 기준으로
-두어 Admin Memory 목록/필터/최근순 조회에 맞춥니다.
+조회 인덱스는 `type + status + updated_at`, `status + confidence + importance`,
+`source + source_ref` 기준으로 둡니다.
 
 ### Store API
 
-`ConversationStore`가 최소 CRUD를 제공합니다:
+`ConversationStore`가 장기기억 read model API를 제공합니다:
 
-- `create_memory_item(...)`
-- `get_memory_item(id)`
+- `create_memory_item(...)` / `get_memory_item(id)`
 - `list_memory_items(item_type=..., status=..., source=..., include_archived=...)`
-- `update_memory_item(id, ...)`
-- `archive_memory_item(id)`
-
-기본 list는 active 항목만 `updated_at DESC, id DESC`로 반환하며,
-`include_archived=True`를 통해 archive 항목까지 추적할 수 있습니다.
+- `update_memory_item(id, ...)` / `archive_memory_item(id)`
+- `search_memory_items(query_vector, k=..., min_score=..., min_confidence=...)`
+- `mark_memory_item_accessed(id)`
 
 ### 기존 저장소와의 경계
 
 - `InsightStore` JSONL sidecar는 현재 드리밍 merge/decay/promotion 상태의 SSOT로 유지합니다.
-- `memory_items`는 Phase 1에서 UI 전환용 DB read model 기반만 제공합니다.
-- `web/admin/src/lib/api/memory-server.ts`의 MEMORY.md 파서 제거와 운영 데이터 마이그레이션은
-  후속 Phase 범위입니다.
+- `memory_items`는 retrieval/read model이며 운영 데이터 일괄 백필은 별도 후속 작업입니다.
+- Admin UI의 Memory 편집 UX 개편과 MEMORY.md/USER.md 파서 제거는 후속 Phase 범위입니다.
 
 ## 드리밍 파이프라인
 

@@ -363,6 +363,17 @@ class ConversationStore:
             return {}
         return data if isinstance(data, dict) else {}
 
+    @staticmethod
+    def _decode_embedding(blob: bytes | None) -> np.ndarray | None:
+        """memory_items.embedding BLOB을 float32 ndarray로 복원한다."""
+        if blob is None:
+            return None
+        try:
+            arr = np.frombuffer(blob, dtype=_EMBEDDING_DTYPE)
+        except (TypeError, ValueError):
+            return None
+        return arr.copy() if arr.size else None
+
     @classmethod
     def _memory_item_from_row(cls, row: sqlite3.Row | tuple) -> MemoryItem:
         """SQLite row를 MemoryItem dataclass로 변환한다."""
@@ -371,7 +382,14 @@ class ConversationStore:
             item_type,
             text,
             source,
+            source_ref,
+            confidence,
+            importance,
             status,
+            first_seen,
+            last_seen,
+            last_accessed,
+            embedding,
             created_at,
             updated_at,
             archived_at,
@@ -383,7 +401,16 @@ class ConversationStore:
             type=MemoryItemType(item_type),
             text=text,
             source=source or "",
+            source_ref=source_ref or "",
+            confidence=float(confidence or 0.0),
+            importance=float(importance or 0.0),
             status=MemoryItemStatus(status),
+            first_seen=datetime.fromisoformat(first_seen),
+            last_seen=datetime.fromisoformat(last_seen),
+            last_accessed=(
+                datetime.fromisoformat(last_accessed) if last_accessed else None
+            ),
+            embedding=cls._decode_embedding(embedding),
             created_at=datetime.fromisoformat(created_at),
             updated_at=datetime.fromisoformat(updated_at),
             archived_at=(
@@ -399,7 +426,13 @@ class ConversationStore:
         item_type: MemoryItemType | str,
         text: str,
         source: str = "",
+        source_ref: str = "",
+        confidence: float = 0.0,
+        importance: float = 0.0,
         status: MemoryItemStatus | str = MemoryItemStatus.ACTIVE,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
         source_msg_ids: list[int] | None = None,
         metadata: dict | None = None,
     ) -> MemoryItem:
@@ -411,18 +444,34 @@ class ConversationStore:
         normalized_type = self._coerce_memory_item_type(item_type)
         normalized_status = self._coerce_memory_item_status(status)
         now_iso = datetime.now().isoformat()
+        first_seen_iso = (first_seen or datetime.now()).isoformat()
+        last_seen_iso = (last_seen or first_seen or datetime.now()).isoformat()
         archived_at = now_iso if normalized_status is MemoryItemStatus.ARCHIVED else None
         msg_ids = self._normalize_source_msg_ids(source_msg_ids)
+        embedding_blob = None
+        if embedding is not None:
+            arr = np.asarray(embedding, dtype=_EMBEDDING_DTYPE)
+            if arr.ndim != 1 or arr.size == 0:
+                raise ValueError("embedding must be a non-empty 1-D vector")
+            embedding_blob = arr.tobytes()
         with sqlite3.connect(self._db_path) as conn:
             cursor = conn.execute(
                 "INSERT INTO memory_items "
-                "(type, text, source, status, created_at, updated_at, archived_at, "
-                "source_msg_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, archived_at, "
+                "source_msg_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     normalized_type.value,
                     text,
                     source,
+                    source_ref,
+                    float(confidence),
+                    float(importance),
                     normalized_status.value,
+                    first_seen_iso,
+                    last_seen_iso,
+                    None,
+                    embedding_blob,
                     now_iso,
                     now_iso,
                     archived_at,
@@ -440,7 +489,8 @@ class ConversationStore:
         """id로 장기기억 항목을 단건 조회한다. 없으면 None."""
         with sqlite3.connect(self._db_path) as conn:
             row = conn.execute(
-                "SELECT id, type, text, source, status, created_at, updated_at, "
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
                 "archived_at, source_msg_ids, metadata FROM memory_items WHERE id = ?",
                 (item_id,),
             ).fetchone()
@@ -476,7 +526,8 @@ class ConversationStore:
             params.append(source)
 
         sql = (
-            "SELECT id, type, text, source, status, created_at, updated_at, "
+            "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+            "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
             "archived_at, source_msg_ids, metadata FROM memory_items"
         )
         if where:
@@ -497,7 +548,14 @@ class ConversationStore:
         item_type: MemoryItemType | str | None = None,
         text: str | None = None,
         source: str | None = None,
+        source_ref: str | None = None,
+        confidence: float | None = None,
+        importance: float | None = None,
         status: MemoryItemStatus | str | None = None,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        last_accessed: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
         source_msg_ids: list[int] | None = None,
         metadata: dict | None = None,
     ) -> MemoryItem:
@@ -517,6 +575,30 @@ class ConversationStore:
         if source is not None:
             sets.append("source = ?")
             params.append(source)
+        if source_ref is not None:
+            sets.append("source_ref = ?")
+            params.append(source_ref)
+        if confidence is not None:
+            sets.append("confidence = ?")
+            params.append(float(confidence))
+        if importance is not None:
+            sets.append("importance = ?")
+            params.append(float(importance))
+        if first_seen is not None:
+            sets.append("first_seen = ?")
+            params.append(first_seen.isoformat())
+        if last_seen is not None:
+            sets.append("last_seen = ?")
+            params.append(last_seen.isoformat())
+        if last_accessed is not None:
+            sets.append("last_accessed = ?")
+            params.append(last_accessed.isoformat())
+        if embedding is not None:
+            arr = np.asarray(embedding, dtype=_EMBEDDING_DTYPE)
+            if arr.ndim != 1 or arr.size == 0:
+                raise ValueError("embedding must be a non-empty 1-D vector")
+            sets.append("embedding = ?")
+            params.append(arr.tobytes())
         if status is not None:
             normalized_status = self._coerce_memory_item_status(status)
             sets.append("status = ?")
@@ -562,6 +644,49 @@ class ConversationStore:
     def archive_memory_item(self, item_id: int) -> MemoryItem:
         """장기기억 항목을 삭제하지 않고 archived 상태로 전환한다."""
         return self.update_memory_item(item_id, status=MemoryItemStatus.ARCHIVED)
+
+    def mark_memory_item_accessed(self, item_id: int) -> MemoryItem:
+        """retrieval hit 후 last_accessed를 현재 시각으로 갱신한다."""
+        return self.update_memory_item(item_id, last_accessed=datetime.now())
+
+    def search_memory_items(
+        self,
+        query_vector: Sequence[float] | np.ndarray,
+        k: int = 5,
+        *,
+        min_score: float = -1.0,
+        min_confidence: float = 0.0,
+    ) -> list[tuple[MemoryItem, float]]:
+        """active memory_items를 embedding cosine similarity로 검색한다."""
+        query = np.asarray(query_vector, dtype=_EMBEDDING_DTYPE)
+        if query.ndim != 1 or query.size == 0:
+            raise ValueError("query_vector must be a non-empty 1-D vector")
+        query_norm = float(np.linalg.norm(query))
+        if query_norm == 0.0:
+            raise ValueError("query_vector must not be a zero vector")
+        query_unit = query / query_norm
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+                "archived_at, source_msg_ids, metadata FROM memory_items "
+                "WHERE status = ? AND confidence >= ? AND embedding IS NOT NULL",
+                (MemoryItemStatus.ACTIVE.value, float(min_confidence)),
+            ).fetchall()
+        results: list[tuple[MemoryItem, float]] = []
+        for row in rows:
+            item = self._memory_item_from_row(row)
+            if item.embedding is None or item.embedding.shape != query.shape:
+                continue
+            emb_norm = float(np.linalg.norm(item.embedding))
+            if emb_norm == 0.0:
+                continue
+            score = float(np.dot(query_unit, item.embedding / emb_norm))
+            if score < min_score:
+                continue
+            results.append((item, score))
+        results.sort(key=lambda pair: pair[1], reverse=True)
+        return results[:k]
     # ------------------------------------------------------------------
     # 분포 통계 (BIZ-29) — 임베딩 커버리지/클러스터 분포 모니터링용
     # ------------------------------------------------------------------
