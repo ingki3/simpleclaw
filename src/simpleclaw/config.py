@@ -48,12 +48,12 @@ def _resolve_secret_field(value: object) -> str:
 
 
 # 페르소나 엔진 기본 설정값
-# BIZ-133: 운영 디렉터리는 저장소 working tree 가 아니라 사용자 홈 (`~/.simpleclaw/`)
-# 으로 이전한다 — git 작업과 dreaming 런타임 쓰기가 같은 디렉터리를 공유하지
-# 않게 해 BIZ-28 류의 race 가 *발생할 수 없도록* 만들기 위함.
+# BIZ-302: 페르소나 base folder 기본값을 ``~/.simpleclaw-agent/default`` 로 전환.
+# 개발 워크스페이스/배포 트리와 페르소나 라이브 파일을 물리적으로 분리해
+# 운영 구조(개발→git→배포)를 단순화한다.
 _DEFAULTS = {
     "token_budget": 4096,
-    "local_dir": "~/.simpleclaw",
+    "local_dir": "~/.simpleclaw-agent/default",
     "global_dir": "~/.agents/main",
     "files": [
         {"name": "AGENT.md", "type": "agent"},
@@ -1016,6 +1016,39 @@ _SUB_AGENTS_DEFAULTS: dict = {
         "network": False,
     },
 }
+
+
+def load_security_config(config_path: str | Path) -> dict:
+    """config.yaml에서 security 섹션을 로드한다.
+
+    BIZ-302 후속 — ``vault_path`` / ``master_key_path`` 키가 있으면 ``~`` 확장 후
+    절대경로로 반환한다. 두 키는 ``EncryptedFileBackend`` 의 시크릿 볼트와 마스터
+    키 파일 위치를 가리키며, 부트스트랩(``configure_default_manager``)에 전달된다.
+    """
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return {}
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    sec = data.get("security", {})
+    if not isinstance(sec, dict):
+        return {}
+
+    for key in ("vault_path", "master_key_path"):
+        value = sec.get(key)
+        if isinstance(value, str) and value:
+            sec[key] = str(Path(value).expanduser())
+        elif value is not None:
+            sec[key] = None
+    return sec
 
 
 def load_sub_agents_config(config_path: str | Path) -> dict:

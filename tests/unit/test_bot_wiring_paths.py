@@ -301,11 +301,12 @@ def test_safety_backup_wiring_routes_under_user_base(tmp_path: Path):
         )
 
 
-def test_safety_backup_wiring_uses_simpleclaw_defaults_when_config_missing(tmp_path: Path):
-    """config.yaml 이 없을 때도 wiring 결과가 ``~/.simpleclaw/`` 아래로 떨어진다.
+def test_safety_backup_wiring_uses_split_defaults_when_config_missing(tmp_path: Path):
+    """config.yaml 이 없을 때도 wiring 결과가 새 기본 경로 정책을 따른다.
 
-    BIZ-138 의 1차 가드 — 배포 환경에서 config 한 줄이 빠져도 ``.agent/`` 로
-    회귀하지 않도록 모든 기본값이 운영 디렉터리를 가리켜야 한다.
+    BIZ-302 반영: persona 파일은 ``~/.simpleclaw-agent/default``,
+    daemon/agent 런타임 데이터는 ``~/.simpleclaw`` 를 기본으로 사용한다.
+    공통 가드: 어떤 경우에도 ``.agent/`` 상대 경로로 회귀하면 안 된다.
     """
     persona = load_persona_config(tmp_path / "missing.yaml")
     agent = load_agent_config(tmp_path / "missing.yaml")
@@ -313,11 +314,24 @@ def test_safety_backup_wiring_uses_simpleclaw_defaults_when_config_missing(tmp_p
     wiring = _simulate_safety_backup_wiring(persona, agent, daemon)
 
     home = Path("~").expanduser().resolve()
-    expected_root = (home / ".simpleclaw").resolve()
-    for path in (*wiring["files"], *wiring["databases"], wiring["backup_root"]):
+    expected_runtime_root = (home / ".simpleclaw").resolve()
+    expected_persona_root = (home / ".simpleclaw-agent" / "default").resolve()
+
+    for path in wiring["files"]:
         resolved = path.resolve()
-        assert expected_root in resolved.parents or resolved == expected_root, (
-            f"기본 wiring 경로가 ``~/.simpleclaw/`` 외부로 회귀: {path}"
+        in_persona = expected_persona_root in resolved.parents or resolved == expected_persona_root
+        in_runtime = expected_runtime_root in resolved.parents or resolved == expected_runtime_root
+        assert in_persona or in_runtime, (
+            f"기본 file wiring 경로가 허용 루트(~/.simpleclaw-agent/default, ~/.simpleclaw) 외부로 회귀: {path}"
+        )
+        assert ".agent" not in resolved.parts, (
+            f"기본 wiring 경로에 ``.agent`` 세그먼트가 남아있음: {path}"
+        )
+
+    for path in (*wiring["databases"], wiring["backup_root"]):
+        resolved = path.resolve()
+        assert expected_runtime_root in resolved.parents or resolved == expected_runtime_root, (
+            f"기본 runtime wiring 경로가 ``~/.simpleclaw`` 외부로 회귀: {path}"
         )
         assert ".agent" not in resolved.parts, (
             f"기본 wiring 경로에 ``.agent`` 세그먼트가 남아있음: {path}"
