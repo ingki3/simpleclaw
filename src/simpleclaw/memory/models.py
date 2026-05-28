@@ -1,7 +1,8 @@
 """메모리 시스템의 데이터 모델을 정의하는 모듈.
 
-대화 메시지(ConversationMessage), 핵심 기억(MemoryEntry), 역할 열거형(MessageRole) 등
-메모리 패키지 전체에서 공통으로 사용하는 자료 구조와 예외 클래스를 포함한다.
+대화 메시지(ConversationMessage), 핵심 기억(MemoryEntry), DB-backed 장기기억
+항목(MemoryItem), 역할 열거형(MessageRole) 등 메모리 패키지 전체에서 공통으로
+사용하는 자료 구조와 예외 클래스를 포함한다.
 """
 
 from __future__ import annotations
@@ -108,6 +109,56 @@ class MemoryEntry:
     created_at: datetime = field(default_factory=datetime.now)
     source: str = ""  # 예: "dreaming_2026-04-17"
 
+
+
+class MemoryItemType(Enum):
+    """DB-backed 장기기억 항목의 논리 타입.
+
+    MEMORY/USER는 사람이 읽는 MEMORY.md/USER.md의 장기기억 성격을 구분하고,
+    SUGGESTION/INSIGHT는 드리밍 검토 루프의 후보·관측 메타를 같은 read model에서
+    조회하기 위한 타입이다. Phase 1에서는 UI 전환 없이 저장소 기반만 먼저 둔다.
+    """
+
+    MEMORY = "memory"
+    USER = "user"
+    SUGGESTION = "suggestion"
+    INSIGHT = "insight"
+
+
+class MemoryItemStatus(Enum):
+    """DB-backed 장기기억 항목의 수명주기 상태."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+@dataclass
+class MemoryItem:
+    """장기기억 항목의 SQLite read model 표현.
+
+    Attributes:
+        id: ``memory_items`` 행 id. 저장 전 객체를 만들 경우 0을 사용한다.
+        type: MEMORY/USER/SUGGESTION/INSIGHT 중 하나.
+        text: 사용자가 읽거나 검색할 기억 본문.
+        source: 항목 생성 출처(dreaming, manual, admin 등).
+        status: 활성/아카이브 상태. 삭제 대신 상태 전환으로 추적성을 보존한다.
+        created_at: 최초 생성 시각.
+        updated_at: 마지막 내용/메타 갱신 시각.
+        archived_at: archive 전환 시각. 활성 항목은 None.
+        source_msg_ids: 근거 대화 messages.id 목록. 중복 제거·오름차순으로 보관한다.
+        metadata: 후속 Phase에서 UI/검토 루프가 사용할 확장 메타 정보.
+    """
+
+    id: int
+    type: MemoryItemType
+    text: str
+    source: str = ""
+    status: MemoryItemStatus = MemoryItemStatus.ACTIVE
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    archived_at: datetime | None = None
+    source_msg_ids: list[int] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
 @dataclass
 class ClusterRecord:

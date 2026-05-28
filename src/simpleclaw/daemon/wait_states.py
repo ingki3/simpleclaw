@@ -15,7 +15,7 @@ import json
 import logging
 from datetime import datetime
 
-from simpleclaw.daemon.models import WaitState, WaitStateNotFoundError
+from simpleclaw.daemon.models import WaitState
 from simpleclaw.daemon.store import DaemonStore
 
 logger = logging.getLogger(__name__)

@@ -1361,7 +1361,6 @@ class AdminAPIServer:
         외부 네트워크에 닿으므로 격리된 단위 테스트는 ``channel_test_callback``을
         주입해 본 메서드를 우회한다.
         """
-        import aiohttp  # 지연 임포트
 
         full_cfg = self._read_yaml()
         message = options.get("message") or "Hello from admin"

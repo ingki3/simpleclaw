@@ -11,9 +11,7 @@ aiohttp 기반 단일 페이지 대시보드를 제공한다.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime
 
 from aiohttp import web
 
