@@ -485,6 +485,74 @@ class ConversationStore:
             raise ValueError(f"memory item {item_id} was not created")
         return item
 
+    def get_memory_item_by_source(
+        self, source: str, source_ref: str
+    ) -> MemoryItem | None:
+        """source/source_ref natural key로 장기기억 항목을 조회한다."""
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+                "archived_at, source_msg_ids, metadata FROM memory_items "
+                "WHERE source = ? AND source_ref = ? ORDER BY id LIMIT 1",
+                (source, source_ref),
+            ).fetchone()
+        return self._memory_item_from_row(row) if row is not None else None
+
+    def upsert_memory_item(
+        self,
+        *,
+        item_type: MemoryItemType | str,
+        text: str,
+        source: str,
+        source_ref: str,
+        confidence: float = 0.0,
+        importance: float = 0.0,
+        status: MemoryItemStatus | str = MemoryItemStatus.ACTIVE,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
+        source_msg_ids: list[int] | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem:
+        """source/source_ref 기준으로 memory_items를 멱등 생성 또는 갱신한다.
+
+        embedding이 None이면 기존 embedding을 보존하고, 값이 제공될 때만 float32 BLOB로
+        갱신한다. text/source/status/confidence/importance는 embedding 유무와 무관하게
+        매 호출 최신값으로 반영한다.
+        """
+        if not source or not source_ref:
+            raise ValueError("source and source_ref are required for upsert")
+        existing = self.get_memory_item_by_source(source, source_ref)
+        if existing is None:
+            return self.create_memory_item(
+                item_type=item_type,
+                text=text,
+                source=source,
+                source_ref=source_ref,
+                confidence=confidence,
+                importance=importance,
+                status=status,
+                first_seen=first_seen,
+                last_seen=last_seen,
+                embedding=embedding,
+                source_msg_ids=source_msg_ids,
+                metadata=metadata,
+            )
+        return self.update_memory_item(
+            existing.id,
+            item_type=item_type,
+            text=text,
+            confidence=confidence,
+            importance=importance,
+            status=status,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            embedding=embedding,
+            source_msg_ids=source_msg_ids,
+            metadata=metadata,
+        )
+
     def get_memory_item(self, item_id: int) -> MemoryItem | None:
         """id로 장기기억 항목을 단건 조회한다. 없으면 None."""
         with sqlite3.connect(self._db_path) as conn:

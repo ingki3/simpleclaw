@@ -66,6 +66,11 @@ from simpleclaw.memory.models import (
     MemoryEntry,
     is_auto_trigger_channel,
 )
+from simpleclaw.memory.memory_items_sync import (
+    sync_active_projects_to_memory_items,
+    sync_cluster_summary_to_memory_item,
+    sync_insights_to_memory_items,
+)
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.prompt_loader import load_dreaming_prompt
 from simpleclaw.memory.protected_section import (
@@ -1471,6 +1476,14 @@ class DreamingPipeline:
         )
         return True
 
+    def _safe_sync_memory_items(self, label: str, fn, *args, **kwargs):
+        """memory_items sync failures must not break the dreaming response flow."""
+        try:
+            return fn(*args, **kwargs)
+        except Exception:  # noqa: BLE001
+            logger.exception("memory_items sync failed (%s); continuing", label)
+            return None
+
     def update_soul_file(self, updates: str) -> None:
         """에이전트 성격/말투 변경을 SOUL.md의 managed:dreaming:dreaming-updates에 추가한다."""
         if not self._soul_file or not updates:
@@ -2184,6 +2197,15 @@ class DreamingPipeline:
                 user_insights_meta, source_msg_ids=source_msg_ids
             )
 
+        if self._insights_store is not None:
+            self._safe_sync_memory_items(
+                "insights",
+                sync_insights_to_memory_items,
+                self._store,
+                self._insights_store.load().values(),
+                promotion_threshold=self._insight_promotion_threshold,
+            )
+
         cluster_summary_text = ""
         active_projects_rendered: list[ActiveProject] = []
         try:
@@ -2210,6 +2232,14 @@ class DreamingPipeline:
             if self.is_active_projects_enabled():
                 active_projects_rendered = self.update_active_projects(
                     active_project_obs
+                )
+                project_store = ActiveProjectStore(self._active_projects_file)
+                self._safe_sync_memory_items(
+                    "active_projects",
+                    sync_active_projects_to_memory_items,
+                    self._store,
+                    project_store.load().values(),
+                    window_days=self._active_projects_window_days,
                 )
 
             # MEMORY.md 갱신은 클러스터 모드 여부에 따라 분기
@@ -2336,6 +2366,14 @@ class DreamingPipeline:
             new_label = updated.get("label", existing_label)
             new_summary = updated.get("summary", existing_summary)
             self._store.update_cluster(cid, label=new_label, summary=new_summary)
+            updated_cluster = self._store.get_cluster(cid)
+            if updated_cluster is not None:
+                self._safe_sync_memory_items(
+                    "cluster_summary",
+                    sync_cluster_summary_to_memory_item,
+                    self._store,
+                    updated_cluster,
+                )
             self.upsert_memory_section(cid, new_label, new_summary)
             summaries.append(f"[cluster {cid} · {new_label}]\n{new_summary}")
         return "\n\n".join(summaries)
