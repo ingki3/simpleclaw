@@ -224,3 +224,73 @@ def test_memory_item_embedding_search_filters_and_updates_last_accessed(tmp_path
     assert store.get_memory_item(archived.id).status is MemoryItemStatus.ARCHIVED
     accessed = store.mark_memory_item_accessed(keep.id)
     assert accessed.last_accessed is not None
+
+
+def test_upsert_memory_item_is_idempotent_by_source_ref_and_preserves_embedding(tmp_path):
+    store = ConversationStore(tmp_path / "memory-items-upsert.db")
+
+    created = store.upsert_memory_item(
+        item_type=MemoryItemType.ACCEPTED_USER_INSIGHT,
+        text="초기 인사이트",
+        source="insight_store",
+        source_ref="insight:korean-tone",
+        confidence=0.7,
+        importance=0.7,
+        embedding=[1.0, 0.0],
+        source_msg_ids=[2],
+        metadata={"version": 1},
+    )
+    updated = store.upsert_memory_item(
+        item_type=MemoryItemType.ACCEPTED_USER_INSIGHT,
+        text="갱신된 인사이트",
+        source="insight_store",
+        source_ref="insight:korean-tone",
+        confidence=0.9,
+        importance=0.8,
+        source_msg_ids=[3, 2],
+        metadata={"version": 2},
+    )
+
+    assert updated.id == created.id
+    assert updated.text == "갱신된 인사이트"
+    assert updated.confidence == 0.9
+    assert updated.importance == 0.8
+    assert updated.source_msg_ids == [2, 3]
+    assert updated.metadata == {"version": 2}
+    assert updated.embedding is not None
+    assert updated.embedding.tolist() == [1.0, 0.0]
+    assert len(store.list_memory_items(include_archived=True)) == 1
+
+    archived = store.upsert_memory_item(
+        item_type=MemoryItemType.ACCEPTED_USER_INSIGHT,
+        text="갱신된 인사이트",
+        source="insight_store",
+        source_ref="insight:korean-tone",
+        status=MemoryItemStatus.ARCHIVED,
+    )
+    assert archived.id == created.id
+    assert archived.status is MemoryItemStatus.ARCHIVED
+    assert store.list_memory_items() == []
+
+
+def test_upsert_memory_item_replaces_embedding_when_provided(tmp_path):
+    store = ConversationStore(tmp_path / "memory-items-upsert-embedding.db")
+    created = store.upsert_memory_item(
+        item_type=MemoryItemType.CLUSTER_SUMMARY,
+        text="cluster",
+        source="semantic_cluster",
+        source_ref="cluster:1",
+        embedding=[1.0, 0.0],
+    )
+
+    updated = store.upsert_memory_item(
+        item_type=MemoryItemType.CLUSTER_SUMMARY,
+        text="cluster updated",
+        source="semantic_cluster",
+        source_ref="cluster:1",
+        embedding=[0.0, 1.0],
+    )
+
+    assert updated.id == created.id
+    assert updated.embedding is not None
+    assert updated.embedding.tolist() == [0.0, 1.0]

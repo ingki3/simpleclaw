@@ -119,16 +119,26 @@ summary, 그리고 DB-backed `memory_items` read model입니다.
 
 `ConversationStore`가 장기기억 read model API를 제공합니다:
 
-- `create_memory_item(...)` / `get_memory_item(id)`
+- `create_memory_item(...)` / `get_memory_item(id)` / `get_memory_item_by_source(source, source_ref)`
+- `upsert_memory_item(...)` — `source` + `source_ref` natural key 기준으로 중복 없이 생성/갱신하고, 새 embedding이 없으면 기존 embedding을 보존
 - `list_memory_items(item_type=..., status=..., source=..., include_archived=...)`
 - `update_memory_item(id, ...)` / `archive_memory_item(id)`
 - `search_memory_items(query_vector, k=..., min_score=..., min_confidence=...)`
 - `mark_memory_item_accessed(id)`
 
+### Write-side 동기화 경로 (BIZ-308)
+
+Dreaming/Admin write path는 기존 sidecar를 SSOT로 유지하면서 `memory_items` read model을 best-effort로 미러링합니다. sync 실패는 structured log로 남기고 Dreaming/Admin API 응답 흐름은 계속 진행합니다.
+
+- `InsightStore` 항목은 `insight_store` / `insight:{normalized_topic}` natural key로 upsert합니다. promoted insight와 high-confidence `decision:`/`preference:` 항목만 active가 되며, archived·low-confidence·unpromoted·sidecar에서 사라진 기존 row는 archived 처리합니다.
+- Admin suggestion review는 `suggestion_store` / `insight:{normalized_topic}` key로 accepted/edited 항목을 active `accepted_user_insight`로 upsert하고 rejected 항목은 archived 처리합니다.
+- active projects sidecar는 `active_projects` / `active_project:{normalized_name}` key로 window-active 프로젝트를 active `active_project` item으로 upsert합니다. window 밖이거나 sidecar에서 빠진 기존 project item은 archived 처리합니다.
+- semantic cluster summary 갱신은 `semantic_cluster` / `cluster:{id}` key로 `cluster_summary` item을 upsert합니다. summary가 비면 archived 처리하고, summary가 있으면 cluster centroid를 embedding으로 저장합니다.
+
 ### 기존 저장소와의 경계
 
 - `InsightStore` JSONL sidecar는 현재 드리밍 merge/decay/promotion 상태의 SSOT로 유지합니다.
-- `memory_items`는 retrieval/read model이며 운영 데이터 일괄 백필은 별도 후속 작업입니다.
+- `memory_items`는 retrieval/read model이며 운영 데이터 일괄 백필은 별도 후속 작업입니다. 이번 변경은 새 Dreaming/Admin write 이후의 증분 동기화만 수행합니다.
 - Admin UI의 Memory 편집 UX 개편과 MEMORY.md/USER.md 파서 제거는 후속 Phase 범위입니다.
 
 ## 드리밍 파이프라인
