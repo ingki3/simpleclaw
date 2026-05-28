@@ -394,7 +394,7 @@ def validate_patch(area: str, patch: dict) -> list[str]:
         if isinstance(routing, dict):
             for cat, val in routing.items():
                 if not isinstance(cat, str) or not cat:
-                    errors.append(f"llm.routing: 카테고리 이름은 비어있지 않은 문자열이어야 합니다")
+                    errors.append("llm.routing: 카테고리 이름은 비어있지 않은 문자열이어야 합니다")
                     continue
                 if val is None:
                     continue

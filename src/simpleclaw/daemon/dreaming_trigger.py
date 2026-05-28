@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.memory.conversation_store import ConversationStore

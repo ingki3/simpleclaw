@@ -65,6 +65,7 @@ from simpleclaw.channels.admin_policy import (
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming_runs import DreamingRunStore
 from simpleclaw.memory.insights import InsightStore
+from simpleclaw.memory.memory_items_sync import sync_suggestion_to_memory_item
 from simpleclaw.memory.suggestions import (
     BlocklistStore,
     SuggestionStore,
@@ -1361,7 +1362,6 @@ class AdminAPIServer:
         외부 네트워크에 닿으므로 격리된 단위 테스트는 ``channel_test_callback``을
         주입해 본 메서드를 우회한다.
         """
-        import aiohttp  # 지연 임포트
 
         full_cfg = self._read_yaml()
         message = options.get("message") or "Hello from admin"
@@ -1630,6 +1630,18 @@ class AdminAPIServer:
         except Exception:  # noqa: BLE001 — 감사 실패가 핸들러 응답을 막지 않도록.
             logger.exception("Failed to write suggestion audit entry")
 
+    def _safe_sync_suggestion_memory_item(self, suggestion) -> None:
+        """Keep reviewed USER insights in memory_items without breaking Admin API flow."""
+        if self._conversation_store is None:
+            return
+        try:
+            sync_suggestion_to_memory_item(self._conversation_store, suggestion)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "memory_items sync failed for suggestion %s; continuing",
+                getattr(suggestion, "id", ""),
+            )
+
     async def _handle_accept_suggestion(
         self, request: web.Request
     ) -> web.Response:
@@ -1663,6 +1675,7 @@ class AdminAPIServer:
         # update_status 의 반환값이 None 이라면 race — 그래도 writer 가 이미 USER.md
         # 를 갱신했으므로 200 으로 응답하고 클라이언트에 최선 정보 제공.
         result = updated or s
+        self._safe_sync_suggestion_memory_item(result)
         self._audit_suggestion(request, "accept_suggestion", result)
         return _json_ok(self._serialize_suggestion(result))
 
@@ -1704,6 +1717,7 @@ class AdminAPIServer:
             sid, "edited", edited_text=edited_text
         )
         result = updated or s
+        self._safe_sync_suggestion_memory_item(result)
         self._audit_suggestion(
             request,
             "edit_suggestion",
@@ -1768,6 +1782,7 @@ class AdminAPIServer:
             sid, "rejected", reject_reason=reason
         )
         result = updated or s
+        self._safe_sync_suggestion_memory_item(result)
         self._audit_suggestion(
             request,
             "reject_suggestion",

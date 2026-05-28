@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from simpleclaw.skills.models import (
     MCPConnectionError,
@@ -61,7 +60,6 @@ class MCPManager:
 
     async def _connect_server(self, name: str, config: dict) -> None:
         """단일 MCP 서버에 연결하고 제공하는 도구들을 로드한다."""
-        transport = config.get("transport", "stdio")
         command = config.get("command")
 
         if not command:
