@@ -388,8 +388,9 @@ class TestPackagedHelpers:
 
         applied = run_conversations_migrations(db)
         # 베이스라인(0001) 은 흡수되어 SQL 실행 없이 기록만 되고, 그 위에 도입된
-        # 0002(BIZ-77 channel 컬럼 추가) 는 실제로 ALTER 가 실행된다.
-        assert applied == [2]
+        # 0002(BIZ-77 channel 컬럼 추가) 와 0003(BIZ-307 memory_items) 는
+        # 실제로 additive migration 으로 실행된다.
+        assert applied == [2, 3]
 
         with sqlite3.connect(db) as conn:
             row = conn.execute(
@@ -403,7 +404,13 @@ class TestPackagedHelpers:
                 ).fetchall()
             }
             assert "channel" in cols
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert "memory_items" in tables
             ver = conn.execute(
                 "SELECT MAX(version) FROM schema_version"
             ).fetchone()[0]
-            assert ver == 2
+            assert ver == 3

@@ -6,6 +6,7 @@
 3. get_recent() / get_since()로 최근 또는 특정 시점 이후 대화를 시간순으로 조회한다.
 4. add_embedding() / search_similar()로 메시지 단위 임베딩을 저장·검색한다(시맨틱 메모리, spec 005).
 5. create_cluster() / list_clusters() / assign_cluster() 등으로 시맨틱 클러스터 그래프를 관리한다(Phase 3).
+6. create_memory_item() 계열 CRUD로 DB-backed 장기기억 read model을 관리한다(BIZ-307).
 
 설계 결정:
 - 각 메서드 호출마다 sqlite3.connect()를 사용하여 연결을 열고 닫는다.
@@ -19,10 +20,13 @@
 - Phase 3에서 ``semantic_clusters`` 테이블을 추가하고 ``messages.cluster_id`` 컬럼으로
   메시지를 클러스터에 부착한다. cluster_id는 외래 키 제약 없이 정수 참조로만 둔다
   (클러스터 삭제 시 멤버 메시지는 보존하되 cluster_id가 dangling 상태로 남는다 — 무시).
+- BIZ-307 ``memory_items``는 MEMORY.md/USER.md 파서를 즉시 대체하지 않는 additive
+  read model이다. source_msg_ids/metadata는 JSON TEXT로 저장해 SQLite 의존성을 유지한다.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Sequence
@@ -32,7 +36,14 @@ from pathlib import Path
 import numpy as np
 
 from simpleclaw.db import run_conversations_migrations
-from simpleclaw.memory.models import ClusterRecord, ConversationMessage, MessageRole
+from simpleclaw.memory.models import (
+    ClusterRecord,
+    ConversationMessage,
+    MemoryItem,
+    MemoryItemStatus,
+    MemoryItemType,
+    MessageRole,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +307,454 @@ class ConversationStore:
         with sqlite3.connect(self._db_path) as conn:
             return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
 
+
+    # ------------------------------------------------------------------
+    # DB-backed 장기기억 항목 (BIZ-307) — Phase 1 read model
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _coerce_memory_item_type(item_type: MemoryItemType | str) -> MemoryItemType:
+        """외부 입력(enum 또는 문자열)을 MemoryItemType으로 정규화한다."""
+        if isinstance(item_type, MemoryItemType):
+            return item_type
+        return MemoryItemType(str(item_type))
+
+    @staticmethod
+    def _coerce_memory_item_status(status: MemoryItemStatus | str) -> MemoryItemStatus:
+        """외부 입력(enum 또는 문자열)을 MemoryItemStatus로 정규화한다."""
+        if isinstance(status, MemoryItemStatus):
+            return status
+        return MemoryItemStatus(str(status))
+
+    @staticmethod
+    def _normalize_source_msg_ids(source_msg_ids: list[int] | None) -> list[int]:
+        """근거 message id 목록을 중복 제거 + 오름차순 정렬한다."""
+        if not source_msg_ids:
+            return []
+        return sorted({int(mid) for mid in source_msg_ids})
+
+    @staticmethod
+    def _decode_json_list(raw: str | None) -> list[int]:
+        """JSON TEXT로 저장된 source_msg_ids를 안전하게 list[int]로 복원한다."""
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[int] = []
+        for value in data:
+            try:
+                out.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        return sorted(set(out))
+
+    @staticmethod
+    def _decode_json_dict(raw: str | None) -> dict:
+        """JSON TEXT로 저장된 metadata를 안전하게 dict로 복원한다."""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _decode_embedding(blob: bytes | None) -> np.ndarray | None:
+        """memory_items.embedding BLOB을 float32 ndarray로 복원한다."""
+        if blob is None:
+            return None
+        try:
+            arr = np.frombuffer(blob, dtype=_EMBEDDING_DTYPE)
+        except (TypeError, ValueError):
+            return None
+        return arr.copy() if arr.size else None
+
+    @classmethod
+    def _memory_item_from_row(cls, row: sqlite3.Row | tuple) -> MemoryItem:
+        """SQLite row를 MemoryItem dataclass로 변환한다."""
+        (
+            item_id,
+            item_type,
+            text,
+            source,
+            source_ref,
+            confidence,
+            importance,
+            status,
+            first_seen,
+            last_seen,
+            last_accessed,
+            embedding,
+            created_at,
+            updated_at,
+            archived_at,
+            source_msg_ids,
+            metadata,
+        ) = row
+        return MemoryItem(
+            id=int(item_id),
+            type=MemoryItemType(item_type),
+            text=text,
+            source=source or "",
+            source_ref=source_ref or "",
+            confidence=float(confidence or 0.0),
+            importance=float(importance or 0.0),
+            status=MemoryItemStatus(status),
+            first_seen=datetime.fromisoformat(first_seen),
+            last_seen=datetime.fromisoformat(last_seen),
+            last_accessed=(
+                datetime.fromisoformat(last_accessed) if last_accessed else None
+            ),
+            embedding=cls._decode_embedding(embedding),
+            created_at=datetime.fromisoformat(created_at),
+            updated_at=datetime.fromisoformat(updated_at),
+            archived_at=(
+                datetime.fromisoformat(archived_at) if archived_at else None
+            ),
+            source_msg_ids=cls._decode_json_list(source_msg_ids),
+            metadata=cls._decode_json_dict(metadata),
+        )
+
+    def create_memory_item(
+        self,
+        *,
+        item_type: MemoryItemType | str,
+        text: str,
+        source: str = "",
+        source_ref: str = "",
+        confidence: float = 0.0,
+        importance: float = 0.0,
+        status: MemoryItemStatus | str = MemoryItemStatus.ACTIVE,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
+        source_msg_ids: list[int] | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem:
+        """새 장기기억 항목을 생성하고 저장된 MemoryItem을 반환한다.
+
+        Phase 1에서는 MEMORY.md/USER.md를 직접 갱신하지 않고, 후속 UI/API가 안정적인
+        id로 참조할 수 있는 DB read model만 만든다.
+        """
+        normalized_type = self._coerce_memory_item_type(item_type)
+        normalized_status = self._coerce_memory_item_status(status)
+        now_iso = datetime.now().isoformat()
+        first_seen_iso = (first_seen or datetime.now()).isoformat()
+        last_seen_iso = (last_seen or first_seen or datetime.now()).isoformat()
+        archived_at = now_iso if normalized_status is MemoryItemStatus.ARCHIVED else None
+        msg_ids = self._normalize_source_msg_ids(source_msg_ids)
+        embedding_blob = None
+        if embedding is not None:
+            arr = np.asarray(embedding, dtype=_EMBEDDING_DTYPE)
+            if arr.ndim != 1 or arr.size == 0:
+                raise ValueError("embedding must be a non-empty 1-D vector")
+            embedding_blob = arr.tobytes()
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.execute(
+                "INSERT INTO memory_items "
+                "(type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, archived_at, "
+                "source_msg_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    normalized_type.value,
+                    text,
+                    source,
+                    source_ref,
+                    float(confidence),
+                    float(importance),
+                    normalized_status.value,
+                    first_seen_iso,
+                    last_seen_iso,
+                    None,
+                    embedding_blob,
+                    now_iso,
+                    now_iso,
+                    archived_at,
+                    json.dumps(msg_ids, ensure_ascii=False),
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                ),
+            )
+            item_id = int(cursor.lastrowid)
+        item = self.get_memory_item(item_id)
+        if item is None:
+            raise ValueError(f"memory item {item_id} was not created")
+        return item
+
+    def get_memory_item_by_source(
+        self, source: str, source_ref: str
+    ) -> MemoryItem | None:
+        """source/source_ref natural key로 장기기억 항목을 조회한다."""
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+                "archived_at, source_msg_ids, metadata FROM memory_items "
+                "WHERE source = ? AND source_ref = ? ORDER BY id LIMIT 1",
+                (source, source_ref),
+            ).fetchone()
+        return self._memory_item_from_row(row) if row is not None else None
+
+    def upsert_memory_item(
+        self,
+        *,
+        item_type: MemoryItemType | str,
+        text: str,
+        source: str,
+        source_ref: str,
+        confidence: float = 0.0,
+        importance: float = 0.0,
+        status: MemoryItemStatus | str = MemoryItemStatus.ACTIVE,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
+        source_msg_ids: list[int] | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem:
+        """source/source_ref 기준으로 memory_items를 멱등 생성 또는 갱신한다.
+
+        embedding이 None이면 기존 embedding을 보존하고, 값이 제공될 때만 float32 BLOB로
+        갱신한다. text/source/status/confidence/importance는 embedding 유무와 무관하게
+        매 호출 최신값으로 반영한다.
+        """
+        if not source or not source_ref:
+            raise ValueError("source and source_ref are required for upsert")
+        existing = self.get_memory_item_by_source(source, source_ref)
+        if existing is None:
+            return self.create_memory_item(
+                item_type=item_type,
+                text=text,
+                source=source,
+                source_ref=source_ref,
+                confidence=confidence,
+                importance=importance,
+                status=status,
+                first_seen=first_seen,
+                last_seen=last_seen,
+                embedding=embedding,
+                source_msg_ids=source_msg_ids,
+                metadata=metadata,
+            )
+        return self.update_memory_item(
+            existing.id,
+            item_type=item_type,
+            text=text,
+            confidence=confidence,
+            importance=importance,
+            status=status,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            embedding=embedding,
+            source_msg_ids=source_msg_ids,
+            metadata=metadata,
+        )
+
+    def get_memory_item(self, item_id: int) -> MemoryItem | None:
+        """id로 장기기억 항목을 단건 조회한다. 없으면 None."""
+        with sqlite3.connect(self._db_path) as conn:
+            row = conn.execute(
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+                "archived_at, source_msg_ids, metadata FROM memory_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+        return self._memory_item_from_row(row) if row is not None else None
+
+    def list_memory_items(
+        self,
+        *,
+        item_type: MemoryItemType | str | None = None,
+        status: MemoryItemStatus | str | None = None,
+        source: str | None = None,
+        include_archived: bool = False,
+        limit: int | None = None,
+    ) -> list[MemoryItem]:
+        """장기기억 항목을 필터링해 updated_at 내림차순으로 반환한다.
+
+        ``include_archived=False``이고 명시 status가 없으면 active 항목만 반환한다.
+        archive는 삭제가 아니므로 ``include_archived=True``로 전체 추적이 가능하다.
+        """
+        where: list[str] = []
+        params: list = []
+        if item_type is not None:
+            where.append("type = ?")
+            params.append(self._coerce_memory_item_type(item_type).value)
+        if status is not None:
+            where.append("status = ?")
+            params.append(self._coerce_memory_item_status(status).value)
+        elif not include_archived:
+            where.append("status = ?")
+            params.append(MemoryItemStatus.ACTIVE.value)
+        if source is not None:
+            where.append("source = ?")
+            params.append(source)
+
+        sql = (
+            "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+            "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+            "archived_at, source_msg_ids, metadata FROM memory_items"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY updated_at DESC, id DESC"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._memory_item_from_row(row) for row in rows]
+
+    def update_memory_item(
+        self,
+        item_id: int,
+        *,
+        item_type: MemoryItemType | str | None = None,
+        text: str | None = None,
+        source: str | None = None,
+        source_ref: str | None = None,
+        confidence: float | None = None,
+        importance: float | None = None,
+        status: MemoryItemStatus | str | None = None,
+        first_seen: datetime | None = None,
+        last_seen: datetime | None = None,
+        last_accessed: datetime | None = None,
+        embedding: Sequence[float] | np.ndarray | None = None,
+        source_msg_ids: list[int] | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem:
+        """장기기억 항목을 부분 갱신하고 갱신된 MemoryItem을 반환한다.
+
+        ``None``으로 둔 필드는 변경하지 않는다. status를 archived로 직접 넘기면
+        archived_at도 함께 채우고, active로 되돌리면 archived_at을 비운다.
+        """
+        sets: list[str] = []
+        params: list = []
+        if item_type is not None:
+            sets.append("type = ?")
+            params.append(self._coerce_memory_item_type(item_type).value)
+        if text is not None:
+            sets.append("text = ?")
+            params.append(text)
+        if source is not None:
+            sets.append("source = ?")
+            params.append(source)
+        if source_ref is not None:
+            sets.append("source_ref = ?")
+            params.append(source_ref)
+        if confidence is not None:
+            sets.append("confidence = ?")
+            params.append(float(confidence))
+        if importance is not None:
+            sets.append("importance = ?")
+            params.append(float(importance))
+        if first_seen is not None:
+            sets.append("first_seen = ?")
+            params.append(first_seen.isoformat())
+        if last_seen is not None:
+            sets.append("last_seen = ?")
+            params.append(last_seen.isoformat())
+        if last_accessed is not None:
+            sets.append("last_accessed = ?")
+            params.append(last_accessed.isoformat())
+        if embedding is not None:
+            arr = np.asarray(embedding, dtype=_EMBEDDING_DTYPE)
+            if arr.ndim != 1 or arr.size == 0:
+                raise ValueError("embedding must be a non-empty 1-D vector")
+            sets.append("embedding = ?")
+            params.append(arr.tobytes())
+        if status is not None:
+            normalized_status = self._coerce_memory_item_status(status)
+            sets.append("status = ?")
+            params.append(normalized_status.value)
+            sets.append("archived_at = ?")
+            params.append(
+                datetime.now().isoformat()
+                if normalized_status is MemoryItemStatus.ARCHIVED
+                else None
+            )
+        if source_msg_ids is not None:
+            sets.append("source_msg_ids = ?")
+            params.append(
+                json.dumps(
+                    self._normalize_source_msg_ids(source_msg_ids),
+                    ensure_ascii=False,
+                )
+            )
+        if metadata is not None:
+            sets.append("metadata = ?")
+            params.append(json.dumps(metadata, ensure_ascii=False))
+        if not sets:
+            item = self.get_memory_item(item_id)
+            if item is None:
+                raise ValueError(f"memory_item_id {item_id} does not exist")
+            return item
+
+        sets.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(item_id)
+        with sqlite3.connect(self._db_path) as conn:
+            cursor = conn.execute(
+                f"UPDATE memory_items SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"memory_item_id {item_id} does not exist")
+        item = self.get_memory_item(item_id)
+        if item is None:
+            raise ValueError(f"memory_item_id {item_id} does not exist")
+        return item
+
+    def archive_memory_item(self, item_id: int) -> MemoryItem:
+        """장기기억 항목을 삭제하지 않고 archived 상태로 전환한다."""
+        return self.update_memory_item(item_id, status=MemoryItemStatus.ARCHIVED)
+
+    def mark_memory_item_accessed(self, item_id: int) -> MemoryItem:
+        """retrieval hit 후 last_accessed를 현재 시각으로 갱신한다."""
+        return self.update_memory_item(item_id, last_accessed=datetime.now())
+
+    def search_memory_items(
+        self,
+        query_vector: Sequence[float] | np.ndarray,
+        k: int = 5,
+        *,
+        min_score: float = -1.0,
+        min_confidence: float = 0.0,
+    ) -> list[tuple[MemoryItem, float]]:
+        """active memory_items를 embedding cosine similarity로 검색한다."""
+        query = np.asarray(query_vector, dtype=_EMBEDDING_DTYPE)
+        if query.ndim != 1 or query.size == 0:
+            raise ValueError("query_vector must be a non-empty 1-D vector")
+        query_norm = float(np.linalg.norm(query))
+        if query_norm == 0.0:
+            raise ValueError("query_vector must not be a zero vector")
+        query_unit = query / query_norm
+        with sqlite3.connect(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, type, text, source, source_ref, confidence, importance, status, "
+                "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
+                "archived_at, source_msg_ids, metadata FROM memory_items "
+                "WHERE status = ? AND confidence >= ? AND embedding IS NOT NULL",
+                (MemoryItemStatus.ACTIVE.value, float(min_confidence)),
+            ).fetchall()
+        results: list[tuple[MemoryItem, float]] = []
+        for row in rows:
+            item = self._memory_item_from_row(row)
+            if item.embedding is None or item.embedding.shape != query.shape:
+                continue
+            emb_norm = float(np.linalg.norm(item.embedding))
+            if emb_norm == 0.0:
+                continue
+            score = float(np.dot(query_unit, item.embedding / emb_norm))
+            if score < min_score:
+                continue
+            results.append((item, score))
+        results.sort(key=lambda pair: pair[1], reverse=True)
+        return results[:k]
     # ------------------------------------------------------------------
     # 분포 통계 (BIZ-29) — 임베딩 커버리지/클러스터 분포 모니터링용
     # ------------------------------------------------------------------

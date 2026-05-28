@@ -13,10 +13,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import signal
 from datetime import datetime
 from pathlib import Path
 

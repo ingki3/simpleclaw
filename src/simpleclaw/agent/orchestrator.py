@@ -326,6 +326,30 @@ class AgentOrchestrator:
         self._rag_enabled: bool = bool(rag_cfg["enabled"])
         self._rag_top_k: int = int(rag_cfg["top_k"])
         self._rag_threshold: float = float(rag_cfg["similarity_threshold"])
+        long_term_cfg = memory_config.get("long_term", {})
+        self._long_term_enabled: bool = bool(long_term_cfg.get("enabled", True))
+        self._long_term_top_k: int = int(long_term_cfg.get("top_k", 3))
+        self._long_term_min_confidence: float = float(
+            long_term_cfg.get("min_confidence", 0.7)
+        )
+        self._long_term_promotion_threshold: int = int(
+            long_term_cfg.get("promotion_threshold", 3)
+        )
+        self._long_term_context_budget_chars: int = int(
+            long_term_cfg.get("context_budget_chars", 1600)
+        )
+        self._long_term_per_item_chars: int = int(
+            long_term_cfg.get("per_item_chars", 400)
+        )
+        self._long_term_insights_file = Path(
+            str(long_term_cfg.get("insights_file", "~/.simpleclaw/insights.jsonl"))
+        ).expanduser()
+        self._long_term_active_projects_file = Path(
+            str(long_term_cfg.get("active_projects_file", "~/.simpleclaw/active_projects.jsonl"))
+        ).expanduser()
+        self._long_term_active_projects_window_days: int = int(
+            long_term_cfg.get("active_projects_window_days", 7)
+        )
         self._embedding_service: EmbeddingService | None = (
             EmbeddingService(
                 model_name=str(rag_cfg["model"]),
@@ -1025,30 +1049,28 @@ class AgentOrchestrator:
         user_text: str,
         exclude_contents: set[str] | None = None,
     ) -> str:
-        """사용자 질의와 의미상 가까운 과거 메시지를 회수하여 시스템 프롬프트 블록으로 포맷한다.
+        """과거 대화 RAG와 Dreaming 장기기억을 함께 회수해 프롬프트 블록으로 포맷한다.
 
-        설계 결정:
-        - RAG가 비활성이거나 임베딩 서비스/모델 로드 실패 시 빈 문자열을 반환하여
-          기존 슬라이딩 윈도우 동작으로 자연 fallback 한다(서비스 가용성 보존).
-        - 최근 윈도우(``_history_limit``)에 이미 포함된 메시지는 ``exclude_contents``로 제외하여
-          중복 주입을 방지한다.
-        - 임계값(``_rag_threshold``) 이상 유사도만 채택 — 노이즈 회상으로 인한 오답을 줄인다.
-        - 인코딩은 동기 API이므로 ``asyncio.to_thread``로 워커 스레드에 위임한다.
-        - StructuredLogger가 주입되어 있으면 호출 단위로 ``rag_retrieve`` 액션을 적재해
-          BIZ-29 토큰 절감 추세 분석(``simpleclaw.memory.stats.analyze_rag_logs``)에 사용한다.
-
-        Args:
-            user_text: 현재 사용자 메시지 원본.
-            exclude_contents: 이미 ``messages`` 리스트에 들어간 메시지 본문 집합.
-
-        Returns:
-            "## 관련 과거 대화\\n..." 마크다운 블록. 회수 결과가 없으면 빈 문자열.
+        RAG 전체가 꺼져 있거나 query embedding 생성이 실패하면 기존처럼 빈 문자열로
+        fallback한다. RAG가 켜진 상태에서는 conversation message, InsightStore/active
+        projects, cluster summary를 서로 독립적으로 조회하며 한 source가 실패해도 나머지
+        source 결과와 일반 응답 흐름은 유지한다.
         """
-        import asyncio
+        import re
         import time
 
-        # RAG 로그는 호출 단위로 1회만 기록한다(상태가 어떻든 추세 분석에 일관된 베이스 제공)
+        import numpy as np
+
+        from simpleclaw.memory.active_projects import ActiveProjectStore, filter_active
+        from simpleclaw.memory.insights import InsightStore, is_promoted
+
         start = time.perf_counter()
+        excluded = exclude_contents or set()
+        source_stats: dict[str, dict[str, object]] = {
+            "conversation": {"count": 0, "hit": False, "top_score": None, "errors": 0},
+            "long_term": {"count": 0, "hit": False, "top_score": None, "errors": 0},
+            "cluster_summary": {"count": 0, "hit": False, "top_score": None, "errors": 0},
+        }
 
         def _log(
             *,
@@ -1059,6 +1081,7 @@ class AgentOrchestrator:
             recalled_tokens: int = 0,
             top_score: float | None = None,
             error: str | None = None,
+            context_chars: int = 0,
         ) -> None:
             if self._structured_logger is None:
                 return
@@ -1069,6 +1092,8 @@ class AgentOrchestrator:
                 "recalled_tokens": recalled_tokens,
                 "top_k": self._rag_top_k,
                 "threshold": self._rag_threshold,
+                "context_chars": context_chars,
+                **source_stats,
             }
             if top_score is not None:
                 details["top_score"] = round(float(top_score), 4)
@@ -1102,6 +1127,30 @@ class AgentOrchestrator:
             _log(status="skipped", hit=False, error="encode_returned_none")
             return ""
 
+        def _tokens(text: str) -> set[str]:
+            return {t.lower() for t in re.findall(r"[\w가-힣]+", text) if len(t) >= 2}
+
+        query_tokens = _tokens(user_text)
+
+        def _lexical_score(text: str, base: float = 0.0) -> float:
+            toks = _tokens(text)
+            if not toks or not query_tokens:
+                return base
+            overlap = len(toks & query_tokens)
+            return base + (overlap / max(len(query_tokens), 1))
+
+        def _clip(text: str, limit: int | None = None) -> str:
+            limit = limit or self._long_term_per_item_chars
+            compact = " ".join(text.split())
+            if len(compact) <= limit:
+                return compact
+            return compact[: max(0, limit - 1)].rstrip() + "…"
+
+        conversation_lines: list[str] = []
+        recalled_tokens = 0
+        top_score: float | None = None
+        conversation_candidates = 0
+        errors = 0
         try:
             results = await asyncio.to_thread(
                 self._store.search_similar,
@@ -1109,56 +1158,223 @@ class AgentOrchestrator:
                 self._rag_top_k,
             )
         except Exception as exc:
-            logger.warning("RAG search failed: %s", exc)
-            _log(status="error", hit=False, error=f"search:{exc}"[:200])
-            return ""
-
-        if not results:
-            _log(status="success", hit=False, candidates=0)
-            return ""
-
-        excluded = exclude_contents or set()
-        lines: list[str] = []
-        recalled_tokens = 0
-        recalled_messages = 0
+            logger.warning("RAG conversation search failed: %s", exc)
+            source_stats["conversation"]["errors"] = 1
+            errors += 1
+            results = []
+        conversation_candidates = len(results)
+        top_score = results[0][1] if results else None
+        source_stats["conversation"]["top_score"] = (
+            round(float(top_score), 4) if top_score is not None else None
+        )
         for msg, score in results:
             if score < self._rag_threshold:
                 continue
             if msg.content in excluded:
                 continue
             ts = msg.timestamp.strftime("%Y-%m-%d %H:%M")
-            lines.append(
-                f"- [{ts}] **{msg.role.value}**: {msg.content}"
-            )
-            recalled_messages += 1
+            conversation_lines.append(f"- [{ts}] **{msg.role.value}**: {msg.content}")
             recalled_tokens += int(msg.token_count or 0)
+        source_stats["conversation"]["count"] = len(conversation_lines)
+        source_stats["conversation"]["hit"] = bool(conversation_lines)
 
-        top_score = results[0][1] if results else None
+        long_term_candidates: list[tuple[float, str, str]] = []
+        if self._long_term_enabled:
+            try:
+                if self._long_term_insights_file.is_file():
+                    for line_no, line in enumerate(
+                        self._long_term_insights_file.read_text(encoding="utf-8").splitlines(),
+                        start=1,
+                    ):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            json.loads(line)
+                        except json.JSONDecodeError as exc:
+                            logger.warning(
+                                "Skipping malformed insight line %d in %s: %s",
+                                line_no,
+                                self._long_term_insights_file,
+                                exc,
+                            )
+                            source_stats["long_term"]["errors"] = int(source_stats["long_term"]["errors"]) + 1
+                            errors += 1
+                insights = InsightStore(self._long_term_insights_file).load()
+                for insight in insights.values():
+                    if insight.is_archived():
+                        continue
+                    if insight.confidence < self._long_term_min_confidence:
+                        continue
+                    if not is_promoted(insight, self._long_term_promotion_threshold):
+                        continue
+                    raw = f"{insight.topic} {insight.text}"
+                    score = _lexical_score(raw, insight.confidence + insight.evidence_count * 0.01)
+                    if score <= insight.confidence and query_tokens:
+                        continue
+                    line = (
+                        f"- [insight] {insight.topic}: {_clip(insight.text)} "
+                        f"(confidence={insight.confidence:.2f}, evidence={insight.evidence_count})"
+                    )
+                    long_term_candidates.append((score, insight.text, line))
+            except Exception as exc:  # noqa: BLE001 — sidecar 장애는 대화 응답을 막지 않는다
+                logger.warning("Long-term insight retrieval failed: %s", exc)
+                source_stats["long_term"]["errors"] = int(source_stats["long_term"]["errors"]) + 1
+                errors += 1
 
-        if not lines:
-            _log(
-                status="success",
-                hit=False,
-                candidates=len(results),
-                top_score=top_score,
+            try:
+                projects = ActiveProjectStore(self._long_term_active_projects_file).load()
+                active_projects = filter_active(
+                    projects,
+                    self._long_term_active_projects_window_days,
+                )
+                for project in active_projects:
+                    text = f"{project.name} {project.role} {project.recent_summary}"
+                    if text in excluded:
+                        continue
+                    score = _lexical_score(text, 0.85)
+                    if score <= 0.85 and query_tokens:
+                        continue
+                    line = (
+                        f"- [active_project] {project.name}: {_clip(project.recent_summary)}"
+                    )
+                    if project.role:
+                        line += f" (role={project.role})"
+                    long_term_candidates.append((score, text, line))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Active-project retrieval failed: %s", exc)
+                source_stats["long_term"]["errors"] = int(source_stats["long_term"]["errors"]) + 1
+                errors += 1
+
+            try:
+                memory_hits = self._store.search_memory_items(
+                    query_vec,
+                    k=max(self._long_term_top_k * 2, 5),
+                    min_score=self._rag_threshold,
+                    min_confidence=self._long_term_min_confidence,
+                )
+                for item, similarity in memory_hits:
+                    if item.text in excluded:
+                        continue
+                    score = similarity + item.confidence + (item.importance * 0.1)
+                    try:
+                        self._store.mark_memory_item_accessed(item.id)
+                    except Exception as exc:  # noqa: BLE001 — 접근 메타 실패는 회상 자체를 막지 않는다
+                        logger.warning("Memory item access mark failed: %s", exc)
+                    long_term_candidates.append((
+                        score,
+                        item.text,
+                        f"- [memory_item:{item.type.value}] {_clip(item.text)} "
+                        f"(confidence={item.confidence:.2f}, importance={item.importance:.2f})",
+                    ))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Memory item retrieval failed: %s", exc)
+                source_stats["long_term"]["errors"] = int(source_stats["long_term"]["errors"]) + 1
+                errors += 1
+
+        seen_texts = {" ".join(t.split()).lower() for t in excluded}
+        long_term_lines: list[str] = []
+        long_term_candidates.sort(key=lambda x: x[0], reverse=True)
+        ranked_long_term_candidates = long_term_candidates[: self._long_term_top_k]
+        for score, text, line in ranked_long_term_candidates:
+            norm = " ".join(text.split()).lower()
+            if norm in seen_texts:
+                continue
+            seen_texts.add(norm)
+            long_term_lines.append(line)
+            if len(long_term_lines) >= self._long_term_top_k:
+                break
+        source_stats["long_term"]["count"] = len(long_term_lines)
+        source_stats["long_term"]["hit"] = bool(long_term_lines)
+        if long_term_candidates:
+            source_stats["long_term"]["top_score"] = round(float(long_term_candidates[0][0]), 4)
+
+        cluster_lines: list[str] = []
+        try:
+            clusters = self._store.list_clusters()
+            cluster_hits: list[tuple[float, str]] = []
+            query_arr = np.asarray(query_vec, dtype=np.float32)
+            query_norm = float(np.linalg.norm(query_arr)) if query_arr.size else 0.0
+            for cluster in clusters:
+                if not cluster.summary:
+                    continue
+                score = _lexical_score(f"{cluster.label} {cluster.summary}", 0.0)
+                if query_norm > 0.0 and cluster.centroid.shape == query_arr.shape:
+                    centroid_norm = float(np.linalg.norm(cluster.centroid))
+                    if centroid_norm > 0.0:
+                        score = max(
+                            score,
+                            float(np.dot(query_arr / query_norm, cluster.centroid / centroid_norm)),
+                        )
+                if score < self._rag_threshold:
+                    continue
+                cluster_hits.append((score, f"- [{cluster.label}] {_clip(cluster.summary)}"))
+            cluster_hits.sort(key=lambda x: x[0], reverse=True)
+            cluster_lines = [line for _, line in cluster_hits[: self._long_term_top_k]]
+            source_stats["cluster_summary"]["count"] = len(cluster_lines)
+            source_stats["cluster_summary"]["hit"] = bool(cluster_lines)
+            if cluster_hits:
+                source_stats["cluster_summary"]["top_score"] = round(float(cluster_hits[0][0]), 4)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Cluster summary retrieval failed: %s", exc)
+            source_stats["cluster_summary"]["errors"] = 1
+            errors += 1
+
+        sections: list[str] = []
+        if long_term_lines:
+            sections.append(
+                "## 장기기억\n\n"
+                "Dreaming/InsightStore가 승격한 durable 사용자·프로젝트 맥락입니다.\n\n"
+                + "\n".join(long_term_lines)
             )
-            return ""
+        if conversation_lines:
+            sections.append(
+                "## 관련 과거 대화 (시맨틱 회상)\n\n"
+                "아래는 현재 질문과 의미상 유사한 과거 대화입니다. "
+                "최근 메시지 윈도우 밖의 정보일 수 있으니 응답 근거로 활용하세요.\n\n"
+                + "\n".join(conversation_lines)
+            )
+        if cluster_lines:
+            sections.append(
+                "## 클러스터 요약\n\n"
+                "Dreaming이 누적 대화를 주제별로 압축한 요약입니다.\n\n"
+                + "\n".join(cluster_lines)
+            )
 
+        context = "\n\n".join(sections)
+        if len(context) > self._long_term_context_budget_chars:
+            kept: list[str] = []
+            total = 0
+            for section in sections:
+                if total + len(section) + (2 if kept else 0) <= self._long_term_context_budget_chars:
+                    kept.append(section)
+                    total += len(section) + (2 if kept else 0)
+            context = "\n\n".join(kept)[: self._long_term_context_budget_chars]
+
+        any_hit = bool(context)
+        status = "partial" if errors and any_hit else "error" if errors else "success"
+        if not any_hit and not errors:
+            status = "success"
+        best_scores = [
+            float(s["top_score"])
+            for s in source_stats.values()
+            if s.get("top_score") is not None
+        ]
         _log(
-            status="success",
-            hit=True,
-            candidates=len(results),
-            recalled_messages=recalled_messages,
+            status=status,
+            hit=any_hit,
+            candidates=conversation_candidates + len(long_term_candidates),
+            recalled_messages=len(conversation_lines),
             recalled_tokens=recalled_tokens,
-            top_score=top_score,
+            top_score=max(best_scores) if best_scores else top_score,
+            error=";".join(
+                name
+                for name, stats in source_stats.items()
+                if int(stats.get("errors") or 0) > 0
+            ) or None,
+            context_chars=len(context),
         )
-
-        header = (
-            "## 관련 과거 대화 (시맨틱 회상)\n\n"
-            "아래는 현재 질문과 의미상 유사한 과거 대화입니다. "
-            "최근 메시지 윈도우 밖의 정보일 수 있으니 응답 근거로 활용하세요."
-        )
-        return f"{header}\n\n" + "\n".join(lines)
+        return context
 
     # ------------------------------------------------------------------
     # Skill execution
