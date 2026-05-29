@@ -9,8 +9,10 @@
 6. create_memory_item() 계열 CRUD로 DB-backed 장기기억 read model을 관리한다(BIZ-307).
 
 설계 결정:
-- 각 메서드 호출마다 sqlite3.connect()를 사용하여 연결을 열고 닫는다.
-  장기 실행 프로세스에서 파일 잠금 문제를 방지하기 위함이다.
+- 각 메서드 호출마다 ``_connect()`` helper를 통해 SQLite 연결을 열고,
+  transaction context 종료 뒤 반드시 ``close()``한다. Python sqlite3 연결
+  context manager는 commit/rollback만 수행하고 close하지 않으므로 장기 실행
+  프로세스에서 DB 파일 FD가 누적되지 않게 명시 close가 필요하다.
 - 메시지 순서는 auto-increment id 기준이며, timestamp는 보조 필터로만 사용한다.
 - 임베딩은 float32 little-endian 연속 BLOB로 저장한다(numpy.tobytes 직렬화).
   Phase 1에서는 코사인 유사도를 인메모리(numpy)로 계산한다. 메시지 수가 1만 이상으로
@@ -29,7 +31,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -68,6 +71,22 @@ class ConversationStore:
         self._db_path = str(db_path)
         self._ensure_schema()
 
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """SQLite 연결의 transaction 처리와 close를 한곳에서 보장한다.
+
+        ``sqlite3.Connection`` 자체의 context manager는 commit/rollback만 수행하고
+        파일 디스크립터를 닫지 않는다. 장기 실행 봇에서는 작은 누락도 FD leak로
+        누적되므로, 모든 DB 접근은 이 helper를 통해 close까지 명시적으로 수행한다.
+        """
+        conn = sqlite3.connect(self._db_path)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _ensure_schema(self) -> None:
         """레거시 컬럼 정규화 후 마이그레이션 러너에 위임해 스키마를 최신화한다.
 
@@ -94,7 +113,7 @@ class ConversationStore:
         """
         if not Path(self._db_path).exists():
             return
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             tables = {
                 row[0] for row in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
@@ -134,7 +153,7 @@ class ConversationStore:
         Returns:
             INSERT된 messages 행의 id.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO messages (role, content, timestamp, token_count, channel) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -157,7 +176,7 @@ class ConversationStore:
         Returns:
             시간순(오래된 것 먼저)으로 정렬된 ConversationMessage 리스트.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content, timestamp, token_count, channel FROM messages "
                 "ORDER BY id DESC LIMIT ?",
@@ -185,7 +204,7 @@ class ConversationStore:
         Returns:
             시간순으로 정렬된 ConversationMessage 리스트.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content, timestamp, token_count, channel FROM messages "
                 "WHERE timestamp >= ? ORDER BY id",
@@ -215,7 +234,7 @@ class ConversationStore:
         ``get_recent`` 와 동일하지만 message rowid 를 함께 노출한다 — 드리밍이
         인사이트 메타에 ``source_msg_ids`` 로 적재해야 하므로 BIZ-77 에서 추가됨.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, role, content, timestamp, token_count, channel "
                 "FROM messages ORDER BY id DESC LIMIT ?",
@@ -239,7 +258,7 @@ class ConversationStore:
         self, since: datetime
     ) -> list[tuple[int, ConversationMessage]]:
         """지정 시점 이후 메시지를 ``(id, message)`` 쌍으로 시간순 반환."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, role, content, timestamp, token_count, channel "
                 "FROM messages WHERE timestamp >= ? ORDER BY id",
@@ -281,7 +300,7 @@ class ConversationStore:
         if not unique_ids:
             return []
         placeholders = ",".join("?" * len(unique_ids))
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT id, role, content, timestamp, token_count, channel "
                 f"FROM messages WHERE id IN ({placeholders}) ORDER BY id",
@@ -304,7 +323,7 @@ class ConversationStore:
 
     def count(self) -> int:
         """저장된 전체 메시지 수를 반환한다."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
 
 
@@ -454,7 +473,7 @@ class ConversationStore:
             if arr.ndim != 1 or arr.size == 0:
                 raise ValueError("embedding must be a non-empty 1-D vector")
             embedding_blob = arr.tobytes()
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO memory_items "
                 "(type, text, source, source_ref, confidence, importance, status, "
@@ -489,7 +508,7 @@ class ConversationStore:
         self, source: str, source_ref: str
     ) -> MemoryItem | None:
         """source/source_ref natural key로 장기기억 항목을 조회한다."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT id, type, text, source, source_ref, confidence, importance, status, "
                 "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
@@ -555,7 +574,7 @@ class ConversationStore:
 
     def get_memory_item(self, item_id: int) -> MemoryItem | None:
         """id로 장기기억 항목을 단건 조회한다. 없으면 None."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT id, type, text, source, source_ref, confidence, importance, status, "
                 "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
@@ -605,7 +624,7 @@ class ConversationStore:
             sql += " LIMIT ?"
             params.append(int(limit))
 
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [self._memory_item_from_row(row) for row in rows]
 
@@ -697,7 +716,7 @@ class ConversationStore:
         sets.append("updated_at = ?")
         params.append(datetime.now().isoformat())
         params.append(item_id)
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE memory_items SET {', '.join(sets)} WHERE id = ?",
                 params,
@@ -733,7 +752,7 @@ class ConversationStore:
         if query_norm == 0.0:
             raise ValueError("query_vector must not be a zero vector")
         query_unit = query / query_norm
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, type, text, source, source_ref, confidence, importance, status, "
                 "first_seen, last_seen, last_accessed, embedding, created_at, updated_at, "
@@ -764,14 +783,14 @@ class ConversationStore:
 
         ``count()``와의 비율이 곧 시맨틱 메모리 커버리지이다.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM messages WHERE embedding IS NOT NULL"
             ).fetchone()[0]
 
     def count_clustered(self) -> int:
         """``cluster_id``가 부착된 메시지 수를 반환한다."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM messages WHERE cluster_id IS NOT NULL"
             ).fetchone()[0]
@@ -781,7 +800,7 @@ class ConversationStore:
 
         Phase 3 점진 클러스터링이 처리해야 할 backlog 크기이다.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             return conn.execute(
                 "SELECT COUNT(*) FROM messages "
                 "WHERE cluster_id IS NULL AND embedding IS NOT NULL"
@@ -796,7 +815,7 @@ class ConversationStore:
         - float32(=4 bytes/dim) 가정. 다른 dtype이 섞이면 차원이 잘못 계산되므로
           이 결과 자체가 모델 교체/혼재 탐지 신호가 된다.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT length(embedding), COUNT(*) FROM messages "
                 "WHERE embedding IS NOT NULL "
@@ -816,7 +835,7 @@ class ConversationStore:
         ``semantic_clusters.member_count``는 캐시 컬럼이라 갱신 누락이 가능하다.
         실측치와 비교하여 drift를 탐지하는 용도로 사용한다.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT cluster_id, COUNT(*) FROM messages "
                 "WHERE cluster_id IS NOT NULL "
@@ -849,7 +868,7 @@ class ConversationStore:
         if arr.ndim != 1 or arr.size == 0:
             raise ValueError("embedding must be a non-empty 1-D vector")
         blob = arr.tobytes()
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE messages SET embedding = ? WHERE id = ?",
                 (blob, message_id),
@@ -904,7 +923,7 @@ class ConversationStore:
             sql += " AND timestamp >= ?"
             params.append(since.isoformat())
 
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
 
         results: list[tuple[ConversationMessage, float]] = []
@@ -962,7 +981,7 @@ class ConversationStore:
         if arr.ndim != 1 or arr.size == 0:
             raise ValueError("centroid must be a non-empty 1-D vector")
         now_iso = datetime.now().isoformat()
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO semantic_clusters "
                 "(label, centroid, summary, member_count, updated_at) "
@@ -1016,7 +1035,7 @@ class ConversationStore:
         params.append(datetime.now().isoformat())
         params.append(cluster_id)
 
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 f"UPDATE semantic_clusters SET {', '.join(sets)} WHERE id = ?",
                 params,
@@ -1030,7 +1049,7 @@ class ConversationStore:
         클러스터링 알고리즘이 신규 메시지를 어느 클러스터에 부착할지 결정할 때 사용된다.
         centroid BLOB 디코딩 실패 행은 조용히 건너뛴다(데이터 손상 보호).
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, label, centroid, summary, member_count, updated_at "
                 "FROM semantic_clusters ORDER BY id"
@@ -1057,7 +1076,7 @@ class ConversationStore:
 
     def get_cluster(self, cluster_id: int) -> ClusterRecord | None:
         """단일 클러스터를 조회한다. 없으면 None."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT id, label, centroid, summary, member_count, updated_at "
                 "FROM semantic_clusters WHERE id = ?",
@@ -1088,7 +1107,7 @@ class ConversationStore:
         존재하지 않는 ``message_id``는 ValueError.
         ``cluster_id`` 자체의 존재 여부는 검증하지 않는다(외래 키 제약 없음, 호출자 책임).
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE messages SET cluster_id = ? WHERE id = ?",
                 (cluster_id, message_id),
@@ -1103,7 +1122,7 @@ class ConversationStore:
 
         클러스터별 LLM 요약 시 멤버 메시지를 모아 전달할 때 사용된다.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content, timestamp, token_count "
                 "FROM messages WHERE cluster_id = ? ORDER BY id",
@@ -1131,7 +1150,7 @@ class ConversationStore:
         Returns:
             ``(message_id, ConversationMessage, embedding)`` 튜플 리스트.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, role, content, timestamp, token_count, embedding "
                 "FROM messages "
@@ -1165,7 +1184,7 @@ class ConversationStore:
         임베딩이 NULL이거나 손상되었으면 ``(message, None)`` 반환.
         메시지 자체가 없으면 ``None``.
         """
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT role, content, timestamp, token_count, embedding "
                 "FROM messages WHERE id = ?",
