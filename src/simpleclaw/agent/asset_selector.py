@@ -11,7 +11,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from simpleclaw.llm.models import ToolCall
+from simpleclaw.llm.models import ToolCall, ToolDefinition
+from simpleclaw.recipes.models import RecipeDefinition
+from simpleclaw.skills.models import SkillDefinition
 
 AssetType = Literal["skill", "recipe"]
 
@@ -75,6 +77,129 @@ class AssetSelectionResult:
     fallback_required: bool = False
     fallback_reason: str = ""
     used_tool_call: bool = False
+
+
+def build_selector_assets(
+    skills: list[SkillDefinition],
+    recipes: list[RecipeDefinition],
+) -> list[SelectorAsset]:
+    """운영 캐시의 스킬/레시피를 selector manifest 자산으로 변환한다."""
+    assets: list[SelectorAsset] = []
+    for skill in skills:
+        assets.append(
+            SelectorAsset(
+                type="skill",
+                name=skill.name,
+                description=skill.description or "",
+                source=(
+                    str(skill.scope.value)
+                    if hasattr(skill.scope, "value")
+                    else str(skill.scope)
+                ),
+                trigger=skill.trigger or "",
+                commands_count=len(skill.commands or []),
+            )
+        )
+    for recipe in recipes:
+        assets.append(
+            SelectorAsset(
+                type="recipe",
+                name=recipe.name,
+                description=recipe.description or recipe.instructions[:160],
+                source=recipe.recipe_dir or "",
+                parameters_count=len(recipe.parameters or []),
+                steps_count=len(recipe.steps or []),
+            )
+        )
+    return assets
+
+
+def build_selector_tool_definition() -> ToolDefinition:
+    """selector LLM에 강제할 단일 Native Function Calling 스키마를 반환한다."""
+    return ToolDefinition(
+        name=_SELECTOR_TOOL_NAME,
+        description=(
+            "Select the most relevant installed skills/recipes for the user request. "
+            "This is only a candidate reducer; do not execute anything."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "selected": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["skill", "recipe"]},
+                            "name": {"type": "string"},
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["type", "name", "confidence"],
+                    },
+                },
+                "fallback": {"type": "boolean"},
+                "fallback_reason": {"type": "string"},
+            },
+            "required": ["selected", "fallback"],
+        },
+    )
+
+
+def build_selector_prompt(
+    *,
+    user_message: str,
+    known_assets: list[SelectorAsset],
+    skill_top_k: int,
+    recipe_top_k: int,
+) -> str:
+    """selector 전용 프롬프트를 manifest와 함께 구성한다."""
+    manifest = [
+        {
+            "type": asset.type,
+            "name": asset.name,
+            "description": asset.description,
+            "trigger": asset.trigger,
+            "commands_count": asset.commands_count,
+            "parameters_count": asset.parameters_count,
+            "steps_count": asset.steps_count,
+        }
+        for asset in known_assets
+    ]
+    return (
+        "You are an asset selector for SimpleClaw. Pick only candidates that may help "
+        "the main LLM answer the user's latest request. Use the select_assets tool. "
+        "Recipes are conservative: include recipes only when the user explicitly asks "
+        "to run/schedule/send a recipe-like report. If unsure, set fallback=true.\n\n"
+        f"Limits: skill_top_k={skill_top_k}, recipe_top_k={recipe_top_k}.\n"
+        f"User message:\n{user_message}\n\n"
+        f"Asset manifest JSON:\n{json.dumps(manifest, ensure_ascii=False, indent=2)}"
+    )
+
+
+def filter_assets_by_selection(
+    *,
+    skills: list[SkillDefinition],
+    recipes: list[RecipeDefinition],
+    selection: AssetSelectionResult,
+    skill_top_k: int,
+    recipe_top_k: int,
+) -> tuple[list[SkillDefinition], list[RecipeDefinition]]:
+    """selector 결과 순서를 보존해 실제 스킬/레시피 객체를 top-k로 축소한다."""
+    skill_by_name = {skill.name: skill for skill in skills}
+    recipe_by_name = {recipe.name: recipe for recipe in recipes}
+    selected_skills: list[SkillDefinition] = []
+    selected_recipes: list[RecipeDefinition] = []
+    for candidate in selection.selected:
+        if candidate.type == "skill" and len(selected_skills) < skill_top_k:
+            skill = skill_by_name.get(candidate.name)
+            if skill is not None:
+                selected_skills.append(skill)
+        elif candidate.type == "recipe" and len(selected_recipes) < recipe_top_k:
+            recipe = recipe_by_name.get(candidate.name)
+            if recipe is not None:
+                selected_recipes.append(recipe)
+    return selected_skills, selected_recipes
 
 
 def normalize_selector_response(
