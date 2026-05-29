@@ -12,6 +12,7 @@ from simpleclaw.agent.asset_selector import (
     SelectorAsset,
     normalize_selector_response,
 )
+from simpleclaw.config import load_asset_selection_config
 from simpleclaw.llm.models import ToolCall
 
 
@@ -111,3 +112,47 @@ def test_missing_function_call_or_empty_selection_requires_fallback() -> None:
     assert "missing_function_call" in missing_call.fallback_reason
     assert empty_selection.fallback_required is True
     assert "empty_selection" in empty_selection.fallback_reason
+
+
+def test_asset_selection_config_defaults_disabled(tmp_path) -> None:
+    """asset_selection 누락 시 운영 기본값은 disabled이다."""
+    config = tmp_path / "config.yaml"
+    config.write_text("llm: {}\n")
+
+    loaded = load_asset_selection_config(config)
+
+    assert loaded["enabled"] is False
+    assert loaded["backend"] == "gemini"
+    assert loaded["skill_top_k"] > 0
+    assert loaded["recipe_top_k"] > 0
+
+
+def test_asset_selection_config_overrides_and_clamps(tmp_path) -> None:
+    """config override는 타입을 정규화하고 confidence 범위를 clamp한다."""
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+asset_selection:
+  enabled: true
+  backend: gemini-fast
+  skill_top_k: "2"
+  recipe_top_k: -1
+  min_confidence: 2.5
+  bypass_below_count: "3"
+  fallback_top_k: 0
+  max_tokens: "128"
+"""
+    )
+
+    loaded = load_asset_selection_config(config)
+
+    assert loaded == {
+        "enabled": True,
+        "backend": "gemini-fast",
+        "skill_top_k": 2,
+        "recipe_top_k": 0,
+        "min_confidence": 1.0,
+        "bypass_below_count": 3,
+        "fallback_top_k": 1,
+        "max_tokens": 128,
+    }

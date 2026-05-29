@@ -524,6 +524,15 @@ _AGENT_DEFAULTS: dict = {
     "web_fetch": {
         "headless_binary": None,
     },
+    "asset_selection": {
+        "enabled": False,
+        "backend": "gemini",
+        "skill_top_k": 5,
+        "recipe_top_k": 3,
+        "min_confidence": 0.5,
+        "bypass_below_count": 8,
+        "max_tokens": 512,
+    },
 }
 
 
@@ -564,6 +573,11 @@ def _agent_with_defaults(agent: dict) -> dict:
     if isinstance(headless_binary, str) and not headless_binary.strip():
         headless_binary = None
 
+    asset_selection = agent.get("asset_selection", {})
+    if not isinstance(asset_selection, dict):
+        asset_selection = {}
+    asset_defaults = _AGENT_DEFAULTS["asset_selection"]
+
     return {
         "history_limit": agent.get(
             "history_limit", _AGENT_DEFAULTS["history_limit"]
@@ -577,6 +591,19 @@ def _agent_with_defaults(agent: dict) -> dict:
         ),
         "web_fetch": {
             "headless_binary": headless_binary,
+        },
+        "asset_selection": {
+            "enabled": bool(asset_selection.get("enabled", asset_defaults["enabled"])),
+            "backend": asset_selection.get("backend", asset_defaults["backend"]),
+            "skill_top_k": asset_selection.get("skill_top_k", asset_defaults["skill_top_k"]),
+            "recipe_top_k": asset_selection.get("recipe_top_k", asset_defaults["recipe_top_k"]),
+            "min_confidence": asset_selection.get(
+                "min_confidence", asset_defaults["min_confidence"]
+            ),
+            "bypass_below_count": asset_selection.get(
+                "bypass_below_count", asset_defaults["bypass_below_count"]
+            ),
+            "max_tokens": asset_selection.get("max_tokens", asset_defaults["max_tokens"]),
         },
     }
 
@@ -616,6 +643,110 @@ def load_recipes_config(config_path: str | Path) -> dict:
 
     return {
         "dir": recipes.get("dir", _RECIPES_DEFAULTS["dir"]),
+    }
+
+
+# Asset selector 기본 설정값 (BIZ-311)
+# 운영 기본은 disabled — selector는 main LLM의 후보군을 줄이는 보조 경로일 뿐,
+# 실패하거나 꺼져 있으면 기존 전체 스킬/레시피 컨텍스트로 회귀해야 한다.
+_ASSET_SELECTION_DEFAULTS: dict = {
+    "enabled": False,
+    "backend": "gemini",
+    "skill_top_k": 5,
+    "recipe_top_k": 3,
+    "min_confidence": 0.5,
+    "bypass_below_count": 8,
+    "fallback_top_k": 50,
+    "max_tokens": 512,
+}
+
+
+def _coerce_int_config(raw: object, default: int, *, minimum: int = 0) -> int:
+    """정수 설정값을 안전하게 정규화한다."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
+
+def _coerce_float_config(
+    raw: object,
+    default: float,
+    *,
+    minimum: float = 0.0,
+    maximum: float = 1.0,
+) -> float:
+    """실수 설정값을 지정 범위로 clamp한다."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(max(value, minimum), maximum)
+
+
+def load_asset_selection_config(config_path: str | Path) -> dict:
+    """config.yaml의 ``asset_selection`` 블록을 기본값으로 보강해 로드한다."""
+    config_path = Path(config_path)
+    if not config_path.is_file():
+        return dict(_ASSET_SELECTION_DEFAULTS)
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (yaml.YAMLError, OSError):
+        return dict(_ASSET_SELECTION_DEFAULTS)
+
+    if not isinstance(data, dict):
+        return dict(_ASSET_SELECTION_DEFAULTS)
+
+    # BIZ-311: 운영 config는 agent.asset_selection 아래에 둔다. 과거 스파이크/문서에서
+    # 최상위 asset_selection을 쓴 경우도 읽어 테스트·수동 실험과의 호환성을 보존한다.
+    agent = data.get("agent", {})
+    raw = agent.get("asset_selection", {}) if isinstance(agent, dict) else {}
+    if not raw:
+        raw = data.get("asset_selection", {})
+    if not isinstance(raw, dict):
+        return dict(_ASSET_SELECTION_DEFAULTS)
+
+    backend = raw.get("backend", _ASSET_SELECTION_DEFAULTS["backend"])
+    if isinstance(backend, str):
+        backend = backend.strip() or _ASSET_SELECTION_DEFAULTS["backend"]
+    else:
+        backend = _ASSET_SELECTION_DEFAULTS["backend"]
+
+    return {
+        "enabled": bool(raw.get("enabled", _ASSET_SELECTION_DEFAULTS["enabled"])),
+        "backend": backend,
+        "skill_top_k": _coerce_int_config(
+            raw.get("skill_top_k", _ASSET_SELECTION_DEFAULTS["skill_top_k"]),
+            _ASSET_SELECTION_DEFAULTS["skill_top_k"],
+            minimum=0,
+        ),
+        "recipe_top_k": _coerce_int_config(
+            raw.get("recipe_top_k", _ASSET_SELECTION_DEFAULTS["recipe_top_k"]),
+            _ASSET_SELECTION_DEFAULTS["recipe_top_k"],
+            minimum=0,
+        ),
+        "min_confidence": _coerce_float_config(
+            raw.get("min_confidence", _ASSET_SELECTION_DEFAULTS["min_confidence"]),
+            _ASSET_SELECTION_DEFAULTS["min_confidence"],
+        ),
+        "bypass_below_count": _coerce_int_config(
+            raw.get("bypass_below_count", _ASSET_SELECTION_DEFAULTS["bypass_below_count"]),
+            _ASSET_SELECTION_DEFAULTS["bypass_below_count"],
+            minimum=0,
+        ),
+        "fallback_top_k": _coerce_int_config(
+            raw.get("fallback_top_k", _ASSET_SELECTION_DEFAULTS["fallback_top_k"]),
+            _ASSET_SELECTION_DEFAULTS["fallback_top_k"],
+            minimum=1,
+        ),
+        "max_tokens": _coerce_int_config(
+            raw.get("max_tokens", _ASSET_SELECTION_DEFAULTS["max_tokens"]),
+            _ASSET_SELECTION_DEFAULTS["max_tokens"],
+            minimum=1,
+        ),
     }
 
 
