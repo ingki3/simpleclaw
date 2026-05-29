@@ -21,7 +21,9 @@
   진화하므로 버전 번호 충돌을 피하려고 디렉토리를 분리한다.
 - **파일명 규칙**: ``NNNN_description.sql`` (예: ``0001_initial.sql``).
   ``NNNN``은 4자리 0-패딩, 단조 증가. 동일 버전 중복은 에러.
-- **트랜잭션**: 각 마이그레이션은 단일 트랜잭션 내에서 실행한다.
+- **트랜잭션/close**: 각 마이그레이션은 단일 트랜잭션 내에서 실행하고
+  연결은 helper에서 명시적으로 close한다. ``sqlite3.Connection`` context manager는
+  commit/rollback만 수행하므로 파일 핸들 누적 방지를 위해 close를 별도로 보장한다.
   다만 SQLite는 일부 DDL(예: PRAGMA, ALTER TABLE의 일부)에서 자동 커밋이
   발생할 수 있으므로, 진정한 원자성은 파일 백업/복원으로 보장한다.
 - **체크섬**: 적용된 마이그레이션 파일의 SHA-256을 기록해 사후 변경을 탐지한다.
@@ -39,7 +41,8 @@ import logging
 import re
 import shutil
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -124,6 +127,17 @@ class MigrationRunner:
         if not self._is_memory:
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
 
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """마이그레이션용 SQLite 연결의 transaction 처리와 close를 보장한다."""
+        conn = sqlite3.connect(self._db_path)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     # ------------------------------------------------------------------
     # 공개 API
     # ------------------------------------------------------------------
@@ -138,7 +152,7 @@ class MigrationRunner:
         migrations = self._discover_migrations()
         applied: list[int] = []
 
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             self._ensure_meta_table(conn)
             already_applied = self._load_applied_versions(conn)
 
@@ -177,7 +191,7 @@ class MigrationRunner:
 
     def current_version(self) -> int:
         """현재 적용된 마이그레이션 중 최댓값(없으면 0)을 반환한다."""
-        with sqlite3.connect(self._db_path) as conn:
+        with self._connect() as conn:
             self._ensure_meta_table(conn)
             row = conn.execute(
                 f"SELECT MAX(version) FROM {self.SCHEMA_VERSION_TABLE}"
@@ -306,7 +320,7 @@ class MigrationRunner:
             migration.version, migration.name, self._db_path,
         )
         try:
-            with sqlite3.connect(self._db_path) as conn:
+            with self._connect() as conn:
                 # executescript는 자체 트랜잭션을 시작하지만, 다중 문장 DDL을
                 # 하나로 실행하기에는 가장 적합하다.
                 conn.executescript(migration.sql)
