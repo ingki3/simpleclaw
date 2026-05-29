@@ -1,0 +1,738 @@
+{
+  "config": "/Users/simplist/Dev/SimpleClaw/config.yaml",
+  "backend_requested": "gemini",
+  "manifest": {
+    "assets_total": 32,
+    "skills": 28,
+    "recipes": 4,
+    "sample_asset_names": [
+      "recipe:ai-report",
+      "recipe:check-email",
+      "recipe:krstock",
+      "recipe:morning-briefing",
+      "skill:agent-browser",
+      "skill:context7",
+      "skill:doc-coauthoring",
+      "skill:docx",
+      "skill:edge-tts",
+      "skill:find-skills",
+      "skill:gmail-skill",
+      "skill:google-calendar-skill",
+      "skill:google-contacts-skill",
+      "skill:google-docs-skill",
+      "skill:implementation-skill",
+      "skill:link-git-summarizer",
+      "skill:local-route-skill",
+      "skill:mcp-builder",
+      "skill:naver-shopping-skill",
+      "skill:news-search-skill",
+      "skill:pdf",
+      "skill:pptx",
+      "skill:react:components",
+      "skill:skill-creator",
+      "skill:speckit-skill",
+      "skill:summarize",
+      "skill:us-stock-skill",
+      "skill:vercel-composition-patterns",
+      "skill:vercel-react-best-practices",
+      "skill:vercel-react-native-skills"
+    ]
+  },
+  "samples": 16,
+  "parse_success_rate": 0.9375,
+  "tool_call_success_rate": 0.9375,
+  "top_k_recall": 1.0,
+  "top_k_precision": 1.0,
+  "fallback_accuracy": 1.0,
+  "latency_ms": {
+    "avg": 3108.5,
+    "p95": 7761.7,
+    "min": 1704.7,
+    "max": 7635.5
+  },
+  "errors": [],
+  "rows": [
+    {
+      "sample_id": "browser",
+      "utterance": "example.com을 열고 로그인 버튼을 눌러 화면 캡처를 해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "agent-browser"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "agent-browser",
+          "confidence": 1.0,
+          "reason": "웹사이트 방문, 버튼 클릭, 화면 캡처 등 브라우저 자동화 작업에 최적화된 스킬입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2590.4,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "reason": "웹사이트 방문, 버튼 클릭, 화면 캡처 등 브라우저 자동화 작업에 최적화된 스킬입니다.",
+            "confidence": 1,
+            "type": "skill",
+            "name": "agent-browser"
+          }
+        ],
+        "fallback_reason": "",
+        "fallback": false
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1803,
+        "output_tokens": 74
+      }
+    },
+    {
+      "sample_id": "context7",
+      "utterance": "FastAPI lifespan 이벤트 최신 사용법 문서를 찾아 코드 예시를 보여줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "context7"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "context7",
+          "confidence": 1.0,
+          "reason": "FastAPI 라이브러리의 최신 문서와 코드 예시를 검색하기 위해 가장 적합한 스킬입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2283.7,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "type": "skill",
+            "reason": "FastAPI 라이브러리의 최신 문서와 코드 예시를 검색하기 위해 가장 적합한 스킬입니다.",
+            "confidence": 1,
+            "name": "context7"
+          }
+        ],
+        "fallback_reason": "",
+        "fallback": false
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1802,
+        "output_tokens": 71
+      }
+    },
+    {
+      "sample_id": "gmail",
+      "utterance": "안 읽은 메일을 검색해서 중요한 것만 요약해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "gmail-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "gmail-skill",
+          "confidence": 1.0,
+          "reason": "사용자의 요청대로 안 읽은 메일을 검색하고 그 내용을 읽어와서 요약하기 위해 Gmail과 상호작용할 수 있는 gmail-skill이 가장 적합합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 6143.3,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "",
+        "fallback": false,
+        "selected": [
+          {
+            "type": "skill",
+            "name": "gmail-skill",
+            "reason": "사용자의 요청대로 안 읽은 메일을 검색하고 그 내용을 읽어와서 요약하기 위해 Gmail과 상호작용할 수 있는 gmail-skill이 가장 적합합니다.",
+            "confidence": 1
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1799,
+        "output_tokens": 86
+      }
+    },
+    {
+      "sample_id": "calendar",
+      "utterance": "내일 오후 2시에 캘린더 일정을 등록해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "google-calendar-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "google-calendar-skill",
+          "confidence": 1.0,
+          "reason": "사용자가 '내일 오후 2시에 캘린더 일정을 등록해줘'라고 요청하였으므로, 구글 캘린더 일정을 생성할 수 있는 google-calendar-skill이 필요합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2071.7,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "type": "skill",
+            "name": "google-calendar-skill",
+            "confidence": 1,
+            "reason": "사용자가 '내일 오후 2시에 캘린더 일정을 등록해줘'라고 요청하였으므로, 구글 캘린더 일정을 생성할 수 있는 google-calendar-skill이 필요합니다."
+          }
+        ],
+        "fallback": false,
+        "fallback_reason": ""
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1800,
+        "output_tokens": 95
+      }
+    },
+    {
+      "sample_id": "docs",
+      "utterance": "Google Docs에 회의록 문서를 새로 만들고 내용을 넣어줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "google-docs-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "google-docs-skill",
+          "confidence": 1.0,
+          "reason": "Google Docs에 새로운 문서를 생성하고 내용을 작성하기 위해 가장 적합한 스킬입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 1704.7,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback": false,
+        "fallback_reason": "",
+        "selected": [
+          {
+            "name": "google-docs-skill",
+            "reason": "Google Docs에 새로운 문서를 생성하고 내용을 작성하기 위해 가장 적합한 스킬입니다.",
+            "confidence": 1,
+            "type": "skill"
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1799,
+        "output_tokens": 69
+      }
+    },
+    {
+      "sample_id": "pptx",
+      "utterance": "이 내용을 발표용 pptx 5장으로 만들어줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "pptx"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "pptx",
+          "confidence": 1.0,
+          "reason": "The user is asking to create a 5-slide PowerPoint presentation (.pptx). The 'pptx' skill is designed for creating, reading, and modifying .pptx files."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2866.1,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "The user wants to create a PowerPoint presentation (.pptx), which is directly supported by the 'pptx' skill.",
+        "fallback": false,
+        "selected": [
+          {
+            "type": "skill",
+            "confidence": 1,
+            "reason": "The user is asking to create a 5-slide PowerPoint presentation (.pptx). The 'pptx' skill is designed for creating, reading, and modifying .pptx files.",
+            "name": "pptx"
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1797,
+        "output_tokens": 107
+      }
+    },
+    {
+      "sample_id": "pdf",
+      "utterance": "이 PDF에서 표를 추출하고 페이지를 합쳐줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "pdf"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "pdf",
+          "confidence": 1.0,
+          "reason": "이 스킬은 PDF에서 텍스트 및 표를 추출하고, 여러 PDF를 하나로 합치거나 페이지를 조작하는 기능을 제공합니다. 사용자의 요청인 '표 추출'과 '페이지 합치기'에 직접적으로 대응하는 도구입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2167.8,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "",
+        "selected": [
+          {
+            "confidence": 1,
+            "type": "skill",
+            "name": "pdf",
+            "reason": "이 스킬은 PDF에서 텍스트 및 표를 추출하고, 여러 PDF를 하나로 합치거나 페이지를 조작하는 기능을 제공합니다. 사용자의 요청인 '표 추출'과 '페이지 합치기'에 직접적으로 대응하는 도구입니다."
+          }
+        ],
+        "fallback": false
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1797,
+        "output_tokens": 101
+      }
+    },
+    {
+      "sample_id": "xlsx",
+      "utterance": "CSV 데이터를 정리해서 xlsx 파일로 저장하고 차트를 만들어줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "xlsx"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "xlsx",
+          "confidence": 1.0,
+          "reason": "CSV 데이터를 정리하고 xlsx 파일로 저장하며 차트를 생성하는 기능은 xlsx 스킬의 핵심 기능입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2049.0,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "",
+        "fallback": false,
+        "selected": [
+          {
+            "reason": "CSV 데이터를 정리하고 xlsx 파일로 저장하며 차트를 생성하는 기능은 xlsx 스킬의 핵심 기능입니다.",
+            "name": "xlsx",
+            "confidence": 1,
+            "type": "skill"
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1799,
+        "output_tokens": 70
+      }
+    },
+    {
+      "sample_id": "news",
+      "utterance": "최신 AI 뉴스 검색해서 사실 확인을 보강해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "news-search-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "news-search-skill",
+          "confidence": 1.0,
+          "reason": "사용자가 최신 AI 뉴스 검색과 사실 확인 보강을 요청하였으므로, 뉴스 검색 및 사실 확인에 특화된 news-search-skill이 가장 적합합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2825.0,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "type": "skill",
+            "name": "news-search-skill",
+            "confidence": 1,
+            "reason": "사용자가 최신 AI 뉴스 검색과 사실 확인 보강을 요청하였으므로, 뉴스 검색 및 사실 확인에 특화된 news-search-skill이 가장 적합합니다."
+          }
+        ],
+        "fallback": false,
+        "fallback_reason": ""
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1798,
+        "output_tokens": 87
+      }
+    },
+    {
+      "sample_id": "us-stock",
+      "utterance": "애플 주가와 배당, 최근 뉴스를 종합해서 알려줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "us-stock-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "us-stock-skill",
+          "confidence": 1.0,
+          "reason": "애플(Apple)은 미국 주식이며, 이 스킬은 주가, 배당 정보, 관련 뉴스를 모두 제공할 수 있습니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2145.5,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "name": "us-stock-skill",
+            "confidence": 1,
+            "reason": "애플(Apple)은 미국 주식이며, 이 스킬은 주가, 배당 정보, 관련 뉴스를 모두 제공할 수 있습니다.",
+            "type": "skill"
+          }
+        ],
+        "fallback": false,
+        "fallback_reason": ""
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1800,
+        "output_tokens": 80
+      }
+    },
+    {
+      "sample_id": "shopping",
+      "utterance": "네이버 쇼핑에서 무선 마우스 가격을 비교해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "naver-shopping-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "naver-shopping-skill",
+          "confidence": 1.0,
+          "reason": "사용자가 네이버 쇼핑에서 무선 마우스 가격 비교를 요청했으므로, 네이버 쇼핑 API를 통해 상품과 가격을 검색할 수 있는 naver-shopping-skill이 가장 적합합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 1972.7,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "confidence": 1,
+            "type": "skill",
+            "name": "naver-shopping-skill",
+            "reason": "사용자가 네이버 쇼핑에서 무선 마우스 가격 비교를 요청했으므로, 네이버 쇼핑 API를 통해 상품과 가격을 검색할 수 있는 naver-shopping-skill이 가장 적합합니다."
+          }
+        ],
+        "fallback_reason": "",
+        "fallback": false
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1799,
+        "output_tokens": 95
+      }
+    },
+    {
+      "sample_id": "route",
+      "utterance": "강남역 근처 식당을 찾고 대중교통 경로를 계산해줘",
+      "expected": [
+        {
+          "type": "skill",
+          "name": "local-route-skill"
+        }
+      ],
+      "selected": [
+        {
+          "type": "skill",
+          "name": "local-route-skill",
+          "confidence": 1.0,
+          "reason": "강남역 근처 식당 검색(장소 검색)과 대중교통 경로 계산 기능을 모두 제공하는 스킬입니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 1947.4,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [
+          {
+            "confidence": 1,
+            "name": "local-route-skill",
+            "type": "skill",
+            "reason": "강남역 근처 식당 검색(장소 검색)과 대중교통 경로 계산 기능을 모두 제공하는 스킬입니다."
+          }
+        ],
+        "fallback": false,
+        "fallback_reason": ""
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1804,
+        "output_tokens": 77
+      }
+    },
+    {
+      "sample_id": "recipe-ai",
+      "utterance": "매일 아침 최신 AI 뉴스 브리핑을 보내줘",
+      "expected": [
+        {
+          "type": "recipe",
+          "name": "ai-report"
+        }
+      ],
+      "selected": [
+        {
+          "type": "recipe",
+          "name": "ai-report",
+          "confidence": 1.0,
+          "reason": "사용자가 요청한 '매일 아침 최신 AI 뉴스 브리핑' 기능에 가장 적합한 레시피입니다. 최신 AI 뉴스를 수집, 분석하여 한국어 리포트를 제공합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2526.8,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "",
+        "fallback": false,
+        "selected": [
+          {
+            "confidence": 1,
+            "name": "ai-report",
+            "type": "recipe",
+            "reason": "사용자가 요청한 '매일 아침 최신 AI 뉴스 브리핑' 기능에 가장 적합한 레시피입니다. 최신 AI 뉴스를 수집, 분석하여 한국어 리포트를 제공합니다."
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1799,
+        "output_tokens": 93
+      }
+    },
+    {
+      "sample_id": "recipe-stock",
+      "utterance": "장 마감 후 한국 증시 시황을 정리해줘",
+      "expected": [
+        {
+          "type": "recipe",
+          "name": "krstock"
+        }
+      ],
+      "selected": [
+        {
+          "type": "recipe",
+          "name": "krstock",
+          "confidence": 1.0,
+          "reason": "사용자가 한국 증시 장 마감 시황 정리를 요청하였으므로, 코스피·코스닥 마감 및 주요 테마를 정리해주는 krstock 레시피가 가장 적합합니다."
+        }
+      ],
+      "fallback": false,
+      "fallback_expected": false,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "",
+      "latency_ms": 2012.6,
+      "used_tool_call": true,
+      "raw_selector": {
+        "fallback_reason": "",
+        "fallback": false,
+        "selected": [
+          {
+            "type": "recipe",
+            "name": "krstock",
+            "reason": "사용자가 한국 증시 장 마감 시황 정리를 요청하였으므로, 코스피·코스닥 마감 및 주요 테마를 정리해주는 krstock 레시피가 가장 적합합니다.",
+            "confidence": 1
+          }
+        ]
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1798,
+        "output_tokens": 91
+      }
+    },
+    {
+      "sample_id": "ambiguous",
+      "utterance": "이거 좀 정리해줘",
+      "expected": [],
+      "selected": [],
+      "fallback": true,
+      "fallback_expected": true,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "ambiguous_intent, 사용자가 '이거'라고 지칭한 대상이 텍스트, 파일, URL, 이메일 중 무엇인지 명확하지 않아 적절한 스킬을 선택할 수 없습니다. 어떤 내용을 정리하고 싶은지 구체적인 정보가 필요합니다., empty_selection",
+      "latency_ms": 6793.9,
+      "used_tool_call": true,
+      "raw_selector": {
+        "selected": [],
+        "fallback": true,
+        "fallback_reason": "사용자가 '이거'라고 지칭한 대상이 텍스트, 파일, URL, 이메일 중 무엇인지 명확하지 않아 적절한 스킬을 선택할 수 없습니다. 어떤 내용을 정리하고 싶은지 구체적인 정보가 필요합니다."
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1791,
+        "output_tokens": 79
+      }
+    },
+    {
+      "sample_id": "no-asset",
+      "utterance": "오늘 날씨 알려줘",
+      "expected": [],
+      "selected": [],
+      "fallback": true,
+      "fallback_expected": true,
+      "fallback_ok": true,
+      "recall": 1.0,
+      "precision": 1.0,
+      "fallback_reason": "missing_function_call, empty_selection",
+      "latency_ms": 7635.5,
+      "used_tool_call": false,
+      "raw_selector": {
+        "selected": [],
+        "fallback": true,
+        "fallback_reason": "parse_failed"
+      },
+      "raw_text": "",
+      "backend": "gemini",
+      "model": "gemini-3-flash-preview",
+      "usage": {
+        "input_tokens": 1790,
+        "output_tokens": 0
+      }
+    }
+  ]
+}

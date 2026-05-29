@@ -1,0 +1,327 @@
+{
+  "assets_total": 32,
+  "skills": 28,
+  "recipes": 4,
+  "assets": [
+    {
+      "type": "recipe",
+      "name": "ai-report",
+      "description": "AI 아침 브리핑 - 최신 AI 뉴스 수집·분석 후 한국어 레포트를 채팅창에 직접 제공",
+      "source": "/Users/simplist/Dev/SimpleClaw/.agent/recipes/ai-report",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 1,
+      "steps_count": 0
+    },
+    {
+      "type": "recipe",
+      "name": "check-email",
+      "description": "읽지 않은 메일 확인 - 새 메일이 있을 때만 알림",
+      "source": "/Users/simplist/Dev/SimpleClaw/.agent/recipes/check-email",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 1,
+      "steps_count": 0
+    },
+    {
+      "type": "recipe",
+      "name": "krstock",
+      "description": "한국 증시 시황 정리 - 코스피·코스닥 마감 및 주요 테마/특징주를 한국어 레포트로 제공",
+      "source": "/Users/simplist/Dev/SimpleClaw/.agent/recipes/krstock",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 1,
+      "steps_count": 0
+    },
+    {
+      "type": "recipe",
+      "name": "morning-briefing",
+      "description": "아침 브리핑 - 읽지 않은 메일과 오늘 일정 요약",
+      "source": "/Users/simplist/Dev/SimpleClaw/.agent/recipes/morning-briefing",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 1,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "agent-browser",
+      "description": "Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to \"open a website\", \"fill out a form\", \"click a button\", \"take a screenshot\", \"scrape data from a page\", \"test this web app\", \"login to a site\", \"automate browser actions\", or any task requiring programmatic web interaction.",
+      "source": "/Users/simplist/.agents/skills/agent-browser",
+      "trigger": "",
+      "commands_count": 136,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "context7",
+      "description": "Retrieve up-to-date documentation for software libraries, frameworks, and components via the Context7 API. This skill should be used when looking up documentation for any programming library or framework, finding code examples for specific APIs or features, verifying correct usage of library functions, or obtaining current information about library APIs that may have changed since training.",
+      "source": "/Users/simplist/.agents/skills/context7",
+      "trigger": "",
+      "commands_count": 8,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "doc-coauthoring",
+      "description": "Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.",
+      "source": "/Users/simplist/.agents/skills/doc-coauthoring",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "docx",
+      "description": "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files). Triggers include: any mention of \"Word doc\", \"word document\", \".docx\", or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx files, inserting or replacing images in documents, performing find-and-replace in Word files, working with tracked changes or comments, or converting content into a polished Word document. If the user asks for a \"report\", \"memo\", \"letter\", \"template\", or similar deliverable as a Word or .docx file, use this skill. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation.",
+      "source": "/Users/simplist/.agents/skills/docx",
+      "trigger": "",
+      "commands_count": 12,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "edge-tts",
+      "description": "Text-to-speech conversion using `uvx edge-tts` for generating audio from text. Use when (1) User requests audio/voice output with the \"tts\" trigger or keyword. (2) Content needs to be spoken rather than read (multitasking, accessibility, driving, cooking). (3) User wants a specific voice, speed, pitch, or format for TTS output.",
+      "source": "/Users/simplist/.agents/skills/edge-tts",
+      "trigger": "",
+      "commands_count": 6,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "find-skills",
+      "description": "Helps users discover and install agent skills when they ask questions like \"how do I do X\", \"find a skill for X\", \"is there a skill that can...\", or express interest in extending capabilities. This skill should be used when the user is looking for functionality that might exist as an installable skill.",
+      "source": "/Users/simplist/.agents/skills/find-skills",
+      "trigger": "",
+      "commands_count": 2,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "gmail-skill",
+      "description": "A skill to interact with Gmail, allowing the AI to search for emails and read their textual content using the user's OAuth credentials.",
+      "source": "/Users/simplist/.agents/skills/gmail-skill",
+      "trigger": "",
+      "commands_count": 2,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "google-calendar-skill",
+      "description": "A skill to interact with Google Calendar (list calendars, list events, create, delete) using the user's OAuth credentials.",
+      "source": "/Users/simplist/.agents/skills/google-calendar-skill",
+      "trigger": "",
+      "commands_count": 10,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "google-contacts-skill",
+      "description": "A skill to interact with Google Contacts (People API) for managing address books and scanning business cards using OCR (Cloud Vision API).",
+      "source": "/Users/simplist/.agents/skills/google-contacts-skill",
+      "trigger": "",
+      "commands_count": 4,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "google-docs-skill",
+      "description": "A skill to interact with Google Docs, allowing the AI to read, create, manage, and modify documents using the user's OAuth credentials.",
+      "source": "/Users/simplist/.agents/skills/google-docs-skill",
+      "trigger": "",
+      "commands_count": 7,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "implementation-skill",
+      "description": "Creates a new project directory and uses Claude Code (Anthropic's CLI) to autonomously implement a user's prompt.",
+      "source": "/Users/simplist/.agents/skills/implementation-skill",
+      "trigger": "",
+      "commands_count": 1,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "link-git-summarizer",
+      "description": "Summarizes a link (AI or stock related) and saves/pushes the summary to the workspace Git repository. Use when the user provides a link and asks to summarize and save it to Git.",
+      "source": "/Users/simplist/.agents/skills/link-git-summarizer",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "local-route-skill",
+      "description": "A skill to search for places using Naver Local Search and calculate routes to them using Google Maps Routes API.",
+      "source": "/Users/simplist/.agents/skills/local-route-skill",
+      "trigger": "",
+      "commands_count": 3,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "mcp-builder",
+      "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).",
+      "source": "/Users/simplist/.agents/skills/mcp-builder",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "naver-shopping-skill",
+      "description": "A skill to search for products and their prices using the Naver Shopping API.",
+      "source": "/Users/simplist/.agents/skills/naver-shopping-skill",
+      "trigger": "",
+      "commands_count": 2,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "news-search-skill",
+      "description": "뉴스 검색 혹은 최신 정보에 대한 사실 확인(Fact-check)이 보강되어야 할 때 사용하는 스킬입니다. 하지만, 속보나 지금 발생하고 있는 상황에 대해서는 사용하지 말아주세요.",
+      "source": "/Users/simplist/.agents/skills/news-search-skill",
+      "trigger": "",
+      "commands_count": 1,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "pdf",
+      "description": "Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.",
+      "source": "/Users/simplist/.agents/skills/pdf",
+      "trigger": "",
+      "commands_count": 12,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "pptx",
+      "description": "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \"deck,\" \"slides,\" \"presentation,\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.",
+      "source": "/Users/simplist/.agents/skills/pptx",
+      "trigger": "",
+      "commands_count": 8,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "react:components",
+      "description": "Converts Stitch designs into modular Vite and React components using system-level networking and AST-based validation.",
+      "source": "/Users/simplist/.agents/skills/react-components",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "skill-creator",
+      "description": "Guide for creating effective skills. This skill should be used when users want to create a new skill (or update an existing skill) that extends Claude's capabilities with specialized knowledge, workflows, or tool integrations.",
+      "source": "/Users/simplist/.agents/skills/skill-creator",
+      "trigger": "",
+      "commands_count": 3,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "speckit-skill",
+      "description": "Spec-Driven Development toolkit – structured workflow for building high-quality software through specifications, plans, tasks, and implementation using AI agents.",
+      "source": "/Users/simplist/.agents/skills/speckit-skill",
+      "trigger": "",
+      "commands_count": 6,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "summarize",
+      "description": "Summarize or extract text/transcripts from URLs, podcasts, and local files (great fallback for “transcribe this YouTube/video”).",
+      "source": "/Users/simplist/.agents/skills/summarize",
+      "trigger": "Use this skill immediately when the user asks any of:\n\n- “use summarize.sh”\n- “what’s this link/video about?”\n- “summarize this URL/article”\n- “transcribe this YouTube/video” (best-effort transcript extraction; no `yt-dlp` needed)",
+      "commands_count": 4,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "us-stock-skill",
+      "description": "A skill to retrieve comprehensive US stock market data including company info, price charts, news, dividends, fundamentals, technical indicators, and screener search.",
+      "source": "/Users/simplist/.agents/skills/us-stock-skill",
+      "trigger": "",
+      "commands_count": 13,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "vercel-composition-patterns",
+      "description": "React composition patterns that scale. Use when refactoring components with boolean prop proliferation, building flexible component libraries, or designing reusable APIs. Triggers on tasks involving compound components, render props, context providers, or component architecture. Includes React 19 API changes.",
+      "source": "/Users/simplist/.agents/skills/vercel-composition-patterns",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "vercel-react-best-practices",
+      "description": "React and Next.js performance optimization guidelines from Vercel Engineering. This skill should be used when writing, reviewing, or refactoring React/Next.js code to ensure optimal performance patterns. Triggers on tasks involving React components, Next.js pages, data fetching, bundle optimization, or performance improvements.",
+      "source": "/Users/simplist/.agents/skills/vercel-react-best-practices",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "vercel-react-native-skills",
+      "description": "React Native and Expo best practices for building performant mobile apps. Use when building React Native components, optimizing list performance, implementing animations, or working with native modules. Triggers on tasks involving React Native, Expo, mobile performance, or native platform APIs.",
+      "source": "/Users/simplist/.agents/skills/vercel-react-native-skills",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "web-design-guidelines",
+      "description": "Review UI code for Web Interface Guidelines compliance. Use when asked to \"review my UI\", \"check accessibility\", \"audit design\", \"review UX\", or \"check my site against best practices\".",
+      "source": "/Users/simplist/.agents/skills/web-design-guidelines",
+      "trigger": "",
+      "commands_count": 0,
+      "parameters_count": 0,
+      "steps_count": 0
+    },
+    {
+      "type": "skill",
+      "name": "xlsx",
+      "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \"the xlsx in my downloads\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved.",
+      "source": "/Users/simplist/.agents/skills/xlsx",
+      "trigger": "",
+      "commands_count": 3,
+      "parameters_count": 0,
+      "steps_count": 0
+    }
+  ]
+}
