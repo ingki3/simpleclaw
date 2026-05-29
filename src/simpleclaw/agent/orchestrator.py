@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from simpleclaw.config import (
     load_agent_config,
+    load_asset_selection_config,
     load_memory_config,
     load_persona_config,
     load_recipes_config,
@@ -52,10 +53,20 @@ from simpleclaw.security.sanitize import (
     sanitize_tool_error,
     sanitize_tool_output,
 )
+from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import SkillDefinition
 
+from simpleclaw.agent.asset_selector import (
+    AssetSelectionResult,
+    build_selector_assets,
+    build_selector_prompt,
+    build_selector_tool_definition,
+    filter_assets_by_selection,
+    normalize_selector_response,
+)
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
     handle_cron_action,
@@ -285,6 +296,7 @@ class AgentOrchestrator:
         agent_config = load_agent_config(config_path)
         persona_config = load_persona_config(config_path)
         recipes_config = load_recipes_config(config_path)
+        self._asset_selection_config = load_asset_selection_config(config_path)
 
         # BIZ-202: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
         # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은 ``~/.simpleclaw/recipes``
@@ -458,6 +470,16 @@ class AgentOrchestrator:
         self._skills_by_name = {s.name: s for s in self._skills}
         # 시스템 프롬프트용 스킬 목록
         self._skills_prompt = self._format_skills_for_prompt(self._skills)
+
+        # --- 레시피 리로드 (~/.simpleclaw/recipes) ---
+        # selector manifest와 선택 레시피 컨텍스트가 운영 recipe 디렉터리 변경을
+        # 재시작 없이 반영하도록 매 메시지 진입 시 스캔한다. 실패는 selector 보조
+        # 경로만 비우고 main 응답은 기존 스킬 경로로 계속 진행한다.
+        try:
+            self._recipes = discover_recipes(self._recipes_dir)
+        except Exception as exc:  # noqa: BLE001 — recipe 스캔 실패는 응답을 막지 않음
+            logger.warning("Recipe discovery failed during dynamic reload: %s", exc)
+            self._recipes = []
 
     def set_cron_scheduler(self, scheduler: CronScheduler) -> None:
         """CronScheduler를 주입하여 cron 도구를 활성화한다."""
@@ -694,13 +716,37 @@ class AgentOrchestrator:
                 text, exclude_contents=recent_contents,
             )
 
+        active_skills = self._skills
+        active_recipes = getattr(self, "_recipes", [])
+        active_skills_prompt = self._skills_prompt
+        active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
+
+        asset_selection = await self._select_assets_for_turn(text, active_skills, active_recipes)
+        if asset_selection is not None and not asset_selection.fallback_required:
+            selected_skills, selected_recipes = filter_assets_by_selection(
+                skills=active_skills,
+                recipes=active_recipes,
+                selection=asset_selection,
+                skill_top_k=int(self._asset_selection_config["skill_top_k"]),
+                recipe_top_k=int(self._asset_selection_config["recipe_top_k"]),
+            )
+            if selected_skills or selected_recipes:
+                active_skills = selected_skills
+                active_recipes = selected_recipes
+                active_skills_prompt = self._format_skills_for_prompt(selected_skills)
+                active_recipes_prompt = self._format_recipes_for_prompt(selected_recipes)
+
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
         # cache 경계: 페르소나 끝 / 스킬 목록 끝. ReAct 지시문과 RAG 블록은 마커 뒤에 둔다.
-        system_blocks = self._build_system_blocks(rag_context=rag_context)
+        system_blocks = self._build_system_blocks(
+            rag_context=rag_context,
+            skills_prompt=active_skills_prompt,
+            recipes_prompt=active_recipes_prompt,
+        )
         system_prompt = self._flatten_system_blocks(system_blocks)
         tools = build_tool_definitions(
-            self._skills,
+            active_skills,
             cron_available=self._cron_scheduler is not None,
         )
 
@@ -921,6 +967,77 @@ class AgentOrchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Asset selector
+    # ------------------------------------------------------------------
+
+    async def _select_assets_for_turn(
+        self,
+        text: str,
+        skills: list[SkillDefinition],
+        recipes: list[RecipeDefinition],
+    ) -> AssetSelectionResult | None:
+        """설정이 켜진 경우 selector LLM으로 이번 turn의 자산 후보를 축소한다.
+
+        selector는 사용자 응답 경로를 막지 않는 best-effort 보조 호출이다. 설정이
+        꺼져 있거나 후보군이 작거나 호출/정규화가 실패하면 None을 반환해 기존 전체
+        후보 프롬프트와 도구 스키마를 그대로 사용한다.
+        """
+        cfg = self._asset_selection_config
+        if not cfg.get("enabled", False):
+            return None
+        known_assets = build_selector_assets(skills, recipes)
+        if not known_assets:
+            return None
+        if len(known_assets) <= int(cfg.get("bypass_below_count", 0)):
+            logger.info(
+                "Asset selector bypassed: candidates=%d threshold=%d",
+                len(known_assets),
+                int(cfg.get("bypass_below_count", 0)),
+            )
+            return None
+
+        prompt = build_selector_prompt(
+            user_message=text,
+            known_assets=known_assets,
+            skill_top_k=int(cfg["skill_top_k"]),
+            recipe_top_k=int(cfg["recipe_top_k"]),
+        )
+        try:
+            response = await self._router.send(
+                LLMRequest(
+                    system_prompt=(
+                        "You are a conservative asset candidate reducer. "
+                        "Always call select_assets; never answer the user."
+                    ),
+                    user_message=prompt,
+                    backend_name=str(cfg["backend"]),
+                    tools=[build_selector_tool_definition()],
+                    max_tokens=int(cfg["max_tokens"]),
+                )
+            )
+            result = normalize_selector_response(
+                user_message=text,
+                known_assets=known_assets,
+                response_text=response.text or "",
+                tool_calls=response.tool_calls,
+                top_k=int(cfg["skill_top_k"]) + int(cfg["recipe_top_k"]),
+                min_confidence=float(cfg["min_confidence"]),
+            )
+        except Exception as exc:  # noqa: BLE001 — selector 실패는 main 응답을 막지 않음
+            logger.warning("Asset selector failed; falling back to full assets: %s", exc)
+            return None
+
+        if result.fallback_required:
+            logger.info(
+                "Asset selector fallback: reason=%s selected=%d",
+                result.fallback_reason,
+                len(result.selected),
+            )
+        else:
+            logger.info("Asset selector selected %d candidate(s)", len(result.selected))
+        return result
+
+    # ------------------------------------------------------------------
     # Tool dispatch
     # ------------------------------------------------------------------
 
@@ -997,7 +1114,13 @@ class AgentOrchestrator:
     # 평탄화 문자열로 받아도 동일한 prefix 가 노출된다.
     _SYSTEM_BLOCK_SEPARATOR = "\n\n---\n\n"
 
-    def _build_system_blocks(self, rag_context: str = "") -> list[SystemBlock]:
+    def _build_system_blocks(
+        self,
+        rag_context: str = "",
+        *,
+        skills_prompt: str | None = None,
+        recipes_prompt: str = "",
+    ) -> list[SystemBlock]:
         """페르소나·스킬·RAG·ReAct 지시문을 세그먼트(SystemBlock)로 반환한다.
 
         캐시 경계:
@@ -1013,8 +1136,11 @@ class AgentOrchestrator:
         segments: list[tuple[str, bool]] = []
         if self._persona_prompt:
             segments.append((self._persona_prompt, True))
-        if self._skills_prompt:
-            segments.append((self._skills_prompt, True))
+        effective_skills_prompt = self._skills_prompt if skills_prompt is None else skills_prompt
+        if effective_skills_prompt:
+            segments.append((effective_skills_prompt, True))
+        if recipes_prompt:
+            segments.append((recipes_prompt, False))
         if rag_context:
             segments.append((rag_context, False))
         segments.append((_TOOL_USAGE_INSTRUCTION, False))
@@ -1599,6 +1725,32 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
     # Skill formatting
     # ------------------------------------------------------------------
+
+    def _format_recipes_for_prompt(self, recipes: list[RecipeDefinition]) -> str:
+        """시스템 프롬프트용 레시피 후보 목록을 생성한다.
+
+        selector가 recipe를 고른 경우 main LLM이 `/recipe-name` 명령 경로와 구분해
+        레시피 존재 여부만 참고할 수 있도록 읽기 전용 컨텍스트로 노출한다.
+        """
+        if not recipes:
+            return ""
+        lines = [
+            "## Available Recipes",
+            "",
+            (
+                "Recipes are pre-defined workflows. Do not treat this list as an "
+                "execution decision; use it only as context when the user explicitly "
+                "asks to run or discuss a recipe-like report/workflow."
+            ),
+            "",
+        ]
+        for recipe in recipes:
+            desc = recipe.description or recipe.instructions[:160]
+            lines.append(f"- **{recipe.name}**: {desc}")
+            if recipe.parameters:
+                params = ", ".join(param.name for param in recipe.parameters)
+                lines.append(f"  Parameters: {params}")
+        return "\n".join(lines)
 
     def _format_skills_for_prompt(self, skills: list[SkillDefinition]) -> str:
         """시스템 프롬프트용 스킬 개요 목록을 생성한다.
