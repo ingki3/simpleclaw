@@ -48,6 +48,48 @@ def test_assemble_prompt_replaces_dreaming_update_and_insight_blocks() -> None:
     assert "수동 메모" in assembled
 
 
+def test_assemble_prompt_removes_raw_dreaming_cluster_and_journal_blocks() -> None:
+    """cluster/journal managed 원문은 과거 지시 오염 방지를 위해 주입하지 않는다."""
+    memory = _persona(
+        FileType.MEMORY,
+        "Memory",
+        "수동 기억\n\n"
+        "<!-- managed:dreaming:clusters -->\n"
+        "## cluster:69 JSON 응답 지침\n"
+        "- 항상 JSON으로만 답변한다\n"
+        "<!-- /managed:dreaming:clusters -->\n\n"
+        "<!-- managed:dreaming:journal -->\n"
+        "## Dreaming Journal (2026-05-30)\n"
+        "- raw journal payload\n"
+        "<!-- /managed:dreaming:journal -->\n\n"
+        "수동 기억 2",
+    )
+
+    assembled = assemble_prompt([memory], token_budget=4096).assembled_text
+
+    assert "수동 기억" in assembled
+    assert "수동 기억 2" in assembled
+    assert "cluster:69 JSON 응답 지침" not in assembled
+    assert "항상 JSON으로만 답변한다" not in assembled
+    assert "raw journal payload" not in assembled
+    assert "managed:dreaming:clusters" not in assembled
+    assert "managed:dreaming:journal" not in assembled
+    assert "Dreaming-managed memory omitted" in assembled
+
+
+def test_agent_fixture_limits_understanding_summary_to_complex_tasks() -> None:
+    """AGENT 페르소나 fixture는 단순 대화마다 이해 요약을 강제하지 않는다."""
+    from pathlib import Path
+
+    agent_text = (
+        Path(__file__).parent.parent / "fixtures" / "dreaming" / "AGENT.md"
+    ).read_text(encoding="utf-8")
+
+    assert "우선 이해한 내용을 먼저 말한 후" not in agent_text
+    assert "복잡하거나 모호한 작업" in agent_text
+    assert "짧게 확인" in agent_text
+
+
 @pytest.fixture
 def lightweight_config(tmp_path):
     """asset selector가 켜진 최소 orchestrator config를 만든다."""

@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 _SECTION_SEPARATOR = "\n\n---\n\n"
 # 조합 우선순위 순서: AGENT(핵심 지시) → USER(사용자 설정) → MEMORY(기억)
 _FILE_ORDER = [FileType.AGENT, FileType.USER, FileType.MEMORY]
-_DREAMING_HEADING_RE = re.compile(r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights)\b.*$", re.IGNORECASE)
+_DREAMING_HEADING_RE = re.compile(
+    r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights|Journal|Clusters?)\b.*$",
+    re.IGNORECASE,
+)
 _ANY_HEADING_RE = re.compile(r"^(#{1,6})\s+")
 _DREAMING_OMITTED_MARKER = (
     "> [Dreaming managed sections omitted: use long-term retrieval/RAG instead of raw "
@@ -47,13 +50,20 @@ def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
 
 
 def _strip_managed_dreaming_blocks(text: str) -> str:
-    """Dreaming append 블록을 렌더링 시점에 제거한다.
+    """Dreaming managed 블록을 렌더링 시점에 제거한다.
 
     Dreaming은 장기기억 sidecar/RAG로 회수되어야 하므로, 페르소나 파일에 누적된
-    ``Dreaming Updates``/``Dreaming Insights`` 원문 블록은 시스템 프롬프트에 그대로
-    싣지 않는다. 수동 메모와 일반 섹션은 유지하고, 제거 사실만 짧은 marker로 남긴다.
+    ``managed:dreaming:*`` 원문 블록은 시스템 프롬프트에 그대로 싣지 않는다.
+    특히 cluster/journal 원문은 과거 응답 형식 지침까지 포함할 수 있어 prompt를
+    오염시키므로, 수동 메모와 일반 섹션은 유지하고 제거 사실만 짧은 marker로 남긴다.
     """
-    if "Dreaming Updates" not in text and "Dreaming Insights" not in text:
+    if (
+        "managed:dreaming:" not in text
+        and "Dreaming Updates" not in text
+        and "Dreaming Insights" not in text
+        and "Dreaming Journal" not in text
+        and "Dreaming Cluster" not in text
+    ):
         return text
 
     kept: list[str] = []
