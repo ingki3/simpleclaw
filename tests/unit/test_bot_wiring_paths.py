@@ -1,9 +1,10 @@
-"""BIZ-138 — 봇 wiring 경로가 ``.agent/`` 로 회귀하지 않는지 검증하는 단위 테스트.
+"""BIZ-138/313 — 봇 wiring 경로가 레거시 상태 디렉터리로 회귀하지 않는지 검증.
 
 배경
 ----
-BIZ-133 으로 운영 디렉터리가 저장소 working tree(``.agent/``) 외부의
-``~/.simpleclaw/`` 로 이전됐다. 그러나 ``scripts/run_bot.py`` 의
+BIZ-133 으로 운영 디렉터리가 저장소 working tree(``.agent/``) 외부로
+이전됐고, BIZ-313 에서 배포 repo(``~/.simpleclaw``)와 런타임 상태
+(``~/.simpleclaw-agent/default``)를 다시 분리했다. 그러나 ``scripts/run_bot.py`` 의
 SafetyBackupManager wiring 만 같은 PR 에서 누락되어 ``.agent/AGENT.md`` 등의
 하드코드가 살아남았고, 결과적으로 config.yaml 이 ``~/.simpleclaw/`` 를
 가리키는데도 봇이 ``.agent/_safety_backup/{ts}/`` 에 빈 디렉터리만 만들고
@@ -15,7 +16,7 @@ dreaming preflight 가 ``.agent/MEMORY.md`` 를 못 찾아 abort 했다 (BIZ-138
    다시 들어오면 즉시 실패한다. 누군가 wiring 을 다시 하드코드로 되돌리는
    것을 막는다.
 2. **config 라우팅 가드**: ``load_persona_config`` / ``load_daemon_config`` /
-   ``load_agent_config`` 가 ``~/.simpleclaw/`` 기본값을 그대로 반환하는지,
+   ``load_agent_config`` 가 ``~/.simpleclaw-agent/default`` 기본값을 그대로 반환하는지,
    그리고 사용자가 명시한 다른 경로(예: 임시 디렉터리)도 그대로 보존하는지
    확인한다 — 어떤 키 하나라도 ``.agent/`` 로 폴백하면 같은 회귀가 다시 난다.
 3. **safety_backup wiring 함수 가드**: 봇 부팅 시 SafetyBackupManager 입력에
@@ -33,6 +34,8 @@ import pytest
 from simpleclaw.config import (
     _AGENT_DEFAULTS,
     _DAEMON_DEFAULTS,
+    _MEMORY_DEFAULTS,
+    _RECIPES_DEFAULTS,
     _DEFAULTS as _PERSONA_DEFAULTS,
     load_agent_config,
     load_daemon_config,
@@ -101,8 +104,11 @@ def test_run_bot_does_not_construct_path_from_dot_agent_root():
 
 
 # ----------------------------------------------------------------------
-# 2. config 기본값 가드 — 모든 운영 경로가 ``~/.simpleclaw/`` 로 시작
+# 2. config 기본값 가드 — 모든 런타임 상태 경로가 ``~/.simpleclaw-agent/default`` 로 시작
 # ----------------------------------------------------------------------
+
+
+DEFAULT_RUNTIME_ROOT = "~/.simpleclaw-agent/default"
 
 
 @pytest.mark.parametrize(
@@ -113,21 +119,21 @@ def test_run_bot_does_not_construct_path_from_dot_agent_root():
     ],
 )
 def test_persona_and_agent_defaults_use_simpleclaw_root(key, defaults):
-    """페르소나 라이브 디렉터리·agent DB 의 기본 경로가 ``~/.simpleclaw/`` 로 시작."""
-    assert defaults[key].startswith("~/.simpleclaw"), (
-        f"{key} 의 기본값이 ``~/.simpleclaw/`` 외부로 회귀했습니다: {defaults[key]}"
+    """페르소나 라이브 디렉터리·agent DB 의 기본 경로가 런타임 루트로 시작."""
+    assert defaults[key].startswith(DEFAULT_RUNTIME_ROOT), (
+        f"{key} 의 기본값이 런타임 루트 외부로 회귀했습니다: {defaults[key]}"
     )
 
 
 def test_daemon_defaults_all_under_simpleclaw_root():
-    """데몬 + dreaming 의 모든 파일·디렉터리 기본 경로가 ``~/.simpleclaw/`` 로 시작.
+    """데몬 + dreaming 의 모든 파일·디렉터리 기본 경로가 런타임 루트로 시작.
 
     하나라도 ``.agent/`` 등으로 회귀하면 BIZ-138 같은 분리 사고가 다시 발생한다.
     """
     flat_keys = ("pid_file", "status_file", "db_path")
     for k in flat_keys:
-        assert _DAEMON_DEFAULTS[k].startswith("~/.simpleclaw"), (
-            f"daemon.{k} 기본값이 ``~/.simpleclaw/`` 외부로 회귀: {_DAEMON_DEFAULTS[k]}"
+        assert _DAEMON_DEFAULTS[k].startswith(DEFAULT_RUNTIME_ROOT), (
+            f"daemon.{k} 기본값이 런타임 루트 외부로 회귀: {_DAEMON_DEFAULTS[k]}"
         )
 
     dreaming = _DAEMON_DEFAULTS["dreaming"]
@@ -139,14 +145,22 @@ def test_daemon_defaults_all_under_simpleclaw_root():
         "safety_backup_dir",
     )
     for k in sidecar_keys:
-        assert dreaming[k].startswith("~/.simpleclaw"), (
-            f"daemon.dreaming.{k} 기본값이 ``~/.simpleclaw/`` 외부로 회귀: {dreaming[k]}"
+        assert dreaming[k].startswith(DEFAULT_RUNTIME_ROOT), (
+            f"daemon.dreaming.{k} 기본값이 런타임 루트 외부로 회귀: {dreaming[k]}"
         )
 
     ap = dreaming["active_projects"]
-    assert ap["sidecar_path"].startswith("~/.simpleclaw"), (
+    assert ap["sidecar_path"].startswith(DEFAULT_RUNTIME_ROOT), (
         f"daemon.dreaming.active_projects.sidecar_path 기본값 회귀: {ap['sidecar_path']}"
     )
+
+
+def test_recipes_and_long_term_memory_defaults_under_runtime_root():
+    """레시피와 장기기억 sidecar 기본값도 live 런타임 루트 아래에 있어야 한다."""
+    assert _RECIPES_DEFAULTS["dir"].startswith(DEFAULT_RUNTIME_ROOT)
+    long_term = _MEMORY_DEFAULTS["long_term"]
+    assert long_term["insights_file"].startswith(DEFAULT_RUNTIME_ROOT)
+    assert long_term["active_projects_file"].startswith(DEFAULT_RUNTIME_ROOT)
 
 
 # ----------------------------------------------------------------------
@@ -264,7 +278,9 @@ def _simulate_safety_backup_wiring(
 
     backup_root = Path(
         _expand(
-            dreaming_cfg.get("safety_backup_dir", "~/.simpleclaw/_safety_backup")
+            dreaming_cfg.get(
+                "safety_backup_dir", "~/.simpleclaw-agent/default/_safety_backup"
+            )
         )
     )
 
@@ -302,7 +318,7 @@ def test_safety_backup_wiring_routes_under_user_base(tmp_path: Path):
 
 
 def test_safety_backup_wiring_uses_simpleclaw_defaults_when_config_missing(tmp_path: Path):
-    """config.yaml 이 없을 때도 wiring 결과가 ``~/.simpleclaw/`` 아래로 떨어진다.
+    """config.yaml 이 없을 때도 wiring 결과가 런타임 상태 루트 아래로 떨어진다.
 
     BIZ-138 의 1차 가드 — 배포 환경에서 config 한 줄이 빠져도 ``.agent/`` 로
     회귀하지 않도록 모든 기본값이 운영 디렉터리를 가리켜야 한다.
@@ -313,11 +329,11 @@ def test_safety_backup_wiring_uses_simpleclaw_defaults_when_config_missing(tmp_p
     wiring = _simulate_safety_backup_wiring(persona, agent, daemon)
 
     home = Path("~").expanduser().resolve()
-    expected_root = (home / ".simpleclaw").resolve()
+    expected_root = (home / ".simpleclaw-agent" / "default").resolve()
     for path in (*wiring["files"], *wiring["databases"], wiring["backup_root"]):
         resolved = path.resolve()
         assert expected_root in resolved.parents or resolved == expected_root, (
-            f"기본 wiring 경로가 ``~/.simpleclaw/`` 외부로 회귀: {path}"
+            f"기본 wiring 경로가 런타임 루트 외부로 회귀: {path}"
         )
         assert ".agent" not in resolved.parts, (
             f"기본 wiring 경로에 ``.agent`` 세그먼트가 남아있음: {path}"

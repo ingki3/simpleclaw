@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from simpleclaw.config import (
     load_agent_config,
     load_asset_selection_config,
+    load_daemon_config,
     load_memory_config,
     load_persona_config,
     load_recipes_config,
@@ -295,12 +296,21 @@ class AgentOrchestrator:
         # --- 정적 설정 로드 (리스타트 시에만 갱신) ---
         agent_config = load_agent_config(config_path)
         persona_config = load_persona_config(config_path)
+        daemon_config = load_daemon_config(config_path)
         recipes_config = load_recipes_config(config_path)
         self._asset_selection_config = load_asset_selection_config(config_path)
+        self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
+            self._config_path,
+            persona_config=persona_config,
+            agent_config=agent_config,
+            daemon_config=daemon_config,
+            recipes_config=recipes_config,
+        )
 
-        # BIZ-202: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
-        # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은 ``~/.simpleclaw/recipes``
-        # — 봇 워크스페이스(`~/.simpleclaw/workspace`) 의 sandbox-write 허용 트리 안에
+        # BIZ-202/BIZ-313: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
+        # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은
+        # ``~/.simpleclaw-agent/default/recipes`` — 봇 워크스페이스
+        # (`~/.simpleclaw-agent/default/workspace`) 의 sandbox-write 허용 트리 안에
         # 들어가야 봇 `cli`/`file_write` 도구가 직접 쓸 수 있다.
         self._recipes_dir = str(
             Path(recipes_config["dir"]).expanduser()
@@ -326,9 +336,10 @@ class AgentOrchestrator:
         self._router = create_router(config_path)
 
         # Conversation store
-        # BIZ-133: db_path 가 ``~/.simpleclaw/...`` 형태로 오므로 expanduser 로 풀어준다.
+        # BIZ-313: db_path 가 ``~/.simpleclaw-agent/default/...`` 형태로 오므로 expanduser 로 풀어준다.
         db_path = Path(agent_config["db_path"]).expanduser()
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conversation_db_path = db_path
         self._store = ConversationStore(db_path)
 
         # 시맨틱 메모리(RAG, spec 005 Phase 2) 설정 로드
@@ -354,10 +365,10 @@ class AgentOrchestrator:
             long_term_cfg.get("per_item_chars", 400)
         )
         self._long_term_insights_file = Path(
-            str(long_term_cfg.get("insights_file", "~/.simpleclaw/insights.jsonl"))
+            str(long_term_cfg.get("insights_file", "~/.simpleclaw-agent/default/insights.jsonl"))
         ).expanduser()
         self._long_term_active_projects_file = Path(
-            str(long_term_cfg.get("active_projects_file", "~/.simpleclaw/active_projects.jsonl"))
+            str(long_term_cfg.get("active_projects_file", "~/.simpleclaw-agent/default/active_projects.jsonl"))
         ).expanduser()
         self._long_term_active_projects_window_days: int = int(
             long_term_cfg.get("active_projects_window_days", 7)
@@ -389,10 +400,10 @@ class AgentOrchestrator:
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)
 
         # Workspace directory for skill file output.
-        # BIZ-133: 기본 위치는 운영 디렉터리(`~/.simpleclaw/workspace`) — 저장소
+        # BIZ-313: 기본 위치는 런타임 디렉터리(`~/.simpleclaw-agent/default/workspace`) — 저장소
         # working tree 안에 임시 파일이 쌓이지 않도록.
         self._workspace_dir = Path(
-            agent_config.get("workspace_dir", "~/.simpleclaw/workspace")
+            agent_config.get("workspace_dir", "~/.simpleclaw-agent/default/workspace")
         ).expanduser()
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -418,8 +429,8 @@ class AgentOrchestrator:
         # BIZ-251: per-turn file mutation verifier footer.
         # 워크스페이스는 재귀 walk, 페르소나 dir 은 명시 파일 화이트리스트
         # (AGENT.md / USER.md / MEMORY.md) 만 추적해 SQLite/dreaming 부산물이
-        # footer 노이즈로 새는 것을 차단한다. ``~/.simpleclaw/`` 가 persona
-        # local_dir 인 BIZ-133 경로 가정 — 화이트리스트면 overlap 도 안전.
+        # footer 노이즈로 새는 것을 차단한다. ``~/.simpleclaw-agent/default`` 가 persona
+        # local_dir 인 BIZ-313 경로 가정 — 화이트리스트면 overlap 도 안전.
         persona_local = Path(
             self._persona_config["local_dir"]
         ).expanduser()
@@ -471,7 +482,7 @@ class AgentOrchestrator:
         # 시스템 프롬프트용 스킬 목록
         self._skills_prompt = self._format_skills_for_prompt(self._skills)
 
-        # --- 레시피 리로드 (~/.simpleclaw/recipes) ---
+        # --- 레시피 리로드 (~/.simpleclaw-agent/default/recipes) ---
         # selector manifest와 선택 레시피 컨텍스트가 운영 recipe 디렉터리 변경을
         # 재시작 없이 반영하도록 매 메시지 진입 시 스캔한다. 실패는 selector 보조
         # 경로만 비우고 main 응답은 기존 스킬 경로로 계속 진행한다.
@@ -1114,6 +1125,44 @@ class AgentOrchestrator:
     # 평탄화 문자열로 받아도 동일한 prefix 가 노출된다.
     _SYSTEM_BLOCK_SEPARATOR = "\n\n---\n\n"
 
+    @staticmethod
+    def _format_runtime_paths_for_prompt(
+        config_path: Path,
+        *,
+        persona_config: dict,
+        agent_config: dict,
+        daemon_config: dict,
+        recipes_config: dict,
+    ) -> str:
+        """live 배포 repo와 런타임 state 경로를 시스템 프롬프트용으로 요약한다.
+
+        BIZ-313: 모델이 ``~/.simpleclaw``(배포 repo/config)와
+        ``~/.simpleclaw-agent/default``(대화 DB·레시피·workspace·페르소나 파일)를
+        혼동하면 잘못된 파일을 읽거나 새 레시피를 레거시 위치에 쓰게 된다. 이 블록은
+        config 로더가 실제로 반환한 경로만 노출해 운영 설정과 프롬프트를 맞춘다.
+        """
+        deploy_repo = config_path.expanduser().resolve().parent
+        persona_dir = Path(str(persona_config["local_dir"])).expanduser()
+        workspace_dir = Path(str(agent_config["workspace_dir"])).expanduser()
+        recipes_dir = Path(str(recipes_config["dir"])).expanduser()
+        conversation_db = Path(str(agent_config["db_path"])).expanduser()
+        daemon_db = Path(str(daemon_config["db_path"])).expanduser()
+        return "\n".join(
+            [
+                "## Runtime Paths",
+                f"- Deploy repo/config: `{deploy_repo}`",
+                f"- Runtime state root: `{persona_dir}`",
+                f"- Persona files: `{persona_dir}/AGENT.md`, "
+                f"`{persona_dir}/USER.md`, `{persona_dir}/MEMORY.md`",
+                f"- Conversations DB: `{conversation_db}`",
+                f"- Daemon DB: `{daemon_db}`",
+                f"- Recipes directory: `{recipes_dir}`",
+                f"- Workspace directory: `{workspace_dir}`",
+                "- Treat the deploy repo as code/config only; read and write live state "
+                "under the runtime state root unless config explicitly says otherwise.",
+            ]
+        )
+
     def _build_system_blocks(
         self,
         rag_context: str = "",
@@ -1136,6 +1185,8 @@ class AgentOrchestrator:
         segments: list[tuple[str, bool]] = []
         if self._persona_prompt:
             segments.append((self._persona_prompt, True))
+        if self._runtime_paths_prompt:
+            segments.append((self._runtime_paths_prompt, True))
         effective_skills_prompt = self._skills_prompt if skills_prompt is None else skills_prompt
         if effective_skills_prompt:
             segments.append((effective_skills_prompt, True))

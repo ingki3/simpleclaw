@@ -420,13 +420,13 @@ class TestRecipeDirResolution:
         await scheduler._execute_action(job)
         assert captured["instructions"] == "go shared"  # PRIMARY 의 instructions
 
-    def test_default_recipes_dir_is_home_simpleclaw(self):
-        """CronScheduler 가 명시적 recipes_dir 없이 생성되면 기본값은 ~/.simpleclaw/recipes."""
+    def test_default_recipes_dir_is_runtime_root(self):
+        """CronScheduler 가 명시적 recipes_dir 없이 생성되면 런타임 recipes 경로를 쓴다."""
         from pathlib import Path
         store = MagicMock()
         apscheduler = MagicMock(spec=AsyncIOScheduler)
         sched = CronScheduler(store, apscheduler)
-        assert sched._recipes_dir == Path("~/.simpleclaw/recipes").expanduser()
+        assert sched._recipes_dir == Path("~/.simpleclaw-agent/default/recipes").expanduser()
 
 
 class TestRecipeCronInvokesLLM:
