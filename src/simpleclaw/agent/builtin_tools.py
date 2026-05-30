@@ -89,7 +89,7 @@ def resolve_safe_path(
     - ``~`` 를 사용자 홈 디렉터리로 확장한다 (운영 디렉터리 ``~/.simpleclaw/``
       가 프로젝트 루트 외부에 있어 필수).
     - 읽기 허용 루트에 프로젝트 루트 외에 ``persona_local_dir`` (보통
-      ``~/.simpleclaw``) 을 화이트리스트로 추가한다.
+      ``~/.simpleclaw-agent/default``) 을 화이트리스트로 추가한다.
     - 경계 검사를 ``Path.relative_to`` 기반으로 바꿔 prefix-trick 을 차단한다.
 
     쓰기는 워크스페이스 디렉터리 내부로만 제한된다 (변경 없음).
@@ -481,7 +481,7 @@ def handle_file_read(
 
     offset/limit으로 읽을 범위를 제어할 수 있으며, 음수 offset은 파일 끝 기준이다.
 
-    BIZ-142: ``persona_local_dir`` (보통 ``~/.simpleclaw``) 도 읽기 허용 루트에
+    BIZ-142: ``persona_local_dir`` (보통 ``~/.simpleclaw-agent/default``) 도 읽기 허용 루트에
     포함된다. 호출자 (오케스트레이터) 가 ``persona.local_dir`` 설정값을 주입.
     """
     raw_path = routing.get("path", "")

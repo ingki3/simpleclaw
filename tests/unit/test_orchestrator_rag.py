@@ -96,6 +96,9 @@ memory:
     model: "test-model"
     top_k: 3
     similarity_threshold: 0.5
+  long_term:
+    insights_file: "{tmp_path}/insights.jsonl"
+    active_projects_file: "{tmp_path}/active_projects.jsonl"
 """)
     persona_dir = tmp_path / "persona_local"
     persona_dir.mkdir()

@@ -83,6 +83,18 @@ class TestAgentOrchestrator:
         prompt = orchestrator._build_system_prompt()
         assert "SimpleClaw" in prompt
 
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_system_prompt_includes_live_runtime_path_summary(self, config_file, tmp_path):
+        """BIZ-313 — 모델이 레시피/DB/workspace를 live config 경로에서 찾도록 요약을 주입."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        prompt = orchestrator._build_system_prompt()
+
+        assert "## Runtime Paths" in prompt
+        assert f"Runtime state root: `{tmp_path}/persona_local`" in prompt
+        assert f"Recipes directory: `{tmp_path}/persona_local`" not in prompt
+        assert f"Conversations DB: `{tmp_path}/conversations.db`" in prompt
+
     # -- BIZ-252 prompt caching: segmented system blocks --
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -95,20 +107,22 @@ class TestAgentOrchestrator:
 
         blocks = orchestrator._build_system_blocks(rag_context="## RAG\n관련 과거")
 
-        # 페르소나, 스킬, RAG, ReAct 4개 블록
-        assert len(blocks) == 4
-        # cache=True 는 처음 두 블록(페르소나, 스킬)뿐 — DoD §"두 지점에 마커"
+        # 페르소나, 런타임 경로, 스킬, RAG, ReAct 5개 블록
+        assert len(blocks) == 5
+        # cache=True 는 정적 prefix(페르소나, 런타임 경로, 스킬)뿐이다.
         cached = [i for i, b in enumerate(blocks) if b.cache]
-        assert cached == [0, 1]
+        assert cached == [0, 1, 2]
         # 페르소나에 AGENT.md 내용이 들어가야 한다
         assert "SimpleClaw" in blocks[0].text
+        # 런타임 경로 블록
+        assert "## Runtime Paths" in blocks[1].text
         # 스킬 블록
-        assert "placeholder" in blocks[1].text
+        assert "placeholder" in blocks[2].text
         # RAG 블록은 캐시 마커 뒤에 위치하고 cache=False (매번 변하므로)
-        assert "관련 과거" in blocks[2].text
-        assert blocks[2].cache is False
-        # ReAct 지시문이 마지막 블록에 들어가야 한다
+        assert "관련 과거" in blocks[3].text
         assert blocks[3].cache is False
+        # ReAct 지시문이 마지막 블록에 들어가야 한다
+        assert blocks[4].cache is False
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_flatten_blocks_byte_identical_to_legacy_prompt(self, config_file):

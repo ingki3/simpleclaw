@@ -162,7 +162,7 @@ def _cron_disable(name: str, cron_scheduler: CronScheduler) -> str:
 async def try_recipe_command(
     text: str,
     react_loop_fn,
-    recipes_dir: str | Path = "~/.simpleclaw/recipes",
+    recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
     legacy_recipes_dir: str | Path | None = ".agent/recipes",
 ) -> tuple[str, str] | None:
     """텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.
@@ -173,7 +173,7 @@ async def try_recipe_command(
         text: 사용자 입력.
         react_loop_fn: 오케스트레이터 ``_tool_loop``.
         recipes_dir: 1차 레시피 디렉터리 — BIZ-202 이후 절대 경로 권장
-            (기본 ``~/.simpleclaw/recipes``). 봇/데몬이 동일 경로를 보도록 한다.
+            (기본 ``~/.simpleclaw-agent/default/recipes``). 봇/데몬이 동일 경로를 보도록 한다.
         legacy_recipes_dir: BIZ-202 이전 위치 폴백. 기본 ``.agent/recipes``
             (프로젝트 working tree). ``None`` 이면 폴백 비활성.
 

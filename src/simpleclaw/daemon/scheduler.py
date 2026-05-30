@@ -136,7 +136,7 @@ class CronScheduler:
         recipe_executor=None,
         agent_orchestrator=None,
         notifier: Callable[[str, str], Awaitable[None]] | None = None,
-        recipes_dir: str | Path = "~/.simpleclaw/recipes",
+        recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
         legacy_recipes_dir: str | Path | None = ".agent/recipes",
     ) -> None:
         self._store = store
@@ -145,7 +145,7 @@ class CronScheduler:
         self._agent = agent_orchestrator
         self._notifier = notifier
         # BIZ-202: cron 의 action_reference 가 이름(예: "krstock") 일 때 어느 디렉터리에서
-        # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw/recipes`)를 보도록
+        # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw-agent/default/recipes`)를 보도록
         # 호출 측(run_bot.py)에서 명시적으로 주입. 레거시 `.agent/recipes/` 는 한 번 폴백.
         self._recipes_dir = Path(recipes_dir).expanduser()
         self._legacy_recipes_dir = (
@@ -494,7 +494,7 @@ class CronScheduler:
             ref_path = Path(job.action_reference)
             if not ref_path.is_file():
                 # BIZ-202: 레시피 이름으로 해석. 봇 채팅에서 만들어 둔 레시피와
-                # 데몬이 같은 절대 경로(``~/.simpleclaw/recipes/``) 를 보도록 한다.
+                # 데몬이 같은 절대 경로(``~/.simpleclaw-agent/default/recipes/``) 를 보도록 한다.
                 # primary 에 없으면 레거시(``.agent/recipes/``) 로 한 번 폴백 + 경고.
                 primary = self._recipes_dir / job.action_reference / "recipe.yaml"
                 if primary.is_file():

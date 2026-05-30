@@ -620,10 +620,10 @@ class TestLoadRecipesConfig:
     """recipes 섹션 — 봇/데몬이 같은 절대 경로를 보도록 단일 진실점을 제공한다."""
 
     def test_defaults_when_file_missing(self, tmp_path: Path):
-        """설정 파일이 없으면 ~/.simpleclaw/recipes 기본값."""
+        """설정 파일이 없으면 ~/.simpleclaw-agent/default/recipes 기본값."""
         result = load_recipes_config(tmp_path / "missing.yaml")
         assert result == _RECIPES_DEFAULTS
-        assert result["dir"] == "~/.simpleclaw/recipes"
+        assert result["dir"] == "~/.simpleclaw-agent/default/recipes"
 
     def test_defaults_when_recipes_key_missing(self, tmp_path: Path):
         """recipes 키 없는 yaml 도 기본값으로 폴백."""
