@@ -28,18 +28,61 @@ _DREAMING_HEADING_RE = re.compile(r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights)\
 _ANY_HEADING_RE = re.compile(r"^(#{1,6})\s+")
 _MANAGED_DREAMING_START = "<!-- managed:dreaming:"
 _MANAGED_DREAMING_END = "<!-- /managed:dreaming:"
+_MANAGED_DREAMING_COMMENT_DOC_RE = re.compile(
+    r"<!--\s*\n[\s\S]*?managed:dreaming:[\s\S]*?-->",
+    re.IGNORECASE,
+)
 _DREAMING_OMITTED_MARKER = (
     "> [Dreaming managed sections omitted: use long-term retrieval/RAG instead of raw "
     "append history. Dreaming-managed memory omitted.]"
 )
 _LEGACY_UNDERSTANDING_RULE_RE = re.compile(
     r"-\s*형님으로\s*부터\s*질문을\s*받았을\s*때,\s*"
-    r"우선\s*이해한\s*내용을\s*먼저\s*말(?:한\s*후\s*작업을\s*시작한다|한다)\."
+    r"우선\s*이해한\s*내용을\s*먼저\s*말(?:한\s*후|하고,?)?\s*"
+    r"(?:작업을\s*시작한다|한다)\."
 )
 _LEGACY_UNDERSTANDING_RULE_REPLACEMENT = (
     "- 복잡하거나 모호한 작업에서만 이해한 내용을 짧게 먼저 확인하고, "
     "간단한 대화에는 이해 요약을 붙이지 않는다."
 )
+
+
+def _strip_managed_dreaming_comment_docs(text: str) -> tuple[str, bool]:
+    """managed:dreaming 마커를 설명하는 HTML 주석 블록도 제거한다.
+
+    실제 managed section 마커는 한 줄 HTML 주석이므로 여기서는 여러 줄 주석만
+    대상으로 삼는다. MEMORY.md/AGENT.md 상단 설명 주석이 system prompt에 들어가며
+    marker 문자열 자체를 노출하는 것을 막기 위한 렌더링 전용 필터다.
+    """
+    lines = text.splitlines()
+    kept: list[str] = []
+    comment_buffer: list[str] | None = None
+    removed = False
+
+    for line in lines:
+        stripped = line.strip()
+        if comment_buffer is not None:
+            comment_buffer.append(line)
+            if "-->" in stripped:
+                block = "\n".join(comment_buffer)
+                if "managed:dreaming:" in block:
+                    if not kept or kept[-1] != _DREAMING_OMITTED_MARKER:
+                        kept.append(_DREAMING_OMITTED_MARKER)
+                    removed = True
+                else:
+                    kept.extend(comment_buffer)
+                comment_buffer = None
+            continue
+
+        if stripped == "<!--":
+            comment_buffer = [line]
+            continue
+
+        kept.append(line)
+
+    if comment_buffer is not None:
+        kept.extend(comment_buffer)
+    return "\n".join(kept), removed
 
 
 def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
@@ -63,12 +106,16 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     ``Dreaming Updates``/``Dreaming Insights`` 원문 블록은 시스템 프롬프트에 그대로
     싣지 않는다. 수동 메모와 일반 섹션은 유지하고, 제거 사실만 짧은 marker로 남긴다.
     """
+    text, comment_docs_removed = _strip_managed_dreaming_comment_docs(text)
+    if comment_docs_removed:
+        text = text.strip()
+
     if (
         "Dreaming Updates" not in text
         and "Dreaming Insights" not in text
         and _MANAGED_DREAMING_START not in text
     ):
-        return text
+        return text.strip() if comment_docs_removed else text
 
     kept: list[str] = []
     omitted = False
