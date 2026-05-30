@@ -26,9 +26,19 @@ _SECTION_SEPARATOR = "\n\n---\n\n"
 _FILE_ORDER = [FileType.AGENT, FileType.USER, FileType.MEMORY]
 _DREAMING_HEADING_RE = re.compile(r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights)\b.*$", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^(#{1,6})\s+")
+_MANAGED_DREAMING_START = "<!-- managed:dreaming:"
+_MANAGED_DREAMING_END = "<!-- /managed:dreaming:"
 _DREAMING_OMITTED_MARKER = (
     "> [Dreaming managed sections omitted: use long-term retrieval/RAG instead of raw "
     "append history. Dreaming-managed memory omitted.]"
+)
+_LEGACY_UNDERSTANDING_RULE_RE = re.compile(
+    r"-\s*형님으로\s*부터\s*질문을\s*받았을\s*때,\s*"
+    r"우선\s*이해한\s*내용을\s*먼저\s*말(?:한\s*후\s*작업을\s*시작한다|한다)\."
+)
+_LEGACY_UNDERSTANDING_RULE_REPLACEMENT = (
+    "- 복잡하거나 모호한 작업에서만 이해한 내용을 짧게 먼저 확인하고, "
+    "간단한 대화에는 이해 요약을 붙이지 않는다."
 )
 
 
@@ -53,7 +63,11 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     ``Dreaming Updates``/``Dreaming Insights`` 원문 블록은 시스템 프롬프트에 그대로
     싣지 않는다. 수동 메모와 일반 섹션은 유지하고, 제거 사실만 짧은 marker로 남긴다.
     """
-    if "Dreaming Updates" not in text and "Dreaming Insights" not in text:
+    if (
+        "Dreaming Updates" not in text
+        and "Dreaming Insights" not in text
+        and _MANAGED_DREAMING_START not in text
+    ):
         return text
 
     kept: list[str] = []
@@ -64,7 +78,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
 
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("<!-- managed:dreaming:"):
+        if stripped.startswith(_MANAGED_DREAMING_START):
             omitted = True
             skipping = True
             skip_level = 0
@@ -72,7 +86,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
                 kept.append(_DREAMING_OMITTED_MARKER)
                 marker_added = True
             continue
-        if skipping and stripped.startswith("<!-- /managed:dreaming:"):
+        if skipping and stripped.startswith(_MANAGED_DREAMING_END):
             skipping = False
             skip_level = 0
             continue
@@ -101,6 +115,19 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+def _normalize_persona_policy_conflicts(text: str) -> str:
+    """구 런타임 AGENT.md의 응답 형식 충돌 지시를 최신 guard와 맞춘다.
+
+    런타임 페르소나 파일은 hot-reload 되는 사용자 소유 파일이라 PR 배포만으로 즉시
+    내용이 바뀌지 않을 수 있다. 따라서 렌더링 시점에 과거 "항상 이해 요약 먼저"
+    문구만 좁게 치환해, 시스템 guard의 "복잡한 작업에서만" 규칙과 충돌하지 않게 한다.
+    """
+    return _LEGACY_UNDERSTANDING_RULE_RE.sub(
+        _LEGACY_UNDERSTANDING_RULE_REPLACEMENT,
+        text,
+    )
+
+
 def _render_persona_file(persona_file: PersonaFile) -> str:
     """PersonaFile의 섹션들을 하나의 텍스트 블록으로 렌더링한다.
 
@@ -124,7 +151,9 @@ def _render_persona_file(persona_file: PersonaFile) -> str:
         if section.content:
             parts.append(section.content)
 
-    return _strip_managed_dreaming_blocks("\n\n".join(parts))
+    text = "\n\n".join(parts)
+    text = _normalize_persona_policy_conflicts(text)
+    return _strip_managed_dreaming_blocks(text)
 
 
 def assemble_prompt(
