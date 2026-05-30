@@ -58,6 +58,13 @@ memory:
     similarity_threshold: 0.5                 # 코사인 유사도 임계값(노이즈 컷)
 
 security:
+  # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일
+  # 경로. 미지정 시 각각 ``~/.simpleclaw/secrets.enc`` / ``~/.simpleclaw/master.key``
+  # (기존 기본값). 라이브 데이터 디렉터리(``~/.simpleclaw-agent/default``)로
+  # 시크릿까지 분리하고 싶다면 아래처럼 명시한다.
+  # vault_path: "~/.simpleclaw-agent/default/secrets.enc"
+  # master_key_path: "~/.simpleclaw-agent/default/master.key"
+  # 환경변수 ``SIMPLECLAW_MASTER_KEY``가 설정되어 있으면 마스터 키 파일보다 우선.
   command_guard:
     enabled: true
     allowlist: []
@@ -265,10 +272,11 @@ daemon:
 
 persona:
   token_budget: 4096
-  # BIZ-133 — 페르소나 라이브 파일(AGENT/USER/MEMORY/SOUL.md) 위치. 저장소 외부
-  # 운영 디렉터리로 이전됐다. 새 환경에서는 ``scripts/migrate_local_dir.py`` 가
-  # ``.agent/`` 의 기존 파일을 이 위치로 옮겨준다.
-  local_dir: "~/.simpleclaw"
+  # BIZ-302 — 페르소나 base folder 기본값. 개발 트리(~/Dev/SimpleClaw) / 배포 트리
+  # (~/.simpleclaw)와 분리된 별도 위치를 사용한다.
+  # 기존 ``~/.simpleclaw`` 에 있던 파일은 ``scripts/migrate_local_dir.py --target
+  # ~/.simpleclaw-agent/default`` 로 이전 가능.
+  local_dir: "~/.simpleclaw-agent/default"
   global_dir: "~/.agents/main"
   files:
     - name: "AGENT.md"

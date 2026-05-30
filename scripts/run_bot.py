@@ -32,6 +32,7 @@ from simpleclaw.config import (
     load_daemon_config,
     load_persona_config,
     load_recipes_config,
+    load_security_config,
     load_telegram_config,
 )
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
@@ -45,6 +46,7 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
 from simpleclaw.memory.safety_backup import SafetyBackupManager
+from simpleclaw.security.secrets import configure_default_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +89,14 @@ def _create_telegram_notifier(bot_token: str, chat_id: int):
 
 async def main():
     _kill_existing_bots()
+
+    # BIZ-302 후속 — 다른 load_*_config()가 "file:NAME" 시크릿 참조를 해소하기
+    # 전에 vault/master.key 경로를 가진 SecretsManager를 기본으로 설치한다.
+    sec_cfg = load_security_config(CONFIG_PATH)
+    configure_default_manager(
+        vault_path=sec_cfg.get("vault_path"),
+        master_key_path=sec_cfg.get("master_key_path"),
+    )
 
     tg_config = load_telegram_config(CONFIG_PATH)
     if not tg_config["bot_token"]:

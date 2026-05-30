@@ -320,8 +320,9 @@ def test_safety_backup_wiring_routes_under_user_base(tmp_path: Path):
 def test_safety_backup_wiring_uses_simpleclaw_defaults_when_config_missing(tmp_path: Path):
     """config.yaml 이 없을 때도 wiring 결과가 런타임 상태 루트 아래로 떨어진다.
 
-    BIZ-138 의 1차 가드 — 배포 환경에서 config 한 줄이 빠져도 ``.agent/`` 로
-    회귀하지 않도록 모든 기본값이 운영 디렉터리를 가리켜야 한다.
+    BIZ-313 반영: persona 파일과 daemon/agent 런타임 데이터는 모두
+    ``~/.simpleclaw-agent/default`` 를 기본으로 사용한다.
+    공통 가드: 어떤 경우에도 ``.agent/`` 상대 경로로 회귀하면 안 된다.
     """
     persona = load_persona_config(tmp_path / "missing.yaml")
     agent = load_agent_config(tmp_path / "missing.yaml")
