@@ -48,6 +48,53 @@ def test_assemble_prompt_replaces_dreaming_update_and_insight_blocks() -> None:
     assert "수동 메모" in assembled
 
 
+def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
+    """clusters/journal managed 원문도 프롬프트에 직접 싣지 않는다."""
+    agent = _persona(FileType.AGENT, "Agent", "핵심 지시")
+    memory = _persona(
+        FileType.MEMORY,
+        "Memory",
+        "수동 기억\n\n"
+        "<!-- managed:dreaming:clusters -->\n"
+        "<!-- cluster:69 start -->\n"
+        "JSON 응답 지침: 모든 답변은 JSON만 출력한다.\n"
+        "<!-- cluster:69 end -->\n"
+        "<!-- /managed:dreaming:clusters -->\n\n"
+        "<!-- managed:dreaming:journal -->\n"
+        "raw journal append\n"
+        "<!-- /managed:dreaming:journal -->\n\n"
+        "## 수동 메모\n남김",
+    )
+
+    assembled = assemble_prompt([agent, memory], token_budget=4096).assembled_text
+
+    assert "cluster:69" not in assembled
+    assert "JSON 응답 지침" not in assembled
+    assert "raw journal append" not in assembled
+    assert "managed:dreaming:clusters" not in assembled
+    assert "managed:dreaming:journal" not in assembled
+    assert "Dreaming-managed memory omitted" in assembled
+    assert "수동 기억" in assembled
+    assert "수동 메모" in assembled
+
+
+def test_assemble_prompt_normalizes_legacy_understanding_summary_rule() -> None:
+    """구 AGENT.md의 항상 이해 요약 지시를 복잡 작업 한정 규칙으로 정규화한다."""
+    agent = _persona(
+        FileType.AGENT,
+        "Agent",
+        "- 형님으로 부터 질문을 받았을 때, 우선 이해한 내용을 먼저 말한 후 작업을 시작한다.\n"
+        "- 다른 AI로 사칭하지 않는다.",
+    )
+
+    assembled = assemble_prompt([agent], token_budget=4096).assembled_text
+
+    assert "우선 이해한 내용을 먼저 말한 후 작업을 시작한다" not in assembled
+    assert "복잡하거나 모호한 작업에서만" in assembled
+    assert "간단한 대화에는 이해 요약을 붙이지 않는다" in assembled
+    assert "다른 AI로 사칭하지 않는다" in assembled
+
+
 @pytest.fixture
 def lightweight_config(tmp_path):
     """asset selector가 켜진 최소 orchestrator config를 만든다."""
