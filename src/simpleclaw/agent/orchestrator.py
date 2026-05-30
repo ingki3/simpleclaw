@@ -28,6 +28,7 @@ from simpleclaw.config import (
     load_memory_config,
     load_persona_config,
     load_recipes_config,
+    load_security_config,
 )
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
@@ -388,7 +389,7 @@ class AgentOrchestrator:
         self._skill_timeout = skills_config.get("execution_timeout", 60)
 
         # Security: command guard + env filtering
-        security_config = self._load_security_config()
+        security_config = load_security_config(self._config_path)
         guard_config = security_config.get("command_guard", {})
         self._command_guard = CommandGuard(
             allowlist=guard_config.get("allowlist", []),
@@ -1988,13 +1989,3 @@ class AgentOrchestrator:
         except (yaml.YAMLError, OSError):
             return {}
 
-    def _load_security_config(self) -> dict:
-        """config.yaml에서 security 섹션을 로드한다."""
-        import yaml
-        try:
-            with open(self._config_path, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            sec = data.get("security", {}) if isinstance(data, dict) else {}
-            return sec if isinstance(sec, dict) else {}
-        except (yaml.YAMLError, OSError):
-            return {}

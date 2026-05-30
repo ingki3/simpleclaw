@@ -449,6 +449,33 @@ def set_default_manager(manager: SecretsManager | None) -> None:
     _default_manager = manager
 
 
+def configure_default_manager(
+    vault_path: str | Path | None = None,
+    master_key_path: str | Path | None = None,
+) -> SecretsManager:
+    """파일 백엔드 경로를 지정한 기본 매니저를 구성하고 반환한다.
+
+    BIZ-302 후속 — 시크릿 볼트(``secrets.enc``)와 마스터 키 파일을
+    ``~/.simpleclaw`` 외 위치(예: 라이브 데이터 디렉터리)로 분리하고 싶을 때,
+    부트스트랩에서 1회 호출한다. 이후 ``default_manager()`` / ``resolve_secret()``
+    경로로 들어오는 ``file:`` 참조 해소는 여기서 구성한 경로를 사용한다.
+
+    인자가 모두 ``None``이면 ``EncryptedFileBackend``의 내장 기본값(``~/.simpleclaw``)
+    이 그대로 적용된다 — 기존 환경과 동일.
+    """
+    backends: dict[str, SecretBackend] = {
+        "env": EnvBackend(),
+        "keyring": KeyringBackend(),
+        "file": EncryptedFileBackend(
+            vault_path=Path(vault_path).expanduser() if vault_path else None,
+            master_key_path=Path(master_key_path).expanduser() if master_key_path else None,
+        ),
+    }
+    manager = SecretsManager(backends=backends)
+    set_default_manager(manager)
+    return manager
+
+
 def resolve_secret(value: str | None) -> str:
     """기본 매니저로 참조를 해소한다 — config 로더용 단축 헬퍼."""
     return default_manager().resolve(value)
