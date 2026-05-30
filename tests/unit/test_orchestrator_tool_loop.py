@@ -179,6 +179,21 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
+async def test_empty_direct_text_response_returns_fallback(config_file):
+    """tool_calls 없이 빈 최종 텍스트가 와도 사용자에게 빈 메시지를 보내지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_send(_request):
+        return _text_response("   ")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("안녕")
+    assert "응답을 생성하지 못했습니다" in result
+    assert result.strip()
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):

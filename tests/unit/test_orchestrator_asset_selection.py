@@ -53,7 +53,7 @@ asset_selection:
   recipe_top_k: 1
   min_confidence: 0.5
   bypass_below_count: 1
-  fallback_top_k: 50
+  fallback_top_k: 2
   max_tokens: 256
 """)
     for dirname in ("persona_local", "local_skills", "global_skills", "recipes"):
@@ -135,8 +135,8 @@ async def test_selector_high_confidence_limits_prompt_and_tool_schema(config_fil
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
-async def test_selector_low_confidence_falls_back_to_all_assets(config_file):
-    """낮은 confidence는 안전하게 기존 전체 후보 경로로 회귀한다."""
+async def test_selector_low_confidence_falls_back_to_capped_assets(config_file):
+    """낮은 confidence는 전체 후보가 아니라 fallback_top_k 만큼만 주입한다."""
     orchestrator = AgentOrchestrator(config_file)
     _install_assets(orchestrator)
     orchestrator._router = MagicMock()
@@ -145,24 +145,25 @@ async def test_selector_low_confidence_falls_back_to_all_assets(config_file):
             _selector_response([
                 {"type": "skill", "name": "mail", "confidence": 0.2, "reason": "weak"},
             ]),
-            _text_response("전체 후보로 처리했습니다."),
+            _text_response("제한 후보로 처리했습니다."),
         ]
     )
 
     result = await orchestrator._tool_loop("이거 좀 정리해줘", isolated=True)
 
-    assert result == "전체 후보로 처리했습니다."
+    assert result == "제한 후보로 처리했습니다."
     main_request = orchestrator._router.send.call_args_list[1][0][0]
     execute_skill = next(tool for tool in main_request.tools if tool.name == "execute_skill")
     assert "mail" in execute_skill.description
     assert "news" in execute_skill.description
-    assert "calendar" in execute_skill.description
+    assert "calendar" not in execute_skill.description
+    assert "calendar" not in main_request.system_prompt
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
-async def test_selector_exception_falls_back_to_all_assets(config_file):
-    """selector 호출 실패는 main 응답 실패가 아니라 기존 전체 후보 경로로 회귀한다."""
+async def test_selector_exception_falls_back_to_capped_assets(config_file):
+    """selector 호출 실패도 main prompt에는 fallback_top_k 후보만 주입한다."""
     orchestrator = AgentOrchestrator(config_file)
     _install_assets(orchestrator)
     orchestrator._router = MagicMock()
@@ -177,7 +178,8 @@ async def test_selector_exception_falls_back_to_all_assets(config_file):
     execute_skill = next(tool for tool in main_request.tools if tool.name == "execute_skill")
     assert "mail" in execute_skill.description
     assert "news" in execute_skill.description
-    assert "calendar" in execute_skill.description
+    assert "calendar" not in execute_skill.description
+    assert "calendar" not in main_request.system_prompt
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
