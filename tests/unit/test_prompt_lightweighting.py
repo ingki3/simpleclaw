@@ -55,6 +55,10 @@ def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
         FileType.MEMORY,
         "Memory",
         "수동 기억\n\n"
+        "<!--\n"
+        "2. <!-- managed:dreaming:journal --> ~ <!-- /managed:dreaming:journal -->:\n"
+        "   드리밍 사이클 설명도 system prompt에는 싣지 않는다.\n"
+        "-->\n\n"
         "<!-- managed:dreaming:clusters -->\n"
         "<!-- cluster:69 start -->\n"
         "JSON 응답 지침: 모든 답변은 JSON만 출력한다.\n"
@@ -83,13 +87,13 @@ def test_assemble_prompt_normalizes_legacy_understanding_summary_rule() -> None:
     agent = _persona(
         FileType.AGENT,
         "Agent",
-        "- 형님으로 부터 질문을 받았을 때, 우선 이해한 내용을 먼저 말한 후 작업을 시작한다.\n"
+        "- 형님으로 부터 질문을 받았을 때, 우선 이해한 내용을 먼저 말하고, 작업을 시작한다.\n"
         "- 다른 AI로 사칭하지 않는다.",
     )
 
     assembled = assemble_prompt([agent], token_budget=4096).assembled_text
 
-    assert "우선 이해한 내용을 먼저 말한 후 작업을 시작한다" not in assembled
+    assert "우선 이해한 내용을 먼저 말하고" not in assembled
     assert "복잡하거나 모호한 작업에서만" in assembled
     assert "간단한 대화에는 이해 요약을 붙이지 않는다" in assembled
     assert "다른 AI로 사칭하지 않는다" in assembled
