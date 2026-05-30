@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import tiktoken
 
@@ -23,6 +24,12 @@ logger = logging.getLogger(__name__)
 _SECTION_SEPARATOR = "\n\n---\n\n"
 # 조합 우선순위 순서: AGENT(핵심 지시) → USER(사용자 설정) → MEMORY(기억)
 _FILE_ORDER = [FileType.AGENT, FileType.USER, FileType.MEMORY]
+_DREAMING_HEADING_RE = re.compile(r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights)\b.*$", re.IGNORECASE)
+_ANY_HEADING_RE = re.compile(r"^(#{1,6})\s+")
+_DREAMING_OMITTED_MARKER = (
+    "> [Dreaming managed sections omitted: use long-term retrieval/RAG instead of raw "
+    "append history. Dreaming-managed memory omitted.]"
+)
 
 
 def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
@@ -37,6 +44,61 @@ def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
     """
     enc = tiktoken.get_encoding(encoding_name)
     return len(enc.encode(text))
+
+
+def _strip_managed_dreaming_blocks(text: str) -> str:
+    """Dreaming append 블록을 렌더링 시점에 제거한다.
+
+    Dreaming은 장기기억 sidecar/RAG로 회수되어야 하므로, 페르소나 파일에 누적된
+    ``Dreaming Updates``/``Dreaming Insights`` 원문 블록은 시스템 프롬프트에 그대로
+    싣지 않는다. 수동 메모와 일반 섹션은 유지하고, 제거 사실만 짧은 marker로 남긴다.
+    """
+    if "Dreaming Updates" not in text and "Dreaming Insights" not in text:
+        return text
+
+    kept: list[str] = []
+    omitted = False
+    skipping = False
+    skip_level = 0
+    marker_added = False
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<!-- managed:dreaming:"):
+            omitted = True
+            skipping = True
+            skip_level = 0
+            if not marker_added:
+                kept.append(_DREAMING_OMITTED_MARKER)
+                marker_added = True
+            continue
+        if skipping and stripped.startswith("<!-- /managed:dreaming:"):
+            skipping = False
+            skip_level = 0
+            continue
+
+        dreaming_match = _DREAMING_HEADING_RE.match(line)
+        if dreaming_match:
+            omitted = True
+            skipping = True
+            skip_level = len(dreaming_match.group(1))
+            if not marker_added:
+                kept.append(_DREAMING_OMITTED_MARKER)
+                marker_added = True
+            continue
+
+        if skipping:
+            heading_match = _ANY_HEADING_RE.match(line)
+            if skip_level and heading_match and len(heading_match.group(1)) <= skip_level:
+                skipping = False
+            else:
+                continue
+
+        kept.append(line)
+
+    if not omitted:
+        return text
+    return "\n".join(kept).strip()
 
 
 def _render_persona_file(persona_file: PersonaFile) -> str:
@@ -62,7 +124,7 @@ def _render_persona_file(persona_file: PersonaFile) -> str:
         if section.content:
             parts.append(section.content)
 
-    return "\n\n".join(parts)
+    return _strip_managed_dreaming_blocks("\n\n".join(parts))
 
 
 def assemble_prompt(

@@ -45,6 +45,43 @@ class TestAssemblePromptFull:
         result = assemble_prompt([agent, user], token_budget=4096)
         assert "---" in result.assembled_text
 
+    def test_managed_dreaming_sections_are_compacted(self):
+        """오래된 Dreaming managed 블록은 매 turn 시스템 프롬프트에서 제거한다."""
+        agent = _make_persona(
+            FileType.AGENT,
+            "Before\n"
+            "<!-- managed:dreaming:dreaming-updates -->\n"
+            "## Dreaming Updates (2026-05-01)\n"
+            "- 오래된 크론 변경\n"
+            "## Dreaming Updates (2026-05-02)\n"
+            "- 반복 업데이트\n"
+            "<!-- /managed:dreaming:dreaming-updates -->\n"
+            "After",
+        )
+        user = _make_persona(
+            FileType.USER,
+            "User before\n"
+            "<!-- managed:dreaming:insights -->\n"
+            "## Dreaming Insights (2026-04-28)\n"
+            "- 오래된 관심사\n"
+            "## Dreaming Insights (2026-05-06)\n"
+            "- 반복 관심사\n"
+            "<!-- /managed:dreaming:insights -->\n"
+            "User after",
+        )
+
+        result = assemble_prompt([agent, user], token_budget=4096)
+
+        assert "Before" in result.assembled_text
+        assert "After" in result.assembled_text
+        assert "User before" in result.assembled_text
+        assert "User after" in result.assembled_text
+        assert "오래된 크론 변경" not in result.assembled_text
+        assert "오래된 관심사" not in result.assembled_text
+        assert "Dreaming Updates" not in result.assembled_text
+        assert "Dreaming Insights" not in result.assembled_text
+        assert "Dreaming-managed memory omitted" in result.assembled_text
+
 
 class TestAssemblePromptPartial:
     """Test assembly with fewer than 3 files."""
