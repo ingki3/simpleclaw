@@ -535,6 +535,7 @@ _AGENT_DEFAULTS: dict = {
         "recipe_top_k": 3,
         "min_confidence": 0.5,
         "bypass_below_count": 8,
+        "fallback_top_k": 12,
         "max_tokens": 512,
     },
 }
@@ -606,6 +607,9 @@ def _agent_with_defaults(agent: dict) -> dict:
             ),
             "bypass_below_count": asset_selection.get(
                 "bypass_below_count", asset_defaults["bypass_below_count"]
+            ),
+            "fallback_top_k": asset_selection.get(
+                "fallback_top_k", asset_defaults["fallback_top_k"]
             ),
             "max_tokens": asset_selection.get("max_tokens", asset_defaults["max_tokens"]),
         },

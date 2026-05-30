@@ -102,10 +102,16 @@ logger = logging.getLogger(__name__)
 # 자동 머지가 실패했음 (2026-05-12: BIZ-164 #151 ↔ BIZ-166 #152, 별도 릴리스
 # release/2026-05-12e #155 강제).
 _BASE_INSTRUCTION = (
-    "You have access to tools. Use them when you need real-time information or "
-    "to perform actions. Do NOT fabricate information — always use a tool to verify.\n"
-    "When the user asks about real-time data (calendar, news, stocks, weather, etc.), "
-    "you MUST use the appropriate tool. Never answer from memory for such questions."
+    "Priority for tool use:\n"
+    "1. MUST use tools for real-time facts, system state, file contents, git state, "
+    "external service state, calculations, and any action that changes state.\n"
+    "2. Use tools when verification materially improves correctness. Do NOT fabricate "
+    "information that a tool can verify.\n"
+    "3. For small talk, greetings, thanks, capability/self-state questions, or purely "
+    "conversational replies that do not depend on live/system/file/external state, "
+    "do not use tools; answer directly and briefly.\n"
+    "Only for complex tasks, summarize your understanding first before proceeding; "
+    "do not prepend an understanding summary to simple conversational replies."
 )
 
 _GUARD_SKILL_DOCS_FIRST = (
@@ -213,6 +219,9 @@ _BUDGET_EXHAUSTED_EMPTY_MESSAGE = (
 )
 _BUDGET_EXHAUSTED_HINT_SUFFIX = (
     "(참고: 도구 호출 한도 {iterations}회에 도달해 추가 정보 수집을 멈췄습니다)"
+)
+_EMPTY_DIRECT_RESPONSE_MESSAGE = (
+    "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
 )
 
 # BIZ-141 — forced final-answer LLM 호출이 provider 측에서 hang 하면 메시지가
@@ -747,6 +756,13 @@ class AgentOrchestrator:
                 active_recipes = selected_recipes
                 active_skills_prompt = self._format_skills_for_prompt(selected_skills)
                 active_recipes_prompt = self._format_recipes_for_prompt(selected_recipes)
+        elif asset_selection is not None and asset_selection.fallback_required:
+            fallback_top_k = int(self._asset_selection_config.get("fallback_top_k", 0))
+            if fallback_top_k > 0:
+                active_skills = active_skills[:fallback_top_k]
+                active_recipes = active_recipes[:fallback_top_k]
+                active_skills_prompt = self._format_skills_for_prompt(active_skills)
+                active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
@@ -803,7 +819,8 @@ class AgentOrchestrator:
             # tool_calls가 없으면 텍스트 응답 → 최종 답변
             if not response.tool_calls:
                 logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
-                return response.text.strip()
+                final_text = (response.text or "").strip()
+                return final_text or _EMPTY_DIRECT_RESPONSE_MESSAGE
 
             # tool_calls가 있으면 실행 후 결과를 메시지에 추가
             logger.info(
@@ -1036,8 +1053,11 @@ class AgentOrchestrator:
                 min_confidence=float(cfg["min_confidence"]),
             )
         except Exception as exc:  # noqa: BLE001 — selector 실패는 main 응답을 막지 않음
-            logger.warning("Asset selector failed; falling back to full assets: %s", exc)
-            return None
+            logger.warning("Asset selector failed; falling back to capped assets: %s", exc)
+            return AssetSelectionResult(
+                fallback_required=True,
+                fallback_reason="selector_error",
+            )
 
         if result.fallback_required:
             logger.info(
