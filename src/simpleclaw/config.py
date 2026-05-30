@@ -48,9 +48,10 @@ def _resolve_secret_field(value: object) -> str:
 
 
 # 페르소나 엔진 기본 설정값
-# BIZ-302: 페르소나 base folder 기본값을 ``~/.simpleclaw-agent/default`` 로 전환.
-# 개발 워크스페이스/배포 트리와 페르소나 라이브 파일을 물리적으로 분리해
-# 운영 구조(개발→git→배포)를 단순화한다.
+# BIZ-313: 페르소나 파일(AGENT/USER/MEMORY)도 배포 repo(`~/.simpleclaw`)가
+# 아니라 런타임 루트(`~/.simpleclaw-agent/default`)에서 읽는다. git 작업과
+# dreaming 런타임 쓰기가 같은 디렉터리를 공유하지 않게 해 BIZ-28 류의 race 가
+# *발생할 수 없도록* 만들기 위함.
 _DEFAULTS = {
     "token_budget": 4096,
     "local_dir": "~/.simpleclaw-agent/default",
@@ -144,14 +145,14 @@ def load_llm_config(config_path: str | Path) -> dict:
 
 
 # 데몬 기본 설정값
-# BIZ-133: 운영 데이터(.pid/.db/HEARTBEAT.md)는 모두 사용자 홈 (`~/.simpleclaw/`)
-# 으로 이전. 저장소 working tree 안에는 dreaming 런타임이 쓰는 라이브 파일이 더 이상
-# 존재하지 않게 한다.
+# BIZ-302/313: 운영 데이터(.pid/.db/HEARTBEAT.md)는 배포 repo(`~/.simpleclaw`)
+# 와 분리된 런타임 루트(`~/.simpleclaw-agent/default`) 아래에 둔다. 저장소
+# working tree 안에는 dreaming 런타임이 쓰는 라이브 파일이 더 이상 존재하지 않게 한다.
 _DAEMON_DEFAULTS: dict = {
     "heartbeat_interval": 300,
-    "pid_file": "~/.simpleclaw/daemon.pid",
-    "status_file": "~/.simpleclaw/HEARTBEAT.md",
-    "db_path": "~/.simpleclaw/daemon.db",
+    "pid_file": "~/.simpleclaw-agent/default/daemon.pid",
+    "status_file": "~/.simpleclaw-agent/default/HEARTBEAT.md",
+    "db_path": "~/.simpleclaw-agent/default/daemon.db",
     "dreaming": {
         "overnight_hour": 3,
         "idle_threshold": 7200,
@@ -181,23 +182,24 @@ _DAEMON_DEFAULTS: dict = {
         # confidence/evidence_count 를 동시에 충족한 항목만 큐를 우회해 자동 적용.
         "auto_promote_confidence": 0.7,
         "auto_promote_evidence_count": 3,
-        # BIZ-133: dreaming 사이드카 파일 경로 — 운영 디렉터리(`~/.simpleclaw/`)
+        # BIZ-302/313: dreaming 사이드카 파일 경로 — 런타임 디렉터리
+        # (`~/.simpleclaw-agent/default/`)
         # 외부 이전을 위해 코드 하드코드를 제거하고 모두 config 로 빼낸다.
         # 운영자가 다른 위치에 두고 싶다면 config.yaml 에서 개별적으로 override 가능.
-        "insights_file": "~/.simpleclaw/insights.jsonl",
-        "suggestions_file": "~/.simpleclaw/suggestions.jsonl",
-        "blocklist_file": "~/.simpleclaw/insight_blocklist.jsonl",
-        "runs_file": "~/.simpleclaw/dreaming_runs.jsonl",
+        "insights_file": "~/.simpleclaw-agent/default/insights.jsonl",
+        "suggestions_file": "~/.simpleclaw-agent/default/suggestions.jsonl",
+        "blocklist_file": "~/.simpleclaw-agent/default/insight_blocklist.jsonl",
+        "runs_file": "~/.simpleclaw-agent/default/dreaming_runs.jsonl",
         # BIZ-132 (Phase 1+2) / BIZ-133 — safety_backup 디렉터리. dreaming 사이클
         # 직전 라이브 파일을 통째로 스냅샷해 두는 위치. 운영 데이터와 같은 루트
         # 아래 두어 백업/복원이 동일 마운트 내에서 일어나도록 한다.
-        "safety_backup_dir": "~/.simpleclaw/_safety_backup",
+        "safety_backup_dir": "~/.simpleclaw-agent/default/_safety_backup",
         # BIZ-74 / BIZ-133: Active Projects 패널 sidecar. enabled=True 가 기본,
         # window_days 는 USER.md 의 active-projects 섹션에 노출할 최근성 윈도우.
         "active_projects": {
             "enabled": True,
             "window_days": 7,
-            "sidecar_path": "~/.simpleclaw/active_projects.jsonl",
+            "sidecar_path": "~/.simpleclaw-agent/default/active_projects.jsonl",
         },
         # BIZ-80: dreaming 산출물의 1차 언어 정책. ``primary`` 는 USER/MEMORY/AGENT/SOUL
         # dreaming-managed 섹션의 출력 언어 — 기본 "ko" 로 영어 입력에서도 인사이트가
@@ -359,8 +361,8 @@ def load_daemon_config(config_path: str | Path) -> dict:
     language = dreaming.get("language", {})
     if not isinstance(language, dict):
         language = {}
-    # BIZ-74 / BIZ-133: active_projects sidecar 설정. dict 이 아니면 빈 dict 로 떨어뜨려
-    # 아래 기본값 (~/.simpleclaw/active_projects.jsonl) 으로 채운다.
+    # BIZ-74 / BIZ-313: active_projects sidecar 설정. dict 이 아니면 빈 dict 로 떨어뜨려
+    # 아래 기본값 (~/.simpleclaw-agent/default/active_projects.jsonl) 으로 채운다.
     active_projects = dreaming.get("active_projects", {})
     if not isinstance(active_projects, dict):
         active_projects = {}
@@ -462,7 +464,8 @@ def load_daemon_config(config_path: str | Path) -> dict:
             # BIZ-297: 파일별 dreaming 출력 토큰 cap. 양수만 의미 있는 값 — 0/음수/
             # 잘못된 타입은 None 으로 떨어뜨려 프로바이더 기본값으로 fallback.
             "max_tokens": _coerce_dreaming_max_tokens(dreaming.get("max_tokens")),
-            # BIZ-133: dreaming sidecar 파일 경로 — 모두 운영 디렉터리(`~/.simpleclaw/`)
+            # BIZ-313: dreaming sidecar 파일 경로 — 모두 런타임 디렉터리
+            # (`~/.simpleclaw-agent/default/`)
             # 기본 경로로 떨어진다. 호출자(run_bot.py 등) 는 *반드시* config 값을
             # 읽어 DreamingPipeline 에 주입해야 한다 (코드 하드코드 금지).
             "insights_file": dreaming.get(
@@ -512,13 +515,14 @@ def load_daemon_config(config_path: str | Path) -> dict:
 
 
 # 에이전트 오케스트레이터 기본 설정값
-# BIZ-133: 대화 DB / 스킬 워크스페이스도 운영 디렉터리(`~/.simpleclaw/`) 로 이전.
-# 저장소 working tree 안에는 SQLite WAL/SHM 파일이 더 이상 존재하지 않게 된다.
+# BIZ-313: 대화 DB / 스킬 워크스페이스도 런타임 디렉터리
+# (`~/.simpleclaw-agent/default`) 아래에 둔다. 배포 repo(`~/.simpleclaw`)에는
+# SQLite WAL/SHM 파일이 더 이상 존재하지 않게 된다.
 _AGENT_DEFAULTS: dict = {
     "history_limit": 20,
-    "db_path": "~/.simpleclaw/conversations.db",
+    "db_path": "~/.simpleclaw-agent/default/conversations.db",
     "max_tool_iterations": 15,
-    "workspace_dir": "~/.simpleclaw/workspace",
+    "workspace_dir": "~/.simpleclaw-agent/default/workspace",
     # BIZ-162: web_fetch 의 헤드리스 폴백 경로 — None 이면 PATH + 알려진 후보 경로
     # 자동 탐색. nohup 등 PATH 가 축소된 데몬 환경에서 운영자가 명시적으로 지정.
     "web_fetch": {
@@ -608,20 +612,21 @@ def _agent_with_defaults(agent: dict) -> dict:
     }
 
 
-# 레시피 디렉터리 기본 설정값 (BIZ-202)
+# 레시피 디렉터리 기본 설정값 (BIZ-202/BIZ-313)
 # 봇이 채팅에서 만든 레시피가 데몬에도 곧장 보이도록, 작성 경로와 로드 경로를
-# 절대 경로로 통일한다. 기본은 `~/.simpleclaw/recipes/` — 다른 사용자 데이터
+# 절대 경로로 통일한다. 기본은 `~/.simpleclaw-agent/default/recipes/` — 다른 사용자 데이터
 # (`conversations.db`, `daemon.db`, `MEMORY.md`, `workspace/`) 와 같은 운영 디렉터리
 # 아래로 모은다. 레거시 `.agent/recipes/` 는 로더의 한 번 fallback 으로 살아 있다.
 _RECIPES_DEFAULTS: dict = {
-    "dir": "~/.simpleclaw/recipes",
+    "dir": "~/.simpleclaw-agent/default/recipes",
 }
 
 
 def load_recipes_config(config_path: str | Path) -> dict:
     """config.yaml 에서 레시피 디렉터리 설정을 로드한다 (BIZ-202).
 
-    파일이 없거나 recipes 키가 없으면 기본 경로 ``~/.simpleclaw/recipes`` 를
+    파일이 없거나 recipes 키가 없으면 기본 경로
+    ``~/.simpleclaw-agent/default/recipes`` 를
     반환한다. 호출자는 ``Path(...).expanduser()`` 로 ``~`` 를 풀어야 한다.
     """
     config_path = Path(config_path)
@@ -768,8 +773,8 @@ _MEMORY_DEFAULTS: dict = {
         "promotion_threshold": 3,
         "context_budget_chars": 1600,
         "per_item_chars": 400,
-        "insights_file": "~/.simpleclaw/insights.jsonl",
-        "active_projects_file": "~/.simpleclaw/active_projects.jsonl",
+        "insights_file": "~/.simpleclaw-agent/default/insights.jsonl",
+        "active_projects_file": "~/.simpleclaw-agent/default/active_projects.jsonl",
         "active_projects_window_days": 7,
     },
 }
