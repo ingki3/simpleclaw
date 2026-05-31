@@ -742,6 +742,7 @@ class AgentOrchestrator:
         active_recipes = getattr(self, "_recipes", [])
         active_skills_prompt = self._skills_prompt
         active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
+        active_recipes_before_skills = False
 
         asset_selection = await self._select_assets_for_turn(text, active_skills, active_recipes)
         if asset_selection is not None and not asset_selection.fallback_required:
@@ -757,6 +758,7 @@ class AgentOrchestrator:
                 active_recipes = selected_recipes
                 active_skills_prompt = self._format_skills_for_prompt(selected_skills)
                 active_recipes_prompt = self._format_recipes_for_prompt(selected_recipes)
+                active_recipes_before_skills = bool(selected_recipes)
         elif asset_selection is not None and asset_selection.fallback_required:
             fallback_top_k = int(self._asset_selection_config.get("fallback_top_k", 0))
             if fallback_top_k > 0:
@@ -772,6 +774,7 @@ class AgentOrchestrator:
             rag_context=rag_context,
             skills_prompt=active_skills_prompt,
             recipes_prompt=active_recipes_prompt,
+            recipes_before_skills=active_recipes_before_skills,
         )
         system_prompt = self._flatten_system_blocks(system_blocks)
         tools = build_tool_definitions(
@@ -1191,6 +1194,7 @@ class AgentOrchestrator:
         *,
         skills_prompt: str | None = None,
         recipes_prompt: str = "",
+        recipes_before_skills: bool = False,
     ) -> list[SystemBlock]:
         """페르소나·스킬·RAG·ReAct 지시문을 세그먼트(SystemBlock)로 반환한다.
 
@@ -1210,9 +1214,13 @@ class AgentOrchestrator:
         if self._runtime_paths_prompt:
             segments.append((self._runtime_paths_prompt, True))
         effective_skills_prompt = self._skills_prompt if skills_prompt is None else skills_prompt
+        if recipes_before_skills and recipes_prompt:
+            segments.append((recipes_prompt, False))
         if effective_skills_prompt:
-            segments.append((effective_skills_prompt, True))
-        if recipes_prompt:
+            # recipe 우선 노출 시 동적 recipe 블록 뒤의 skill 블록은 더 이상
+            # 정적 prefix가 아니므로 cache marker를 붙이지 않는다.
+            segments.append((effective_skills_prompt, not recipes_before_skills))
+        if not recipes_before_skills and recipes_prompt:
             segments.append((recipes_prompt, False))
         if rag_context:
             segments.append((rag_context, False))

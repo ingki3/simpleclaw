@@ -230,7 +230,9 @@ def normalize_selector_response(
             reasons.append("recipe_guardrail")
         candidates = [candidate for candidate in candidates if candidate.type != "recipe"]
         reasons.append("ambiguous_intent")
-    elif not _has_explicit_recipe_intent(user_message):
+    elif _has_explicit_recipe_intent(user_message):
+        candidates = _prioritize_recipe_candidates(candidates)
+    else:
         filtered = [candidate for candidate in candidates if candidate.type != "recipe"]
         if len(filtered) != len(candidates):
             reasons.append("recipe_guardrail")
@@ -313,6 +315,20 @@ def _coerce_candidates(
         )
         seen.add(key)
     return sorted(candidates, key=lambda candidate: candidate.confidence, reverse=True)
+
+
+def _prioritize_recipe_candidates(candidates: list[AssetCandidate]) -> list[AssetCandidate]:
+    """명시적 recipe 요청에서는 confidence가 약간 낮아도 recipe를 먼저 노출한다.
+
+    selector confidence는 후보 축소용 신호일 뿐이므로 사용자가 브리핑/리포트/실행을
+    명시한 경우 recipe-like workflow가 일반 skill 후보 뒤로 밀리지 않게 한다.
+    같은 asset type 안에서는 기존 confidence 정렬을 유지한다.
+    """
+
+    return sorted(
+        candidates,
+        key=lambda candidate: (candidate.type != "recipe", -candidate.confidence),
+    )
 
 
 def _is_ambiguous_intent(user_message: str) -> bool:
