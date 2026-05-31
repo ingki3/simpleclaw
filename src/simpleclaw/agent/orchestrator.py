@@ -1258,8 +1258,6 @@ class AgentOrchestrator:
         import re
         import time
 
-        import numpy as np
-
         from simpleclaw.memory.active_projects import ActiveProjectStore, filter_active
         from simpleclaw.memory.insights import InsightStore, is_promoted
 
@@ -1490,36 +1488,11 @@ class AgentOrchestrator:
         if long_term_candidates:
             source_stats["long_term"]["top_score"] = round(float(long_term_candidates[0][0]), 4)
 
+        # Cluster summaries are useful as an offline/debug artifact, but too coarse for the
+        # live system prompt: they can reintroduce old automation/event history that the
+        # dedicated AGENT/MEMORY filters intentionally removed. Keep the source_stats bucket
+        # for schema compatibility, but do not retrieve or inject cluster summaries by default.
         cluster_lines: list[str] = []
-        try:
-            clusters = self._store.list_clusters()
-            cluster_hits: list[tuple[float, str]] = []
-            query_arr = np.asarray(query_vec, dtype=np.float32)
-            query_norm = float(np.linalg.norm(query_arr)) if query_arr.size else 0.0
-            for cluster in clusters:
-                if not cluster.summary:
-                    continue
-                score = _lexical_score(f"{cluster.label} {cluster.summary}", 0.0)
-                if query_norm > 0.0 and cluster.centroid.shape == query_arr.shape:
-                    centroid_norm = float(np.linalg.norm(cluster.centroid))
-                    if centroid_norm > 0.0:
-                        score = max(
-                            score,
-                            float(np.dot(query_arr / query_norm, cluster.centroid / centroid_norm)),
-                        )
-                if score < self._rag_threshold:
-                    continue
-                cluster_hits.append((score, f"- [{cluster.label}] {_clip(cluster.summary)}"))
-            cluster_hits.sort(key=lambda x: x[0], reverse=True)
-            cluster_lines = [line for _, line in cluster_hits[: self._long_term_top_k]]
-            source_stats["cluster_summary"]["count"] = len(cluster_lines)
-            source_stats["cluster_summary"]["hit"] = bool(cluster_lines)
-            if cluster_hits:
-                source_stats["cluster_summary"]["top_score"] = round(float(cluster_hits[0][0]), 4)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Cluster summary retrieval failed: %s", exc)
-            source_stats["cluster_summary"]["errors"] = 1
-            errors += 1
 
         sections: list[str] = []
         if long_term_lines:

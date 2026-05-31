@@ -35,7 +35,7 @@ _MANAGED_DREAMING_COMMENT_DOC_RE = re.compile(
     r"<!--\s*\n[\s\S]*?managed:dreaming:[\s\S]*?-->",
     re.IGNORECASE,
 )
-_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
+_HTML_COMMENT_RE = re.compile(r"<!--(?!\s*/?managed:dreaming:)[\s\S]*?-->")
 _DREAMING_OMITTED_MARKER = ""
 _DREAMING_DOC_ARTIFACT_PHRASES = (
     "드리밍 사이클이",
@@ -70,7 +70,7 @@ def _strip_managed_dreaming_comment_docs(text: str) -> tuple[str, bool]:
         stripped = line.strip()
         if comment_buffer is not None:
             comment_buffer.append(line)
-            if "-->" in stripped:
+            if stripped == "-->":
                 block = "\n".join(comment_buffer)
                 if "managed:dreaming:" in block:
                     if _DREAMING_OMITTED_MARKER and (
@@ -92,6 +92,11 @@ def _strip_managed_dreaming_comment_docs(text: str) -> tuple[str, bool]:
     if comment_buffer is not None:
         kept.extend(comment_buffer)
     return "\n".join(kept), removed
+
+
+def _strip_html_comments(text: str) -> str:
+    """원본 persona 파일의 운영 설명용 HTML comment를 prompt 렌더링에서 제거한다."""
+    return _HTML_COMMENT_RE.sub("", text)
 
 
 def _strip_dreaming_doc_artifact_lines(text: str) -> str:
@@ -137,6 +142,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     """
     text = _strip_dreaming_doc_artifact_lines(text)
     text, comment_docs_removed = _strip_managed_dreaming_comment_docs(text)
+    text = _strip_html_comments(text)
     if comment_docs_removed:
         text = text.strip()
 

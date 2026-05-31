@@ -83,6 +83,8 @@ def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
     assert "마커 안쪽에서만 dreaming" not in assembled
     assert "Dreaming managed sections omitted" not in assembled
     assert "Dreaming-managed memory omitted" not in assembled
+    assert "<!--" not in assembled
+    assert "-->" not in assembled
     assert "수동 기억" in assembled
     assert "수동 메모" in assembled
 
@@ -92,7 +94,9 @@ def test_assemble_prompt_strips_general_html_comments() -> None:
     agent = _persona(
         FileType.AGENT,
         "Agent",
-        "핵심 지시\n\n<!-- 내부 운영 메모: system prompt에 노출되면 안 됨 -->\n\n공개 지시",
+        "핵심 지시\n\n<!-- 내부 운영 메모: system prompt에 노출되면 안 됨 -->\n\n"
+        "<!--\n운영자용 설명: system prompt에는 들어가면 안 됨\n-->\n\n"
+        "## Identity\n- SimpleClaw로 응답한다.\n\n공개 지시",
     )
     memory = _persona(
         FileType.MEMORY,
@@ -105,8 +109,10 @@ def test_assemble_prompt_strips_general_html_comments() -> None:
     assert "<!--" not in assembled
     assert "-->" not in assembled
     assert "내부 운영 메모" not in assembled
+    assert "운영자용 설명" not in assembled
     assert "멀티라인 comment" not in assembled
     assert "공개 지시" in assembled
+    assert "SimpleClaw로 응답한다" in assembled
     assert "보존할 기억" in assembled
 
 
