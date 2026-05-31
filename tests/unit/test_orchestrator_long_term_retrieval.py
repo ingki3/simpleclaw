@@ -17,6 +17,7 @@ from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.active_projects import ActiveProject, ActiveProjectStore
 from simpleclaw.memory.insights import InsightMeta, InsightStore
+from simpleclaw.memory.models import MemoryItemType
 
 
 def _write_jsonl(path, rows):
@@ -164,6 +165,41 @@ class TestLongTermRetrieval:
         assert "Multica" in block
         assert "## 클러스터 요약" in block
         assert "장기기억 검색 파이프라인" in block
+
+    @pytest.mark.asyncio
+    async def test_memory_item_cluster_summaries_are_excluded_from_long_term_context(self, long_term_config):
+        """DB-backed cluster_summary memory item은 기본 RAG system context에서 제외한다."""
+        cfg = long_term_config()
+        orch = AgentOrchestrator(cfg)
+        orch._embedding_service.encode_query = MagicMock(return_value=np.array([1.0, 0.0], dtype=np.float32))
+        orch._store.create_memory_item(
+            item_type=MemoryItemType.CLUSTER_SUMMARY,
+            text="link-to-wiki check_new_emails usstock-night cluster summary noise",
+            source="cluster",
+            source_ref="cluster:69",
+            confidence=0.95,
+            importance=1.0,
+            embedding=[1.0, 0.0],
+        )
+        orch._store.create_memory_item(
+            item_type=MemoryItemType.MEMORY,
+            text="허용되는 장기기억 항목은 계속 회수됩니다",
+            source="manual",
+            source_ref="memory:1",
+            confidence=0.95,
+            importance=0.8,
+            embedding=[1.0, 0.0],
+        )
+
+        block = await orch._retrieve_relevant_context("장기기억")
+
+        assert "## 장기기억" in block
+        assert "memory_item:memory" in block
+        assert "허용되는 장기기억 항목" in block
+        assert "memory_item:cluster_summary" not in block
+        assert "link-to-wiki" not in block
+        assert "check_new_emails" not in block
+        assert "usstock-night" not in block
 
     @pytest.mark.asyncio
     async def test_sidecar_failures_fallback_to_conversation_rag_and_log_source_errors(self, long_term_config, tmp_path):

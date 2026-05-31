@@ -40,6 +40,7 @@ from simpleclaw.memory.models import (
     CHANNEL_CRON_ADMIN,
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
+    MemoryItemType,
     MessageRole,
 )
 from simpleclaw.persona.assembler import assemble_prompt
@@ -1452,6 +1453,8 @@ class AgentOrchestrator:
                     min_confidence=self._long_term_min_confidence,
                 )
                 for item, similarity in memory_hits:
+                    if item.type is MemoryItemType.CLUSTER_SUMMARY:
+                        continue
                     if item.text in excluded:
                         continue
                     score = similarity + item.confidence + (item.importance * 0.1)
