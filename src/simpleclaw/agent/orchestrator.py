@@ -1210,10 +1210,10 @@ class AgentOrchestrator:
         if self._runtime_paths_prompt:
             segments.append((self._runtime_paths_prompt, True))
         effective_skills_prompt = self._skills_prompt if skills_prompt is None else skills_prompt
-        if effective_skills_prompt:
-            segments.append((effective_skills_prompt, True))
         if recipes_prompt:
             segments.append((recipes_prompt, False))
+        if effective_skills_prompt:
+            segments.append((effective_skills_prompt, True))
         if rag_context:
             segments.append((rag_context, False))
         segments.append((_TOOL_USAGE_INSTRUCTION, False))

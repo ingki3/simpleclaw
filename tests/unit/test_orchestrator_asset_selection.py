@@ -184,6 +184,32 @@ async def test_selector_exception_falls_back_to_capped_assets(config_file):
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
+async def test_selector_recipe_request_places_recipes_before_skills_in_prompt(config_file):
+    """recipe-like 요청에서는 선택된 recipe block을 skill block보다 앞에 노출한다."""
+    orchestrator = AgentOrchestrator(config_file)
+    _install_assets(orchestrator)
+    orchestrator._router = MagicMock()
+    orchestrator._router.send = AsyncMock(
+        side_effect=[
+            _selector_response([
+                {"type": "skill", "name": "news", "confidence": 0.99, "reason": "news lookup"},
+                {"type": "recipe", "name": "daily-report", "confidence": 0.70, "reason": "briefing workflow"},
+            ]),
+            _text_response("AI 리포트 레시피를 우선 확인하겠습니다."),
+        ]
+    )
+
+    result = await orchestrator._tool_loop("AI 뉴스 아침 브리핑 리포트를 보내줘", isolated=True)
+
+    assert result == "AI 리포트 레시피를 우선 확인하겠습니다."
+    main_request = orchestrator._router.send.call_args_list[1][0][0]
+    system_prompt = main_request.system_prompt
+    assert system_prompt.index("## Available Recipes") < system_prompt.index("## Available Skills")
+    assert system_prompt.index("daily-report") < system_prompt.index("- **news**")
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
 async def test_selector_bypasses_when_candidate_count_under_threshold(config_file):
     """후보 수가 bypass_below_count 이하이면 selector 호출 자체를 생략한다."""
     orchestrator = AgentOrchestrator(config_file)
