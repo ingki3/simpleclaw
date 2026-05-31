@@ -35,7 +35,8 @@ _MANAGED_DREAMING_COMMENT_DOC_RE = re.compile(
     r"<!--\s*\n[\s\S]*?managed:dreaming:[\s\S]*?-->",
     re.IGNORECASE,
 )
-_HTML_COMMENT_RE = re.compile(r"<!--(?!\s*/?managed:dreaming:)[\s\S]*?-->")
+_NON_MANAGED_HTML_COMMENT_RE = re.compile(r"<!--(?!\s*/?managed:dreaming:)[\s\S]*?-->")
+_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
 _DREAMING_OMITTED_MARKER = ""
 _DREAMING_DOC_ARTIFACT_PHRASES = (
     "드리밍 사이클이",
@@ -142,7 +143,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     """
     text = _strip_dreaming_doc_artifact_lines(text)
     text, comment_docs_removed = _strip_managed_dreaming_comment_docs(text)
-    text = _strip_html_comments(text)
+    text = _NON_MANAGED_HTML_COMMENT_RE.sub("", text)
     if comment_docs_removed:
         text = text.strip()
 
