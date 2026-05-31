@@ -35,6 +35,7 @@ _MANAGED_DREAMING_COMMENT_DOC_RE = re.compile(
     r"<!--\s*\n[\s\S]*?managed:dreaming:[\s\S]*?-->",
     re.IGNORECASE,
 )
+_HTML_COMMENT_RE = re.compile(r"<!--[\s\S]*?-->")
 _DREAMING_OMITTED_MARKER = ""
 _DREAMING_DOC_ARTIFACT_PHRASES = (
     "드리밍 사이클이",
@@ -100,6 +101,16 @@ def _strip_dreaming_doc_artifact_lines(text: str) -> str:
         for line in text.splitlines()
         if not any(phrase in line for phrase in _DREAMING_DOC_ARTIFACT_PHRASES)
     )
+
+
+def _strip_html_comments(text: str) -> str:
+    """렌더링된 시스템 프롬프트에서 일반 HTML comment를 제거한다.
+
+    Persona 파일의 HTML comment는 운영 메모·관리 마커 표현용이며 모델에게 노출될
+    지시가 아니다. managed dreaming 블록 제거가 먼저 실행된 뒤 남은 comment만
+    걷어내므로, 마커 내부 본문이 실수로 되살아나지 않는다.
+    """
+    return _HTML_COMMENT_RE.sub("", text)
 
 
 def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
@@ -221,7 +232,7 @@ def _render_persona_file(persona_file: PersonaFile) -> str:
 
     text = "\n\n".join(parts)
     text = _normalize_persona_policy_conflicts(text)
-    return _strip_managed_dreaming_blocks(text)
+    return _strip_html_comments(_strip_managed_dreaming_blocks(text)).strip()
 
 
 def assemble_prompt(

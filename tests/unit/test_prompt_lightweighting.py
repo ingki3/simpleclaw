@@ -87,6 +87,29 @@ def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
     assert "수동 메모" in assembled
 
 
+def test_assemble_prompt_strips_general_html_comments() -> None:
+    """일반 HTML 주석도 production system prompt에는 남기지 않는다."""
+    agent = _persona(
+        FileType.AGENT,
+        "Agent",
+        "핵심 지시\n\n<!-- 내부 운영 메모: system prompt에 노출되면 안 됨 -->\n\n공개 지시",
+    )
+    memory = _persona(
+        FileType.MEMORY,
+        "Memory",
+        "수동 기억\n<!--\n멀티라인 comment\n오래된 운영 설명\n-->\n보존할 기억",
+    )
+
+    assembled = assemble_prompt([agent, memory], token_budget=4096).assembled_text
+
+    assert "<!--" not in assembled
+    assert "-->" not in assembled
+    assert "내부 운영 메모" not in assembled
+    assert "멀티라인 comment" not in assembled
+    assert "공개 지시" in assembled
+    assert "보존할 기억" in assembled
+
+
 def test_assemble_prompt_normalizes_legacy_understanding_summary_rule() -> None:
     """구 AGENT.md의 항상 이해 요약 지시를 복잡 작업 한정 규칙으로 정규화한다."""
     agent = _persona(
