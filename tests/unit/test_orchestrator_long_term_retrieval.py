@@ -139,7 +139,7 @@ class TestLongTermRetrieval:
         assert "단발 미승격" not in block
 
     @pytest.mark.asyncio
-    async def test_active_projects_and_cluster_summaries_join_long_term_context(self, long_term_config, tmp_path):
+    async def test_active_projects_join_long_term_context_but_cluster_summaries_are_not_prompted(self, long_term_config, tmp_path):
         cfg = long_term_config()
         ActiveProjectStore(tmp_path / "active_projects.jsonl").save_all({
             "multica": ActiveProject(
@@ -163,8 +163,43 @@ class TestLongTermRetrieval:
         assert "## 장기기억" in block
         assert "active_project" in block
         assert "Multica" in block
-        assert "## 클러스터 요약" in block
-        assert "장기기억 검색 파이프라인" in block
+        assert "## 클러스터 요약" not in block
+        assert "장기기억 검색 파이프라인" not in block
+
+    @pytest.mark.asyncio
+    async def test_cluster_summary_memory_items_are_excluded_from_long_term_prompt(self, long_term_config):
+        """DB-backed cluster_summary는 기본 system prompt 주입 대상에서 제외한다."""
+        cfg = long_term_config()
+        orch = AgentOrchestrator(cfg)
+        orch._embedding_service.encode_query = MagicMock(return_value=np.array([1.0, 0.0], dtype=np.float32))
+        orch._store.create_memory_item(
+            item_type=MemoryItemType.CLUSTER_SUMMARY,
+            text="link-to-wiki check_new_emails usstock-night 과거 자동화 히스토리",
+            source="semantic_cluster",
+            source_ref="cluster:legacy-automation",
+            confidence=0.95,
+            importance=1.0,
+            embedding=[1.0, 0.0],
+        )
+        orch._store.create_memory_item(
+            item_type=MemoryItemType.ACCEPTED_USER_INSIGHT,
+            text="사용자는 system prompt에서 지속 정책만 보길 원한다",
+            source="insight_store",
+            source_ref="insight:prompt-policy",
+            confidence=0.95,
+            importance=0.9,
+            embedding=[1.0, 0.0],
+        )
+
+        block = await orch._retrieve_relevant_context("system prompt 자동화 히스토리")
+
+        assert "## 장기기억" in block
+        assert "[memory_item:accepted_user_insight]" in block
+        assert "지속 정책만" in block
+        assert "[memory_item:cluster_summary]" not in block
+        assert "link-to-wiki" not in block
+        assert "check_new_emails" not in block
+        assert "usstock-night" not in block
 
     @pytest.mark.asyncio
     async def test_memory_item_cluster_summaries_are_excluded_from_long_term_context(self, long_term_config):
@@ -215,12 +250,13 @@ class TestLongTermRetrieval:
         block = await orch._retrieve_relevant_context("fallback")
 
         assert "conversation fallback survives" in block
+        orch._store.list_clusters.assert_not_called()
         [entry] = sl.get_entries()
         assert entry.action_type == "rag_retrieve"
         assert entry.status == "partial"
         assert entry.details["conversation"]["count"] == 1
         assert entry.details["long_term"]["errors"] >= 1
-        assert entry.details["cluster_summary"]["errors"] == 1
+        assert entry.details["cluster_summary"]["errors"] == 0
         assert "context_chars" in entry.details
 
     @pytest.mark.asyncio
