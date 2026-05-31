@@ -221,6 +221,7 @@ def normalize_selector_response(
     known_keys = {(asset.type, asset.name) for asset in known_assets}
     candidates = _coerce_candidates(raw_selection.get("selected"), known_keys, min_confidence)
     reasons: list[str] = []
+    has_recipe_intent = _has_explicit_recipe_intent(user_message)
 
     if not used_tool_call:
         reasons.append("missing_function_call")
@@ -230,13 +231,13 @@ def normalize_selector_response(
             reasons.append("recipe_guardrail")
         candidates = [candidate for candidate in candidates if candidate.type != "recipe"]
         reasons.append("ambiguous_intent")
-    elif _has_explicit_recipe_intent(user_message):
-        candidates = _prioritize_recipe_candidates(candidates)
-    else:
+    elif not has_recipe_intent:
         filtered = [candidate for candidate in candidates if candidate.type != "recipe"]
         if len(filtered) != len(candidates):
             reasons.append("recipe_guardrail")
         candidates = filtered
+    else:
+        candidates = _prioritize_recipes(candidates)
 
     candidates = candidates[: max(top_k, 0)]
 
@@ -317,12 +318,11 @@ def _coerce_candidates(
     return sorted(candidates, key=lambda candidate: candidate.confidence, reverse=True)
 
 
-def _prioritize_recipe_candidates(candidates: list[AssetCandidate]) -> list[AssetCandidate]:
-    """명시적 recipe 요청에서는 confidence가 약간 낮아도 recipe를 먼저 노출한다.
+def _prioritize_recipes(candidates: list[AssetCandidate]) -> list[AssetCandidate]:
+    """명시적 recipe 요청에서는 recipe 후보를 skill 후보보다 먼저 정렬한다.
 
-    selector confidence는 후보 축소용 신호일 뿐이므로 사용자가 브리핑/리포트/실행을
-    명시한 경우 recipe-like workflow가 일반 skill 후보 뒤로 밀리지 않게 한다.
-    같은 asset type 안에서는 기존 confidence 정렬을 유지한다.
+    confidence는 같은 asset type 안에서만 우선순위를 결정하게 한다. recipe-like 요청에서
+    관련 skill confidence가 더 높아도 main LLM이 recipe workflow를 먼저 보도록 하기 위함이다.
     """
 
     return sorted(

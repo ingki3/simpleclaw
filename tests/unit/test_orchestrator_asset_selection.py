@@ -184,24 +184,24 @@ async def test_selector_exception_falls_back_to_capped_assets(config_file):
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
-async def test_explicit_recipe_selection_places_recipe_before_skill_context(config_file):
-    """recipe-like 요청에서 recipe 컨텍스트가 skill 컨텍스트보다 먼저 노출된다."""
+async def test_selector_recipe_request_places_recipes_before_skills_in_prompt(config_file):
+    """recipe-like 요청에서는 선택된 recipe block을 skill block보다 앞에 노출한다."""
     orchestrator = AgentOrchestrator(config_file)
     _install_assets(orchestrator)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(
         side_effect=[
             _selector_response([
-                {"type": "skill", "name": "news", "confidence": 0.95, "reason": "news"},
-                {"type": "recipe", "name": "daily-report", "confidence": 0.90, "reason": "briefing"},
+                {"type": "skill", "name": "news", "confidence": 0.99, "reason": "news lookup"},
+                {"type": "recipe", "name": "daily-report", "confidence": 0.70, "reason": "briefing workflow"},
             ]),
-            _text_response("레시피를 우선 참고했습니다."),
+            _text_response("AI 리포트 레시피를 우선 확인하겠습니다."),
         ]
     )
 
-    result = await orchestrator._tool_loop("매일 아침 최신 뉴스 브리핑을 보내줘", isolated=True)
+    result = await orchestrator._tool_loop("AI 뉴스 아침 브리핑 리포트를 보내줘", isolated=True)
 
-    assert result == "레시피를 우선 참고했습니다."
+    assert result == "AI 리포트 레시피를 우선 확인하겠습니다."
     main_request = orchestrator._router.send.call_args_list[1][0][0]
     system_prompt = main_request.system_prompt
     assert system_prompt.index("## Available Recipes") < system_prompt.index("## Available Skills")

@@ -59,6 +59,26 @@ def test_explicit_recipe_activation_prioritizes_recipe_candidate() -> None:
     assert result.fallback_required is False
 
 
+def test_explicit_recipe_activation_prioritizes_recipe_over_higher_confidence_skill() -> None:
+    """recipe-like 명시 요청에서는 skill confidence가 더 높아도 recipe를 먼저 노출한다."""
+    result = normalize_selector_response(
+        user_message="AI 뉴스 아침 브리핑 리포트를 보내줘",
+        known_assets=KNOWN_ASSETS,
+        tool_calls=_tool_call(
+            [
+                {"type": "skill", "name": "news-search-skill", "confidence": 0.99, "reason": "news lookup"},
+                {"type": "recipe", "name": "ai-report", "confidence": 0.70, "reason": "briefing workflow"},
+            ]
+        ),
+    )
+
+    assert result.selected == [
+        AssetCandidate(type="recipe", name="ai-report", confidence=0.70, reason="briefing workflow"),
+        AssetCandidate(type="skill", name="news-search-skill", confidence=0.99, reason="news lookup"),
+    ]
+    assert result.fallback_required is False
+
+
 def test_ad_hoc_news_summary_drops_recipe_overselection_and_preserves_skill() -> None:
     """ad-hoc 뉴스 검색/요약은 recipe 과선택만 제거하고 skill 후보는 보존한다."""
     result = normalize_selector_response(
