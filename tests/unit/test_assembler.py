@@ -1,7 +1,5 @@
 """Tests for the prompt assembler."""
 
-import pytest
-
 from simpleclaw.persona.models import (
     FileType,
     PersonaFile,
@@ -80,7 +78,7 @@ class TestAssemblePromptFull:
         assert "오래된 관심사" not in result.assembled_text
         assert "Dreaming Updates" not in result.assembled_text
         assert "Dreaming Insights" not in result.assembled_text
-        assert "Dreaming-managed memory omitted" in result.assembled_text
+        assert "Dreaming-managed memory omitted" not in result.assembled_text
 
 
 class TestAssemblePromptPartial:
