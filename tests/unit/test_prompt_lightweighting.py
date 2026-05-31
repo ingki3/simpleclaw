@@ -82,6 +82,56 @@ def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
     assert "수동 메모" in assembled
 
 
+
+def test_assemble_prompt_emits_dreaming_omitted_marker_at_most_once() -> None:
+    """여러 파일의 dreaming history를 제거해도 marker는 1회 이하로만 남긴다."""
+    agent = _persona(
+        FileType.AGENT,
+        "Agent",
+        "운영 규칙\n\n"
+        "<!-- managed:dreaming:dreaming-updates -->\n"
+        "## Dreaming Updates\n"
+        "- link-to-wiki 레시피 생성 완료\n"
+        "- check_new_emails 레시피 수정 완료\n"
+        "- usstock-night 크론 변경 완료\n"
+        "<!-- /managed:dreaming:dreaming-updates -->",
+    )
+    user = _persona(
+        FileType.USER,
+        "User",
+        "사용자 정보\n\n"
+        "<!-- managed:dreaming:insights -->\n"
+        "## Dreaming Insights\n"
+        "- raw user history\n"
+        "<!-- /managed:dreaming:insights -->",
+    )
+    memory = _persona(
+        FileType.MEMORY,
+        "Memory",
+        "기억\n\n"
+        "<!--\n"
+        "managed:dreaming:journal 설명 주석도 숨긴다.\n"
+        "-->\n"
+        "<!-- managed:dreaming:journal -->\n"
+        "## Dreaming Journal\n"
+        "- raw memory history\n"
+        "<!-- /managed:dreaming:journal -->",
+    )
+
+    assembled = assemble_prompt([agent, user, memory], token_budget=4096).assembled_text
+
+    assert assembled.count("Dreaming-managed memory omitted") <= 1
+    for leaked in (
+        "link-to-wiki",
+        "check_new_emails",
+        "usstock-night",
+        "Dreaming Updates",
+        "raw user history",
+        "raw memory history",
+        "managed:dreaming:journal",
+    ):
+        assert leaked not in assembled
+
 def test_assemble_prompt_normalizes_legacy_understanding_summary_rule() -> None:
     """구 AGENT.md의 항상 이해 요약 지시를 복잡 작업 한정 규칙으로 정규화한다."""
     agent = _persona(

@@ -168,6 +168,19 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+
+def _dedupe_dreaming_omitted_marker(text: str) -> str:
+    """조합된 프롬프트 전체에서 dreaming omitted marker를 최대 1회만 남긴다."""
+    seen = False
+    kept: list[str] = []
+    for line in text.splitlines():
+        if line.strip() == _DREAMING_OMITTED_MARKER:
+            if seen:
+                continue
+            seen = True
+        kept.append(line)
+    return "\n".join(kept)
+
 def _normalize_persona_policy_conflicts(text: str) -> str:
     """구 런타임 AGENT.md의 응답 형식 충돌 지시를 최신 guard와 맞춘다.
 
@@ -247,7 +260,9 @@ def assemble_prompt(
         return PromptAssembly(parts=ordered_files, token_budget=token_budget)
 
     # 전체 텍스트 조합
-    full_text = _SECTION_SEPARATOR.join(text for _, text in rendered)
+    full_text = _dedupe_dreaming_omitted_marker(
+        _SECTION_SEPARATOR.join(text for _, text in rendered)
+    )
     total_tokens = _count_tokens(full_text)
 
     if total_tokens <= token_budget:
@@ -268,7 +283,7 @@ def assemble_prompt(
 
     # 마지막 파일부터 역순으로 절삭 시도
     for i in range(len(truncated_texts) - 1, 0, -1):
-        assembled = _SECTION_SEPARATOR.join(truncated_texts)
+        assembled = _dedupe_dreaming_omitted_marker(_SECTION_SEPARATOR.join(truncated_texts))
         current_tokens = _count_tokens(assembled)
 
         if current_tokens <= token_budget:
@@ -281,7 +296,9 @@ def assemble_prompt(
         )
         was_truncated = True
 
-    assembled = _SECTION_SEPARATOR.join(t for t in truncated_texts if t)
+    assembled = _dedupe_dreaming_omitted_marker(
+        _SECTION_SEPARATOR.join(t for t in truncated_texts if t)
+    )
     final_tokens = _count_tokens(assembled)
 
     # 선택적 파일 제거 후에도 초과 시, 강제 절삭 (토큰 단위로 자름)

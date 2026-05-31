@@ -38,6 +38,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from simpleclaw.memory.agent_update_filter import filter_agent_updates
 from simpleclaw.memory.active_projects import (
     ActiveProject,
     ActiveProjectStore,
@@ -679,12 +680,16 @@ class DreamingPipeline:
         agent_part = await self.summarize_agent(messages)
         ap_part = await self.summarize_active_projects(messages)
 
+        filtered_agent = self._filter_agent_updates(
+            agent_part.get("agent_updates", ""),
+            memory_summary=mem_part.get("memory", ""),
+        )
         merged: dict = {
             "memory": mem_part.get("memory", ""),
             "user_insights": user_part.get("user_insights", ""),
             "user_insights_meta": user_part.get("user_insights_meta", []) or [],
             "soul_updates": soul_part.get("soul_updates", ""),
-            "agent_updates": agent_part.get("agent_updates", ""),
+            "agent_updates": filtered_agent,
             "active_projects": ap_part.get("active_projects", []) or [],
         }
 
@@ -768,7 +773,34 @@ class DreamingPipeline:
             max_tokens_key="agent",
         )
         result = self._extract_json_object(raw)
-        return {"agent_updates": (result.get("agent_updates") or "") if isinstance(result, dict) else ""}
+        raw_updates = (result.get("agent_updates") or "") if isinstance(result, dict) else ""
+        return {"agent_updates": self._filter_agent_updates(raw_updates)}
+
+    def _filter_agent_updates(
+        self,
+        agent_updates: str,
+        *,
+        memory_summary: str = "",
+    ) -> str:
+        """AGENT.md dreaming 산출물에서 지속 정책만 남긴다.
+
+        AGENT.md는 앞으로의 행동 규칙 전용이고, MEMORY.md는 사건 기록 전용이다. 저장 전
+        한 번 더 deterministic 필터를 거쳐 recipe/cron 완료 로그와 MEMORY 중복 bullet을
+        차단한다.
+        """
+        result = filter_agent_updates(
+            agent_updates,
+            memory_summary=memory_summary,
+            existing_memory_md=self._read_existing(self._memory_file),
+        )
+        if result.dropped:
+            logger.info(
+                "Agent update filter: kept %d bullet(s), dropped %d bullet(s): %s",
+                len(result.kept),
+                len(result.dropped),
+                result.dropped,
+            )
+        return result.text
 
     async def summarize_active_projects(self, messages: list) -> dict:
         """USER.md active-projects 섹션 갱신용 LLM 호출 (BIZ-299).
