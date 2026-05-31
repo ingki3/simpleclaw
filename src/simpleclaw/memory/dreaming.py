@@ -45,6 +45,7 @@ from simpleclaw.memory.active_projects import (
     merge_projects,
     render_section_body as render_active_projects_body,
 )
+from simpleclaw.memory.agent_update_filter import filter_agent_updates_with_stats
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.insights import (
     InsightMeta,
@@ -2166,6 +2167,30 @@ class DreamingPipeline:
         user_insights_meta = result.get("user_insights_meta", []) or []
         soul_updates = result.get("soul_updates", "")
         agent_updates = result.get("agent_updates", "")
+        if agent_updates:
+            memory_for_agent_filter = "\n".join(
+                part
+                for part in (
+                    memory_summary,
+                    self._read_existing(self._memory_file),
+                )
+                if part
+            )
+            agent_filter = filter_agent_updates_with_stats(
+                agent_updates,
+                memory_text=memory_for_agent_filter,
+            )
+            if agent_filter.dropped:
+                logger.info(
+                    "Dreaming agent update filter: kept=%d dropped=%d "
+                    "event=%d duplicate=%d non_policy=%d",
+                    agent_filter.kept,
+                    agent_filter.dropped,
+                    agent_filter.dropped_event,
+                    agent_filter.dropped_duplicate,
+                    agent_filter.dropped_non_policy,
+                )
+            agent_updates = agent_filter.text
         # BIZ-74: 관측치는 빈 리스트일 수 있다(LLM이 식별 못함). 빈 리스트여도
         # update_active_projects를 호출해 윈도우 외 항목이 USER.md에서 사라지도록 한다.
         active_project_obs = result.get("active_projects", []) or []

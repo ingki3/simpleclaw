@@ -35,9 +35,12 @@ _MANAGED_DREAMING_COMMENT_DOC_RE = re.compile(
     r"<!--\s*\n[\s\S]*?managed:dreaming:[\s\S]*?-->",
     re.IGNORECASE,
 )
-_DREAMING_OMITTED_MARKER = (
-    "> [Dreaming managed sections omitted: use long-term retrieval/RAG instead of raw "
-    "append history. Dreaming-managed memory omitted.]"
+_DREAMING_OMITTED_MARKER = ""
+_DREAMING_DOC_ARTIFACT_PHRASES = (
+    "드리밍 사이클이",
+    "드리밍 사이클 설명",
+    "마커 안쪽에서만 dreaming",
+    "dreaming의 시간순 append",
 )
 _LEGACY_UNDERSTANDING_RULE_RE = re.compile(
     r"-\s*형님으로\s*부터\s*질문을\s*받았을\s*때,\s*"
@@ -69,7 +72,9 @@ def _strip_managed_dreaming_comment_docs(text: str) -> tuple[str, bool]:
             if "-->" in stripped:
                 block = "\n".join(comment_buffer)
                 if "managed:dreaming:" in block:
-                    if not kept or kept[-1] != _DREAMING_OMITTED_MARKER:
+                    if _DREAMING_OMITTED_MARKER and (
+                        not kept or kept[-1] != _DREAMING_OMITTED_MARKER
+                    ):
                         kept.append(_DREAMING_OMITTED_MARKER)
                     removed = True
                 else:
@@ -86,6 +91,15 @@ def _strip_managed_dreaming_comment_docs(text: str) -> tuple[str, bool]:
     if comment_buffer is not None:
         kept.extend(comment_buffer)
     return "\n".join(kept), removed
+
+
+def _strip_dreaming_doc_artifact_lines(text: str) -> str:
+    """파서 단계에서 HTML 주석 껍질이 사라진 dreaming 설명 찌꺼기를 제거한다."""
+    return "\n".join(
+        line
+        for line in text.splitlines()
+        if not any(phrase in line for phrase in _DREAMING_DOC_ARTIFACT_PHRASES)
+    )
 
 
 def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
@@ -110,6 +124,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
     특히 cluster/journal 원문은 과거 응답 형식 지침까지 포함할 수 있어 prompt를
     오염시키므로, 수동 메모와 일반 섹션은 유지하고 제거 사실만 짧은 marker로 남긴다.
     """
+    text = _strip_dreaming_doc_artifact_lines(text)
     text, comment_docs_removed = _strip_managed_dreaming_comment_docs(text)
     if comment_docs_removed:
         text = text.strip()
@@ -135,7 +150,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
             omitted = True
             skipping = True
             skip_level = 0
-            if not marker_added:
+            if _DREAMING_OMITTED_MARKER and not marker_added:
                 kept.append(_DREAMING_OMITTED_MARKER)
                 marker_added = True
             continue
@@ -149,7 +164,7 @@ def _strip_managed_dreaming_blocks(text: str) -> str:
             omitted = True
             skipping = True
             skip_level = len(dreaming_match.group(1))
-            if not marker_added:
+            if _DREAMING_OMITTED_MARKER and not marker_added:
                 kept.append(_DREAMING_OMITTED_MARKER)
                 marker_added = True
             continue
