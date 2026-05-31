@@ -39,22 +39,42 @@ def _tool_call(selected: list[dict], *, fallback: bool = False, fallback_reason:
     ]
 
 
-def test_explicit_recipe_activation_keeps_recipe_candidate() -> None:
-    """명시적 실행/브리핑 요청이면 recipe 후보를 top-k에 유지한다."""
+def test_explicit_recipe_activation_prioritizes_recipe_candidate() -> None:
+    """명시적 실행/브리핑 요청이면 recipe 후보를 skill보다 먼저 노출한다."""
     result = normalize_selector_response(
         user_message="매일 아침 최신 AI 뉴스 브리핑을 보내줘",
         known_assets=KNOWN_ASSETS,
         tool_calls=_tool_call(
             [
+                {"type": "skill", "name": "news-search-skill", "confidence": 0.95, "reason": "news source"},
                 {"type": "recipe", "name": "ai-report", "confidence": 0.91, "reason": "scheduled briefing"},
-                {"type": "skill", "name": "news-search-skill", "confidence": 0.72, "reason": "news source"},
             ]
         ),
     )
 
     assert result.selected == [
         AssetCandidate(type="recipe", name="ai-report", confidence=0.91, reason="scheduled briefing"),
-        AssetCandidate(type="skill", name="news-search-skill", confidence=0.72, reason="news source"),
+        AssetCandidate(type="skill", name="news-search-skill", confidence=0.95, reason="news source"),
+    ]
+    assert result.fallback_required is False
+
+
+def test_explicit_recipe_activation_prioritizes_recipe_over_higher_confidence_skill() -> None:
+    """recipe-like 명시 요청에서는 skill confidence가 더 높아도 recipe를 먼저 노출한다."""
+    result = normalize_selector_response(
+        user_message="AI 뉴스 아침 브리핑 리포트를 보내줘",
+        known_assets=KNOWN_ASSETS,
+        tool_calls=_tool_call(
+            [
+                {"type": "skill", "name": "news-search-skill", "confidence": 0.99, "reason": "news lookup"},
+                {"type": "recipe", "name": "ai-report", "confidence": 0.70, "reason": "briefing workflow"},
+            ]
+        ),
+    )
+
+    assert result.selected == [
+        AssetCandidate(type="recipe", name="ai-report", confidence=0.70, reason="briefing workflow"),
+        AssetCandidate(type="skill", name="news-search-skill", confidence=0.99, reason="news lookup"),
     ]
     assert result.fallback_required is False
 
