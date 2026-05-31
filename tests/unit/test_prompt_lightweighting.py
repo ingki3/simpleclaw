@@ -116,6 +116,22 @@ def test_assemble_prompt_strips_general_html_comments() -> None:
     assert "보존할 기억" in assembled
 
 
+def test_assemble_prompt_strips_managed_marker_tail_comments() -> None:
+    """마크다운 목록에 남은 managed marker 설명 꼬리도 system prompt에서 제거한다."""
+    memory = _persona(
+        FileType.MEMORY,
+        "Memory",
+        " ~ <!-- /managed:dreaming:journal -->:\n\n## Runtime Paths\n보존",
+    )
+
+    assembled = assemble_prompt([memory], token_budget=4096).assembled_text
+
+    assert "<!--" not in assembled
+    assert "-->" not in assembled
+    assert "managed:dreaming" not in assembled
+    assert "Runtime Paths" in assembled
+
+
 def test_assemble_prompt_normalizes_legacy_understanding_summary_rule() -> None:
     """구 AGENT.md의 항상 이해 요약 지시를 복잡 작업 한정 규칙으로 정규화한다."""
     agent = _persona(
