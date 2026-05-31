@@ -43,7 +43,8 @@ def test_assemble_prompt_replaces_dreaming_update_and_insight_blocks() -> None:
     assert "업데이트 1" not in assembled
     assert "Dreaming Insights" not in assembled
     assert "Dreaming Updates" not in assembled
-    assert "Dreaming-managed memory omitted" in assembled
+    assert "Dreaming managed sections omitted" not in assembled
+    assert "Dreaming-managed memory omitted" not in assembled
     assert "보존" in assembled
     assert "수동 메모" in assembled
 
@@ -77,7 +78,11 @@ def test_assemble_prompt_omits_cluster_and_journal_managed_sections() -> None:
     assert "raw journal append" not in assembled
     assert "managed:dreaming:clusters" not in assembled
     assert "managed:dreaming:journal" not in assembled
-    assert "Dreaming-managed memory omitted" in assembled
+    assert "드리밍 사이클 설명" not in assembled
+    assert "드리밍 사이클이" not in assembled
+    assert "마커 안쪽에서만 dreaming" not in assembled
+    assert "Dreaming managed sections omitted" not in assembled
+    assert "Dreaming-managed memory omitted" not in assembled
     assert "수동 기억" in assembled
     assert "수동 메모" in assembled
 
