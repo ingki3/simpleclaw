@@ -225,6 +225,40 @@ async def test_empty_final_after_empty_tool_result_reports_not_found(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_zero_rows_tool_result_reports_not_found(
+    config_file, monkeypatch,
+):
+    """도구 결과가 0 rows 성격이면 빈 final 대신 '못 찾음'으로 답해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "김경열 골프 일정 검색 결과: 0 rows"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "conversation_search", {"query": "김경열 골프"}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "김경열님과 골프 일정을 넣어달라고 한 적이 있었나?",
+    )
+
+    assert result.strip()
+    assert "찾지 못했습니다" in result
+    assert "응답을 생성하지 못했습니다" not in result
+    assert call_idx["i"] == 2
+
+
+@pytest.mark.asyncio
 async def test_empty_final_after_tool_error_reports_checked_but_failed(
     config_file, monkeypatch,
 ):

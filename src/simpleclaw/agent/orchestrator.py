@@ -233,6 +233,30 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE = (
 _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE = (
     "확인은 했지만 답변을 마무리하지 못했습니다. 확인한 결과: {detail}"
 )
+_TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
+    "0 chars",
+    "0 rows",
+    "0 row",
+    "no rows",
+    "no row",
+    "no results",
+    "not found",
+    "검색 결과가 없습니다",
+    "결과 없음",
+    "없음",
+    "없습니다",
+    "못 찾",
+    "찾지 못",
+)
+_TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS = (
+    "error",
+    "traceback",
+    "exception",
+    "timeout",
+    "failed",
+    "오류",
+    "실패",
+)
 
 
 def _fallback_for_empty_final_after_tools(
@@ -253,22 +277,13 @@ def _fallback_for_empty_final_after_tools(
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
     lowered = stripped.lower()
-    if (
-        lowered.startswith("error")
-        or "traceback" in lowered
-        or "exception" in lowered
-        or "failed" in lowered
-    ):
+    if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS):
         detail = stripped.splitlines()[0][:240]
         return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
 
-    if (
-        "0 chars" in lowered
-        or "no rows" in lowered
-        or "no results" in lowered
-        or "not found" in lowered
-        or "검색 결과가 없습니다" in stripped
-        or "결과 없음" in stripped
+    if any(
+        marker in lowered or marker in stripped
+        for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS
     ):
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
@@ -276,6 +291,7 @@ def _fallback_for_empty_final_after_tools(
     return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(
         detail=f"{name}: {detail}",
     )
+
 
 
 # BIZ-141 — forced final-answer LLM 호출이 provider 측에서 hang 하면 메시지가
@@ -890,6 +906,7 @@ class AgentOrchestrator:
                         tool_results_for_empty_final,
                     )
                 return _EMPTY_DIRECT_RESPONSE_MESSAGE
+
 
             # tool_calls가 있으면 실행 후 결과를 메시지에 추가
             logger.info(
