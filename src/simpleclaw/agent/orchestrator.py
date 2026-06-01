@@ -224,6 +224,63 @@ _BUDGET_EXHAUSTED_HINT_SUFFIX = (
 _EMPTY_DIRECT_RESPONSE_MESSAGE = (
     "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
 )
+_EMPTY_FINAL_AFTER_TOOL_RESULT_MESSAGE = (
+    "도구 결과는 확인했지만 모델이 최종 답변을 비워 반환했습니다. "
+    "마지막 도구 결과를 기준으로 답변드립니다: {snippet}"
+)
+_EMPTY_RESULT_INDICATORS = (
+    "0 rows",
+    "0 row",
+    "0 chars",
+    "no rows",
+    "no row",
+    "no results",
+    "not found",
+    "없음",
+    "없습니다",
+    "못 찾",
+    "찾지 못",
+    "결과 없음",
+)
+_TOOL_ERROR_INDICATORS = (
+    "error:",
+    "traceback",
+    "exception",
+    "timeout",
+    "failed",
+    "오류",
+    "실패",
+)
+
+
+def _empty_final_answer_tool_fallback(messages: list[dict]) -> str | None:
+    """도구 실행 후 빈 final-answer를 마지막 tool result 기반 안전 답변으로 바꾼다.
+
+    Gemini가 도구 결과를 받은 뒤 `tool_calls=None, text=""`를 돌려주면
+    채널 fallback만 노출되어 사용자는 실제 조회 결과를 잃는다. tool 역할
+    메시지가 이번 turn에 존재할 때만 보수적인 요약을 반환해 일반 대화의
+    빈 응답 처리와 분리한다.
+    """
+    last_tool_message = next(
+        (msg for msg in reversed(messages) if msg.get("role") == "tool"),
+        None,
+    )
+    if last_tool_message is None:
+        return None
+
+    content = str(last_tool_message.get("content") or "").strip()
+    tool_name = str(last_tool_message.get("name") or "도구")
+    if not content:
+        return f"{tool_name} 결과를 확인했지만 관련 기록을 찾지 못했습니다."
+
+    lowered = content.lower()
+    snippet = content.replace("\n", " ")[:500]
+    if any(indicator in lowered for indicator in _TOOL_ERROR_INDICATORS):
+        return f"{tool_name} 도구 실행 중 오류가 발생했습니다: {snippet}"
+    if any(indicator in lowered for indicator in _EMPTY_RESULT_INDICATORS):
+        return f"{tool_name} 결과를 확인했지만 관련 기록을 찾지 못했습니다. ({snippet})"
+    return _EMPTY_FINAL_AFTER_TOOL_RESULT_MESSAGE.format(snippet=snippet)
+
 
 # BIZ-141 — forced final-answer LLM 호출이 provider 측에서 hang 하면 메시지가
 # 영구 침묵하는 사고를 막기 위한 hard timeout. 일반 응답 시간(통상 1~3초) 대비
@@ -824,7 +881,10 @@ class AgentOrchestrator:
             if not response.tool_calls:
                 logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
                 final_text = (response.text or "").strip()
-                return final_text or _EMPTY_DIRECT_RESPONSE_MESSAGE
+                if final_text:
+                    return final_text
+                tool_fallback = _empty_final_answer_tool_fallback(messages)
+                return tool_fallback or _EMPTY_DIRECT_RESPONSE_MESSAGE
 
             # tool_calls가 있으면 실행 후 결과를 메시지에 추가
             logger.info(

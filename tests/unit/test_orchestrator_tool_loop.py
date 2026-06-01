@@ -194,6 +194,68 @@ async def test_empty_direct_text_response_returns_fallback(config_file):
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_tool_result_returns_tool_fallback(
+    config_file, monkeypatch,
+):
+    """도구 실행 뒤 빈 final-answer가 와도 일반 빈 응답 fallback으로 빠지지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "김경열 골프 일정 검색 결과: 0 rows"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "conversation_search", {"query": "김경열 골프"}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("김경열님과 골프 일정을 넣어달라고 한 적이 있었나?")
+
+    assert result.strip()
+    assert "응답을 생성하지 못했습니다" not in result
+    assert "확인했지만" in result
+    assert "찾지 못했습니다" in result
+    assert "김경열 골프" in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_tool_error_mentions_error(config_file, monkeypatch):
+    """마지막 도구 결과가 오류이면 빈 final-answer 대신 오류 사실을 사용자에게 알려야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Error: calendar backend timeout"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "calendar_search", {"query": "골프"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("골프 일정 찾아줘")
+
+    assert result.strip()
+    assert "도구 실행 중 오류" in result
+    assert "calendar backend timeout" in result
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):
