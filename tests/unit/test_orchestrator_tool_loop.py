@@ -194,6 +194,68 @@ async def test_empty_direct_text_response_returns_fallback(config_file):
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_empty_tool_result_reports_not_found(
+    config_file, monkeypatch,
+):
+    """도구가 빈 결과를 반환한 뒤 LLM final 이 비면 '못 찾음'으로 답해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return ""
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "sqlite3 conversations.db SELECT ..."}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("예전에 김경열님과 골프 일정 넣었나?")
+
+    assert "찾지 못했습니다" in result
+    assert "빈 응답" not in result
+    assert call_idx["i"] == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_tool_error_reports_checked_but_failed(
+    config_file, monkeypatch,
+):
+    """도구 오류 뒤 빈 final 이 오면 재질문 대신 확인 실패 사실을 알려야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Error: sqlite3 database is locked"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "sqlite3 conversations.db SELECT ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("예전 골프 일정 확인해줘")
+
+    assert "확인 중 오류" in result
+    assert "sqlite3 database is locked" in result
+    assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):
