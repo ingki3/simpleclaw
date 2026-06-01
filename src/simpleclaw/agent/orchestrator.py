@@ -224,6 +224,59 @@ _BUDGET_EXHAUSTED_HINT_SUFFIX = (
 _EMPTY_DIRECT_RESPONSE_MESSAGE = (
     "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
 )
+_TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE = (
+    "확인해 봤지만 관련 기록을 찾지 못했습니다."
+)
+_TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE = (
+    "확인 중 오류가 발생해 답변을 마무리하지 못했습니다: {detail}"
+)
+_TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE = (
+    "확인은 했지만 답변을 마무리하지 못했습니다. 확인한 결과: {detail}"
+)
+
+
+def _fallback_for_empty_final_after_tools(
+    tool_results: list[tuple[str, str]],
+) -> str:
+    """도구 실행 후 LLM final 텍스트가 비었을 때 사용자 가시 fallback을 만든다.
+
+    도구 결과까지 얻은 턴에서 “한 번 더 말해 달라”로 끝내면 이미 확인한
+    사실(특히 빈 검색 결과)을 버리게 된다. 마지막 도구 결과를 보수적으로
+    해석해, 빈 결과는 “못 찾음”, 오류 결과는 “확인 중 오류”로 분리한다.
+    """
+    if not tool_results:
+        return _EMPTY_DIRECT_RESPONSE_MESSAGE
+
+    name, content = tool_results[-1]
+    stripped = content.strip()
+    if not stripped:
+        return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
+
+    lowered = stripped.lower()
+    if (
+        lowered.startswith("error")
+        or "traceback" in lowered
+        or "exception" in lowered
+        or "failed" in lowered
+    ):
+        detail = stripped.splitlines()[0][:240]
+        return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
+
+    if (
+        "0 chars" in lowered
+        or "no rows" in lowered
+        or "no results" in lowered
+        or "not found" in lowered
+        or "검색 결과가 없습니다" in stripped
+        or "결과 없음" in stripped
+    ):
+        return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
+
+    detail = stripped.replace("\n", " ")[:240]
+    return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(
+        detail=f"{name}: {detail}",
+    )
+
 
 # BIZ-141 — forced final-answer LLM 호출이 provider 측에서 hang 하면 메시지가
 # 영구 침묵하는 사고를 막기 위한 hard timeout. 일반 응답 시간(통상 1~3초) 대비
@@ -785,6 +838,7 @@ class AgentOrchestrator:
         # BIZ-160 — budget-exhausted 분기에서 운영자가 패턴을 추적할 수 있도록
         # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
         invoked_tool_sequence: list[str] = []
+        tool_results_for_empty_final: list[tuple[str, str]] = []
 
         # BIZ-190 — 같은 turn 안에서 ``agent-browser`` 호출 횟수 카운터. 첫 시도가
         # 실패하면 LLM 이 같은 명령을 cli/execute_skill 채널로 재시도하면서 max-iter
@@ -824,7 +878,18 @@ class AgentOrchestrator:
             if not response.tool_calls:
                 logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
                 final_text = (response.text or "").strip()
-                return final_text or _EMPTY_DIRECT_RESPONSE_MESSAGE
+                if final_text:
+                    return final_text
+                if tool_results_for_empty_final:
+                    logger.warning(
+                        "Tool loop [%d] empty final answer after tool results; "
+                        "returning synthesized fallback",
+                        i + 1,
+                    )
+                    return _fallback_for_empty_final_after_tools(
+                        tool_results_for_empty_final,
+                    )
+                return _EMPTY_DIRECT_RESPONSE_MESSAGE
 
             # tool_calls가 있으면 실행 후 결과를 메시지에 추가
             logger.info(
@@ -881,6 +946,7 @@ class AgentOrchestrator:
                 # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
                 # 출력 변형(envelope 없음) 만 사용.
                 sanitized = sanitize_tool_output(result)
+                tool_results_for_empty_final.append((tc.name, sanitized))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
