@@ -290,6 +290,71 @@ async def test_empty_final_after_tool_error_reports_checked_but_failed(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_transcript_with_error_words_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """정상 transcript 본문 속 error/failed 단어는 도구 오류로 오판하지 않아야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Transcript:\n"
+            "오늘 영상에서는 error recovery와 failed attempt를 설명하지만, "
+            "도구 실행 자체는 정상 완료됐습니다."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 유튜브 요약해줘")
+
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "확인 중 오류" not in result
+    assert "Transcript:" in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_command_failed_header_reports_error(
+    config_file, monkeypatch,
+):
+    """명시적인 오류 헤더는 계속 확인 실패 fallback으로 분류해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Command failed: summarize exited with status 1\nstderr: network timeout"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 유튜브 요약해줘")
+
+    assert "확인 중 오류" in result
+    assert "Command failed" in result
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):

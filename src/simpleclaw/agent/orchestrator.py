@@ -253,15 +253,45 @@ _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
     "못 찾",
     "찾지 못",
 )
-_TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS = (
+_TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
     "error",
     "traceback",
     "exception",
     "timeout",
     "failed",
+    "command failed",
+    "tool error",
     "오류",
     "실패",
 )
+
+
+def _is_explicit_tool_error_result(content: str) -> bool:
+    """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다.
+
+    정상 transcript/요약 본문에는 ``error``/``failed`` 같은 단어가 자연어로 섞일 수
+    있다. 그래서 전체 본문 검색 대신 첫 non-empty line 또는 JSON-style envelope 처럼
+    도구 실행 실패를 직접 선언하는 초반 헤더만 오류로 본다.
+    """
+    stripped = content.strip()
+    if not stripped:
+        return False
+
+    lowered = stripped.lower()
+    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
+        return True
+
+    for line in stripped.splitlines()[:3]:
+        header = line.strip().lower()
+        if not header:
+            continue
+        return any(
+            header == prefix
+            or header.startswith(f"{prefix}:")
+            or header.startswith(f"{prefix} ")
+            for prefix in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
+        )
+    return False
 
 
 def _fallback_for_empty_final_after_tools(
@@ -282,7 +312,7 @@ def _fallback_for_empty_final_after_tools(
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
     lowered = stripped.lower()
-    if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS):
+    if _is_explicit_tool_error_result(stripped):
         detail = stripped.splitlines()[0][:240]
         return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
 
