@@ -913,6 +913,7 @@ _TELEGRAM_STREAMING_DEFAULTS: dict = {
     "min_delta_chars": 40,
     "initial_placeholder": "…",
     "final_only_for_cron": True,
+    "tool_progress": True,
 }
 
 _TELEGRAM_DEFAULTS: dict = {
@@ -957,6 +958,12 @@ def _coerce_streaming_config(raw: object) -> dict:
     try:
         merged["final_only_for_cron"] = bool(
             raw.get("final_only_for_cron", merged["final_only_for_cron"])
+        )
+    except (TypeError, ValueError):
+        pass
+    try:
+        merged["tool_progress"] = bool(
+            raw.get("tool_progress", merged["tool_progress"])
         )
     except (TypeError, ValueError):
         pass

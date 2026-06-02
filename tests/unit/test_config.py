@@ -471,6 +471,7 @@ telegram:
         assert result["streaming"]["min_delta_chars"] == 40
         assert result["streaming"]["initial_placeholder"]
         assert result["streaming"]["final_only_for_cron"] is True
+        assert result["streaming"]["tool_progress"] is True
 
     def test_streaming_values_overridden(self, tmp_path: Path):
         """BIZ-259 — streaming 키가 명시되면 값이 그대로 로드된다."""
@@ -486,6 +487,7 @@ telegram:
     min_delta_chars: 64
     initial_placeholder: "처리 중…"
     final_only_for_cron: false
+    tool_progress: false
 """,
         )
         result = load_telegram_config(cfg)
@@ -494,6 +496,7 @@ telegram:
         assert result["streaming"]["min_delta_chars"] == 64
         assert result["streaming"]["initial_placeholder"] == "처리 중…"
         assert result["streaming"]["final_only_for_cron"] is False
+        assert result["streaming"]["tool_progress"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -188,3 +188,31 @@ class TestRecipeWriteThenLoadIntegration:
         assert result is not None
         assert result[1] == "test"
         assert "run integration test" in captured["rendered"]
+
+    @pytest.mark.asyncio
+    async def test_recipe_command_emits_progress_events(self, tmp_path):
+        """BIZ-329 — /recipe 명령 경로도 recipe start/complete 이벤트를 발행한다."""
+        recipes_dir = tmp_path / "recipes"
+        _write_recipe(recipes_dir, "daily", "do daily work")
+        events = []
+
+        async def fake_react_loop(rendered, **kwargs):
+            assert "do daily work" in rendered
+            return "ok"
+
+        async def on_progress(event):
+            events.append(event)
+
+        result = await try_recipe_command(
+            "/daily",
+            fake_react_loop,
+            recipes_dir=recipes_dir,
+            legacy_recipes_dir=None,
+            on_progress=on_progress,
+        )
+
+        assert result == ("ok", "daily")
+        assert [(e.kind, e.name, e.status) for e in events] == [
+            ("recipe", "daily", "start"),
+            ("recipe", "daily", "complete"),
+        ]
