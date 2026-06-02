@@ -299,13 +299,18 @@ async def test_empty_final_after_transcript_with_error_words_reports_generic_res
     async def fake_dispatch(tc):
         return (
             "Transcript:\n"
-            "오늘 영상에서는 error recovery와 failed attempt를 설명하지만, "
-            "도구 실행 자체는 정상 완료됐습니다."
+            "This video explains how an agent can fail when context is noisy.\n"
+            "The speaker also says previous approaches had an error rate problem.\n"
+            "하지만 이 텍스트는 정상적으로 추출된 유튜브 transcript 본문입니다."
         )
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
     responses = [
-        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "summarize", "args": "https://youtu.be/example --youtube auto"},
+        ),
         _text_response(""),
     ]
     call_idx = {"i": 0}
@@ -317,11 +322,12 @@ async def test_empty_final_after_transcript_with_error_words_reports_generic_res
 
     orch._router.send = fake_send
 
-    result = await orch.process_cron_message("이 유튜브 요약해줘")
+    result = await orch.process_cron_message("https://youtu.be/example")
 
     assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "execute_skill: Transcript:" in result
     assert "확인 중 오류" not in result
-    assert "Transcript:" in result
+    assert "한 번 더 말씀" not in result
 
 
 @pytest.mark.asyncio

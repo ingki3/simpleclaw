@@ -266,7 +266,7 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
 )
 
 
-def _is_explicit_tool_error_result(content: str) -> bool:
+def _tool_result_looks_like_explicit_error(content: str) -> bool:
     """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
     정상 transcript/요약 본문에는 ``error``/``failed`` 같은 단어가 자연어로 섞일 수
@@ -293,7 +293,6 @@ def _is_explicit_tool_error_result(content: str) -> bool:
         )
     return False
 
-
 def _fallback_for_empty_final_after_tools(
     tool_results: list[tuple[str, str]],
 ) -> str:
@@ -312,7 +311,7 @@ def _fallback_for_empty_final_after_tools(
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
     lowered = stripped.lower()
-    if _is_explicit_tool_error_result(stripped):
+    if _tool_result_looks_like_explicit_error(stripped):
         detail = stripped.splitlines()[0][:240]
         return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
 
