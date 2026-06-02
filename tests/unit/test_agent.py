@@ -1522,3 +1522,38 @@ class TestToolLoop:
         assert "fail in a prior turn" in _TOOL_USAGE_INSTRUCTION, (
             "BIZ-164 prompt guard missing — 과거 실패 도구 재시도 가드 한 줄이 누락됨"
         )
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_tool_loop_emits_progress_events_for_tool_call(self, config_file):
+        """BIZ-329 — tool start/complete 이벤트가 실제 dispatch 전후에 callback 으로 전달된다."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        mock_response_1 = MagicMock()
+        mock_response_1.text = ""
+        mock_response_1.tool_calls = [
+            ToolCall(id="call_1", name="cli", arguments={"command": "echo hello"})
+        ]
+        mock_response_1.raw_assistant_message = None
+
+        mock_response_2 = MagicMock()
+        mock_response_2.text = "done"
+        mock_response_2.tool_calls = None
+        mock_response_2.raw_assistant_message = None
+
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(side_effect=[mock_response_1, mock_response_2])
+        events = []
+
+        async def on_progress(event):
+            events.append(event)
+
+        response = await orchestrator.process_message(
+            "Run echo", 123, 456, on_progress=on_progress,
+        )
+
+        assert response == "done"
+        assert [(e.kind, e.name, e.status) for e in events] == [
+            ("command", "cli", "start"),
+            ("command", "cli", "complete"),
+        ]

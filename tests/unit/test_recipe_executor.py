@@ -51,6 +51,35 @@ class TestRecipeExecutor:
         assert "Hello Alice" in result.step_results[0].output
         assert "Monday" in result.step_results[0].output
 
+
+    @pytest.mark.asyncio
+    async def test_execute_recipe_emits_step_progress_events(self):
+        """BIZ-329 — step 기반 recipe executor 도 실제 step 시작/완료 이벤트를 발행한다."""
+        recipe = RecipeDefinition(
+            name="progress-recipe",
+            steps=[
+                RecipeStep(
+                    step_type=StepType.PROMPT,
+                    name="plan",
+                    content="make plan",
+                )
+            ],
+        )
+        events = []
+
+        async def on_progress(event):
+            events.append(event)
+
+        result = await execute_recipe(recipe, on_progress=on_progress)
+
+        assert result.success
+        assert [(e.kind, e.name, e.status) for e in events] == [
+            ("recipe", "progress-recipe", "start"),
+            ("recipe", "progress-recipe:plan", "start"),
+            ("recipe", "progress-recipe:plan", "complete"),
+            ("recipe", "progress-recipe", "complete"),
+        ]
+
     @pytest.mark.asyncio
     async def test_default_parameter_applied(self):
         recipe = load_recipe(FIXTURES / "daily-report" / "recipe.yaml")

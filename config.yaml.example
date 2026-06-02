@@ -126,6 +126,8 @@ telegram:
     initial_placeholder: "…"
     # Cron 트리거 응답은 강제로 비스트리밍 — 자동 알림이 부분 결과로 푸시되는 사고 방지.
     final_only_for_cron: true
+    # true 면 tool/skill/command/recipe 실행 start/complete/fail 을 placeholder 에 표시.
+    tool_progress: true
 
 # Admin API (BIZ-41 / BIZ-58) — Admin UI 백엔드.
 # 단일 운영자 가정으로 ``127.0.0.1`` 로컬 바인딩만 권장. 토큰은 시크릿 매니저 참조로

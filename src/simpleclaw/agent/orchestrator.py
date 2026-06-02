@@ -81,6 +81,11 @@ from simpleclaw.agent.builtin_tools import (
 )
 from simpleclaw.agent.clarify import ClarifyRequest, clarify_chat_id_var
 from simpleclaw.agent.commands import try_cron_command, try_recipe_command
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
@@ -599,6 +604,7 @@ class AgentOrchestrator:
         chat_id: int,
         *,
         on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> str:
         """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
@@ -636,7 +642,10 @@ class AgentOrchestrator:
                 # /recipe-name 명령어 확인 (e.g. /ai-report)
                 # BIZ-202: 레시피 디렉터리는 config 기반 — 봇/데몬 양쪽이 같은 절대 경로를 본다.
                 recipe_outcome = await try_recipe_command(
-                    text, self._tool_loop, recipes_dir=self._recipes_dir,
+                    text,
+                    self._tool_loop,
+                    recipes_dir=self._recipes_dir,
+                    on_progress=on_progress,
                 )
                 if recipe_outcome is not None:
                     recipe_result, recipe_name = recipe_outcome
@@ -651,7 +660,7 @@ class AgentOrchestrator:
                     return recipe_result
 
                 response_text = await self._tool_loop(
-                    text, on_text_delta=on_text_delta,
+                    text, on_text_delta=on_text_delta, on_progress=on_progress,
                 )
 
                 # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
@@ -749,6 +758,7 @@ class AgentOrchestrator:
         isolated: bool = False,
         *,
         on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> str:
         """Native Function Calling 루프를 실행한다.
 
@@ -957,7 +967,23 @@ class AgentOrchestrator:
                         })
                         continue
 
-                result = await self._dispatch_tool_call(tc)
+                progress_kind, progress_name = self._progress_identity_for_tool_call(tc)
+                await emit_progress_event(
+                    on_progress,
+                    ProgressEvent(progress_kind, progress_name, "start", tc.arguments),
+                )
+                try:
+                    result = await self._dispatch_tool_call(tc)
+                except Exception as exc:  # noqa: BLE001
+                    await emit_progress_event(
+                        on_progress,
+                        ProgressEvent(progress_kind, progress_name, "fail", str(exc)),
+                    )
+                    raise
+                await emit_progress_event(
+                    on_progress,
+                    ProgressEvent(progress_kind, progress_name, "complete", result),
+                )
                 # PRD §3.5.6 — 다음 턴의 ``role=tool`` 메시지로 들어가기
                 # 직전에 구조적 framing 토큰 / 제어문자를 제거한다. 도구
                 # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
@@ -1199,6 +1225,21 @@ class AgentOrchestrator:
                 chat_id=clarify_chat_id_var.get(),
             )
         return f"Error: unknown tool '{name}'."
+
+
+    @staticmethod
+    def _progress_identity_for_tool_call(tool_call: ToolCall) -> tuple[str, str]:
+        """ToolCall 을 사용자 표시용 progress 종류/이름으로 축약한다."""
+        name = tool_call.name
+        args = tool_call.arguments or {}
+        if name == "cli":
+            return "command", "cli"
+        if name == "execute_skill":
+            skill_name = str(args.get("skill_name") or "execute_skill")
+            if args.get("command"):
+                return "command", skill_name
+            return "skill", skill_name
+        return "tool", name
 
     def pop_pending_clarify(self, chat_id: int) -> ClarifyRequest | None:
         """채널이 ``process_message`` 후 호출 — pending clarify 를 회수·제거한다.
