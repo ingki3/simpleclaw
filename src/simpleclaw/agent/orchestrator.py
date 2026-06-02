@@ -253,15 +253,35 @@ _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
     "못 찾",
     "찾지 못",
 )
-_TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS = (
-    "error",
+_TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
+    "error:",
     "traceback",
-    "exception",
-    "timeout",
-    "failed",
-    "오류",
-    "실패",
+    "exception:",
+    "timeout:",
+    "failed:",
+    "command failed",
+    "오류:",
+    "실패:",
 )
+
+
+def _tool_result_looks_like_explicit_error(content: str) -> bool:
+    """도구 결과가 명시적 오류 envelope인지 보수적으로 판정한다.
+
+    정상 웹/유튜브 본문에는 "error", "failed", "오류" 같은 단어가 자연스럽게
+    포함될 수 있다. 따라서 빈 final answer fallback에서는 전체 본문을 훑지 않고,
+    첫 non-empty 줄이 오류 prefix로 시작하는 명시적 도구 실패만 오류로 분류한다.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        lowered = stripped.lower()
+        return any(
+            lowered.startswith(marker)
+            for marker in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
+        )
+    return False
 
 
 def _fallback_for_empty_final_after_tools(
@@ -282,7 +302,7 @@ def _fallback_for_empty_final_after_tools(
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
     lowered = stripped.lower()
-    if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_ERROR_MARKERS):
+    if _tool_result_looks_like_explicit_error(stripped):
         detail = stripped.splitlines()[0][:240]
         return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
 
