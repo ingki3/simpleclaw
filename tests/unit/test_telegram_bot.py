@@ -568,3 +568,34 @@ class TestTelegramBotStreaming:
         )
         response = await bot.handle_message("ping", 1, 1)
         assert response == "got ping"
+
+    @pytest.mark.asyncio
+    async def test_progress_event_edits_placeholder_and_finalize_removes_progress(self):
+        """BIZ-329 — progress 는 placeholder 에만 보이고 최종 답변에서는 제거된다."""
+        from simpleclaw.agent.progress import ProgressEvent
+
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=12, min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+
+        await sink.on_progress_event(
+            ProgressEvent(
+                kind="tool",
+                name="cli",
+                status="start",
+                detail={"command": "echo password=hunter2"},
+            )
+        )
+
+        assert fake.edits
+        progress_text = fake.edits[-1]["text"]
+        assert "진행 상황" in progress_text
+        assert "cli 시작" in progress_text
+        assert "hunter2" not in progress_text
+
+        await sink.finalize("최종 답변")
+
+        assert fake.edits[-1]["text"] == "최종 답변"
+        assert "진행 상황" not in fake.edits[-1]["text"]

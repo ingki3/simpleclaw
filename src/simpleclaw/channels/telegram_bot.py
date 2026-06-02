@@ -25,6 +25,11 @@ import time
 from collections import OrderedDict
 from typing import Awaitable, Callable
 
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    format_progress_line,
+)
 from simpleclaw.agent.clarify import (
     ClarifyOption,
     ClarifyRequest,
@@ -189,6 +194,7 @@ class TelegramStreamSink:
         self._last_edit_ts: float = 0.0
         self._lock = asyncio.Lock()
         self._finalized = False
+        self._progress_lines: list[str] = []
 
     @property
     def message_id(self) -> int | None:
@@ -232,7 +238,24 @@ class TelegramStreamSink:
             now = time.monotonic()
             if now - self._last_edit_ts < self._min_interval_s:
                 return
-            await self._commit_edit(self._accumulated)
+            await self._commit_edit(self._render_stream_text())
+
+    def _render_stream_text(self) -> str:
+        """누적 텍스트와 최근 progress 이벤트를 placeholder 용 본문으로 합친다."""
+        base = self._accumulated.strip()
+        progress = "\n".join(self._progress_lines[-6:])
+        if progress:
+            body = f"{base}\n\n진행 상황\n{progress}" if base else f"진행 상황\n{progress}"
+            return body
+        return self._accumulated
+
+    async def on_progress_event(self, event: ProgressEvent) -> None:
+        """도구/레시피 progress 이벤트를 placeholder 메시지에 compact 하게 표시한다."""
+        if self._finalized or self._message_id is None:
+            return
+        async with self._lock:
+            self._progress_lines.append(format_progress_line(event))
+            await self._commit_edit(self._render_stream_text())
 
     async def _commit_edit(self, text: str) -> None:
         """``editMessageText`` 호출. 동일 텍스트면 skip, 실패는 WARN."""
@@ -417,6 +440,7 @@ class TelegramBot:
         chat_id: int,
         *,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> str | None:
         """수신 메시지를 인증 후 처리한다.
 
@@ -424,7 +448,8 @@ class TelegramBot:
 
         BIZ-259: ``on_text_delta`` 가 주어지면 message_handler 에 kwarg 로 전달한다.
         오케스트레이터는 LLM 라우터의 ``stream()`` 경로로 전환되어 텍스트 델타를
-        sink 콜백으로 흘려보낸다.
+        sink 콜백으로 흘려보낸다. BIZ-329: ``on_progress`` 는 실제 tool/recipe
+        런타임 이벤트를 같은 placeholder 에 compact 하게 표시한다.
         """
         if not self.is_authorized(user_id, chat_id):
             self.log_access(user_id, chat_id, authorized=False)
@@ -437,10 +462,14 @@ class TelegramBot:
 
         if self._message_handler:
             try:
-                if on_text_delta is not None:
+                if on_text_delta is not None or on_progress is not None:
+                    kwargs = {}
+                    if on_text_delta is not None:
+                        kwargs["on_text_delta"] = on_text_delta
+                    if on_progress is not None:
+                        kwargs["on_progress"] = on_progress
                     return await self._message_handler(
-                        text, user_id, chat_id,
-                        on_text_delta=on_text_delta,
+                        text, user_id, chat_id, **kwargs,
                     )
                 return await self._message_handler(text, user_id, chat_id)
             except Exception:
@@ -690,6 +719,11 @@ class TelegramBot:
                         response = await self.handle_message(
                             update.message.text, user_id, chat_id,
                             on_text_delta=sink.on_text_delta,
+                            on_progress=(
+                                sink.on_progress_event
+                                if bool(self._streaming_config.get("tool_progress", True))
+                                else None
+                            ),
                         )
                         # BIZ-260 + BIZ-259 통합 — clarify 가 pending 이면 sink 의
                         # placeholder/스트리밍 결과를 버리고 인라인 키보드 경로로 전환.
