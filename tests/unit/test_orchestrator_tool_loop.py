@@ -290,6 +290,47 @@ async def test_empty_final_after_tool_error_reports_checked_but_failed(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_transcript_with_error_words_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """정상 transcript 본문 속 error/failed 단어는 도구 오류로 오판하지 않아야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Transcript:\n"
+            "This video explains how an agent can fail when context is noisy.\n"
+            "The speaker also says previous approaches had an error rate problem.\n"
+            "하지만 이 텍스트는 정상적으로 추출된 유튜브 transcript 본문입니다."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "summarize", "args": "https://youtu.be/example --youtube auto"},
+        ),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("https://youtu.be/example")
+
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "execute_skill: Transcript:" in result
+    assert "확인 중 오류" not in result
+    assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):
