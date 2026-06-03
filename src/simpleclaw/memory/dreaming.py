@@ -98,6 +98,8 @@ from simpleclaw.memory.suggestions import (
     BlocklistStore,
     SuggestionStore,
 )
+from simpleclaw.proactive.models import ProactiveOpportunity
+from simpleclaw.proactive.store import OpportunityStore
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +238,8 @@ class DreamingPipeline:
         safety_backup_manager: SafetyBackupManager | None = None,
         memory_backup_dir: str | Path | None = None,
         max_tokens: dict[str, int | None] | None = None,
+        proactive_extractor=None,
+        opportunity_store: OpportunityStore | None = None,
     ) -> None:
         """드리밍 파이프라인을 초기화한다.
 
@@ -311,6 +315,10 @@ class DreamingPipeline:
                 추가하고, (2) 추출된 결과(memory bullet, user_insights, meta items,
                 active_projects role/recent_summary, soul/agent updates)에서 비-1차
                 언어 항목을 자동 드롭한다.
+            proactive_extractor: BIZ-333 — Dreaming 코퍼스에서 proactive 후보를
+                생성하는 optional hook. None 이면 후보 추출을 건너뛰어 레거시 호환.
+            opportunity_store: BIZ-333 — 생성 후보를 pending queue에 upsert하는 저장소.
+                None 이면 hook이 있어도 저장하지 않는다.
 
         BIZ-72: 모든 dreaming 쓰기는 위 managed 섹션 마커 안쪽으로만 이뤄지며,
         마커가 없는 파일은 fail-closed로 처리된다(쓰기 시도 시 abort, 파일 보존).
@@ -455,6 +463,11 @@ class DreamingPipeline:
         # 키: ``memory`` / ``user`` / ``soul`` / ``agent`` / ``active_projects`` / ``cluster``.
         # ``active_projects`` 키가 빠지면 ``user`` 캡으로 떨어진다(USER.md 산출물이라 의미상 동일).
         self._max_tokens: dict[str, int | None] = dict(max_tokens or {})
+
+        # BIZ-333 — Dreaming은 후보 생성까지만 수행한다. 실제 발송/cron 생성은
+        # presenter/action executor 책임이므로 여기서는 pending queue upsert 외 부작용이 없다.
+        self._proactive_extractor = proactive_extractor
+        self._opportunity_store = opportunity_store
 
         # BIZ-299 — 한 회차의 파일별 LLM 호출 메트릭(duration_ms, 토큰 사용량 등).
         # ``run()`` 시점에 초기화되고, 정상/예외 종료 직전에 ``run_record.details``
@@ -2295,12 +2308,15 @@ class DreamingPipeline:
                 )
             return None
 
+        proactive_opportunities = self._extract_and_store_proactive_opportunities(id_pairs)
+
         # 결과 산출물이 전혀 없으면 None 반환 (테스트/호출자가 빈 회차를 식별할 수 있도록).
-        # active-projects만 갱신된 경우(다른 산출물이 모두 비어 있음)에도 None을 반환하지
-        # 않는다 — sidecar/USER.md 에 의미 있는 변경이 일어났음을 호출자가 인지해야 한다.
+        # active-projects/proactive 후보만 갱신된 경우(다른 산출물이 모두 비어 있음)에도
+        # None을 반환하지 않는다 — sidecar/queue 에 의미 있는 변경이 일어났음을 호출자가
+        # 인지해야 한다.
         if not any(
             [memory_summary, user_insights, soul_updates, agent_updates,
-             cluster_summary_text, active_projects_rendered]
+             cluster_summary_text, active_projects_rendered, proactive_opportunities]
         ):
             if run_record is not None and self._runs_store is not None:
                 details: dict = {}
@@ -2327,6 +2343,8 @@ class DreamingPipeline:
             per_file = self._snapshot_per_file_metrics()
             if per_file:
                 details["per_file"] = per_file
+            if proactive_opportunities:
+                details["proactive_opportunity_count"] = len(proactive_opportunities)
             self._runs_store.finish(
                 run_record,
                 input_msg_count=len(source_msg_ids),
@@ -2338,6 +2356,36 @@ class DreamingPipeline:
             summary=entry_summary,
             source=f"dreaming_{datetime.now().strftime('%Y-%m-%d')}",
         )
+
+    def _extract_and_store_proactive_opportunities(
+        self, id_pairs: list[tuple[int, ConversationMessage]]
+    ) -> list[ProactiveOpportunity]:
+        """BIZ-333 — Dreaming 코퍼스에서 proactive 후보를 만들고 pending queue에 저장한다.
+
+        hook 실패는 memory/user write 성공을 되돌릴 이유가 아니므로 logging 후 skip 한다.
+        반환값은 성공적으로 upsert 된 opportunity 목록이며, 어떤 경로에서도 Telegram 발송이나
+        cron 생성 같은 외부 부작용은 수행하지 않는다.
+        """
+        if self._proactive_extractor is None or self._opportunity_store is None:
+            return []
+        try:
+            opportunities = self._proactive_extractor.extract(id_pairs)
+        except Exception:
+            logger.exception("Dreaming proactive extractor failed; skipping opportunities")
+            return []
+
+        stored: list[ProactiveOpportunity] = []
+        for opportunity in opportunities:
+            try:
+                stored.append(
+                    self._opportunity_store.upsert_pending_by_cooldown_key(opportunity)
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to store proactive opportunity cooldown_key=%s",
+                    getattr(opportunity, "cooldown_key", ""),
+                )
+        return stored
 
     def _snapshot_per_file_metrics(self) -> dict[str, dict]:
         """BIZ-299 — 이번 사이클의 파일별 LLM 호출 메트릭을 dict 로 복사한다.
