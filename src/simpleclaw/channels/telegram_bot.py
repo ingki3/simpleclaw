@@ -38,6 +38,10 @@ from simpleclaw.agent.clarify import (
 )
 from simpleclaw.channels.models import AccessAttempt
 from simpleclaw.llm.models import MultimodalAttachment
+from simpleclaw.proactive.presenter import (
+    build_proactive_callback_data,
+    parse_proactive_callback_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +378,7 @@ class TelegramBot:
         message_handler: Callable[..., Awaitable[str]] | None = None,
         clarify_provider: Callable[[int], ClarifyRequest | None] | None = None,
         streaming_config: dict | None = None,
+        proactive_callback_handler: Callable[..., Awaitable[str]] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._whitelist_user_ids = set(whitelist_user_ids or [])
@@ -396,6 +401,57 @@ class TelegramBot:
         # final_only_for_cron 는 본 인바운드 경로(/cron 명령 응답 외) 에서는 무관 —
         # CronScheduler 의 notifier 가 별도 경로라 인바운드 sink 와 격리된다.
         self._streaming_config = streaming_config or {}
+        self._proactive_callback_handler = proactive_callback_handler
+
+    def set_proactive_callback_handler(
+        self, handler: Callable[..., Awaitable[str]] | None
+    ) -> None:
+        """proactive 제안 버튼 callback을 처리할 async handler를 연결한다."""
+        self._proactive_callback_handler = handler
+
+    async def send_proactive_opportunity(
+        self, *, chat_id: int, opportunity, text: str | None = None
+    ) -> None:
+        """proactive 제안을 InlineKeyboard와 함께 Telegram으로 보낸다."""
+        if self._application is None:
+            raise RuntimeError("Telegram application is not started")
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        rows = [
+            [
+                InlineKeyboardButton(
+                    "등록",
+                    callback_data=build_proactive_callback_data(
+                        "accept", opportunity.id
+                    ),
+                ),
+                InlineKeyboardButton(
+                    "시간 변경",
+                    callback_data=build_proactive_callback_data("edit", opportunity.id),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "나중에",
+                    callback_data=build_proactive_callback_data(
+                        "snooze", opportunity.id
+                    ),
+                ),
+                InlineKeyboardButton(
+                    "아니요",
+                    callback_data=build_proactive_callback_data(
+                        "dismiss", opportunity.id
+                    ),
+                ),
+            ],
+        ]
+        await self._application.bot.send_message(
+            chat_id=chat_id,
+            text=(text or opportunity.message_draft or opportunity.title)[
+                :TELEGRAM_MESSAGE_LIMIT
+            ],
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
 
     def is_authorized(self, user_id: int, chat_id: int) -> bool:
         """사용자/채팅이 화이트리스트에 포함되어 있는지 확인한다.
@@ -631,6 +687,27 @@ class TelegramBot:
             return
 
         self.log_access(user_id, chat_id, authorized=True)
+
+        proactive = parse_proactive_callback_data(data)
+        if proactive is not None:
+            action, opportunity_id = proactive
+            if self._proactive_callback_handler is None:
+                await query.answer(text="이 제안은 만료되었습니다.", show_alert=False)
+                return
+            try:
+                response = await self._proactive_callback_handler(
+                    action, opportunity_id
+                )
+            except Exception:  # noqa: BLE001 — callback UX 보호.
+                logger.exception("proactive callback handler error")
+                response = "제안 처리 중 오류가 발생했습니다."
+            try:
+                await query.answer(text=response[:200], show_alert=False)
+            except Exception:
+                logger.debug("callback_query.answer() failed (proactive)")
+            if response:
+                await query.message.reply_text(response[:TELEGRAM_MESSAGE_LIMIT])
+            return
 
         option_index = decode_callback_data(data)
         if option_index is None:
