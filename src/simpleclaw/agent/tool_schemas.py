@@ -143,6 +143,34 @@ _SKILL_DOCS_TOOL = ToolDefinition(
     },
 )
 
+# BIZ-325 — Active Memory 온디맨드 검색 도구. 자동 RAG 주입만으로 부족할 때
+# LLM이 별도 질의어로 장기기억/과거 대화를 명시 회상하도록 노출한다.
+_SEARCH_MEMORY_TOOL = ToolDefinition(
+    name="search_memory",
+    description=(
+        "과거 대화와 DB-backed 장기기억을 의미 기반으로 검색한다. 최근 대화나 "
+        "현재 시스템 프롬프트에 없는 사용자 선호, 프로젝트 맥락, 과거 결정이 "
+        "필요할 때 사용한다. 실시간 사실, 파일 내용, 시스템 상태 확인에는 사용하지 "
+        "말고 해당 전용 도구를 사용한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "찾고 싶은 기억/과거 대화의 자연어 질의",
+            },
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "반환할 최대 항목 수 (1~10, 기본값은 메모리 설정 사용)",
+            },
+        },
+        "required": ["query"],
+    },
+)
+
 # BIZ-260 — clarify 다지선다 도구. 텔레그램 등 인라인 키보드를 지원하는 채널은
 # ``options`` 를 버튼으로 렌더한다. 호출 즉시 ReAct 루프가 종결되어 LLM 의 다음
 # 텍스트 응답을 기다리지 않는다 — clarify 의 본 의도가 "사용자에게 되묻기" 이므로
@@ -242,6 +270,7 @@ def build_tool_definitions(
         _FILE_WRITE_TOOL,
         _FILE_MANAGE_TOOL,
         _SKILL_DOCS_TOOL,
+        _SEARCH_MEMORY_TOOL,
         _CLARIFY_TOOL,
     ]
 
