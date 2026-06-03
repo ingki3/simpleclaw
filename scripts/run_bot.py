@@ -46,6 +46,8 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
 from simpleclaw.memory.safety_backup import SafetyBackupManager
+from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
+from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security.secrets import configure_default_manager
 
 logging.basicConfig(
@@ -226,6 +228,32 @@ async def main():
             return None
         return str(Path(path_str).expanduser())
 
+    # BIZ-333 — Dreaming 회차에서 proactive 후보만 추출해 pending queue 에 적재한다.
+    # 기본값은 off 이며, daemon.proactive.extractors.dreaming.enabled=true 일 때만 주입된다.
+    proactive_cfg = daemon_config.get("proactive", {}) or {}
+    dreaming_proactive_cfg = (
+        proactive_cfg.get("extractors", {}).get("dreaming", {}) or {}
+    )
+    proactive_extractor = None
+    opportunity_store = None
+    if bool(proactive_cfg.get("enabled")) and bool(
+        dreaming_proactive_cfg.get("enabled")
+    ):
+        repeated_task_cfg = dreaming_proactive_cfg.get("repeated_task", {}) or {}
+        proactive_extractor = DreamingOpportunityExtractor(
+            min_confidence=float(proactive_cfg.get("min_confidence", 0.75)),
+            lookback_days=int(dreaming_proactive_cfg.get("lookback_days", 14)),
+            repeated_task_min_occurrences=int(
+                repeated_task_cfg.get("min_occurrences", 5)
+            ),
+            repeated_task_time_bucket_hours=int(
+                repeated_task_cfg.get("time_bucket_hours", 2)
+            ),
+        )
+        opportunity_store = OpportunityStore(
+            Path(_expand(proactive_cfg.get("store_file")))
+        )
+
     # BIZ-132 / BIZ-133 / BIZ-138 — 사이클 직전 통째 백업 매니저. 위험 파일 목록(라이브
     # 페르소나 4종 + dreaming sidecar 들 + 데몬 상태 파일 + DB)을 매 사이클 직전
     # 시점으로 보존한다. 모든 경로는 config 와 영구 디렉터리(``~/.simpleclaw/``)에서
@@ -316,6 +344,8 @@ async def main():
         # ``DreamingPipeline`` 의 ``summarize_*`` 호출이 각자 자기 key 의 max_tokens 를
         # ``LLMRequest.max_tokens`` 로 전달 — None / 0 / 음수는 프로바이더 기본값으로 회귀.
         max_tokens=dreaming_config.get("max_tokens"),
+        proactive_extractor=proactive_extractor,
+        opportunity_store=opportunity_store,
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))

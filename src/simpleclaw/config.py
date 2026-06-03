@@ -238,6 +238,19 @@ _DAEMON_DEFAULTS: dict = {
         "dismissed_cooldown_days": 30,
         "min_confidence": 0.75,
         "store_file": "~/.simpleclaw-agent/default/proactive_opportunities.jsonl",
+        "extractors": {
+            "dreaming": {
+                "enabled": False,
+                "lookback_days": 14,
+                "repeated_task": {
+                    "min_occurrences": 5,
+                    "time_bucket_hours": 2,
+                },
+                "interest_based": {
+                    "enabled": False,
+                },
+            },
+        },
     },
 }
 
@@ -323,6 +336,20 @@ def _coerce_proactive_policy(raw: object) -> dict:
     mode = str(raw.get("mode", defaults["mode"]) or defaults["mode"]).lower()
     if mode not in {"off", "low", "normal", "high"}:
         mode = defaults["mode"]
+    extractors = raw.get("extractors", {})
+    if not isinstance(extractors, dict):
+        extractors = {}
+    dreaming_raw = extractors.get("dreaming", {})
+    if not isinstance(dreaming_raw, dict):
+        dreaming_raw = {}
+    dreaming_defaults = defaults["extractors"]["dreaming"]
+    repeated_raw = dreaming_raw.get("repeated_task", {})
+    if not isinstance(repeated_raw, dict):
+        repeated_raw = {}
+    interest_raw = dreaming_raw.get("interest_based", {})
+    if not isinstance(interest_raw, dict):
+        interest_raw = {}
+
     return {
         "enabled": bool(raw.get("enabled", defaults["enabled"])),
         "mode": mode,
@@ -349,6 +376,37 @@ def _coerce_proactive_policy(raw: object) -> dict:
             upper=1.0,
         ),
         "store_file": str(raw.get("store_file", defaults["store_file"])),
+        "extractors": {
+            "dreaming": {
+                "enabled": bool(dreaming_raw.get("enabled", dreaming_defaults["enabled"])),
+                "lookback_days": _positive_int(
+                    dreaming_raw.get("lookback_days", dreaming_defaults["lookback_days"]),
+                    dreaming_defaults["lookback_days"],
+                ),
+                "repeated_task": {
+                    "min_occurrences": _positive_int(
+                        repeated_raw.get(
+                            "min_occurrences",
+                            dreaming_defaults["repeated_task"]["min_occurrences"],
+                        ),
+                        dreaming_defaults["repeated_task"]["min_occurrences"],
+                    ),
+                    "time_bucket_hours": _positive_int(
+                        repeated_raw.get(
+                            "time_bucket_hours",
+                            dreaming_defaults["repeated_task"]["time_bucket_hours"],
+                        ),
+                        dreaming_defaults["repeated_task"]["time_bucket_hours"],
+                    ),
+                },
+                "interest_based": {
+                    "enabled": bool(interest_raw.get(
+                        "enabled",
+                        dreaming_defaults["interest_based"]["enabled"],
+                    )),
+                },
+            },
+        },
     }
 
 
