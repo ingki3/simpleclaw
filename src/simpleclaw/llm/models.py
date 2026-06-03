@@ -59,6 +59,20 @@ class ToolCall:
     arguments: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class MultimodalAttachment:
+    """Provider-neutral 멀티모달 첨부 1건.
+
+    Telegram 등 채널 레이어는 외부 파일 ID를 LLM provider에 직접 노출하지 않고,
+    인증 후 다운로드한 bytes와 MIME type만 이 구조체에 담는다. Gemini provider는
+    Google 이미지 이해 문서의 inline image data 방식에 맞춰 이 값을
+    ``types.Part.from_bytes(data=..., mime_type=...)`` 로 변환한다.
+    """
+    data: bytes
+    mime_type: str
+    name: str | None = None
+
+
 @dataclass
 class SystemBlock:
     """시스템 프롬프트의 한 세그먼트.

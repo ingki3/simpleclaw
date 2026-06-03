@@ -1,13 +1,13 @@
 """Tests for LLM providers with mocked SDK calls."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from simpleclaw.llm.models import (
     LLMAuthError,
-    LLMProviderError,
+    MultimodalAttachment,
     SystemBlock,
     ToolCall,
     ToolDefinition,
@@ -939,6 +939,51 @@ class TestGeminiProvider:
         assert part.function_response is not None
         assert part.function_response.id == "fc-abc-123"
         assert part.function_response.name == "get_weather"
+
+    def test_convert_messages_user_image_attachments_to_inline_parts(self):
+        """Gemini 이미지 이해 문서의 inline bytes 방식으로 image Part를 만든다."""
+        provider = GeminiProvider(model="gemini-3.5-flash", api_key="test-key")
+        img1 = MultimodalAttachment(
+            data=b"jpeg", mime_type="image/jpeg", name="photo.jpg"
+        )
+        img2 = {"data": b"png", "mime_type": "image/png", "name": "diagram.png"}
+
+        result = provider._convert_messages(
+            [
+                {
+                    "role": "user",
+                    "content": "두 이미지의 차이를 설명해줘",
+                    "attachments": [img1, img2],
+                }
+            ]
+        )
+
+        assert len(result) == 1
+        content = result[0]
+        assert content.role == "user"
+        assert content.parts[0].text == "두 이미지의 차이를 설명해줘"
+        assert content.parts[1].inline_data.mime_type == "image/jpeg"
+        assert content.parts[1].inline_data.data == b"jpeg"
+        assert content.parts[2].inline_data.mime_type == "image/png"
+        assert content.parts[2].inline_data.data == b"png"
+
+    def test_convert_messages_ignores_non_image_attachments(self):
+        provider = GeminiProvider(model="gemini-3.5-flash", api_key="test-key")
+
+        result = provider._convert_messages(
+            [
+                {
+                    "role": "user",
+                    "content": "파일 확인",
+                    "attachments": [
+                        {"data": b"pdf", "mime_type": "application/pdf", "name": "x.pdf"}
+                    ],
+                }
+            ]
+        )
+
+        assert len(result[0].parts) == 1
+        assert result[0].parts[0].text == "파일 확인"
 
     def test_convert_messages_raw_content_passthrough(self):
         """_raw_content가 있는 assistant 메시지는 원본 객체를 그대로 통과시켜야 한다.
