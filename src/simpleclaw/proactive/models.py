@@ -136,6 +136,7 @@ class ProactiveOpportunity:
     source: str = ""
     source_msg_ids: list[int] = field(default_factory=list)
     updated_at: datetime = field(default_factory=datetime.now)
+    error_summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """JSONL 저장과 API 응답에 사용할 dict로 변환한다."""
@@ -182,6 +183,7 @@ class ProactiveOpportunity:
             source=str(data.get("source") or ""),
             source_msg_ids=[int(v) for v in list(data.get("source_msg_ids") or [])],
             updated_at=updated_at,
+            error_summary=str(data.get("error_summary") or ""),
         )
 
     def is_expired(self, now: datetime | None = None) -> bool:

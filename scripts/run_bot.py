@@ -46,7 +46,9 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
 from simpleclaw.memory.safety_backup import SafetyBackupManager
+from simpleclaw.proactive.actions import ProactiveActionExecutor
 from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
+from simpleclaw.proactive.presenter import ProactivePresenter
 from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security.secrets import configure_default_manager
 
@@ -254,6 +256,31 @@ async def main():
             Path(_expand(proactive_cfg.get("store_file")))
         )
 
+    # BIZ-335 — Presenter/ActionExecutor wiring. 후보 발송과 side effect 실행을
+    # 분리해, Telegram callback 승인 전에는 cron 생성이 절대 일어나지 않게 한다.
+    proactive_presenter = None
+    presenter_cfg = proactive_cfg.get("presenter", {}) or {}
+    if bool(proactive_cfg.get("enabled")) and bool(presenter_cfg.get("enabled")):
+        if opportunity_store is None:
+            opportunity_store = OpportunityStore(
+                Path(_expand(proactive_cfg.get("store_file")))
+            )
+        action_cfg = proactive_cfg.get("actions", {}) or {}
+        create_cron_cfg = action_cfg.get("create_cron", {}) or {}
+        action_executor = ProactiveActionExecutor(
+            store=opportunity_store,
+            cron_scheduler=cron,
+            create_cron_enabled=bool(create_cron_cfg.get("enabled", False)),
+        )
+        proactive_presenter = ProactivePresenter(
+            store=opportunity_store,
+            telegram_bot=bot,
+            chat_id=notify_chat_id,
+            config=proactive_cfg,
+            action_executor=action_executor,
+        )
+        bot.set_proactive_callback_handler(proactive_presenter.handle_callback)
+
     # BIZ-132 / BIZ-133 / BIZ-138 — 사이클 직전 통째 백업 매니저. 위험 파일 목록(라이브
     # 페르소나 4종 + dreaming sidecar 들 + 데몬 상태 파일 + DB)을 매 사이클 직전
     # 시점으로 보존한다. 모든 경로는 config 와 영구 디렉터리(``~/.simpleclaw/``)에서
@@ -445,6 +472,25 @@ async def main():
     apscheduler.add_job(
         _dreaming_check, "interval", minutes=5, id="dreaming-check",
     )
+    if proactive_presenter is not None:
+        async def _proactive_presenter_tick():
+            """APScheduler interval job: pending proactive 제안을 Telegram으로 노출."""
+            try:
+                await proactive_presenter.tick()
+            except Exception:
+                logger.exception("Proactive presenter tick failed")
+
+        interval_minutes = int(presenter_cfg.get("interval_minutes", 30))
+        apscheduler.add_job(
+            _proactive_presenter_tick,
+            "interval",
+            minutes=interval_minutes,
+            id="proactive-presenter",
+        )
+        logger.info(
+            "Proactive presenter enabled: check every %dmin",
+            interval_minutes,
+        )
     logger.info(
         "Dreaming enabled: overnight_hour=%d, idle_threshold=%ds, check every 5min, "
         "clusters=%s (threshold=%.2f)",
