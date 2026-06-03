@@ -1,6 +1,8 @@
 """Proactive Opportunity Queue + TPO Policy Engine 공개 API."""
 
+from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
+from simpleclaw.proactive.event_detector import EventDetector
 from simpleclaw.proactive.models import (
     OpportunityStatus,
     OpportunityType,
@@ -15,7 +17,9 @@ from simpleclaw.proactive.policy import TPOPolicyEngine
 from simpleclaw.proactive.store import OpportunityStore
 
 __all__ = [
+    "ConversationEndDetector",
     "DreamingOpportunityExtractor",
+    "EventDetector",
     "OpportunityStatus",
     "OpportunityStore",
     "OpportunityType",

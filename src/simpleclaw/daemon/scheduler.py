@@ -30,6 +30,7 @@ from simpleclaw.daemon.models import (
 )
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.recipes.models import StepType
+from simpleclaw.proactive.event_detector import EventDetector
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class CronScheduler:
         recipe_executor=None,
         agent_orchestrator=None,
         notifier: Callable[[str, str], Awaitable[None]] | None = None,
+        event_detector: EventDetector | None = None,
         recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
         legacy_recipes_dir: str | Path | None = ".agent/recipes",
     ) -> None:
@@ -144,6 +146,7 @@ class CronScheduler:
         self._recipe_executor = recipe_executor
         self._agent = agent_orchestrator
         self._notifier = notifier
+        self._event_detector = event_detector
         # BIZ-202: cron 의 action_reference 가 이름(예: "krstock") 일 때 어느 디렉터리에서
         # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw-agent/default/recipes`)를 보도록
         # 호출 측(run_bot.py)에서 명시적으로 주입. 레거시 `.agent/recipes/` 는 한 번 폴백.
@@ -408,12 +411,26 @@ class CronScheduler:
             await self._send_circuit_break_notification(
                 job, last_error
             )
+            await self._capture_cron_event(
+                event_type="circuit_break",
+                job=job,
+                error_details=last_error,
+                attempt=max(1, int(job.max_attempts)),
+                max_attempts=max(1, int(job.max_attempts)),
+            )
         else:
             self._store.save_job(job)
             logger.error(
                 "Cron job '%s' failed after %d retries (consecutive failures: %d).",
                 job.name, max(1, int(job.max_attempts)) - 1,
                 job.consecutive_failures,
+            )
+            await self._capture_cron_event(
+                event_type="failure",
+                job=job,
+                error_details=last_error,
+                attempt=max(1, int(job.max_attempts)),
+                max_attempts=max(1, int(job.max_attempts)),
             )
 
     async def _send_circuit_break_notification(
@@ -438,6 +455,37 @@ class CronScheduler:
                 "Failed to send circuit-break notification for cron '%s'",
                 job.name,
             )
+
+    async def _capture_cron_event(
+        self,
+        *,
+        event_type: str,
+        job: CronJob,
+        error_details: str | None = None,
+        result_summary: str | None = None,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> None:
+        """cron 이벤트 hook을 best-effort로 실행해 scheduler 본 흐름을 보호한다."""
+        if self._event_detector is None:
+            return
+        try:
+            self._event_detector.capture_cron_event(
+                event_type=event_type,
+                job_name=job.name,
+                error_details=error_details,
+                result_summary=result_summary,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                payload={
+                    "action_type": job.action_type.value,
+                    "action_reference": job.action_reference,
+                    "consecutive_failures": job.consecutive_failures,
+                    "enabled": job.enabled,
+                },
+            )
+        except Exception:  # noqa: BLE001 — proactive hook 실패가 cron 실행/기록을 깨면 안 된다.
+            logger.exception("Cron proactive event hook failed for '%s'", job.name)
 
     async def _run_action(self, job: CronJob) -> str:
         """작업의 대상 액션을 실행하고, NO_NOTIFY 필터링 후 알림을 전송한다.
