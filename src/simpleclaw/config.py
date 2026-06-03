@@ -238,6 +238,15 @@ _DAEMON_DEFAULTS: dict = {
         "dismissed_cooldown_days": 30,
         "min_confidence": 0.75,
         "store_file": "~/.simpleclaw-agent/default/proactive_opportunities.jsonl",
+        "presenter": {
+            "enabled": False,
+            "interval_minutes": 30,
+        },
+        "actions": {
+            "create_cron": {
+                "enabled": False,
+            },
+        },
         "extractors": {
             "dreaming": {
                 "enabled": False,
@@ -370,6 +379,17 @@ def _coerce_proactive_policy(raw: object) -> dict:
     cron_failure_raw = event_hooks_raw.get("cron_failure", {})
     if not isinstance(cron_failure_raw, dict):
         cron_failure_raw = {}
+    presenter_raw = raw.get("presenter", {})
+    if not isinstance(presenter_raw, dict):
+        presenter_raw = {}
+    presenter_defaults = defaults["presenter"]
+    actions_raw = raw.get("actions", {})
+    if not isinstance(actions_raw, dict):
+        actions_raw = {}
+    create_cron_raw = actions_raw.get("create_cron", {})
+    if not isinstance(create_cron_raw, dict):
+        create_cron_raw = {}
+    actions_defaults = defaults["actions"]
 
     return {
         "enabled": bool(raw.get("enabled", defaults["enabled"])),
@@ -397,6 +417,21 @@ def _coerce_proactive_policy(raw: object) -> dict:
             upper=1.0,
         ),
         "store_file": str(raw.get("store_file", defaults["store_file"])),
+        "presenter": {
+            "enabled": bool(presenter_raw.get("enabled", presenter_defaults["enabled"])),
+            "interval_minutes": _positive_int(
+                presenter_raw.get("interval_minutes", presenter_defaults["interval_minutes"]),
+                presenter_defaults["interval_minutes"],
+            ),
+        },
+        "actions": {
+            "create_cron": {
+                "enabled": bool(create_cron_raw.get(
+                    "enabled",
+                    actions_defaults["create_cron"]["enabled"],
+                )),
+            },
+        },
         "extractors": {
             "dreaming": {
                 "enabled": bool(dreaming_raw.get("enabled", dreaming_defaults["enabled"])),
@@ -1089,6 +1124,9 @@ _TELEGRAM_DEFAULTS: dict = {
         "chat_ids": [],
     },
     "streaming": dict(_TELEGRAM_STREAMING_DEFAULTS),
+    "buttons": {
+        "enabled": True,
+    },
 }
 
 
@@ -1169,6 +1207,15 @@ def load_telegram_config(config_path: str | Path) -> dict:
             "chat_ids": whitelist.get("chat_ids", []),
         },
         "streaming": _coerce_streaming_config(tg.get("streaming")),
+        "buttons": {
+            "enabled": bool(
+                (tg.get("buttons", {}) or {}).get(
+                    "enabled", _TELEGRAM_DEFAULTS["buttons"]["enabled"]
+                )
+                if isinstance(tg.get("buttons", {}), dict)
+                else _TELEGRAM_DEFAULTS["buttons"]["enabled"]
+            ),
+        },
     }
 
 
