@@ -45,6 +45,8 @@ from simpleclaw.memory.models import (
 )
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
+from simpleclaw.proactive.conversation_detector import ConversationEndDetector
+from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security import (
     CommandGuard,
     DangerousCommandError,
@@ -571,6 +573,19 @@ class AgentOrchestrator:
         # 동일 chat 안에서는 한 번에 하나만 대기 — 새 clarify 가 호출되면 덮어쓴다.
         self._pending_clarify: dict[int, ClarifyRequest] = {}
 
+        proactive_config = daemon_config.get("proactive", {}) or {}
+        conversation_config = (
+            proactive_config.get("extractors", {}).get("conversation_end", {})
+            if isinstance(proactive_config.get("extractors", {}), dict)
+            else {}
+        )
+        self._conversation_end_detector = ConversationEndDetector(
+            store=OpportunityStore(proactive_config.get("store_file", "~/.simpleclaw-agent/default/proactive_opportunities.jsonl")),
+            enabled=bool(proactive_config.get("enabled", False))
+            and bool(conversation_config.get("enabled", False)),
+            max_latency_ms=int(conversation_config.get("max_latency_ms", 50) or 50),
+        )
+
         logger.info(
             "AgentOrchestrator initialized: persona=%d chars, skills=%d, backend=%s",
             len(self._persona_prompt),
@@ -710,7 +725,10 @@ class AgentOrchestrator:
 
                 # 일반 사용자 발화는 채널을 명시하지 않는다(=organic). 이후 BIZ-76
                 # 후속에서 telegram/webhook/console 같은 origin 메타로 확장될 수 있음.
-                self._save_turn(text, response_text)
+                msg_ids = self._save_turn(text, response_text)
+                await self._capture_conversation_end_opportunity(
+                    text, response_text, list(msg_ids)
+                )
                 return response_text
             finally:
                 clarify_chat_id_var.reset(clarify_token)
@@ -725,7 +743,7 @@ class AgentOrchestrator:
         assistant_text: str,
         *,
         channel: str | None = None,
-    ) -> None:
+    ) -> tuple[int, int]:
         """user/assistant 메시지 한 쌍을 저장하고, RAG가 켜져 있으면 임베딩을 백그라운드 부착한다.
 
         설계 결정:
@@ -745,6 +763,23 @@ class AgentOrchestrator:
         ))
         self._schedule_embedding(user_id, user_text)
         self._schedule_embedding(asst_id, assistant_text)
+        return user_id, asst_id
+
+    async def _capture_conversation_end_opportunity(
+        self, user_text: str, assistant_text: str, source_msg_ids: list[int]
+    ) -> None:
+        """대화 종료 hook을 best-effort로 실행해 pending 후보만 적재한다."""
+        detector = getattr(self, "_conversation_end_detector", None)
+        if detector is None:
+            return
+        try:
+            detector.capture(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                source_msg_ids=source_msg_ids,
+            )
+        except Exception:  # noqa: BLE001 — proactive 후보 실패가 사용자 응답을 깨면 안 된다.
+            logger.exception("Conversation-end proactive hook failed")
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.

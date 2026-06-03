@@ -282,6 +282,21 @@ daemon:
     backoff_seconds: 60
     backoff_strategy: "exponential"
     circuit_break_threshold: 5
+  # BIZ-332/334 — proactive 후보는 저장만 하며 presenter/policy가 별도 발송 판단.
+  proactive:
+    enabled: false
+    mode: "low"
+    store_file: "~/.simpleclaw-agent/default/proactive_opportunities.jsonl"
+    extractors:
+      dreaming:
+        enabled: false
+      conversation_end:
+        enabled: false
+        max_latency_ms: 50
+    event_hooks:
+      enabled: false
+      cron_failure:
+        enabled: false
 
 persona:
   token_budget: 4096

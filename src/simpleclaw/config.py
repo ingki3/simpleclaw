@@ -250,6 +250,16 @@ _DAEMON_DEFAULTS: dict = {
                     "enabled": False,
                 },
             },
+            "conversation_end": {
+                "enabled": False,
+                "max_latency_ms": 50,
+            },
+        },
+        "event_hooks": {
+            "enabled": False,
+            "cron_failure": {
+                "enabled": False,
+            },
         },
     },
 }
@@ -349,6 +359,17 @@ def _coerce_proactive_policy(raw: object) -> dict:
     interest_raw = dreaming_raw.get("interest_based", {})
     if not isinstance(interest_raw, dict):
         interest_raw = {}
+    conversation_raw = extractors.get("conversation_end", {})
+    if not isinstance(conversation_raw, dict):
+        conversation_raw = {}
+    conversation_defaults = defaults["extractors"]["conversation_end"]
+    event_hooks_raw = raw.get("event_hooks", {})
+    if not isinstance(event_hooks_raw, dict):
+        event_hooks_raw = {}
+    event_hooks_defaults = defaults["event_hooks"]
+    cron_failure_raw = event_hooks_raw.get("cron_failure", {})
+    if not isinstance(cron_failure_raw, dict):
+        cron_failure_raw = {}
 
     return {
         "enabled": bool(raw.get("enabled", defaults["enabled"])),
@@ -405,6 +426,22 @@ def _coerce_proactive_policy(raw: object) -> dict:
                         dreaming_defaults["interest_based"]["enabled"],
                     )),
                 },
+            },
+            "conversation_end": {
+                "enabled": bool(conversation_raw.get("enabled", conversation_defaults["enabled"])),
+                "max_latency_ms": _positive_int(
+                    conversation_raw.get("max_latency_ms", conversation_defaults["max_latency_ms"]),
+                    conversation_defaults["max_latency_ms"],
+                ),
+            },
+        },
+        "event_hooks": {
+            "enabled": bool(event_hooks_raw.get("enabled", event_hooks_defaults["enabled"])),
+            "cron_failure": {
+                "enabled": bool(cron_failure_raw.get(
+                    "enabled",
+                    event_hooks_defaults["cron_failure"]["enabled"],
+                )),
             },
         },
     }

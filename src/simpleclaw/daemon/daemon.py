@@ -28,6 +28,8 @@ from simpleclaw.daemon.models import DaemonLockError
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.daemon.wait_states import WaitStateManager
+from simpleclaw.proactive.event_detector import EventDetector
+from simpleclaw.proactive.store import OpportunityStore
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ class AgentDaemon:
         self._cron_scheduler: CronScheduler | None = None
         self._dreaming_trigger: DreamingTrigger | None = None
         self._wait_state_manager: WaitStateManager | None = None
+        self._event_detector: EventDetector | None = None
         self._running = False
         self._start_time: datetime | None = None
 
@@ -137,9 +140,23 @@ class AgentDaemon:
             )
 
             self._scheduler = AsyncIOScheduler()
+            proactive_config = self._config.get("proactive", {}) or {}
+            event_hooks = proactive_config.get("event_hooks", {}) if isinstance(proactive_config, dict) else {}
+            cron_failure = (
+                event_hooks.get("cron_failure", {})
+                if isinstance(event_hooks, dict)
+                else {}
+            )
+            self._event_detector = EventDetector(
+                store=OpportunityStore(proactive_config.get("store_file", "~/.simpleclaw-agent/default/proactive_opportunities.jsonl")),
+                enabled=bool(proactive_config.get("enabled", False))
+                and bool(event_hooks.get("enabled", False)),
+                cron_failure_enabled=bool(cron_failure.get("enabled", False)),
+            )
             self._cron_scheduler = CronScheduler(
                 self._store, self._scheduler,
                 agent_orchestrator=self._agent,
+                event_detector=self._event_detector,
             )
 
             self._scheduler.add_job(
