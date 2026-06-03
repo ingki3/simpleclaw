@@ -17,6 +17,7 @@ from simpleclaw.channels.telegram_bot import (
     TelegramStreamSink,
     split_for_telegram,
 )
+from simpleclaw.llm.models import MultimodalAttachment
 
 
 class _FakeBot:
@@ -115,6 +116,81 @@ class TestTelegramBot:
         assert response is not None
         # The response should contain truncated message
         assert len(response) < 10000
+
+    @pytest.mark.asyncio
+    async def test_handle_message_forwards_multimodal_attachments(self):
+        handler = AsyncMock(return_value="ok")
+        attachment = MultimodalAttachment(
+            data=b"jpeg-bytes", mime_type="image/jpeg", name="photo.jpg"
+        )
+        bot = TelegramBot("token", whitelist_user_ids=[1], message_handler=handler)
+
+        response = await bot.handle_message(
+            "이 이미지를 설명해줘", 1, 1, attachments=[attachment]
+        )
+
+        assert response == "ok"
+        handler.assert_awaited_once_with(
+            "이 이미지를 설명해줘", 1, 1, attachments=[attachment]
+        )
+
+    @pytest.mark.asyncio
+    async def test_download_photo_attachment_uses_largest_photo_size(self):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"largest"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = [
+            SimpleNamespace(file_id="small", width=10, height=10),
+            SimpleNamespace(file_id="large", width=100, height=100),
+        ]
+        message.document = None
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        api_bot.get_file.assert_awaited_once_with("large")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"largest", mime_type="image/jpeg", name="telegram-photo-large"
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_download_image_document_attachment_preserves_mime_and_name(self):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"png"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1", mime_type="image/png", file_name="diagram.png"
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        api_bot.get_file.assert_awaited_once_with("doc-1")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"png", mime_type="image/png", name="diagram.png"
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_download_non_image_document_is_ignored(self):
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock()
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1", mime_type="application/pdf", file_name="paper.pdf"
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        assert attachments == []
+        api_bot.get_file.assert_not_called()
 
 
 class TestSplitForTelegram:
