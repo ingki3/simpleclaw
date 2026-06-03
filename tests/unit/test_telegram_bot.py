@@ -17,6 +17,7 @@ from simpleclaw.channels.telegram_bot import (
     TelegramStreamSink,
     split_for_telegram,
 )
+from simpleclaw.llm.models import MultimodalAttachment
 
 
 class _FakeBot:
@@ -599,3 +600,84 @@ class TestTelegramBotStreaming:
 
         assert fake.edits[-1]["text"] == "최종 답변"
         assert "진행 상황" not in fake.edits[-1]["text"]
+
+
+class TestTelegramMultimodalAttachments:
+    @pytest.mark.asyncio
+    async def test_handle_message_passes_authorized_photo_attachment(self):
+        seen = {}
+
+        async def handler(text, user_id, chat_id, *, attachments=None):
+            seen["text"] = text
+            seen["attachments"] = attachments
+            return "ok"
+
+        bot = TelegramBot("token", whitelist_user_ids=[123], message_handler=handler)
+        response = await bot.handle_message(
+            "caption",
+            123,
+            999,
+            attachments=[
+                MultimodalAttachment(data=b"image", mime_type="image/jpeg")
+            ],
+        )
+
+        assert response == "ok"
+        assert seen["text"] == "caption"
+        assert seen["attachments"][0].data == b"image"
+        assert seen["attachments"][0].mime_type == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_handler_signature_compat_omits_unknown_attachment_kwarg(self):
+        async def legacy_handler(text, user_id, chat_id):
+            return f"legacy:{text}:{user_id}:{chat_id}"
+
+        bot = TelegramBot("token", whitelist_user_ids=[1], message_handler=legacy_handler)
+        response = await bot.handle_message(
+            "hello",
+            1,
+            2,
+            attachments=[
+                MultimodalAttachment(data=b"image", mime_type="image/png")
+            ],
+        )
+
+        assert response == "legacy:hello:1:2"
+
+    @pytest.mark.asyncio
+    async def test_download_image_document_and_ignore_non_image_document(self):
+        class FakeTelegramFile:
+            async def download_as_bytearray(self):
+                return bytearray(b"png-bytes")
+
+        fake_bot = MagicMock()
+        fake_bot.get_file = AsyncMock(return_value=FakeTelegramFile())
+        bot = TelegramBot("token", whitelist_user_ids=[1])
+        image_doc_message = SimpleNamespace(
+            photo=[],
+            document=SimpleNamespace(
+                file_id="doc-file", mime_type="image/png", file_name="scan.png"
+            ),
+        )
+
+        attachments = await bot._download_image_attachment(image_doc_message, fake_bot)
+
+        assert len(attachments) == 1
+        assert attachments[0].data == b"png-bytes"
+        assert attachments[0].mime_type == "image/png"
+        assert attachments[0].filename == "scan.png"
+        fake_bot.get_file.assert_awaited_once_with("doc-file")
+
+        non_image_message = SimpleNamespace(
+            photo=[],
+            document=SimpleNamespace(
+                file_id="doc-file", mime_type="application/pdf", file_name="a.pdf"
+            ),
+        )
+        assert await bot._download_image_attachment(non_image_message, fake_bot) == []
+
+    def test_captionless_photo_uses_default_prompt(self):
+        message = SimpleNamespace(
+            text=None, caption=None, photo=[SimpleNamespace(file_id="p")]
+        )
+        assert TelegramBot._message_text_with_attachment_default(message)

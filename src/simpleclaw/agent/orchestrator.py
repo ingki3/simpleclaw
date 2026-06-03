@@ -30,7 +30,7 @@ from simpleclaw.config import (
     load_recipes_config,
     load_security_config,
 )
-from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
+from simpleclaw.llm.models import LLMRequest, MultimodalAttachment, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.llm.router import create_router
 from simpleclaw.logging.trace_context import trace_scope
@@ -655,6 +655,7 @@ class AgentOrchestrator:
         user_id: int,
         chat_id: int,
         *,
+        attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> str:
@@ -712,7 +713,10 @@ class AgentOrchestrator:
                     return recipe_result
 
                 response_text = await self._tool_loop(
-                    text, on_text_delta=on_text_delta, on_progress=on_progress,
+                    text,
+                    attachments=attachments,
+                    on_text_delta=on_text_delta,
+                    on_progress=on_progress,
                 )
 
                 # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
@@ -829,6 +833,7 @@ class AgentOrchestrator:
         text: str,
         isolated: bool = False,
         *,
+        attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> str:
@@ -856,10 +861,13 @@ class AgentOrchestrator:
             "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
         )
         user_content = f"{datetime_context}\n{text}"
+        current_user_message = {"role": "user", "content": user_content}
+        if attachments:
+            current_user_message["attachments"] = attachments
 
         # 메시지 구성
         if isolated:
-            messages: list[dict] = [{"role": "user", "content": user_content}]
+            messages: list[dict] = [current_user_message]
             rag_context = ""
         else:
             recent = self._store.get_recent(limit=self._history_limit)
@@ -882,7 +890,7 @@ class AgentOrchestrator:
                     "role": role_value,
                     "content": msg.content,
                 })
-            messages.append({"role": "user", "content": user_content})
+            messages.append(current_user_message)
             # 시맨틱 회상: 최근 윈도우에 포함되지 않은 과거 메시지를 추가 컨텍스트로 회수
             recent_contents = {msg.content for msg in recent}
             rag_context = await self._retrieve_relevant_context(

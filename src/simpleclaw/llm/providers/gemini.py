@@ -22,6 +22,7 @@ from simpleclaw.llm.models import (
     LLMAuthError,
     LLMProviderError,
     LLMResponse,
+    MultimodalAttachment,
     SystemBlock,
     ToolCall,
     ToolDefinition,
@@ -130,10 +131,31 @@ class GeminiProvider(LLMProvider):
                 contents.append(
                     types.Content(
                         role=gemini_role,
-                        parts=[types.Part(text=msg.get("content", ""))],
+                        parts=self._convert_user_parts(msg),
                     )
                 )
         return contents
+
+    @staticmethod
+    def _convert_user_parts(msg: dict) -> list[types.Part]:
+        """텍스트 + provider-neutral image attachment 를 Gemini Part 로 변환한다."""
+        parts: list[types.Part] = []
+        content = msg.get("content", "")
+        if content:
+            parts.append(types.Part(text=content))
+        for attachment in msg.get("attachments") or []:
+            if isinstance(attachment, MultimodalAttachment):
+                data = attachment.data
+                mime_type = attachment.mime_type
+            else:
+                data = attachment.get("data", b"")
+                mime_type = attachment.get("mime_type", "")
+            if not data or not str(mime_type).startswith("image/"):
+                continue
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+        if not parts:
+            parts.append(types.Part(text=""))
+        return parts
 
     async def send(
         self,

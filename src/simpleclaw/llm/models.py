@@ -59,6 +59,21 @@ class ToolCall:
     arguments: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class MultimodalAttachment:
+    """Provider-neutral 인라인 멀티모달 첨부.
+
+    Telegram 같은 채널에서 인증 후 다운로드한 이미지 bytes 를 LLM 라우터까지
+    보존하기 위한 최소 스키마다. Gemini Files API 같은 영구 업로드 경로가 아니라
+    Gemini 문서의 inline image data(``types.Part.from_bytes``)로 변환 가능한 정보만
+    담는다.
+    """
+    data: bytes
+    mime_type: str
+    filename: str | None = None
+    source: str = "telegram"
+
+
 @dataclass
 class SystemBlock:
     """시스템 프롬프트의 한 세그먼트.
