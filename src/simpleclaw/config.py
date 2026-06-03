@@ -228,6 +228,17 @@ _DAEMON_DEFAULTS: dict = {
     "wait_state": {
         "default_timeout": 3600,
     },
+    # BIZ-332: proactive 후보는 fail-closed/low-noise 기본값으로만 활성화된다.
+    "proactive": {
+        "enabled": False,
+        "mode": "low",
+        "quiet_hours": {"start": "23:00", "end": "08:00"},
+        "max_messages_per_day": 1,
+        "topic_cooldown_days": 14,
+        "dismissed_cooldown_days": 30,
+        "min_confidence": 0.75,
+        "store_file": "~/.simpleclaw-agent/default/proactive_opportunities.jsonl",
+    },
 }
 
 
@@ -281,6 +292,64 @@ def _coerce_dreaming_max_tokens(raw: object) -> dict:
             continue
         merged[key] = n if n > 0 else None
     return merged
+
+
+def _positive_int(value: object, default: int) -> int:
+    """양수 정수 설정만 받아들이고 깨진 값은 기본값으로 되돌린다."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
+def _clamped_float(value: object, default: float, *, lower: float, upper: float) -> float:
+    """float 설정을 지정 구간으로 클램프해 정책 임계값 실수를 줄인다."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lower, min(upper, parsed))
+
+
+def _coerce_proactive_policy(raw: object) -> dict:
+    """daemon.proactive 설정을 fail-closed 기본값과 병합한다."""
+    defaults = _DAEMON_DEFAULTS["proactive"]
+    if not isinstance(raw, dict):
+        raw = {}
+    quiet = raw.get("quiet_hours", {})
+    if not isinstance(quiet, dict):
+        quiet = {}
+    mode = str(raw.get("mode", defaults["mode"]) or defaults["mode"]).lower()
+    if mode not in {"off", "low", "normal", "high"}:
+        mode = defaults["mode"]
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "mode": mode,
+        "quiet_hours": {
+            "start": str(quiet.get("start", defaults["quiet_hours"]["start"])),
+            "end": str(quiet.get("end", defaults["quiet_hours"]["end"])),
+        },
+        "max_messages_per_day": _positive_int(
+            raw.get("max_messages_per_day", defaults["max_messages_per_day"]),
+            defaults["max_messages_per_day"],
+        ),
+        "topic_cooldown_days": _positive_int(
+            raw.get("topic_cooldown_days", defaults["topic_cooldown_days"]),
+            defaults["topic_cooldown_days"],
+        ),
+        "dismissed_cooldown_days": _positive_int(
+            raw.get("dismissed_cooldown_days", defaults["dismissed_cooldown_days"]),
+            defaults["dismissed_cooldown_days"],
+        ),
+        "min_confidence": _clamped_float(
+            raw.get("min_confidence", defaults["min_confidence"]),
+            defaults["min_confidence"],
+            lower=0.0,
+            upper=1.0,
+        ),
+        "store_file": str(raw.get("store_file", defaults["store_file"])),
+    }
 
 
 def _coerce_language_policy(raw: dict) -> dict:
@@ -370,6 +439,7 @@ def load_daemon_config(config_path: str | Path) -> dict:
     wait_state = daemon.get("wait_state", {})
     if not isinstance(wait_state, dict):
         wait_state = {}
+    proactive = daemon.get("proactive", {})
 
     return {
         "heartbeat_interval": daemon.get(
@@ -511,6 +581,7 @@ def load_daemon_config(config_path: str | Path) -> dict:
                 _DAEMON_DEFAULTS["wait_state"]["default_timeout"],
             ),
         },
+        "proactive": _coerce_proactive_policy(proactive),
     }
 
 
