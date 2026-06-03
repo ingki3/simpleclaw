@@ -37,6 +37,7 @@ from simpleclaw.agent.clarify import (
     encode_callback_data,
 )
 from simpleclaw.channels.models import AccessAttempt
+from simpleclaw.llm.models import MultimodalAttachment
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +440,7 @@ class TelegramBot:
         user_id: int,
         chat_id: int,
         *,
+        attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> str | None:
@@ -462,16 +464,34 @@ class TelegramBot:
 
         if self._message_handler:
             try:
-                if on_text_delta is not None or on_progress is not None:
-                    kwargs = {}
-                    if on_text_delta is not None:
-                        kwargs["on_text_delta"] = on_text_delta
-                    if on_progress is not None:
-                        kwargs["on_progress"] = on_progress
+                kwargs = {}
+                if attachments:
+                    kwargs["attachments"] = attachments
+                if on_text_delta is not None:
+                    kwargs["on_text_delta"] = on_text_delta
+                if on_progress is not None:
+                    kwargs["on_progress"] = on_progress
+                if kwargs:
                     return await self._message_handler(
                         text, user_id, chat_id, **kwargs,
                     )
                 return await self._message_handler(text, user_id, chat_id)
+            except TypeError as exc:
+                # 기존 커스텀 handler 가 새 kwargs를 받지 못하는 경우 텍스트-only
+                # 경로는 계속 살린다. attachment가 있는 요청에서 이 fallback이 발생하면
+                # 이미지는 처리되지 않지만 봇 전체 응답은 깨지지 않는다.
+                if attachments and "unexpected keyword" in str(exc):
+                    logger.warning(
+                        "Message handler does not accept attachments; falling back "
+                        "to text-only call"
+                    )
+                    try:
+                        return await self._message_handler(text, user_id, chat_id)
+                    except Exception:
+                        logger.exception("Message handler error")
+                        return "An error occurred while processing your message."
+                logger.exception("Message handler error")
+                return "An error occurred while processing your message."
             except Exception:
                 logger.exception("Message handler error")
                 return "An error occurred while processing your message."
@@ -667,6 +687,55 @@ class TelegramBot:
         # 또 키보드가 붙는다.
         await self._send_response(query, response, chat_id=chat_id)
 
+    @staticmethod
+    async def _download_message_attachments(message, bot) -> list[MultimodalAttachment]:
+        """Telegram 메시지의 이미지 첨부를 인증 후 LLM용 bytes로 다운로드한다.
+
+        Telegram photo는 해상도별 후보가 오므로 가장 큰 항목(마지막)을 선택한다.
+        document는 MIME type이 ``image/*``인 경우에만 인라인 이미지 데이터로 취급한다.
+        파일 ID/URL은 provider에 넘기지 않고 이 지점에서 bytes로 닫아 Gemini 문서의
+        ``types.Part.from_bytes`` 경로에 맞춘다.
+        """
+        attachments: list[MultimodalAttachment] = []
+
+        photos = list(getattr(message, "photo", None) or [])
+        if photos:
+            largest = photos[-1]
+            file_id = getattr(largest, "file_id", None)
+            if file_id:
+                try:
+                    tg_file = await bot.get_file(file_id)
+                    payload = await tg_file.download_as_bytearray()
+                    attachments.append(
+                        MultimodalAttachment(
+                            data=bytes(payload),
+                            mime_type="image/jpeg",
+                            name=f"telegram-photo-{file_id}",
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram photo download failed: %s", exc)
+
+        document = getattr(message, "document", None)
+        mime_type = getattr(document, "mime_type", "") if document is not None else ""
+        if document is not None and str(mime_type).startswith("image/"):
+            file_id = getattr(document, "file_id", None)
+            if file_id:
+                try:
+                    tg_file = await bot.get_file(file_id)
+                    payload = await tg_file.download_as_bytearray()
+                    attachments.append(
+                        MultimodalAttachment(
+                            data=bytes(payload),
+                            mime_type=str(mime_type),
+                            name=getattr(document, "file_name", None),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Telegram document image download failed: %s", exc)
+
+        return attachments
+
     async def start(self) -> None:
         """텔레그램 봇 폴링을 시작한다."""
         if not self._bot_token:
@@ -688,9 +757,20 @@ class TelegramBot:
             )
 
             async def _on_message(update, context):
-                if update.message and update.message.text:
+                if update.message:
+                    message_text = update.message.text or update.message.caption or ""
                     user_id = update.message.from_user.id
                     chat_id = update.message.chat_id
+                    authorized = self.is_authorized(user_id, chat_id)
+                    attachments = (
+                        await self._download_message_attachments(update.message, context.bot)
+                        if authorized
+                        else []
+                    )
+                    if attachments and not message_text.strip():
+                        message_text = "이미지를 분석해 주세요."
+                    if not message_text and not attachments:
+                        return
 
                     # BIZ-259 — streaming.enabled 일 때 인증 후 sink 생성.
                     # 인증 실패는 handle_message 가 None 을 반환하므로 sink 누설 없음
@@ -698,7 +778,7 @@ class TelegramBot:
                     streaming_enabled = bool(
                         self._streaming_config.get("enabled", False)
                     )
-                    if streaming_enabled and self.is_authorized(user_id, chat_id):
+                    if streaming_enabled and authorized:
                         sink = TelegramStreamSink(
                             bot=context.bot,
                             chat_id=chat_id,
@@ -717,7 +797,8 @@ class TelegramBot:
                         )
                         await sink.start()
                         response = await self.handle_message(
-                            update.message.text, user_id, chat_id,
+                            message_text, user_id, chat_id,
+                            attachments=attachments,
                             on_text_delta=sink.on_text_delta,
                             on_progress=(
                                 sink.on_progress_event
@@ -771,7 +852,7 @@ class TelegramBot:
 
                     # 비스트리밍 경로 — 기존 동작 유지(완성 후 BIZ-253 분할 전송).
                     response = await self.handle_message(
-                        update.message.text, user_id, chat_id
+                        message_text, user_id, chat_id, attachments=attachments
                     )
                     if response is None:
                         return
@@ -780,7 +861,7 @@ class TelegramBot:
                     )
 
             self._application.add_handler(
-                MessageHandler(filters.TEXT, _on_message)
+                MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.IMAGE, _on_message)
             )
             self._application.add_handler(
                 CallbackQueryHandler(self._on_callback_query)
