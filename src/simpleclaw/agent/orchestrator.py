@@ -1983,6 +1983,34 @@ class AgentOrchestrator:
         # 인용 안에 ``&&`` 를 넣어 chain 흉내내는 패턴은 봇 운영 중 관찰된 적 없음.
         return ("&&" in command) or ("||" in command) or (";" in command)
 
+    @staticmethod
+    def _agent_browser_npx_fallback_command(
+        command: str, stderr: str,
+    ) -> str | None:
+        """bare ``agent-browser`` PATH 실패를 ``npx --yes agent-browser`` 로 보정.
+
+        라이브 봇은 LaunchAgent PATH 에 bare ``agent-browser`` binary 가 없을 수
+        있지만 ``npx --yes agent-browser`` 는 같은 환경에서 동작한다. command-not-found
+        인 경우에만 1회 fallback 하며, 이미 npx 를 사용한 명령이나 다른 CLI 실패에는
+        적용하지 않는다.
+        """
+        if not AgentOrchestrator._is_agent_browser_command(command):
+            return None
+        stripped = command.lstrip()
+        if stripped.startswith("npx --yes agent-browser"):
+            return None
+        if "command not found" not in stderr.lower():
+            return None
+        if stripped == "agent-browser":
+            return command.replace("agent-browser", "npx --yes agent-browser", 1)
+        if stripped.startswith("agent-browser "):
+            leading_len = len(command) - len(stripped)
+            return (
+                command[:leading_len]
+                + stripped.replace("agent-browser", "npx --yes agent-browser", 1)
+            )
+        return None
+
     async def _execute_command(
         self, skill_name: str, command: str
     ) -> str:
@@ -2031,30 +2059,75 @@ class AgentOrchestrator:
             env = filter_env(passthrough=self._env_passthrough)
             env["AGENT_WORKSPACE"] = str(self._workspace_dir.resolve())
 
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(self._workspace_dir),
-                env=env,
-                preexec_fn=get_preexec_fn(),
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=effective_timeout
-            )
-            output = stdout.decode("utf-8", errors="replace").strip()
-            error = stderr.decode("utf-8", errors="replace").strip()
+            async def _run_shell_once(run_command: str) -> tuple[int, str, str]:
+                """한 번의 shell 실행 결과를 구조화해서 반환한다.
 
-            if proc.returncode != 0:
+                fallback 로직이 같은 실행 코드를 재사용해야 하므로 stdout/stderr
+                decode 까지를 내부 헬퍼로 묶는다. timeout 시 호출자를 위해 proc 를
+                즉시 정리하고 예외를 다시 올린다.
+                """
+                proc = await asyncio.create_subprocess_shell(
+                    run_command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self._workspace_dir),
+                    env=env,
+                    preexec_fn=get_preexec_fn(),
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=effective_timeout
+                    )
+                except asyncio.TimeoutError:
+                    await kill_process_group(proc, metrics=self._metrics)
+                    raise
+                return (
+                    int(proc.returncode or 0),
+                    stdout.decode("utf-8", errors="replace").strip(),
+                    stderr.decode("utf-8", errors="replace").strip(),
+                )
+
+            returncode, output, error = await _run_shell_once(command)
+
+            if returncode != 0:
+                fallback_command = self._agent_browser_npx_fallback_command(
+                    command, error,
+                )
+                if fallback_command is not None:
+                    logger.warning(
+                        "BIZ-337: agent-browser command not found; retrying via npx: %s",
+                        fallback_command,
+                    )
+                    fb_returncode, fb_output, fb_error = await _run_shell_once(
+                        fallback_command,
+                    )
+                    if fb_returncode == 0:
+                        logger.info(
+                            "BIZ-337: agent-browser npx fallback succeeded: %d chars output",
+                            len(fb_output),
+                        )
+                        return fb_output if fb_output else "[Command completed with no output]"
+                    logger.error(
+                        "BIZ-337: agent-browser npx fallback failed (exit %d): %s",
+                        fb_returncode, fb_error,
+                    )
+                    return sanitize_tool_error(
+                        "agent-browser failed because the bare command was not on PATH, "
+                        "and the npx fallback also failed. Do not ask the user to search "
+                        "manually; report that live browser retrieval is unavailable and "
+                        "separate verified facts from unverified facts. "
+                        f"Original: Command failed (exit {returncode}): {error[:300]} | "
+                        f"Fallback: Command failed (exit {fb_returncode}): {fb_error[:300]}"
+                    )
                 logger.error(
                     "Skill command failed (exit %d): %s",
-                    proc.returncode, error,
+                    returncode, error,
                 )
                 # subprocess 의 stderr 는 외부 도구/원격 응답을 그대로 전달할
                 # 수 있어 prompt-injection 가장 큰 surface. envelope + 길이
                 # 캡 + framing 제거를 적용. (PRD §3.5.6)
                 return sanitize_tool_error(
-                    f"Command failed (exit {proc.returncode}): {error[:500]}"
+                    f"Command failed (exit {returncode}): {error[:500]}"
                 )
 
             logger.info(
@@ -2064,7 +2137,6 @@ class AgentOrchestrator:
 
         except asyncio.TimeoutError:
             logger.error("Skill command timed out: %s", command)
-            await kill_process_group(proc, metrics=self._metrics)
             return f"Command timed out after {effective_timeout}s"
         except Exception as exc:
             logger.error("Skill command error: %s", exc)
