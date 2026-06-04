@@ -1983,6 +1983,41 @@ class AgentOrchestrator:
         # 인용 안에 ``&&`` 를 넣어 chain 흉내내는 패턴은 봇 운영 중 관찰된 적 없음.
         return ("&&" in command) or ("||" in command) or (";" in command)
 
+    @staticmethod
+    def _agent_browser_npx_fallback_command(command: str) -> str | None:
+        """bare ``agent-browser`` 단일 명령을 ``npx --yes`` fallback 형태로 바꾼다."""
+        if not command.startswith("agent-browser"):
+            return None
+        if command != "agent-browser" and not command.startswith("agent-browser "):
+            return None
+        return f"npx --yes {command}"
+
+    @staticmethod
+    def _is_agent_browser_command_not_found(error: str) -> bool:
+        """셸별 ``agent-browser`` command-not-found stderr 패턴을 판별한다."""
+        normalized = error.lower()
+        return "agent-browser" in normalized and (
+            "command not found" in normalized or "not found" in normalized
+        )
+
+    @staticmethod
+    def _format_agent_browser_fallback_failure(
+        *,
+        original_exit: int,
+        original_error: str,
+        fallback_exit: int,
+        fallback_error: str,
+    ) -> str:
+        """원 실패와 fallback 실패를 모두 담은 모델 진단용 메시지를 만든다."""
+        return sanitize_tool_error(
+            "agent-browser command failed and npx fallback also failed. "
+            "Do not ask the user to search manually; use another available tool or "
+            "answer from gathered evidence. "
+            f"Original failure (exit {original_exit}): {original_error[:500]} "
+            f"Fallback `npx --yes agent-browser` failure (exit {fallback_exit}): "
+            f"{fallback_error[:500]}"
+        )
+
     async def _execute_command(
         self, skill_name: str, command: str
     ) -> str:
@@ -2050,6 +2085,55 @@ class AgentOrchestrator:
                     "Skill command failed (exit %d): %s",
                     proc.returncode, error,
                 )
+                fallback_command = self._agent_browser_npx_fallback_command(command)
+                if fallback_command and self._is_agent_browser_command_not_found(error):
+                    logger.warning(
+                        "BIZ-337: agent-browser not found; retrying with npx fallback: %s",
+                        fallback_command,
+                    )
+                    fallback_timeout = self._resolve_command_timeout(fallback_command)
+                    original_returncode = proc.returncode
+                    fallback_proc = await asyncio.create_subprocess_shell(
+                        fallback_command,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=str(self._workspace_dir),
+                        env=env,
+                        preexec_fn=get_preexec_fn(),
+                    )
+                    # timeout 시 외부 except 블록이 실제 실행 중인 fallback 프로세스를
+                    # 종료할 수 있게 ``proc`` 참조를 갱신한다.
+                    proc = fallback_proc
+                    fallback_stdout, fallback_stderr = await asyncio.wait_for(
+                        fallback_proc.communicate(), timeout=fallback_timeout
+                    )
+                    fallback_output = fallback_stdout.decode(
+                        "utf-8", errors="replace"
+                    ).strip()
+                    fallback_error = fallback_stderr.decode(
+                        "utf-8", errors="replace"
+                    ).strip()
+                    if fallback_proc.returncode == 0:
+                        logger.info(
+                            "BIZ-337: agent-browser npx fallback succeeded: %d chars output",
+                            len(fallback_output),
+                        )
+                        return (
+                            fallback_output
+                            if fallback_output
+                            else "[Command completed with no output]"
+                        )
+                    logger.error(
+                        "BIZ-337: agent-browser npx fallback failed (exit %d): %s",
+                        fallback_proc.returncode, fallback_error,
+                    )
+                    return self._format_agent_browser_fallback_failure(
+                        original_exit=original_returncode,
+                        original_error=error,
+                        fallback_exit=fallback_proc.returncode,
+                        fallback_error=fallback_error,
+                    )
+
                 # subprocess 의 stderr 는 외부 도구/원격 응답을 그대로 전달할
                 # 수 있어 prompt-injection 가장 큰 surface. envelope + 길이
                 # 캡 + framing 제거를 적용. (PRD §3.5.6)

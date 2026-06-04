@@ -457,6 +457,114 @@ async def test_execute_command_single_agent_browser_call_not_blocked(
     assert result == "ok"
 
 
+@pytest.mark.asyncio
+async def test_agent_browser_command_not_found_falls_back_to_npx(
+    config_file, monkeypatch,
+):
+    """bare ``agent-browser`` 가 PATH 에 없으면 ``npx --yes`` 로 1회 재시도."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+    commands: list[str] = []
+
+    class _FakeProc:
+        def __init__(self, returncode: int, stdout: bytes, stderr: bytes):
+            self.returncode = returncode
+            self._stdout = stdout
+            self._stderr = stderr
+
+        async def communicate(self):
+            return self._stdout, self._stderr
+
+    async def fake_create(command, *args, **kwargs):
+        commands.append(command)
+        if len(commands) == 1:
+            return _FakeProc(
+                127, b"", b"/bin/sh: agent-browser: command not found"
+            )
+        return _FakeProc(0, b"browser result", b"")
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fake_create)
+
+    result = await orch._execute_command(
+        "agent-browser", "agent-browser search 'world cup korea'",
+    )
+
+    assert result == "browser result"
+    assert commands == [
+        "agent-browser search 'world cup korea'",
+        "npx --yes agent-browser search 'world cup korea'",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_browser_fallback_failure_includes_both_failures(
+    config_file, monkeypatch,
+):
+    """fallback 도 실패하면 원 실패와 fallback 실패를 함께 반환한다."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+    commands: list[str] = []
+
+    class _FakeProc:
+        def __init__(self, returncode: int, stderr: bytes):
+            self.returncode = returncode
+            self._stderr = stderr
+
+        async def communicate(self):
+            return b"", self._stderr
+
+    async def fake_create(command, *args, **kwargs):
+        commands.append(command)
+        if len(commands) == 1:
+            return _FakeProc(127, b"/bin/sh: agent-browser: command not found")
+        return _FakeProc(1, b"npm error network down")
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fake_create)
+
+    result = await orch._execute_command(
+        "agent-browser", "agent-browser open https://example.com",
+    )
+
+    assert commands == [
+        "agent-browser open https://example.com",
+        "npx --yes agent-browser open https://example.com",
+    ]
+    assert "agent-browser command failed and npx fallback also failed" in result
+    assert "/bin/sh: agent-browser: command not found" in result
+    assert "npm error network down" in result
+
+
+@pytest.mark.asyncio
+async def test_non_agent_browser_command_not_found_does_not_fallback(
+    config_file, monkeypatch,
+):
+    """일반 명령의 command-not-found 는 agent-browser fallback 대상이 아니다."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+    commands: list[str] = []
+
+    class _FakeProc:
+        returncode = 127
+
+        async def communicate(self):
+            return b"", b"/bin/sh: weather-cli: command not found"
+
+    async def fake_create(command, *args, **kwargs):
+        commands.append(command)
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fake_create)
+
+    result = await orch._execute_command("weather", "weather-cli today")
+
+    assert commands == ["weather-cli today"]
+    assert "npx --yes" not in result
+    assert "weather-cli: command not found" in result
+
+
 def test_call_invokes_agent_browser_detects_via_skill_name():
     """``execute_skill(skill_name="agent-browser", ...)`` 는 카운트 대상."""
     from simpleclaw.agent.orchestrator import AgentOrchestrator
