@@ -23,6 +23,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from pathlib import Path
 from typing import Awaitable, Callable
 
 from simpleclaw.agent.progress import (
@@ -61,6 +62,69 @@ _CODE_FENCE_RE = re.compile(r"^```([^\n]*)$", re.MULTILINE)
 # 100개면 최근 ~100 차례의 clarify 질문을 콜백 가능 상태로 유지 — 일반 대화량
 # 기준 수일~수주 분량. 한계 초과 시 가장 오래된 항목부터 evict.
 _CLARIFY_CACHE_MAX_ENTRIES = 100
+
+# Telegram Bot API의 일반 파일 다운로드 한계와 LLM inline bytes 입력 비용을 함께
+# 고려한 상한. 큰 파일은 사용자 응답 지연/메모리 급증을 막기 위해 fail-soft로 무시한다.
+_MAX_DOCUMENT_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+# Gemini inline bytes로 안전하게 넘길 수 있는 문서 계열 MIME allowlist. 임의 바이너리,
+# 실행 파일, 압축 파일은 다운로드 자체를 피한다.
+SUPPORTED_DOCUMENT_MIME_TYPES = frozenset({
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/rtf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
+
+_MIME_EXTENSIONS = {
+    "application/pdf": ".pdf",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/csv": ".csv",
+    "application/json": ".json",
+    "application/rtf": ".rtf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
+
+
+def _safe_attachment_filename(name: str | None, *, file_id: str, mime_type: str) -> str:
+    """Telegram 파일명을 sandbox 저장에 안전한 basename으로 정규화한다."""
+    candidate = Path(name or "").name.strip()
+    if not candidate:
+        candidate = f"telegram-document-{file_id}{_MIME_EXTENSIONS.get(mime_type, '')}"
+    candidate = re.sub(r"[^\w.() \-]", "_", candidate, flags=re.UNICODE).strip(" .")
+    if not candidate:
+        candidate = f"telegram-document-{file_id}{_MIME_EXTENSIONS.get(mime_type, '')}"
+    return candidate[:180]
+
+
+def _write_attachment_to_sandbox(
+    attachment_dir: str | Path | None,
+    *,
+    filename: str,
+    payload: bytes,
+) -> str | None:
+    """첨부 payload를 sandbox에 best-effort 저장하고 절대 경로를 반환한다."""
+    if attachment_dir is None:
+        return None
+    directory = Path(attachment_dir).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / filename
+    path.write_bytes(payload)
+    return str(path)
 
 
 def _scan_fence_state(
@@ -370,6 +434,8 @@ class TelegramBot:
     화이트리스트가 비어 있으면 모든 메시지를 거부하는 fail-closed 정책을 따른다.
     """
 
+    MAX_DOCUMENT_ATTACHMENT_BYTES = _MAX_DOCUMENT_ATTACHMENT_BYTES
+
     def __init__(
         self,
         bot_token: str,
@@ -379,6 +445,7 @@ class TelegramBot:
         clarify_provider: Callable[[int], ClarifyRequest | None] | None = None,
         streaming_config: dict | None = None,
         proactive_callback_handler: Callable[..., Awaitable[str]] | None = None,
+        attachment_dir: str | Path | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._whitelist_user_ids = set(whitelist_user_ids or [])
@@ -402,6 +469,8 @@ class TelegramBot:
         # CronScheduler 의 notifier 가 별도 경로라 인바운드 sink 와 격리된다.
         self._streaming_config = streaming_config or {}
         self._proactive_callback_handler = proactive_callback_handler
+        self._attachment_dir = Path(attachment_dir).expanduser() if attachment_dir else None
+
 
     def set_proactive_callback_handler(
         self, handler: Callable[..., Awaitable[str]] | None
@@ -765,13 +834,28 @@ class TelegramBot:
         await self._send_response(query, response, chat_id=chat_id)
 
     @staticmethod
-    async def _download_message_attachments(message, bot) -> list[MultimodalAttachment]:
-        """Telegram 메시지의 이미지 첨부를 인증 후 LLM용 bytes로 다운로드한다.
+    def _default_message_text_for_attachments(
+        attachments: list[MultimodalAttachment],
+    ) -> str:
+        """첨부만 있는 Telegram 메시지에 사용할 안전한 기본 요청문을 고른다."""
+        if attachments and all(a.mime_type.startswith("image/") for a in attachments):
+            return "이미지를 분석해 주세요."
+        return "첨부 파일을 분석해 주세요."
+
+    @staticmethod
+    async def _download_message_attachments(
+        message,
+        bot,
+        *,
+        attachment_dir: str | Path | None = None,
+    ) -> list[MultimodalAttachment]:
+        """Telegram 메시지의 첨부를 인증 후 LLM용 bytes로 다운로드한다.
 
         Telegram photo는 해상도별 후보가 오므로 가장 큰 항목(마지막)을 선택한다.
-        document는 MIME type이 ``image/*``인 경우에만 인라인 이미지 데이터로 취급한다.
-        파일 ID/URL은 provider에 넘기지 않고 이 지점에서 bytes로 닫아 Gemini 문서의
-        ``types.Part.from_bytes`` 경로에 맞춘다.
+        document는 이미지와 allowlist 문서 MIME만 현재 turn inline bytes로 취급한다.
+        파일 ID/URL은 provider에 넘기지 않고 이 지점에서 bytes로 닫는다. 문서 파일은
+        운영자가 추적할 수 있도록 sandbox에 best-effort 저장하되, 영속 대화 DB에는
+        바이너리나 경로를 저장하지 않는다.
         """
         attachments: list[MultimodalAttachment] = []
 
@@ -794,22 +878,48 @@ class TelegramBot:
                     logger.warning("Telegram photo download failed: %s", exc)
 
         document = getattr(message, "document", None)
-        mime_type = getattr(document, "mime_type", "") if document is not None else ""
-        if document is not None and str(mime_type).startswith("image/"):
+        raw_mime_type = getattr(document, "mime_type", "") if document is not None else ""
+        mime_type = str(raw_mime_type or "").lower()
+        is_supported_document = mime_type in SUPPORTED_DOCUMENT_MIME_TYPES
+        if document is not None and (mime_type.startswith("image/") or is_supported_document):
             file_id = getattr(document, "file_id", None)
             if file_id:
+                file_size = getattr(document, "file_size", None)
+                if (
+                    isinstance(file_size, int)
+                    and file_size > _MAX_DOCUMENT_ATTACHMENT_BYTES
+                ):
+                    logger.warning(
+                        "Telegram document ignored because it is too large: "
+                        "file_id=%s size=%d max=%d",
+                        file_id,
+                        file_size,
+                        _MAX_DOCUMENT_ATTACHMENT_BYTES,
+                    )
+                    return attachments
                 try:
                     tg_file = await bot.get_file(file_id)
                     payload = await tg_file.download_as_bytearray()
+                    filename = _safe_attachment_filename(
+                        getattr(document, "file_name", None),
+                        file_id=file_id,
+                        mime_type=mime_type,
+                    )
+                    saved_path = _write_attachment_to_sandbox(
+                        attachment_dir,
+                        filename=filename,
+                        payload=bytes(payload),
+                    )
                     attachments.append(
                         MultimodalAttachment(
                             data=bytes(payload),
                             mime_type=str(mime_type),
-                            name=getattr(document, "file_name", None),
+                            name=filename,
+                            path=saved_path,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Telegram document image download failed: %s", exc)
+                    logger.warning("Telegram document download failed: %s", exc)
 
         return attachments
 
@@ -840,12 +950,18 @@ class TelegramBot:
                     chat_id = update.message.chat_id
                     authorized = self.is_authorized(user_id, chat_id)
                     attachments = (
-                        await self._download_message_attachments(update.message, context.bot)
+                        await self._download_message_attachments(
+                            update.message,
+                            context.bot,
+                            attachment_dir=self._attachment_dir,
+                        )
                         if authorized
                         else []
                     )
                     if attachments and not message_text.strip():
-                        message_text = "이미지를 분석해 주세요."
+                        message_text = self._default_message_text_for_attachments(
+                            attachments
+                        )
                     if not message_text and not attachments:
                         return
 
@@ -938,7 +1054,7 @@ class TelegramBot:
                     )
 
             self._application.add_handler(
-                MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.IMAGE, _on_message)
+                MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, _on_message)
             )
             self._application.add_handler(
                 CallbackQueryHandler(self._on_callback_query)
