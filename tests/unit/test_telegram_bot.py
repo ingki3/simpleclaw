@@ -208,6 +208,32 @@ class TestTelegramBot:
         assert (tmp_path / "paper.pdf").read_bytes() == b"%PDF-1.7"
 
     @pytest.mark.asyncio
+    async def test_download_document_attachment_does_not_overwrite_existing_file(
+        self, tmp_path
+    ):
+        (tmp_path / "paper.pdf").write_bytes(b"old")
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"new"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="paper.pdf",
+            file_size=3,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        assert attachments[0].path == str(tmp_path / "paper-1.pdf")
+        assert (tmp_path / "paper.pdf").read_bytes() == b"old"
+        assert (tmp_path / "paper-1.pdf").read_bytes() == b"new"
+
+    @pytest.mark.asyncio
     async def test_download_unsupported_document_is_ignored(self):
         api_bot = MagicMock()
         api_bot.get_file = AsyncMock()
@@ -239,6 +265,30 @@ class TestTelegramBot:
 
         assert attachments == []
         api_bot.get_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_document_over_limit_after_download_is_ignored(self, tmp_path):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(
+            return_value=bytearray(b"x" * (TelegramBot.MAX_DOCUMENT_ATTACHMENT_BYTES + 1))
+        )
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="huge.pdf",
+            file_size=1,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        assert attachments == []
+        assert not (tmp_path / "huge.pdf").exists()
 
     def test_document_only_prompt_mentions_attachment_file(self):
         attachment = MultimodalAttachment(
