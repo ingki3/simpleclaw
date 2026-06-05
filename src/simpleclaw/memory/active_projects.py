@@ -38,6 +38,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from simpleclaw.memory.supersession import is_expired_event_memory
+
 logger = logging.getLogger(__name__)
 
 
@@ -285,7 +287,13 @@ def filter_active(
     fallback_now = now or datetime.now()
     cutoff = fallback_now - timedelta(days=window_days)
 
-    active = [p for p in projects.values() if p.last_seen >= cutoff]
+    active = [
+        p for p in projects.values()
+        if p.last_seen >= cutoff
+        and not is_expired_event_memory(
+            f"{p.name} {p.role} {p.recent_summary}", now=fallback_now
+        )
+    ]
     active.sort(key=lambda p: p.last_seen, reverse=True)
     return active
 

@@ -745,6 +745,8 @@ class ConversationStore:
         min_confidence: float = 0.0,
     ) -> list[tuple[MemoryItem, float]]:
         """active memory_items를 embedding cosine similarity로 검색한다."""
+        from simpleclaw.memory.supersession import memory_item_supersession_boost
+
         query = np.asarray(query_vector, dtype=_EMBEDDING_DTYPE)
         if query.ndim != 1 or query.size == 0:
             raise ValueError("query_vector must be a non-empty 1-D vector")
@@ -771,7 +773,7 @@ class ConversationStore:
             score = float(np.dot(query_unit, item.embedding / emb_norm))
             if score < min_score:
                 continue
-            results.append((item, score))
+            results.append((item, score + memory_item_supersession_boost(item)))
         results.sort(key=lambda pair: pair[1], reverse=True)
         return results[:k]
     # ------------------------------------------------------------------
