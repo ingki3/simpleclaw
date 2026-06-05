@@ -127,6 +127,9 @@ async def main():
     # config 누락 시 회귀 0. 운영자가 켜고 싶을 때 config.yaml 의 telegram.streaming
     # 블록만 켜면 된다.
     streaming_config = tg_config.get("streaming", {})
+    attachment_sandbox_dir = Path(
+        "~/.simpleclaw-agent/default/attachments/telegram"
+    ).expanduser()
     bot = TelegramBot(
         bot_token=tg_config["bot_token"],
         whitelist_user_ids=whitelist["user_ids"],
@@ -136,6 +139,7 @@ async def main():
         # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
         clarify_provider=orchestrator.pop_pending_clarify,
         streaming_config=streaming_config,
+        attachment_sandbox_dir=attachment_sandbox_dir,
     )
 
     # Cron scheduler — notifier is the only external wiring.

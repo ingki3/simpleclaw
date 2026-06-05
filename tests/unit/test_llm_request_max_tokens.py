@@ -19,7 +19,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from simpleclaw.llm.models import LLMRequest, LLMResponse, SystemBlock
+from simpleclaw.llm.models import (
+    LLMRequest,
+    LLMResponse,
+    MultimodalAttachment,
+    SystemBlock,
+)
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.providers.claude import ClaudeProvider
 from simpleclaw.llm.providers.gemini import GeminiProvider
@@ -320,6 +325,25 @@ class TestGeminiMaxTokens:
         await provider.stream("sys", "msg", max_tokens=300)
         config = stream.call_args.kwargs["config"]
         assert config.max_output_tokens == 300
+
+    def test_pdf_attachment_becomes_inline_bytes_part(self):
+        parts = GeminiProvider._content_parts_for_message({
+            "role": "user",
+            "content": "요약해줘",
+            "attachments": [
+                MultimodalAttachment(
+                    data=b"%PDF",
+                    mime_type="application/pdf",
+                    name="paper.pdf",
+                    path="/tmp/paper.pdf",
+                )
+            ],
+        })
+
+        assert len(parts) == 2
+        assert parts[0].text == "요약해줘"
+        assert parts[1].inline_data.mime_type == "application/pdf"
+        assert bytes(parts[1].inline_data.data) == b"%PDF"
 
 
 # ---------------------------------------------------------------------------

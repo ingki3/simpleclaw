@@ -35,6 +35,19 @@ from simpleclaw.llm.providers.base import (
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_INLINE_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini API 프로바이더."""
@@ -74,7 +87,7 @@ class GeminiProvider(LLMProvider):
 
     @staticmethod
     def _coerce_multimodal_attachment(raw: object) -> MultimodalAttachment | None:
-        """dict/dataclass 첨부를 Gemini에 보낼 수 있는 image attachment로 정규화한다."""
+        """dict/dataclass 첨부를 Gemini에 보낼 수 있는 inline Part로 정규화한다."""
         if isinstance(raw, MultimodalAttachment):
             attachment = raw
         elif isinstance(raw, dict):
@@ -88,13 +101,17 @@ class GeminiProvider(LLMProvider):
             )
         else:
             return None
-        if not attachment.mime_type.startswith("image/") or not attachment.data:
+        if not attachment.data:
             return None
-        return attachment
+        if attachment.mime_type.startswith("image/"):
+            return attachment
+        if attachment.mime_type in _ALLOWED_INLINE_DOCUMENT_MIME_TYPES:
+            return attachment
+        return None
 
     @classmethod
     def _content_parts_for_message(cls, msg: dict) -> list[types.Part]:
-        """텍스트 + 이미지 첨부를 Gemini Content.parts 순서로 변환한다."""
+        """텍스트 + 허용 첨부를 Gemini Content.parts 순서로 변환한다."""
         parts: list[types.Part] = []
         text = msg.get("content", "")
         if text:

@@ -64,13 +64,15 @@ class MultimodalAttachment:
     """Provider-neutral 멀티모달 첨부 1건.
 
     Telegram 등 채널 레이어는 외부 파일 ID를 LLM provider에 직접 노출하지 않고,
-    인증 후 다운로드한 bytes와 MIME type만 이 구조체에 담는다. Gemini provider는
-    Google 이미지 이해 문서의 inline image data 방식에 맞춰 이 값을
-    ``types.Part.from_bytes(data=..., mime_type=...)`` 로 변환한다.
+    인증 후 다운로드한 bytes와 MIME type만 이 구조체에 담는다. 이미지뿐 아니라
+    PDF/텍스트/CSV/Office 문서도 같은 inline bytes 경로로 표현한다.
+    ``path`` 는 안전한 sandbox 저장 위치를 기록하기 위한 메타데이터이며,
+    provider 호출에는 bytes/mime_type 만 사용한다.
     """
     data: bytes
     mime_type: str
     name: str | None = None
+    path: str | None = None
 
 
 @dataclass

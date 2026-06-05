@@ -967,7 +967,7 @@ class TestGeminiProvider:
         assert content.parts[2].inline_data.mime_type == "image/png"
         assert content.parts[2].inline_data.data == b"png"
 
-    def test_convert_messages_ignores_non_image_attachments(self):
+    def test_convert_messages_ignores_disallowed_attachments(self):
         provider = GeminiProvider(model="gemini-3.5-flash", api_key="test-key")
 
         result = provider._convert_messages(
@@ -976,7 +976,11 @@ class TestGeminiProvider:
                     "role": "user",
                     "content": "파일 확인",
                     "attachments": [
-                        {"data": b"pdf", "mime_type": "application/pdf", "name": "x.pdf"}
+                        {
+                            "data": b"binary",
+                            "mime_type": "application/octet-stream",
+                            "name": "x.bin",
+                        }
                     ],
                 }
             ]
