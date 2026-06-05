@@ -7,7 +7,6 @@ contextvars 기반 trace_id 전파, 환경변수 주입/채택, ``trace_scope`` 
 from __future__ import annotations
 
 import asyncio
-import os
 
 import pytest
 

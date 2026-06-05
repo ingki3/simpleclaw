@@ -1,5 +1,6 @@
 """Tests for the conversation store."""
 
+import warnings
 from datetime import datetime, timedelta
 
 import pytest
@@ -12,6 +13,25 @@ class TestConversationStore:
     @pytest.fixture
     def store(self, tmp_path):
         return ConversationStore(tmp_path / "test.db")
+
+    def test_context_manager_closes_without_resource_warning(self, tmp_path):
+        db_path = tmp_path / "context-manager.db"
+        with warnings.catch_warnings(record=True) as captured_warnings:
+            warnings.simplefilter("always", ResourceWarning)
+            with ConversationStore(db_path) as store:
+                store.add_message(ConversationMessage(
+                    role=MessageRole.USER,
+                    content="Hello context manager",
+                ))
+                assert store.get_recent(limit=1)[0].content == "Hello context manager"
+            store.close()
+
+        resource_warnings = [
+            warning
+            for warning in captured_warnings
+            if issubclass(warning.category, ResourceWarning)
+        ]
+        assert resource_warnings == []
 
     def test_add_and_retrieve(self, store):
         msg = ConversationMessage(

@@ -1,6 +1,5 @@
 """End-to-end integration test for the persona pipeline."""
 
-from pathlib import Path
 
 import pytest
 

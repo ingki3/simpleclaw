@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-import pytest
 
 from simpleclaw.memory.active_projects import (
     ActiveProject,
