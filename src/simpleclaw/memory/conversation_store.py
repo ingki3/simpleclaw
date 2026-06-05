@@ -71,6 +71,21 @@ class ConversationStore:
         self._db_path = str(db_path)
         self._ensure_schema()
 
+    def close(self) -> None:
+        """저장소 종료 hook.
+
+        현재 구현은 메서드 호출마다 SQLite 연결을 열고 닫으므로 인스턴스가 보유한
+        장기 연결은 없다. 그래도 fixture/호출자가 ``close()`` 또는 context manager를
+        일관되게 사용할 수 있도록 idempotent no-op으로 명시한다.
+        """
+
+    def __enter__(self) -> "ConversationStore":
+        """``with ConversationStore(...)`` 패턴에서 저장소 자신을 반환한다."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """context manager 종료 시 close 정책을 한곳으로 모은다."""
+        self.close()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
