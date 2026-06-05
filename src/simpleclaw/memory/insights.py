@@ -31,6 +31,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 
+from simpleclaw.memory.supersession import is_expired_event_memory
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +68,11 @@ class InsightMeta:
     # ``managed:dreaming:archive`` 섹션의 dated block 에만 흔적이 남고 활성 retrieval
     # 에서는 제외된다(``DreamingPipeline.active_insights`` 가 필터한다).
     archived_at: datetime | None = None
+    # BIZ-340 — 사용자/운영자 정정으로 더 이상 활성 기억으로 쓰면 안 되는 항목.
+    # archive는 decay로도 발생하지만 superseded는 명시적 반박/종료 신호다.
+    superseded_at: datetime | None = None
+    superseded_by: str = ""
+    correction_reason: str = ""
 
     def recompute_id_range(self) -> None:
         """``source_msg_ids`` 로부터 ``start_msg_id`` / ``end_msg_id`` 를 갱신.
@@ -83,6 +90,14 @@ class InsightMeta:
         """BIZ-78 — archive 상태 여부. ``apply_decay`` 가 세팅하고 부활 시 해제."""
         return self.archived_at is not None
 
+    def is_superseded(self) -> bool:
+        """BIZ-340 — 명시적 정정/종료 신호로 대체된 상태 여부."""
+        return self.superseded_at is not None
+
+    def is_inactive(self) -> bool:
+        """활성 retrieval/sync 에서 배제되어야 하는 상태 여부."""
+        return self.is_archived() or self.is_superseded()
+
     def to_dict(self) -> dict:
         """JSONL 직렬화용 dict 로 변환 (datetime → ISO 문자열)."""
         d = asdict(self)
@@ -91,6 +106,9 @@ class InsightMeta:
         # archived_at 는 None 또는 datetime — None 이면 그대로 둔다.
         d["archived_at"] = (
             self.archived_at.isoformat() if self.archived_at is not None else None
+        )
+        d["superseded_at"] = (
+            self.superseded_at.isoformat() if self.superseded_at is not None else None
         )
         return d
 
@@ -132,6 +150,15 @@ class InsightMeta:
                 archived_at = None
         else:
             archived_at = None
+        raw_superseded = d.get("superseded_at")
+        superseded_at: datetime | None
+        if isinstance(raw_superseded, str) and raw_superseded:
+            try:
+                superseded_at = datetime.fromisoformat(raw_superseded)
+            except ValueError:
+                superseded_at = None
+        else:
+            superseded_at = None
         return cls(
             topic=str(d.get("topic", "")),
             text=str(d.get("text", "")),
@@ -151,6 +178,9 @@ class InsightMeta:
             start_msg_id=start_msg_id,
             end_msg_id=end_msg_id,
             archived_at=archived_at,
+            superseded_at=superseded_at,
+            superseded_by=str(d.get("superseded_by", "") or ""),
+            correction_reason=str(d.get("correction_reason", "") or ""),
         )
 
 
@@ -351,6 +381,15 @@ def merge_insights(
         if key in merged:
             # reinforcement — 같은 topic 의 누적 관측.
             cur = merged[key]
+            # BIZ-340 — explicit correction/supersession is stronger than a later
+            # raw dreaming observation. Keep the audit row but do not resurrect it.
+            if cur.is_superseded() or is_expired_event_memory(
+                f"{cur.topic} {cur.text} {obs.topic} {obs.text}", now=now
+            ):
+                if cur.archived_at is None:
+                    cur.archived_at = now
+                changed.append(cur)
+                continue
             # BIZ-78 — archive 상태에서 재관측되면 부활. ``archived_at`` 을 None 으로
             # 되돌리고 ``last_seen`` 갱신은 아래 공통 로직이 처리. evidence_count 도
             # 정상 누적 — archive 기간 동안 잃었다고 보지 않고 같은 인사이트의 재등장

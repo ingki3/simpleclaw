@@ -11,6 +11,7 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.insights import InsightMeta, is_promoted, normalize_topic
 from simpleclaw.memory.models import ClusterRecord, MemoryItem, MemoryItemStatus, MemoryItemType
 from simpleclaw.memory.suggestions import SuggestionMeta
+from simpleclaw.memory.supersession import is_expired_event_memory
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +71,16 @@ def sync_insights_to_memory_items(
             continue
         seen_refs.add(source_ref)
         item_type = _classify_insight(meta)
+        expired_event = is_expired_event_memory(f"{meta.topic} {meta.text}", now=ts)
+        raw_superseded_at = getattr(meta, "superseded_at", None)
+        superseded_at = (
+            raw_superseded_at.isoformat()
+            if raw_superseded_at is not None
+            else None
+        )
         should_be_active = (
-            not meta.is_archived()
+            not meta.is_inactive()
+            and not expired_event
             and meta.confidence >= high_confidence
             and (
                 item_type in {MemoryItemType.DECISION, MemoryItemType.PREFERENCE}
@@ -98,6 +107,10 @@ def sync_insights_to_memory_items(
                 "evidence_count": meta.evidence_count,
                 "start_msg_id": meta.start_msg_id,
                 "end_msg_id": meta.end_msg_id,
+                "superseded_at": superseded_at,
+                "superseded_by": getattr(meta, "superseded_by", ""),
+                "correction_reason": getattr(meta, "correction_reason", ""),
+                "expired_event": expired_event,
                 "sync_reason": (
                     "active" if should_be_active else "inactive_or_low_confidence"
                 ),
@@ -174,7 +187,10 @@ def sync_active_projects_to_memory_items(
         if source_ref == "active_project:":
             continue
         seen_refs.add(source_ref)
-        is_active = window_days > 0 and project.last_seen >= cutoff
+        expired_event = is_expired_event_memory(
+            f"{project.name} {project.role} {project.recent_summary}", now=ts
+        )
+        is_active = window_days > 0 and project.last_seen >= cutoff and not expired_event
         item = store.upsert_memory_item(
             item_type=MemoryItemType.ACTIVE_PROJECT,
             text=_render_project_text(project),
@@ -189,6 +205,7 @@ def sync_active_projects_to_memory_items(
                 "name": project.name,
                 "role": project.role,
                 "window_days": window_days,
+                "expired_event": expired_event,
             },
         )
         if item.status is MemoryItemStatus.ACTIVE:
@@ -210,7 +227,8 @@ def sync_cluster_summary_to_memory_item(
     summary = (cluster.summary or "").strip()
     label = (cluster.label or "").strip()
     text = f"[{label}]\n{summary}" if label and summary else summary or label
-    is_active = bool(summary)
+    expired_event = is_expired_event_memory(text, now=ts)
+    is_active = bool(summary) and not expired_event
     return store.upsert_memory_item(
         item_type=MemoryItemType.CLUSTER_SUMMARY,
         text=text,
@@ -226,5 +244,6 @@ def sync_cluster_summary_to_memory_item(
             "cluster_id": cluster.id,
             "label": cluster.label,
             "member_count": cluster.member_count,
+            "expired_event": expired_event,
         },
     )
