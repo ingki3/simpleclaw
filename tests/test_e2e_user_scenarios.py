@@ -17,7 +17,6 @@ import sys
 import textwrap
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -302,7 +301,7 @@ class TestScenario_SkillExecution:
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
 
-        response = await orch.process_message("지금 몇 시야?", 123456, 789)
+        await orch.process_message("지금 몇 시야?", 123456, 789)
 
         # 스킬이 실제로 실행되어 결과가 Observation에 포함되었는지
         assert captured_user_message is not None

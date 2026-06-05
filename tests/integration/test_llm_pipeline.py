@@ -1,6 +1,5 @@
 """Integration test: persona engine + LLM router pipeline."""
 
-from unittest.mock import AsyncMock
 
 import pytest
 

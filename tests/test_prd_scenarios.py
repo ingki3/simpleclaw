@@ -16,13 +16,9 @@ PRD Sections:
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 import sys
 import textwrap
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -661,8 +657,7 @@ class TestPRD_4_1_WorkspaceRules:
     def test_config_loaded_from_yaml(self, tmp_path):
         """config.yaml에서 모든 설정 로드."""
         from simpleclaw.config import (
-            load_persona_config, load_llm_config,
-            load_daemon_config, load_sub_agents_config,
+            load_persona_config,
         )
         config = tmp_path / "config.yaml"
         config.write_text("persona:\n  token_budget: 2048\n")

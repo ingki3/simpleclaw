@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 
 from simpleclaw.skills.models import SkillScope
 from simpleclaw.skills.discovery import discover_skills

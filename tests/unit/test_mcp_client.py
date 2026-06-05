@@ -3,7 +3,6 @@
 import pytest
 
 from simpleclaw.skills.mcp_client import MCPManager
-from simpleclaw.skills.models import ToolSource
 
 
 class TestMCPManager:

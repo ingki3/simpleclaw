@@ -29,10 +29,7 @@ correctly by checking:
 
 from __future__ import annotations
 
-import json
-import os
 import sqlite3
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -451,7 +448,7 @@ class TestCmd_MultiSkillConversation:
         await bot.handle_message("AAPL 주가 알려줘", USER_ID, CHAT_ID)
 
         # Command 2
-        response = await bot.handle_message("관련 뉴스도 찾아줘", USER_ID, CHAT_ID)
+        await bot.handle_message("관련 뉴스도 찾아줘", USER_ID, CHAT_ID)
 
         # History should contain first conversation
         assert len(captured_messages) == 1

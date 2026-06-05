@@ -18,7 +18,7 @@ class TestHeartbeatMonitor:
     @pytest.mark.asyncio
     async def test_tick_writes_status_file(self, setup):
         _, monitor, status_file = setup
-        tick = await monitor.tick()
+        await monitor.tick()
         assert status_file.exists()
         content = status_file.read_text()
         assert "# Heartbeat Status" in content
