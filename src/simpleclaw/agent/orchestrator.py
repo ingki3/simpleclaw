@@ -1592,6 +1592,7 @@ class AgentOrchestrator:
 
         from simpleclaw.memory.active_projects import ActiveProjectStore, filter_active
         from simpleclaw.memory.insights import InsightStore, is_promoted
+        from simpleclaw.memory.supersession import is_expired_event_memory
 
         start = time.perf_counter()
         excluded = exclude_contents or set()
@@ -1731,7 +1732,9 @@ class AgentOrchestrator:
                             errors += 1
                 insights = InsightStore(self._long_term_insights_file).load()
                 for insight in insights.values():
-                    if insight.is_archived():
+                    if insight.is_inactive():
+                        continue
+                    if is_expired_event_memory(f"{insight.topic} {insight.text}"):
                         continue
                     if insight.confidence < self._long_term_min_confidence:
                         continue
@@ -1759,6 +1762,8 @@ class AgentOrchestrator:
                 )
                 for project in active_projects:
                     text = f"{project.name} {project.role} {project.recent_summary}"
+                    if is_expired_event_memory(text):
+                        continue
                     if text in excluded:
                         continue
                     score = _lexical_score(text, 0.85)
