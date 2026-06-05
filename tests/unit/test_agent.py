@@ -1090,7 +1090,6 @@ class TestBuiltinFileRead:
         assert "not found" in result
 
     def test_file_read_success(self, tmp_path):
-        from pathlib import Path
         ws = tmp_path / "workspace"
         ws.mkdir()
         result = handle_file_read(
@@ -1105,7 +1104,7 @@ class TestBuiltinFileRead:
             {"skill_name": "file-read", "path": "config.yaml", "offset": 0, "limit": 3}, ws
         )
         if "Error" not in result:
-            lines = [l for l in result.split("\n") if l.strip() and "|" in l]
+            lines = [line for line in result.split("\n") if line.strip() and "|" in line]
             assert len(lines) <= 3
 
     def test_file_read_negative_offset(self, tmp_path):

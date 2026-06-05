@@ -19,13 +19,9 @@ Only LLM API calls are mocked. Everything else is real.
 
 from __future__ import annotations
 
-import json
-import os
 import sqlite3
 import sys
-import textwrap
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -346,7 +342,7 @@ class TestCmd_CalcSkill:
         orch._router.send = AsyncMock(side_effect=mock_send)
 
         # ── 사용자 명령 ──
-        response = await bot.handle_message("123 * 456 계산해줘", USER_ID, CHAT_ID)
+        await bot.handle_message("123 * 456 계산해줘", USER_ID, CHAT_ID)
 
         # ── 예상 행동: 계산 결과가 Observation에 포함 ──
         assert "Result: 56088" in captured["user_message"]
@@ -398,7 +394,7 @@ class TestCmd_MultiTurn:
         await bot.handle_message("내 이름은 김철수야", USER_ID, CHAT_ID)
 
         # ── 명령 2 ──
-        response = await bot.handle_message("내 이름이 뭐였지?", USER_ID, CHAT_ID)
+        await bot.handle_message("내 이름이 뭐였지?", USER_ID, CHAT_ID)
 
         # ── 예상 행동: 히스토리에 이전 대화 포함 ──
         assert len(captured_messages) == 1

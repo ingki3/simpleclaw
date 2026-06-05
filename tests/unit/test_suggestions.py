@@ -11,7 +11,6 @@ DoD 회귀 가드:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -28,7 +27,6 @@ from simpleclaw.memory.insights import (
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.memory.suggestions import (
     BlocklistStore,
-    SuggestionMeta,
     SuggestionStore,
 )
 

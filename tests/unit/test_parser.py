@@ -3,7 +3,6 @@
 from pathlib import Path
 import tempfile
 
-import pytest
 
 from simpleclaw.persona.models import FileType, SourceScope
 from simpleclaw.persona.parser import parse_markdown
