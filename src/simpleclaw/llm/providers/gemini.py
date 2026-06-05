@@ -35,6 +35,21 @@ from simpleclaw.llm.providers.base import (
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_INLINE_ATTACHMENT_MIME_TYPES = frozenset({
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/rtf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
+
 
 class GeminiProvider(LLMProvider):
     """Google Gemini API 프로바이더."""
@@ -74,27 +89,39 @@ class GeminiProvider(LLMProvider):
 
     @staticmethod
     def _coerce_multimodal_attachment(raw: object) -> MultimodalAttachment | None:
-        """dict/dataclass 첨부를 Gemini에 보낼 수 있는 image attachment로 정규화한다."""
+        """dict/dataclass 첨부를 Gemini inline bytes attachment로 정규화한다."""
         if isinstance(raw, MultimodalAttachment):
             attachment = raw
         elif isinstance(raw, dict):
             data = raw.get("data")
             mime_type = raw.get("mime_type") or raw.get("mimeType")
             name = raw.get("name") or raw.get("file_name")
+            path = raw.get("path")
             if data is None or not mime_type:
                 return None
             attachment = MultimodalAttachment(
-                data=bytes(data), mime_type=str(mime_type), name=name
+                data=bytes(data), mime_type=str(mime_type), name=name, path=path
             )
         else:
             return None
-        if not attachment.mime_type.startswith("image/") or not attachment.data:
+        mime_type = attachment.mime_type.lower()
+        if not attachment.data:
             return None
-        return attachment
+        if not (
+            mime_type.startswith("image/")
+            or mime_type in _GEMINI_INLINE_ATTACHMENT_MIME_TYPES
+        ):
+            return None
+        return MultimodalAttachment(
+            data=attachment.data,
+            mime_type=mime_type,
+            name=attachment.name,
+            path=attachment.path,
+        )
 
     @classmethod
     def _content_parts_for_message(cls, msg: dict) -> list[types.Part]:
-        """텍스트 + 이미지 첨부를 Gemini Content.parts 순서로 변환한다."""
+        """텍스트 + 지원 첨부를 Gemini Content.parts 순서로 변환한다."""
         parts: list[types.Part] = []
         text = msg.get("content", "")
         if text:
@@ -121,8 +148,8 @@ class GeminiProvider(LLMProvider):
         assistant, user, tool 세 가지 role을 처리한다.
         tool result 메시지는 FunctionResponse로 변환하고,
         assistant의 tool_calls는 FunctionCall part로 변환한다. user 메시지에
-        ``attachments``가 있으면 Gemini 이미지 이해 문서의 inline bytes 방식,
-        즉 ``types.Part.from_bytes(data=..., mime_type=...)`` 로 이미지 Part를 붙인다.
+        ``attachments``가 있으면 Gemini inline bytes 방식,
+        즉 ``types.Part.from_bytes(data=..., mime_type=...)`` 로 지원 Part를 붙인다.
         """
         contents: list[types.Content] = []
         for msg in messages:
