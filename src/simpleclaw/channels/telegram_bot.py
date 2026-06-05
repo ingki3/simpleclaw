@@ -123,8 +123,18 @@ def _write_attachment_to_sandbox(
     directory = Path(attachment_dir).expanduser()
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / filename
-    path.write_bytes(payload)
-    return str(path)
+    if not path.exists():
+        path.write_bytes(payload)
+        return str(path)
+
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(1, 1000):
+        candidate = directory / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            candidate.write_bytes(payload)
+            return str(candidate)
+    raise RuntimeError("could not allocate attachment sandbox path")
 
 
 def _scan_fence_state(
@@ -899,7 +909,19 @@ class TelegramBot:
                     return attachments
                 try:
                     tg_file = await bot.get_file(file_id)
-                    payload = await tg_file.download_as_bytearray()
+                    payload = bytes(await tg_file.download_as_bytearray())
+                    if (
+                        is_supported_document
+                        and len(payload) > _MAX_DOCUMENT_ATTACHMENT_BYTES
+                    ):
+                        logger.warning(
+                            "Telegram document ignored after download because it is "
+                            "too large: file_id=%s size=%d max=%d",
+                            file_id,
+                            len(payload),
+                            _MAX_DOCUMENT_ATTACHMENT_BYTES,
+                        )
+                        return attachments
                     filename = _safe_attachment_filename(
                         getattr(document, "file_name", None),
                         file_id=file_id,
@@ -908,11 +930,11 @@ class TelegramBot:
                     saved_path = _write_attachment_to_sandbox(
                         attachment_dir,
                         filename=filename,
-                        payload=bytes(payload),
+                        payload=payload,
                     )
                     attachments.append(
                         MultimodalAttachment(
-                            data=bytes(payload),
+                            data=payload,
                             mime_type=str(mime_type),
                             name=filename,
                             path=saved_path,
