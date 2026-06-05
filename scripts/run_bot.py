@@ -121,6 +121,10 @@ async def main():
         metrics=metrics,
         structured_logger=structured_logger,
     )
+    agent_config = load_agent_config(CONFIG_PATH)
+    attachment_dir = (
+        Path(agent_config["workspace_dir"]).expanduser() / "attachments" / "telegram"
+    )
 
     whitelist = tg_config["whitelist"]
     # BIZ-259 — telegram.streaming 블록을 봇에 전달. 기본 enabled=false 이므로
@@ -136,6 +140,7 @@ async def main():
         # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
         clarify_provider=orchestrator.pop_pending_clarify,
         streaming_config=streaming_config,
+        attachment_dir=attachment_dir,
     )
 
     # Cron scheduler — notifier is the only external wiring.
@@ -175,7 +180,6 @@ async def main():
     # Dreaming — 야간 자동 대화 요약 (5분마다 조건 체크)
     dreaming_config = daemon_config.get("dreaming", {})
     # orchestrator와 동일한 대화 DB를 사용
-    agent_config = load_agent_config(CONFIG_PATH)
     conv_store = ConversationStore(Path(agent_config["db_path"]).expanduser())
     llm_router = orchestrator._router  # 오케스트레이터의 LLM 라우터 재사용
 

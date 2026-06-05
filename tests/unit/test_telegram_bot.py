@@ -178,19 +178,76 @@ class TestTelegramBot:
         ]
 
     @pytest.mark.asyncio
-    async def test_download_non_image_document_is_ignored(self):
+    async def test_download_pdf_document_attachment_preserves_mime_name_and_path(self, tmp_path):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"%PDF-1.7"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="paper.pdf",
+            file_size=8,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        api_bot.get_file.assert_awaited_once_with("doc-1")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"%PDF-1.7",
+                mime_type="application/pdf",
+                name="paper.pdf",
+                path=str(tmp_path / "paper.pdf"),
+            )
+        ]
+        assert (tmp_path / "paper.pdf").read_bytes() == b"%PDF-1.7"
+
+    @pytest.mark.asyncio
+    async def test_download_unsupported_document_is_ignored(self):
         api_bot = MagicMock()
         api_bot.get_file = AsyncMock()
         message = MagicMock()
         message.photo = []
         message.document = SimpleNamespace(
-            file_id="doc-1", mime_type="application/pdf", file_name="paper.pdf"
+            file_id="doc-1", mime_type="application/octet-stream", file_name="tool.bin"
         )
 
         attachments = await TelegramBot._download_message_attachments(message, api_bot)
 
         assert attachments == []
         api_bot.get_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_oversized_document_is_ignored(self):
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock()
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="huge.pdf",
+            file_size=TelegramBot.MAX_DOCUMENT_ATTACHMENT_BYTES + 1,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        assert attachments == []
+        api_bot.get_file.assert_not_called()
+
+    def test_document_only_prompt_mentions_attachment_file(self):
+        attachment = MultimodalAttachment(
+            data=b"%PDF", mime_type="application/pdf", name="paper.pdf"
+        )
+
+        assert TelegramBot._default_message_text_for_attachments([attachment]) == (
+            "첨부 파일을 분석해 주세요."
+        )
 
 
 class TestSplitForTelegram:
