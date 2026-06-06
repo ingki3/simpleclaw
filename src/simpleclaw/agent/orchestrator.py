@@ -45,7 +45,6 @@ from simpleclaw.memory.models import (
     CHANNEL_CRON_ADMIN,
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
-    MemoryItemType,
     MessageRole,
 )
 from simpleclaw.persona.assembler import assemble_prompt

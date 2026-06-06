@@ -42,12 +42,44 @@ def test_krstock_recipe_requires_detailed_close_report_sections() -> None:
     assert missing == []
 
 
+def test_krstock_recipe_requires_market_summary_first() -> None:
+    """krstock recipe는 구조화 summary를 개별 quote보다 먼저 요구해야 한다."""
+    content = _read_live_asset(KRSTOCK_RECIPE)
+
+    required_fragments = [
+        "market-summary --json",
+        "구조화 요약",
+        "필수 조회보다 먼저",
+        "수급/업종/거래대금/breadth",
+    ]
+
+    missing = [fragment for fragment in required_fragments if fragment not in content]
+    assert missing == []
+
+
+def test_krstock_recipe_unavailable_data_guardrails() -> None:
+    """미확보 정량 데이터는 데이터 미확보로 남기고 뉴스 숫자를 승격하지 못하게 한다."""
+    content = _read_live_asset(KRSTOCK_RECIPE)
+
+    required_fragments = [
+        "수급/업종/거래대금/breadth",
+        "데이터 미확보",
+        "status: unavailable",
+        "뉴스 숫자를 구조화 수치로 승격하지 마",
+        "임의 값을 만들지 마",
+    ]
+
+    missing = [fragment for fragment in required_fragments if fragment not in content]
+    assert missing == []
+
+
 def test_krstock_skill_documents_close_summary_workflow() -> None:
     """skill 문서에도 장마감 요약용 조회·작성 workflow를 남겨 recipe와 정합성을 맞춘다."""
     content = _read_live_asset(KRSTOCK_SKILL)
 
     required_fragments = [
         "For “한국장 장마감 요약”",
+        "market-summary --json",
         "quote --symbol KS11",
         "quote --symbol KQ11",
         "quote --symbol USD/KRW",
@@ -55,6 +87,7 @@ def test_krstock_skill_documents_close_summary_workflow() -> None:
         "시장 드라이버",
         "다음 거래일 체크리스트",
         "1,800~2,500자",
+        "status: unavailable",
     ]
 
     missing = [fragment for fragment in required_fragments if fragment not in content]
