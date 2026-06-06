@@ -179,6 +179,86 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
+async def test_live_sports_query_forces_web_fetch_before_final_answer(
+    config_file, monkeypatch,
+):
+    """실시간 경기 결과 질문은 모델의 직접 답변을 웹 조회 전에는 허용하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    dispatch_calls: list[ToolCall] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc)
+        return "네이버 스포츠 확인 결과: KT 7:3 SSG"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _text_response("LG가 두산을 7:4로 이겼습니다."),
+        _text_response("확인 결과 KT가 SSG를 7:3으로 이겼습니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
+
+    assert result == "확인 결과 KT가 SSG를 7:3으로 이겼습니다."
+    assert call_idx["i"] == 2
+    assert [tc.name for tc in dispatch_calls] == ["web_fetch"]
+    assert "sports.naver.com" in dispatch_calls[0].arguments["url"]
+    assert dispatch_calls[0].arguments["force_headless"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "삼성전자 현재 주가 알려줘",
+        "서울 날씨 지금 어때?",
+        "AI 최신 뉴스 찾아줘",
+    ],
+)
+async def test_live_market_weather_news_queries_force_web_fetch(
+    config_file, monkeypatch, message,
+):
+    """주가·날씨·뉴스 질문도 조회 없이 바로 최종 답변하지 않아야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    dispatch_calls: list[ToolCall] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc)
+        return f"웹 확인 결과: {message}"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _text_response("조회 없이 만든 답변"),
+        _text_response("웹 확인 기반 답변"),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(message)
+
+    assert result == "웹 확인 기반 답변"
+    assert call_idx["i"] == 2
+    assert [tc.name for tc in dispatch_calls] == ["web_fetch"]
+    assert "search.naver.com" in dispatch_calls[0].arguments["url"]
+    assert dispatch_calls[0].arguments["force_headless"] is True
+
+
+@pytest.mark.asyncio
 async def test_empty_direct_text_response_returns_fallback(config_file):
     """tool_calls 없이 빈 최종 텍스트가 와도 사용자에게 빈 메시지를 보내지 않는다."""
     orch = AgentOrchestrator(config_file)
