@@ -299,6 +299,9 @@ daemon:
           calendar_lookahead_hours: 24
           mail_lookback_hours: 24
           mail_query: "in:inbox newer_than:1d"
+          calendar_id: "primary"
+          calendar_limit: 10
+          mail_limit: 10
           require_user_approval: true
           max_context_opportunities_per_run: 3
           allow_recurring: true

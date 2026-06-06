@@ -53,6 +53,7 @@ from simpleclaw.proactive.context_collectors import (
     merge_snapshots,
 )
 from simpleclaw.proactive.context_planner import ContextCronPlanner
+from simpleclaw.proactive.context_provider_resolver import resolve_context_providers
 from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
 from simpleclaw.proactive.presenter import ProactivePresenter
 from simpleclaw.proactive.store import OpportunityStore
@@ -260,12 +261,16 @@ async def main():
                 conv_store,
                 lookback_hours=int(context_cron_cfg.get("conversation_lookback_hours", 24)),
             )
+            # BIZ-357 — live skill/config resolver로 Calendar/Gmail provider를 주입한다.
+            # 경로/인증 장애는 provider/collector 단계에서 context_unavailable warning으로
+            # 축약되어 Dreaming run 전체를 실패시키지 않는다.
+            calendar_provider, mail_provider = resolve_context_providers(context_cron_cfg)
             calendar_context = CalendarContextCollector(
-                None,
+                calendar_provider,
                 lookahead_hours=int(context_cron_cfg.get("calendar_lookahead_hours", 24)),
             )
             mail_context = MailContextCollector(
-                None,
+                mail_provider,
                 lookback_hours=int(context_cron_cfg.get("mail_lookback_hours", 24)),
                 query=str(context_cron_cfg.get("mail_query", "in:inbox newer_than:1d")),
             )
