@@ -59,8 +59,9 @@ class DaemonStore:
                (name, cron_expression, action_type, action_reference, enabled,
                 created_at, updated_at,
                 max_attempts, backoff_seconds, backoff_strategy,
-                circuit_break_threshold, consecutive_failures)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                circuit_break_threshold, consecutive_failures,
+                run_once, expires_at, max_runs, run_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 job.name,
                 job.cron_expression,
@@ -74,6 +75,10 @@ class DaemonStore:
                 job.backoff_strategy.value,
                 int(job.circuit_break_threshold),
                 int(job.consecutive_failures),
+                int(job.run_once),
+                job.expires_at.isoformat() if job.expires_at else None,
+                int(job.max_runs) if job.max_runs is not None else None,
+                int(job.run_count),
             ),
         )
         self._conn.commit()
@@ -138,6 +143,14 @@ class DaemonStore:
                 if "consecutive_failures" in keys
                 else 0
             ),
+            run_once=bool(row["run_once"]) if "run_once" in keys else False,
+            expires_at=(
+                datetime.fromisoformat(row["expires_at"])
+                if "expires_at" in keys and row["expires_at"]
+                else None
+            ),
+            max_runs=row["max_runs"] if "max_runs" in keys else None,
+            run_count=row["run_count"] if "run_count" in keys else 0,
         )
 
     # --- 크론 실행 로그 ---

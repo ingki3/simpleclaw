@@ -1,0 +1,5 @@
+-- BIZ-356: one-shot/temporary cron semantics.
+ALTER TABLE cron_jobs ADD COLUMN run_once INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cron_jobs ADD COLUMN expires_at TEXT DEFAULT NULL;
+ALTER TABLE cron_jobs ADD COLUMN max_runs INTEGER DEFAULT NULL;
+ALTER TABLE cron_jobs ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;

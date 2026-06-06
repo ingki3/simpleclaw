@@ -174,10 +174,13 @@ class CronScheduler:
         """
         jobs = self._store.list_jobs()
         count = 0
+        now = datetime.now()
         for job in jobs:
-            if job.enabled:
+            if job.enabled and not self._is_job_expired(job, now):
                 self._register_apscheduler_job(job)
                 count += 1
+            elif job.enabled and self._is_job_expired(job, now):
+                self.update_job(job.name, enabled=False)
         logger.info("Loaded %d persisted cron jobs.", count)
         return count
 
@@ -192,6 +195,9 @@ class CronScheduler:
         backoff_seconds: float | None = None,
         backoff_strategy: BackoffStrategy | str | None = None,
         circuit_break_threshold: int | None = None,
+        run_once: bool | None = None,
+        expires_at: datetime | None = None,
+        max_runs: int | None = None,
     ) -> CronJob:
         """새 크론 작업을 생성하고 DB 및 APScheduler에 등록한다.
 
@@ -213,6 +219,12 @@ class CronScheduler:
             )
         if circuit_break_threshold is not None:
             kwargs["circuit_break_threshold"] = circuit_break_threshold
+        if run_once is not None:
+            kwargs["run_once"] = bool(run_once)
+        if expires_at is not None:
+            kwargs["expires_at"] = expires_at
+        if max_runs is not None:
+            kwargs["max_runs"] = max(1, int(max_runs))
 
         job = CronJob(
             name=name,
@@ -364,6 +376,7 @@ class CronScheduler:
             execution.status = ExecutionStatus.SUCCESS
             execution.result_summary = summary
             self._reset_consecutive_failures(job)
+            self._cleanup_one_shot_if_needed(job)
             if attempt > 1:
                 logger.info(
                     "Cron job '%s' succeeded on attempt %d/%d.",
@@ -377,6 +390,26 @@ class CronScheduler:
         await self._record_failure_and_maybe_break(job, last_error or "")
         assert last_execution is not None  # 루프가 1회 이상 돌았음을 보장
         return last_execution
+
+    def _is_job_expired(self, job: CronJob, now: datetime | None = None) -> bool:
+        """temporary/one-shot job의 만료 또는 max-run 도달 여부를 판단한다."""
+        now = now or datetime.now()
+        if job.expires_at is not None and job.expires_at <= now:
+            return True
+        if job.max_runs is not None and int(job.run_count or 0) >= int(job.max_runs):
+            return True
+        return False
+
+    def _cleanup_one_shot_if_needed(self, job: CronJob) -> None:
+        """성공 실행 후 run_count를 올리고 one-shot/max_runs job을 비활성화한다."""
+        if not (job.run_once or job.max_runs is not None):
+            return
+        job.run_count = int(job.run_count or 0) + 1
+        if job.run_once or (job.max_runs is not None and job.run_count >= int(job.max_runs)):
+            job.enabled = False
+            self._unregister_apscheduler_job(job.name)
+        job.updated_at = datetime.now()
+        self._store.save_job(job)
 
     def _reset_consecutive_failures(self, job: CronJob) -> None:
         """성공 시 누적 실패 카운터를 0으로 리셋한다 (이미 0이면 no-op)."""

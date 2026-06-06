@@ -153,3 +153,23 @@ async def test_failure_marks_failed_and_redacts_secret_summary(tmp_path):
 
 def test_redact_secret_text_removes_common_secret_patterns():
     assert redact_secret_text("token=abc123 api_key: xyz789") == "token=[REDACTED] api_key: [REDACTED]"
+
+@pytest.mark.asyncio
+async def test_accept_creates_one_shot_cron_with_temporary_metadata(tmp_path):
+    opportunity = _cron_opportunity(
+        run_once=True,
+        expires_at="2099-01-01T00:00:00",
+        max_runs=1,
+        source_context_window={"calendar_lookahead_hours": 24},
+        privacy_level="metadata_only",
+    )
+    store = _store_with(opportunity, tmp_path)
+    cron = FakeCronScheduler()
+    executor = ProactiveActionExecutor(store=store, cron_scheduler=cron)
+
+    result = await executor.execute("cron-op", "accept")
+
+    assert "등록" in result
+    assert cron.add_calls[0][4]["run_once"] is True
+    assert cron.add_calls[0][4]["max_runs"] == 1
+    assert cron.add_calls[0][4]["expires_at"].isoformat() == "2099-01-01T00:00:00"
