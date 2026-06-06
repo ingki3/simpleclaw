@@ -38,7 +38,6 @@ from simpleclaw.config import (
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
-from simpleclaw.logging.dashboard import DashboardServer
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.clustering import IncrementalClusterer
@@ -504,20 +503,8 @@ async def main():
         cluster_threshold,
     )
 
-    # 대시보드 — 메트릭 스냅샷을 127.0.0.1:8081에 노출.
-    # 외부 노출 없이 로컬 점검 용도로만 바인딩한다.
-    dashboard = DashboardServer(
-        metrics=metrics,
-        structured_logger=structured_logger,
-        host="127.0.0.1",
-        port=8081,
-        conversation_store=conv_store,
-    )
-    try:
-        await dashboard.start()
-    except Exception as exc:  # noqa: BLE001 — 대시보드 실패는 봇 동작을 막지 않음.
-        logger.warning("Dashboard failed to start: %s", exc)
-        dashboard = None
+    # 대시보드 — 별도 8081 listener를 띄우지 않고 Admin API(8082) 앱에 통합한다.
+    # localhost:8081 이 다른 개발 서버(Expo/Node)로 라우팅돼도 운영자는 8082만 보면 된다.
 
     # Admin API (BIZ-58) — Admin UI 백엔드. 토큰 검증·시크릿/감사 매니저는 모두
     # build_admin_api_server에 위임. ``admin_api.enabled=False``면 None이 반환된다.
@@ -531,7 +518,10 @@ async def main():
             return {
                 "daemon": {
                     "telegram_running": bool(getattr(bot, "is_running", False)),
-                    "dashboard_running": dashboard is not None,
+                    "dashboard_running": bool(
+                        admin_api is not None
+                        and admin_api.dashboard_routes_registered
+                    ),
                     "cron_jobs_active": len(cron.list_jobs()),
                     "scheduler_running": apscheduler.running,
                 }
@@ -558,15 +548,13 @@ async def main():
             # last_run/KPI만 반환한다. dreaming_pipeline 와 동일한 sidecar 를 공유.
             dreaming_run_store=dreaming_pipeline.runs_store,
             dreaming_status_provider=_dreaming_status_provider,
+            dashboard_metrics=metrics,
+            dashboard_structured_logger=structured_logger,
+            dashboard_conversation_store=conv_store,
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
         print(f"ERROR: Admin API 부팅 실패 — {exc}")
-        if dashboard is not None:
-            try:
-                await dashboard.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Dashboard stop failed during admin boot abort")
         return
 
     if admin_api is not None:
@@ -574,11 +562,6 @@ async def main():
             await admin_api.start()
         except Exception as exc:  # noqa: BLE001 — 포트 충돌 등은 명시적 에러로 종료.
             print(f"ERROR: Admin API 바인딩 실패 — {exc}")
-            if dashboard is not None:
-                try:
-                    await dashboard.stop()
-                except Exception:  # noqa: BLE001
-                    logger.exception("Dashboard stop failed during admin bind abort")
             return
 
     # Start cron + dreaming scheduler
@@ -617,11 +600,6 @@ async def main():
             await admin_api.stop()
         except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
             logger.exception("Admin API stop failed")
-    if dashboard is not None:
-        try:
-            await dashboard.stop()
-        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
-            logger.exception("Dashboard stop failed")
     await bot.stop()
     print("Done.")
 

@@ -93,6 +93,7 @@ AREA_TO_YAML_KEY: dict[str, str | list[str]] = {
     "cron": "daemon.cron_retry",  # admin-requirements §1 11번
     "persona": "persona",
     "system": "daemon",  # 호스트/포트/DB 경로 같은 process-restart 키 모음
+    "admin_api": "admin_api",
 }
 
 
@@ -226,6 +227,7 @@ ChannelTestCallback = Callable[[str, dict], "Awaitable[dict] | dict"]
 # 이미 성공한 상태에서 호출되므로 콜백 실패는 회전을 되돌리지 않으며 (로그만) — 새 토큰
 # 값이 sink 에 도달하지 않아도 데몬 측 백엔드는 이미 갱신된 상태.
 SecretRotationCallback = Callable[[str, str, str], None]
+DashboardRouteRegistrar = Callable[[web.Application], object]
 
 
 class AdminAPIServer:
@@ -259,6 +261,11 @@ class AdminAPIServer:
         dreaming_run_store: DreamingRunStore | None = None,
         dreaming_status_provider: Callable[[], dict] | None = None,
         secret_rotation_callback: SecretRotationCallback | None = None,
+        dashboard_registrar: DashboardRouteRegistrar | None = None,
+        dashboard_metrics: object | None = None,
+        dashboard_structured_logger: object | None = None,
+        dashboard_conversation_store: ConversationStore | None = None,
+        dashboard_rag_log_window_days: int = 7,
     ) -> None:
         self._host = host
         self._port = port
@@ -319,6 +326,15 @@ class AdminAPIServer:
         # 미주입 시 후크 자체가 비활성화되며 회전 응답에는 영향 없음.
         self._secret_rotation_cb = secret_rotation_callback
 
+        # 8082 통합 대시보드 — registrar가 직접 주입되거나, metrics/logger가
+        # 넘어오면 기본 DashboardServer adapter를 지연 import로 붙인다.
+        self._dashboard_registrar = dashboard_registrar
+        self._dashboard_metrics = dashboard_metrics
+        self._dashboard_structured_logger = dashboard_structured_logger
+        self._dashboard_conversation_store = dashboard_conversation_store
+        self._dashboard_rag_log_window_days = dashboard_rag_log_window_days
+        self._dashboard_routes_registered = False
+
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
@@ -361,9 +377,38 @@ class AdminAPIServer:
 
         prefix = "/admin/v1"
         _admin_routes.register_admin_routes(app, self, prefix)
+        self._register_dashboard_routes_if_configured(app)
 
         self._app = app
         return app
+
+    def _register_dashboard_routes_if_configured(self, app: web.Application) -> None:
+        """Admin API 앱에 기존 dashboard HTML/API 라우트를 함께 붙인다."""
+        registrar = self._dashboard_registrar
+        if registrar is None and (
+            self._dashboard_metrics is not None
+            and self._dashboard_structured_logger is not None
+        ):
+            from simpleclaw.logging.dashboard import register_dashboard_routes
+
+            def registrar(target_app: web.Application) -> object:
+                return register_dashboard_routes(
+                    target_app,
+                    metrics=self._dashboard_metrics,
+                    structured_logger=self._dashboard_structured_logger,
+                    conversation_store=self._dashboard_conversation_store,
+                    rag_log_window_days=self._dashboard_rag_log_window_days,
+                )
+
+        if registrar is None:
+            return
+        registrar(app)
+        self._dashboard_routes_registered = True
+
+    @property
+    def dashboard_routes_registered(self) -> bool:
+        """대시보드 라우트가 Admin API 앱에 통합됐는지 반환한다."""
+        return self._dashboard_routes_registered
 
     async def start(self) -> None:
         """HTTP 서버를 시작한다."""

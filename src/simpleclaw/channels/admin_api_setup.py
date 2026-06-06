@@ -55,6 +55,11 @@ def build_admin_api_server(
     dreaming_run_store: DreamingRunStore | None = None,
     dreaming_status_provider: Callable[[], dict] | None = None,
     secret_rotation_callback: SecretRotationCallback | None = None,
+    dashboard_registrar: Callable[[object], object] | None = None,
+    dashboard_metrics: object | None = None,
+    dashboard_structured_logger: object | None = None,
+    dashboard_conversation_store: ConversationStore | None = None,
+    dashboard_rag_log_window_days: int = 7,
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -134,6 +139,11 @@ def build_admin_api_server(
         # run_store 미주입 시 /memory/dreaming/runs 가 503, /status 는 metrics_enabled=False.
         dreaming_run_store=dreaming_run_store,
         dreaming_status_provider=dreaming_status_provider,
+        dashboard_registrar=dashboard_registrar,
+        dashboard_metrics=dashboard_metrics,
+        dashboard_structured_logger=dashboard_structured_logger,
+        dashboard_conversation_store=dashboard_conversation_store,
+        dashboard_rag_log_window_days=dashboard_rag_log_window_days,
     )
 
 
