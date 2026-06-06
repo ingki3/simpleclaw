@@ -161,6 +161,32 @@ Dreaming/Admin write path는 기존 sidecar를 SSOT로 유지하면서 `memory_i
    - **active_projects** (사용자가 현재 집중 중인 프로젝트 카드) → `USER.md`의 `active-projects` 섹션을 in-place 갱신 (BIZ-74)
 5. (선택) 시맨틱 클러스터가 활성화되어 있으면 클러스터별 요약을 `MEMORY.md`의 HTML 마커 영역에 in-place 갱신
 
+### Context-aware cron 후보 (BIZ-356)
+
+Dreaming proactive extractor는 선택적으로 최근 24시간 대화, 다음 24시간 Calendar 일정, 최근 24시간 Gmail metadata를 하나의 `DreamingContextSnapshot`으로 합쳐 cron 후보를 만들 수 있습니다. 이 흐름은 **후보 생성만** 수행하며, Telegram 승인 버튼에서 `등록`을 누르기 전에는 실제 `CronScheduler.add_job()` side effect가 없습니다.
+
+- Calendar/Gmail provider가 없거나 인증에 실패하면 `context_unavailable` warning으로 축약하고 Dreaming run은 계속 진행합니다.
+- 메일 본문 전문은 snapshot/evidence/action_reference에 저장하지 않으며, token/password/api-key 같은 secret-like 값은 `[REDACTED]`로 가립니다.
+- 일정 + 관련 대화/메일이 결합되면 `run_once=true`, `max_runs=1`, `expires_at`이 붙은 one-shot reminder 후보를 만듭니다. 승인 후 실행에 성공하면 scheduler가 `run_count`를 올리고 job을 비활성화합니다.
+- 명시적인 정기 브리핑 의도(매일/정기/briefing 등)가 보이면 기존 recurring cron 후보를 만듭니다.
+
+```yaml
+daemon:
+  proactive:
+    extractors:
+      dreaming:
+        context_cron:
+          enabled: false
+          conversation_lookback_hours: 24
+          calendar_lookahead_hours: 24
+          mail_lookback_hours: 24
+          mail_query: "in:inbox newer_than:1d"
+          require_user_approval: true
+          max_context_opportunities_per_run: 3
+          allow_recurring: true
+          allow_one_shot: true
+```
+
 ### 설정
 
 ```yaml

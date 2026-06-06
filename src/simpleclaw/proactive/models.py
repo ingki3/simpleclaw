@@ -21,6 +21,7 @@ class OpportunityType(StrEnum):
     REQUESTED_FOLLOWUP = "requested_followup"
     UNFINISHED_FOLLOWUP = "unfinished_followup"
     INTEREST_BRIEFING = "interest_briefing"
+    CONTEXTUAL_REMINDER = "contextual_reminder"
     FAILURE_RECOVERY = "failure_recovery"
     OTHER = "other"
 

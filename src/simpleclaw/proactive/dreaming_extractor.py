@@ -65,6 +65,8 @@ class DreamingOpportunityExtractor:
         repeated_task_min_occurrences: int | None = None,
         repeated_task_time_bucket_hours: int | None = None,
         now: datetime | None = None,
+        context_collector=None,
+        context_planner=None,
     ) -> None:
         """운영 config 값을 보수적으로 정규화한다."""
         self.lookback_days = max(1, int(lookback_days))
@@ -77,6 +79,8 @@ class DreamingOpportunityExtractor:
         self.interest_based_enabled = bool(interest_based_enabled)
         self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
         self._now = now
+        self._context_collector = context_collector
+        self._context_planner = context_planner
 
     def extract(
         self,
@@ -123,7 +127,19 @@ class DreamingOpportunityExtractor:
         opportunities.extend(self._extract_unfinished_intents(unfinished))
         if self.interest_based_enabled:
             opportunities.extend(self._extract_interest_based_info(pairs, cutoff))
+        opportunities.extend(self._extract_contextual_opportunities())
         return opportunities
+
+    def _extract_contextual_opportunities(self) -> list[ProactiveOpportunity]:
+        """Optional context collector/planner 결과를 기존 deterministic 후보와 merge한다."""
+        if self._context_collector is None or self._context_planner is None:
+            return []
+        try:
+            snapshot = self._context_collector.collect()
+            return list(self._context_planner.plan(snapshot))
+        except Exception:
+            # Context provider 장애는 Dreaming 전체 실패로 전파하지 않는다.
+            return []
 
     def _classify_repeated_topic(self, content: str) -> tuple[str, str] | None:
         """요청 문장을 낮은 cardinality의 topic key로 매핑한다."""

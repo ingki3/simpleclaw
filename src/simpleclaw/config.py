@@ -258,6 +258,19 @@ _DAEMON_DEFAULTS: dict = {
                 "interest_based": {
                     "enabled": False,
                 },
+                "context_cron": {
+                    "enabled": False,
+                    "conversation_lookback_hours": 24,
+                    "calendar_lookahead_hours": 24,
+                    "mail_lookback_hours": 24,
+                    "mail_query": "in:inbox newer_than:1d",
+                    "require_user_approval": True,
+                    "max_context_opportunities_per_run": 3,
+                    "allow_recurring": True,
+                    "allow_one_shot": True,
+                    "calendar_skill_path": "~/.agents/skills/google-calendar-skill",
+                    "gmail_skill_path": "~/.agents/skills/gmail-skill",
+                },
             },
             "conversation_end": {
                 "enabled": False,
@@ -344,6 +357,25 @@ def _clamped_float(value: object, default: float, *, lower: float, upper: float)
     return max(lower, min(upper, parsed))
 
 
+def _coerce_context_cron(raw: object, defaults: dict) -> dict:
+    """Dreaming context-aware cron 설정을 fail-closed 기본값과 병합한다."""
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "conversation_lookback_hours": _positive_int(raw.get("conversation_lookback_hours", defaults["conversation_lookback_hours"]), defaults["conversation_lookback_hours"]),
+        "calendar_lookahead_hours": _positive_int(raw.get("calendar_lookahead_hours", defaults["calendar_lookahead_hours"]), defaults["calendar_lookahead_hours"]),
+        "mail_lookback_hours": _positive_int(raw.get("mail_lookback_hours", defaults["mail_lookback_hours"]), defaults["mail_lookback_hours"]),
+        "mail_query": str(raw.get("mail_query", defaults["mail_query"])),
+        "require_user_approval": bool(raw.get("require_user_approval", defaults["require_user_approval"])),
+        "max_context_opportunities_per_run": _positive_int(raw.get("max_context_opportunities_per_run", defaults["max_context_opportunities_per_run"]), defaults["max_context_opportunities_per_run"]),
+        "allow_recurring": bool(raw.get("allow_recurring", defaults["allow_recurring"])),
+        "allow_one_shot": bool(raw.get("allow_one_shot", defaults["allow_one_shot"])),
+        "calendar_skill_path": str(raw.get("calendar_skill_path", defaults["calendar_skill_path"])),
+        "gmail_skill_path": str(raw.get("gmail_skill_path", defaults["gmail_skill_path"])),
+    }
+
+
 def _coerce_proactive_policy(raw: object) -> dict:
     """daemon.proactive 설정을 fail-closed 기본값과 병합한다."""
     defaults = _DAEMON_DEFAULTS["proactive"]
@@ -368,6 +400,9 @@ def _coerce_proactive_policy(raw: object) -> dict:
     interest_raw = dreaming_raw.get("interest_based", {})
     if not isinstance(interest_raw, dict):
         interest_raw = {}
+    context_cron_raw = dreaming_raw.get("context_cron", {})
+    if not isinstance(context_cron_raw, dict):
+        context_cron_raw = {}
     conversation_raw = extractors.get("conversation_end", {})
     if not isinstance(conversation_raw, dict):
         conversation_raw = {}
@@ -461,6 +496,10 @@ def _coerce_proactive_policy(raw: object) -> dict:
                         dreaming_defaults["interest_based"]["enabled"],
                     )),
                 },
+                "context_cron": _coerce_context_cron(
+                    context_cron_raw,
+                    dreaming_defaults["context_cron"],
+                ),
             },
             "conversation_end": {
                 "enabled": bool(conversation_raw.get("enabled", conversation_defaults["enabled"])),
