@@ -179,10 +179,10 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
-async def test_live_sports_query_forces_web_fetch_before_final_answer(
+async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answer(
     config_file, monkeypatch,
 ):
-    """실시간 경기 결과 질문은 모델의 직접 답변을 웹 조회 전에는 허용하지 않는다."""
+    """실시간 경기 질문에서도 Gemini-breaking synthetic web_fetch를 만들지 않는다."""
     orch = AgentOrchestrator(config_file)
 
     dispatch_calls: list[ToolCall] = []
@@ -192,26 +192,19 @@ async def test_live_sports_query_forces_web_fetch_before_final_answer(
         return "네이버 스포츠 확인 결과: KT 7:3 SSG"
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    responses = [
-        _text_response("LG가 두산을 7:4로 이겼습니다."),
-        _text_response("확인 결과 KT가 SSG를 7:3으로 이겼습니다."),
-    ]
     call_idx = {"i": 0}
 
     async def fake_send(_request):
-        i = call_idx["i"]
         call_idx["i"] += 1
-        return responses[i]
+        return _text_response("LG가 두산을 7:4로 이겼습니다.")
 
     orch._router.send = fake_send
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert result == "확인 결과 KT가 SSG를 7:3으로 이겼습니다."
-    assert call_idx["i"] == 2
-    assert [tc.name for tc in dispatch_calls] == ["web_fetch"]
-    assert "sports.naver.com" in dispatch_calls[0].arguments["url"]
-    assert dispatch_calls[0].arguments["force_headless"] is True
+    assert result == "LG가 두산을 7:4로 이겼습니다."
+    assert call_idx["i"] == 1
+    assert dispatch_calls == []
 
 
 @pytest.mark.asyncio
@@ -223,10 +216,10 @@ async def test_live_sports_query_forces_web_fetch_before_final_answer(
         "AI 최신 뉴스 찾아줘",
     ],
 )
-async def test_live_market_weather_news_queries_force_web_fetch(
+async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
     config_file, monkeypatch, message,
 ):
-    """주가·날씨·뉴스 질문도 조회 없이 바로 최종 답변하지 않아야 한다."""
+    """주가·날씨·뉴스 질문도 synthetic web_fetch 없이 모델/스킬 경로에 맡긴다."""
     orch = AgentOrchestrator(config_file)
 
     dispatch_calls: list[ToolCall] = []
@@ -236,26 +229,19 @@ async def test_live_market_weather_news_queries_force_web_fetch(
         return f"웹 확인 결과: {message}"
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    responses = [
-        _text_response("조회 없이 만든 답변"),
-        _text_response("웹 확인 기반 답변"),
-    ]
     call_idx = {"i": 0}
 
     async def fake_send(_request):
-        i = call_idx["i"]
         call_idx["i"] += 1
-        return responses[i]
+        return _text_response("조회 없이 만든 답변")
 
     orch._router.send = fake_send
 
     result = await orch.process_cron_message(message)
 
-    assert result == "웹 확인 기반 답변"
-    assert call_idx["i"] == 2
-    assert [tc.name for tc in dispatch_calls] == ["web_fetch"]
-    assert "search.naver.com" in dispatch_calls[0].arguments["url"]
-    assert dispatch_calls[0].arguments["force_headless"] is True
+    assert result == "조회 없이 만든 답변"
+    assert call_idx["i"] == 1
+    assert dispatch_calls == []
 
 
 @pytest.mark.asyncio
