@@ -209,14 +209,18 @@ class DashboardServer:
         self._app: web.Application | None = None
         self._running = False
 
+    def register_routes(self, app: web.Application) -> None:
+        """대시보드 라우트를 주어진 aiohttp 앱에 등록한다."""
+        app.router.add_get("/", self._handle_dashboard)
+        app.router.add_get("/api/metrics", self._handle_metrics)
+        app.router.add_get("/api/logs", self._handle_logs)
+        app.router.add_get("/api/trace", self._handle_trace)
+        app.router.add_get("/api/memory_stats", self._handle_memory_stats)
+
     async def start(self) -> None:
         """대시보드 HTTP 서버를 시작한다."""
         self._app = web.Application()
-        self._app.router.add_get("/", self._handle_dashboard)
-        self._app.router.add_get("/api/metrics", self._handle_metrics)
-        self._app.router.add_get("/api/logs", self._handle_logs)
-        self._app.router.add_get("/api/trace", self._handle_trace)
-        self._app.router.add_get("/api/memory_stats", self._handle_memory_stats)
+        self.register_routes(self._app)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -327,3 +331,26 @@ class DashboardServer:
             "rag": rag_payload,
             "rag_days": days,
         })
+
+
+def register_dashboard_routes(
+    app: web.Application,
+    *,
+    metrics: MetricsCollector,
+    structured_logger: StructuredLogger,
+    conversation_store: ConversationStore | None = None,
+    rag_log_window_days: int = 7,
+) -> DashboardServer:
+    """기존 대시보드 라우트를 외부 aiohttp 앱에 등록한다.
+
+    Admin API와 같은 앱에 붙일 때 별도 8081 listener를 띄우지 않기 위한
+    adapter다. 핸들러 계약은 ``DashboardServer.start()``와 동일하게 유지한다.
+    """
+    dashboard = DashboardServer(
+        metrics=metrics,
+        structured_logger=structured_logger,
+        conversation_store=conversation_store,
+        rag_log_window_days=rag_log_window_days,
+    )
+    dashboard.register_routes(app)
+    return dashboard

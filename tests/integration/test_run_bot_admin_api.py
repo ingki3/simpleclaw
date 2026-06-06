@@ -30,6 +30,8 @@ from simpleclaw.channels.admin_api_setup import (
     build_admin_api_server,
 )
 from simpleclaw.channels.admin_audit import AuditLog
+from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.security.secrets import (
     EnvBackend,
     SecretsManager,
@@ -177,6 +179,51 @@ class TestAdminAPIBootsAndAuth:
                     url, headers={"Authorization": "Bearer wrong"}
                 ) as resp:
                     assert resp.status == 401
+        finally:
+            await srv.stop()
+
+    @pytest.mark.asyncio
+    async def test_build_server_can_host_dashboard_without_8081_listener(
+        self, tmp_path, isolated_secrets
+    ):
+        token = "dashboard-token"
+        isolated_secrets["keyring"].set("admin_api_token", token)
+        port = _free_port()
+        config_path = _write_config(
+            tmp_path,
+            enabled=True,
+            token_ref="keyring:admin_api_token",
+            port=port,
+        )
+        metrics = MetricsCollector()
+        metrics.record_execution(success=True, duration_ms=1, tokens_used=11)
+        structured = StructuredLogger(log_dir=tmp_path / "logs")
+        structured.log(action_type="integration-dashboard", duration_ms=1)
+
+        srv = build_admin_api_server(
+            config_path,
+            secrets_manager=isolated_secrets["manager"],
+            audit_log=AuditLog(tmp_path / "audit"),
+            admin_state_dir=tmp_path / "admin",
+            dashboard_metrics=metrics,
+            dashboard_structured_logger=structured,
+        )
+        assert srv is not None
+
+        await srv.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"http://127.0.0.1:{port}/") as resp:
+                    assert resp.status == 200
+                    assert "SimpleClaw Dashboard" in await resp.text()
+                async with session.get(f"http://127.0.0.1:{port}/api/metrics") as resp:
+                    assert resp.status == 200
+                    assert (await resp.json())["total_tokens_used"] == 11
+                async with session.get(
+                    f"http://127.0.0.1:{port}/admin/v1/health",
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as resp:
+                    assert resp.status == 200
         finally:
             await srv.stop()
 
