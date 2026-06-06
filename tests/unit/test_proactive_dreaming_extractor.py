@@ -13,7 +13,7 @@ from simpleclaw.memory.models import (
     MessageRole,
 )
 from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
-from simpleclaw.proactive.models import OpportunityType
+from simpleclaw.proactive.models import OpportunityType, ProactiveOpportunity
 from simpleclaw.proactive.store import OpportunityStore
 
 
@@ -43,6 +43,68 @@ def _msg(
             channel=channel,
         ),
     )
+
+
+class StaticContextCollector:
+    """Context planner wiring 검증용 fake collector."""
+
+    def collect(self):
+        return {"context": "snapshot"}
+
+
+class StaticContextPlanner:
+    """Context snapshot을 pending 가능한 proactive 후보로 바꾸는 fake planner."""
+
+    def plan(self, snapshot):
+        assert snapshot == {"context": "snapshot"}
+        return [
+            ProactiveOpportunity(
+                type=OpportunityType.CONTEXTUAL_REMINDER,
+                title="일정 준비 알림 후보",
+                message_draft="회의 전 context를 다시 확인할까요?",
+                evidence=["calendar_event_id=evt-1"],
+                confidence=0.82,
+                priority=3,
+                cooldown_key="context-reminder:evt-1",
+                suggested_action=None,
+                requires_user_approval=True,
+                source="dreaming_context_planner",
+            )
+        ]
+
+
+class RaisingContextCollector:
+    """Calendar/Gmail provider failure가 extractor 전체 실패로 번지지 않음을 검증."""
+
+    def collect(self):
+        raise RuntimeError("calendar token expired")
+
+
+def test_context_planner_opportunities_are_merged_with_dreaming_candidates() -> None:
+    """Dreaming extractor는 optional context planner 후보를 기존 후보 목록에 병합한다."""
+    pairs = [_msg("오늘 있었던 일 기억해줘", days_ago=0)]
+    extractor = DreamingOpportunityExtractor(
+        now=BASE,
+        context_collector=StaticContextCollector(),
+        context_planner=StaticContextPlanner(),
+    )
+
+    opportunities = extractor.extract(pairs)
+
+    assert [op.type for op in opportunities] == [OpportunityType.CONTEXTUAL_REMINDER]
+    assert opportunities[0].cooldown_key == "context-reminder:evt-1"
+    assert opportunities[0].requires_user_approval is True
+
+
+def test_context_provider_failure_does_not_break_dreaming_extractor() -> None:
+    """Context provider 인증/호출 장애는 Dreaming extractor 전체 실패로 전파되지 않는다."""
+    extractor = DreamingOpportunityExtractor(
+        now=BASE,
+        context_collector=RaisingContextCollector(),
+        context_planner=StaticContextPlanner(),
+    )
+
+    assert extractor.extract([_msg("오늘 있었던 일 기억해줘", days_ago=0)]) == []
 
 
 def test_repeated_market_summary_requests_create_cron_opportunity() -> None:

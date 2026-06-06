@@ -84,6 +84,10 @@ class CronJob:
     backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
     circuit_break_threshold: int = 5
     consecutive_failures: int = 0
+    run_once: bool = False
+    expires_at: datetime | None = None
+    max_runs: int | None = None
+    run_count: int = 0
 
 
 @dataclass

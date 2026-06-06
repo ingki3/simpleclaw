@@ -83,6 +83,14 @@ class ProactiveActionExecutor:
         cron_expression = str(payload.get("cron_expression") or payload.get("schedule") or "").strip()
         action_reference = str(payload.get("action_reference") or payload.get("prompt") or "").strip()
         action_type = self._coerce_action_type(payload.get("action_type", "prompt"))
+        run_once = bool(payload.get("run_once", False))
+        expires_at = self._coerce_datetime(payload.get("expires_at"))
+        max_runs = payload.get("max_runs")
+        max_runs = int(max_runs) if max_runs is not None else (1 if run_once else None)
+        if run_once and max_runs != 1:
+            raise ValueError("run_once cron must use max_runs=1")
+        if expires_at is not None and expires_at <= datetime.now():
+            raise ValueError("expires_at must be in the future")
         if not cron_expression:
             raise ValueError("cron_expression is required")
         if not action_reference:
@@ -94,17 +102,27 @@ class ProactiveActionExecutor:
                 existing.cron_expression == cron_expression
                 and existing.action_type == action_type
                 and existing.action_reference == action_reference
+                and bool(getattr(existing, "run_once", False)) == run_once
+                and getattr(existing, "max_runs", None) == max_runs
             )
             if same:
                 self._update_opportunity(opportunity, status=OpportunityStatus.EXECUTED)
                 return f"이미 등록된 cron job이에요: {name}"
             raise ValueError(f"cron job already exists with different definition: {name}")
 
+        job_kwargs: dict[str, Any] = {}
+        if "run_once" in payload:
+            job_kwargs["run_once"] = run_once
+        if expires_at is not None:
+            job_kwargs["expires_at"] = expires_at
+        if "max_runs" in payload or run_once:
+            job_kwargs["max_runs"] = max_runs
         self._cron_scheduler.add_job(
             name,
             cron_expression,
             action_type,
             action_reference,
+            **job_kwargs,
         )
         self._update_opportunity(opportunity, status=OpportunityStatus.EXECUTED)
         return f"등록했어요: {name}"
@@ -136,3 +154,13 @@ class ProactiveActionExecutor:
         if isinstance(value, ActionType):
             return value
         return ActionType(str(value or "prompt"))
+
+    def _coerce_datetime(self, value: object) -> datetime | None:
+        """payload의 ISO datetime 값을 optional datetime으로 복원한다."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+        raise ValueError("expires_at must be an ISO datetime")

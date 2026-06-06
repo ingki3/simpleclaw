@@ -46,6 +46,14 @@ from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
 from simpleclaw.memory.safety_backup import SafetyBackupManager
 from simpleclaw.proactive.actions import ProactiveActionExecutor
+from simpleclaw.proactive.context_collectors import (
+    CalendarContextCollector,
+    ConversationContextCollector,
+    MailContextCollector,
+    merge_snapshots,
+)
+from simpleclaw.proactive.context_planner import ContextCronPlanner
+from simpleclaw.proactive.context_provider_resolver import resolve_context_providers
 from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
 from simpleclaw.proactive.presenter import ProactivePresenter
 from simpleclaw.proactive.store import OpportunityStore
@@ -245,6 +253,44 @@ async def main():
         dreaming_proactive_cfg.get("enabled")
     ):
         repeated_task_cfg = dreaming_proactive_cfg.get("repeated_task", {}) or {}
+        context_cron_cfg = dreaming_proactive_cfg.get("context_cron", {}) or {}
+        context_collector = None
+        context_planner = None
+        if bool(context_cron_cfg.get("enabled", False)):
+            conv_context = ConversationContextCollector(
+                conv_store,
+                lookback_hours=int(context_cron_cfg.get("conversation_lookback_hours", 24)),
+            )
+            # BIZ-357 — live skill/config resolver로 Calendar/Gmail provider를 주입한다.
+            # 경로/인증 장애는 provider/collector 단계에서 context_unavailable warning으로
+            # 축약되어 Dreaming run 전체를 실패시키지 않는다.
+            calendar_provider, mail_provider = resolve_context_providers(context_cron_cfg)
+            calendar_context = CalendarContextCollector(
+                calendar_provider,
+                lookahead_hours=int(context_cron_cfg.get("calendar_lookahead_hours", 24)),
+            )
+            mail_context = MailContextCollector(
+                mail_provider,
+                lookback_hours=int(context_cron_cfg.get("mail_lookback_hours", 24)),
+                query=str(context_cron_cfg.get("mail_query", "in:inbox newer_than:1d")),
+            )
+
+            class _MergedContextCollector:
+                """런타임 provider 미구성도 graceful warning으로 합치는 collector."""
+
+                def collect(self):
+                    return merge_snapshots(
+                        conv_context.collect(),
+                        calendar_context.collect(),
+                        mail_context.collect(),
+                    )
+
+            context_collector = _MergedContextCollector()
+            context_planner = ContextCronPlanner(
+                allow_one_shot=bool(context_cron_cfg.get("allow_one_shot", True)),
+                allow_recurring=bool(context_cron_cfg.get("allow_recurring", True)),
+                max_opportunities=int(context_cron_cfg.get("max_context_opportunities_per_run", 3)),
+            )
         proactive_extractor = DreamingOpportunityExtractor(
             min_confidence=float(proactive_cfg.get("min_confidence", 0.75)),
             lookback_days=int(dreaming_proactive_cfg.get("lookback_days", 14)),
@@ -254,6 +300,8 @@ async def main():
             repeated_task_time_bucket_hours=int(
                 repeated_task_cfg.get("time_bucket_hours", 2)
             ),
+            context_collector=context_collector,
+            context_planner=context_planner,
         )
         opportunity_store = OpportunityStore(
             Path(_expand(proactive_cfg.get("store_file")))
