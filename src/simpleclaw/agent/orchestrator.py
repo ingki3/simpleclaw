@@ -20,6 +20,7 @@ import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote_plus
 
 from simpleclaw.config import (
     load_agent_config,
@@ -205,6 +206,12 @@ _GUARD_ACTIVE_MEMORY = (
     "it for real-time facts, file contents, system state, or web lookup."
 )
 
+_GUARD_LIVE_FACT_WEB_EVIDENCE = (
+    "For live facts — current games/scores, stock or market prices, weather, and "
+    "news — you MUST use `web_fetch` first. It may fall back to the headless "
+    "agent browser automatically. Never answer these from memory or guesswork."
+)
+
 _TOOL_USAGE_INSTRUCTION = "\n".join(
     [
         _BASE_INSTRUCTION,
@@ -216,6 +223,7 @@ _TOOL_USAGE_INSTRUCTION = "\n".join(
         _GUARD_WEB_FETCH_PREFERRED,
         _GUARD_CLARIFY_TOOL,
         _GUARD_ACTIVE_MEMORY,
+        _GUARD_LIVE_FACT_WEB_EVIDENCE,
     ]
 )
 
@@ -269,6 +277,125 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
     "오류",
     "실패",
 )
+
+_LIVE_FACT_TOOL_CALL_ID = "simpleclaw_live_web_fetch"
+_LIVE_FACT_TIME_CUES = (
+    "오늘",
+    "현재",
+    "지금",
+    "실시간",
+    "방금",
+    "최신",
+    "결과",
+    "스코어",
+    "예보",
+    "마감",
+    "장마감",
+)
+_LIVE_FACT_CORRECTION_CUES = (
+    "틀렸",
+    "이상해",
+    "다시 확인",
+    "확인해",
+    "맞아?",
+)
+_LIVE_FACT_SPORTS_TERMS = (
+    "프로야구",
+    "kbo",
+    "야구",
+    "축구",
+    "농구",
+    "배구",
+    "경기 결과",
+    "스코어",
+)
+_LIVE_FACT_STOCK_TERMS = (
+    "주가",
+    "주식",
+    "코스피",
+    "코스닥",
+    "나스닥",
+    "다우",
+    "s&p",
+    "환율",
+    "증시",
+    "시장 마감",
+    "티커",
+)
+_LIVE_FACT_WEATHER_TERMS = (
+    "날씨",
+    "기온",
+    "강수",
+    "비 와",
+    "눈 와",
+    "미세먼지",
+    "예보",
+)
+_LIVE_FACT_NEWS_TERMS = (
+    "뉴스",
+    "속보",
+    "기사",
+    "최신 소식",
+)
+
+
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    """소문자화된 텍스트에서 키워드가 하나라도 보이는지 확인한다."""
+    lowered = text.lower()
+    return any(needle.lower() in lowered for needle in needles)
+
+
+def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
+    """경기·주가·날씨·뉴스처럼 웹 근거가 필요한 최신 사실 질문인지 판정한다.
+
+    모델 프롬프트 가드만으로는 작은 모델이 실시간 질문을 바로 답하는 회귀를
+    막지 못했다. 그래서 보수적인 키워드 게이트로 최종 답변 직전에도 한 번 더
+    차단한다. 단순 스포츠 규칙 설명 같은 비실시간 질문은 시간 cue 없이 통과시킨다.
+    """
+    if not text.strip():
+        return False
+    has_time_cue = _contains_any(text, _LIVE_FACT_TIME_CUES)
+    if _contains_any(text, _LIVE_FACT_WEATHER_TERMS):
+        return True
+    if _contains_any(text, _LIVE_FACT_NEWS_TERMS) and has_time_cue:
+        return True
+    if _contains_any(text, _LIVE_FACT_STOCK_TERMS):
+        return True
+    if has_time_cue and _contains_any(text, _LIVE_FACT_SPORTS_TERMS):
+        return True
+    if _contains_any(text, _LIVE_FACT_CORRECTION_CUES):
+        context = prior_context[-3000:]
+        return _looks_like_live_fact_request(context, prior_context="")
+    return False
+
+
+def _live_fact_web_fetch_call(text: str, now_kst: object, prior_context: str = "") -> ToolCall | None:
+    """실시간 사실 질문에 대해 기본 웹 조회용 ``web_fetch`` 호출을 만든다."""
+    if not _looks_like_live_fact_request(text, prior_context=prior_context):
+        return None
+    normalized_query = " ".join(text.split()) or "실시간 정보"
+    lowered = text.lower()
+    date_formatter = getattr(now_kst, "strftime", None)
+    if (
+        ("프로야구" in text or "kbo" in lowered or "야구" in text)
+        and _contains_any(text, _LIVE_FACT_TIME_CUES)
+        and callable(date_formatter)
+    ):
+        url = (
+            "https://m.sports.naver.com/kbaseball/schedule/index"
+            f"?date={date_formatter('%Y-%m-%d')}"
+        )
+    else:
+        where = "news" if _contains_any(text, _LIVE_FACT_NEWS_TERMS) else "nexearch"
+        url = (
+            "https://search.naver.com/search.naver"
+            f"?where={where}&query={quote_plus(normalized_query)}"
+        )
+    return ToolCall(
+        id=_LIVE_FACT_TOOL_CALL_ID,
+        name="web_fetch",
+        arguments={"url": url, "force_headless": True},
+    )
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -883,6 +1010,7 @@ class AgentOrchestrator:
         # 메시지 구성
         if isolated:
             messages: list[dict] = [current_user_message]
+            prior_context = ""
             rag_context = ""
         else:
             recent = self._store.get_recent(limit=self._history_limit)
@@ -897,14 +1025,17 @@ class AgentOrchestrator:
             # 현재 턴 내부(in-flight)의 tool exchange 는 아래 루프에서 그대로
             # 누적되므로 정보 손실 없음.
             messages = []
+            prior_context_parts: list[str] = []
             for msg in recent:
                 role_value = msg.role.value
                 if role_value not in ("user", "assistant", "system"):
                     continue
+                prior_context_parts.append(msg.content)
                 messages.append({
                     "role": role_value,
                     "content": msg.content,
                 })
+            prior_context = "\n".join(prior_context_parts[-6:])
             messages.append(current_user_message)
             # 시맨틱 회상: 최근 윈도우에 포함되지 않은 과거 메시지를 추가 컨텍스트로 회수
             recent_contents = {msg.content for msg in recent}
@@ -955,6 +1086,12 @@ class AgentOrchestrator:
             active_skills,
             cron_available=self._cron_scheduler is not None,
         )
+        live_web_fetch_call = _live_fact_web_fetch_call(
+            text,
+            now_kst,
+            prior_context=prior_context,
+        )
+        live_web_evidence_seen = False
 
         # BIZ-160 — budget-exhausted 분기에서 운영자가 패턴을 추적할 수 있도록
         # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
@@ -985,9 +1122,14 @@ class AgentOrchestrator:
                 )
                 # BIZ-259 — 콜백이 있을 때만 streaming 경로로 분기.
                 # 기존 호출 시그니처 호환성 유지(테스트 mock 회귀 0).
-                if on_text_delta is not None:
+                # BIZ-358 — 실시간 사실 질문은 웹 근거 확인 전 텍스트를 스트리밍하지 않는다.
+                # 모델이 첫 응답에서 환각 final 을 생성해도 아래 게이트가 버릴 수 있어야 한다.
+                text_delta_callback = on_text_delta
+                if live_web_fetch_call is not None and not live_web_evidence_seen:
+                    text_delta_callback = None
+                if text_delta_callback is not None:
                     response = await self._router.send(
-                        request, on_text_delta=on_text_delta,
+                        request, on_text_delta=text_delta_callback,
                     )
                 else:
                     response = await self._router.send(request)
@@ -1000,6 +1142,38 @@ class AgentOrchestrator:
                 logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
                 final_text = (response.text or "").strip()
                 if final_text:
+                    if live_web_fetch_call is not None and not live_web_evidence_seen:
+                        tc = live_web_fetch_call
+                        logger.warning(
+                            "BIZ-358: live fact final answer blocked before web evidence; "
+                            "forcing %s(%s)",
+                            tc.name,
+                            json.dumps(tc.arguments, ensure_ascii=False)[:200],
+                        )
+                        invoked_tool_sequence.append(tc.name)
+                        messages.append({
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "arguments": tc.arguments,
+                                }
+                            ],
+                        })
+                        result = await self._dispatch_tool_call(tc)
+                        sanitized = sanitize_tool_output(result)
+                        tool_results_for_empty_final.append((tc.name, sanitized))
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": tc.name,
+                            "content": sanitized[:3000],
+                        })
+                        live_web_evidence_seen = True
+                        logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
+                        continue
                     return final_text
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -1084,6 +1258,8 @@ class AgentOrchestrator:
                 # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
                 # 출력 변형(envelope 없음) 만 사용.
                 sanitized = sanitize_tool_output(result)
+                if tc.name == "web_fetch" or self._call_invokes_agent_browser(tc):
+                    live_web_evidence_seen = True
                 tool_results_for_empty_final.append((tc.name, sanitized))
                 messages.append({
                     "role": "tool",
