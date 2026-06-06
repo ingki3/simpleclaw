@@ -2,7 +2,7 @@
 
 from simpleclaw.logging.structured_logger import StructuredLogger, LogEntry
 from simpleclaw.logging.metrics import MetricsCollector
-from simpleclaw.logging.dashboard import DashboardServer
+from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
 from simpleclaw.logging.trace_context import (
     TRACE_ID_ENV_VAR,
     adopt_env_trace_id,
@@ -23,6 +23,7 @@ __all__ = [
     "get_trace_id",
     "inject_trace_id_env",
     "new_trace_id",
+    "register_dashboard_routes",
     "set_trace_id",
     "trace_scope",
 ]

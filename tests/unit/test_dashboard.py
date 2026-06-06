@@ -3,7 +3,7 @@
 import pytest
 from aiohttp import web
 
-from simpleclaw.logging.dashboard import DashboardServer
+from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
 
@@ -51,6 +51,38 @@ class TestDashboardServer:
         data = await resp.json()
         assert len(data) == 1
         assert data[0]["action_type"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_register_dashboard_routes_adds_full_dashboard_contract(
+        self, dashboard, aiohttp_client
+    ):
+        app = web.Application()
+        register_dashboard_routes(
+            app,
+            metrics=dashboard._metrics,
+            structured_logger=dashboard._logger,
+        )
+        client = await aiohttp_client(app)
+
+        root = await client.get("/")
+        assert root.status == 200
+        assert "SimpleClaw Dashboard" in await root.text()
+
+        metrics = await client.get("/api/metrics")
+        assert metrics.status == 200
+        assert (await metrics.json())["total_executions"] == 2
+
+        logs = await client.get("/api/logs")
+        assert logs.status == 200
+        assert (await logs.json())[0]["action_type"] == "test"
+
+        trace = await client.get("/api/trace?trace_id=missing")
+        assert trace.status == 200
+        assert (await trace.json())["steps"] == []
+
+        memory = await client.get("/api/memory_stats")
+        assert memory.status == 200
+        assert await memory.json() == {"disabled": True}
 
 
 class TestDashboardTraceTimeline:

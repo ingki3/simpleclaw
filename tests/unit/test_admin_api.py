@@ -25,6 +25,8 @@ from simpleclaw.channels.admin_policy import (
     validate_patch,
 )
 from simpleclaw.security.secrets import SecretsManager
+from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.structured_logger import StructuredLogger
 
 
 class _InMemoryBackend:
@@ -93,6 +95,13 @@ def tmp_state(tmp_path):
         "daemon": {
             "heartbeat_interval": 300,
             "db_path": ".agent/daemon.db",
+        },
+        "admin_api": {
+            "enabled": True,
+            "bind_host": "127.0.0.1",
+            "bind_port": 8082,
+            "token_secret": "file:admin_api_token",
+            "request_max_body_kb": 256,
         },
     }
     config_path.write_text(yaml.safe_dump(initial), encoding="utf-8")
@@ -185,6 +194,59 @@ class TestConfigGet:
         data = await resp.json()
         assert "telegram" in data["config"]
         assert "webhook" in data["config"]
+
+    @pytest.mark.asyncio
+    async def test_get_admin_api_area_config(self, client):
+        resp = await client.get("/admin/v1/config/admin_api", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["area"] == "admin_api"
+        assert data["config"]["bind_port"] == 8082
+        assert data["config"]["token_secret"] == "file:admin_api_token"
+
+
+class TestDashboardRoutesOnAdminAPI:
+    @pytest.mark.asyncio
+    async def test_dashboard_routes_share_admin_api_app(self, tmp_state, aiohttp_client):
+        metrics = MetricsCollector()
+        metrics.record_execution(success=True, duration_ms=100, tokens_used=7)
+        logger = StructuredLogger(log_dir=tmp_state["state_dir"] / "logs")
+        logger.log(action_type="dashboard-admin", status="success", duration_ms=5)
+        server = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dashboard_metrics=metrics,
+            dashboard_structured_logger=logger,
+        )
+        client = await aiohttp_client(server.get_app())
+
+        dashboard = await client.get("/")
+        assert dashboard.status == 200
+        assert "SimpleClaw Dashboard" in await dashboard.text()
+
+        metrics_resp = await client.get("/api/metrics")
+        assert metrics_resp.status == 200
+        assert (await metrics_resp.json())["total_tokens_used"] == 7
+
+        logs_resp = await client.get("/api/logs")
+        assert logs_resp.status == 200
+        assert (await logs_resp.json())[0]["action_type"] == "dashboard-admin"
+
+        trace_resp = await client.get("/api/trace?trace_id=missing")
+        assert trace_resp.status == 200
+        assert (await trace_resp.json())["steps"] == []
+
+        memory_resp = await client.get("/api/memory_stats")
+        assert memory_resp.status == 200
+        assert await memory_resp.json() == {"disabled": True}
+
+        health_without_token = await client.get("/admin/v1/health")
+        assert health_without_token.status == 401
+        health_with_token = await client.get("/admin/v1/health", headers=HEADERS)
+        assert health_with_token.status == 200
 
 
 # ---------------------------------------------------------------------------
