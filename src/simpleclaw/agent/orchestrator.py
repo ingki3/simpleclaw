@@ -16,11 +16,11 @@ Hot-reload 정책:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote_plus
 
 from simpleclaw.config import (
     load_agent_config,
@@ -208,8 +208,10 @@ _GUARD_ACTIVE_MEMORY = (
 
 _GUARD_LIVE_FACT_WEB_EVIDENCE = (
     "For live facts — current games/scores, stock or market prices, weather, and "
-    "news — you MUST use `web_fetch` first. It may fall back to the headless "
-    "agent browser automatically. Never answer these from memory or guesswork."
+    "news — use `realtime-lookup-skill` via `execute_skill` when it is available. "
+    "If that skill is not available, use `web_fetch` yourself. Never answer these "
+    "from memory or guesswork, and base the final answer only on the returned "
+    "evidence/sources."
 )
 
 _TOOL_USAGE_INSTRUCTION = "\n".join(
@@ -278,7 +280,8 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
     "실패",
 )
 
-_LIVE_FACT_TOOL_CALL_ID = "simpleclaw_live_web_fetch"
+_REALTIME_LOOKUP_SKILL_NAME = "realtime-lookup-skill"
+_REALTIME_LOOKUP_CONTEXT_HEADER = "## Realtime Lookup Evidence"
 _LIVE_FACT_TIME_CUES = (
     "오늘",
     "현재",
@@ -369,33 +372,55 @@ def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
     return False
 
 
-def _live_fact_web_fetch_call(text: str, now_kst: object, prior_context: str = "") -> ToolCall | None:
-    """실시간 사실 질문에 대해 기본 웹 조회용 ``web_fetch`` 호출을 만든다."""
+def _realtime_lookup_skill_payload(
+    text: str,
+    now_kst: object,
+    prior_context: str = "",
+) -> str | None:
+    """실시간성 질문을 evidence 스킬용 단일 토큰 payload로 직렬화한다.
+
+    BIZ-359: Gemini는 모델이 직접 반환하지 않은 synthetic assistant
+    functionCall을 다음 요청 history에 넣으면 ``thought_signature`` 누락으로 거부한다.
+    그래서 오케스트레이터는 더 이상 강제 ``web_fetch`` tool call을 합성하지 않고,
+    별도 ``realtime-lookup-skill``을 LLM history 밖에서 먼저 실행한 뒤 그 결과만
+    system evidence 블록으로 주입한다. 스킬 executor가 args를 공백 split하므로
+    JSON은 URL-safe base64 단일 토큰으로 전달한다.
+    """
     if not _looks_like_live_fact_request(text, prior_context=prior_context):
         return None
+
     normalized_query = " ".join(text.split()) or "실시간 정보"
-    lowered = text.lower()
-    date_formatter = getattr(now_kst, "strftime", None)
-    if (
-        ("프로야구" in text or "kbo" in lowered or "야구" in text)
-        and _contains_any(text, _LIVE_FACT_TIME_CUES)
-        and callable(date_formatter)
-    ):
-        url = (
-            "https://m.sports.naver.com/kbaseball/schedule/index"
-            f"?date={date_formatter('%Y-%m-%d')}"
-        )
-    else:
-        where = "news" if _contains_any(text, _LIVE_FACT_NEWS_TERMS) else "nexearch"
-        url = (
-            "https://search.naver.com/search.naver"
-            f"?where={where}&query={quote_plus(normalized_query)}"
-        )
-    return ToolCall(
-        id=_LIVE_FACT_TOOL_CALL_ID,
-        name="web_fetch",
-        arguments={"url": url, "force_headless": True},
+    iso_formatter = getattr(now_kst, "isoformat", None)
+    payload = {
+        "query": normalized_query,
+        "as_of_kst": iso_formatter() if callable(iso_formatter) else str(now_kst),
+        "prior_context": prior_context[-1200:],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def _format_realtime_lookup_context(evidence: str) -> str:
+    """실시간 조회 스킬 stdout을 최종 답변용 system evidence 블록으로 감싼다."""
+    return "\n".join(
+        [
+            _REALTIME_LOOKUP_CONTEXT_HEADER,
+            "Use only the evidence below for live/current facts. "
+            "Do not invent numbers, dates, sources, winners, prices, or news not present here. "
+            "If the evidence says it is limited, say so explicitly.",
+            evidence.strip() or "{}",
+        ]
     )
+
+
+def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
+    """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
+    if tool_call.name == "web_fetch":
+        return True
+    if tool_call.name == "execute_skill":
+        skill_name = str((tool_call.arguments or {}).get("skill_name", ""))
+        return skill_name.lower() == _REALTIME_LOOKUP_SKILL_NAME
+    return False
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -1072,6 +1097,46 @@ class AgentOrchestrator:
                 active_skills_prompt = self._format_skills_for_prompt(active_skills)
                 active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
+        realtime_lookup_context = ""
+        realtime_lookup_payload = _realtime_lookup_skill_payload(
+            text,
+            now_kst,
+            prior_context=prior_context,
+        )
+        if (
+            realtime_lookup_payload is not None
+            and self._resolve_skill_name(_REALTIME_LOOKUP_SKILL_NAME) is not None
+        ):
+            try:
+                realtime_lookup_result = await self._execute_skill(
+                    _REALTIME_LOOKUP_SKILL_NAME,
+                    realtime_lookup_payload,
+                )
+                realtime_lookup_context = _format_realtime_lookup_context(
+                    sanitize_tool_output(realtime_lookup_result or ""),
+                )
+                logger.info(
+                    "BIZ-359: realtime lookup skill evidence injected (%d chars)",
+                    len(realtime_lookup_context),
+                )
+            except Exception as exc:  # noqa: BLE001 — evidence 조회 실패가 turn 전체를 죽이지 않음
+                realtime_lookup_context = _format_realtime_lookup_context(
+                    json.dumps(
+                        {
+                            "kind": "realtime_lookup",
+                            "confidence": "low",
+                            "facts": [],
+                            "limitations": [
+                                f"realtime-lookup-skill failed: {str(exc)[:200]}"
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                logger.warning("BIZ-359: realtime lookup skill failed: %s", exc)
+        if realtime_lookup_context:
+            rag_context = "\n\n".join(part for part in [rag_context, realtime_lookup_context] if part)
+
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
         # cache 경계: 페르소나 끝 / 스킬 목록 끝. ReAct 지시문과 RAG 블록은 마커 뒤에 둔다.
@@ -1086,12 +1151,7 @@ class AgentOrchestrator:
             active_skills,
             cron_available=self._cron_scheduler is not None,
         )
-        live_web_fetch_call = _live_fact_web_fetch_call(
-            text,
-            now_kst,
-            prior_context=prior_context,
-        )
-        live_web_evidence_seen = False
+        live_evidence_seen = bool(realtime_lookup_context)
 
         # BIZ-160 — budget-exhausted 분기에서 운영자가 패턴을 추적할 수 있도록
         # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
@@ -1122,10 +1182,10 @@ class AgentOrchestrator:
                 )
                 # BIZ-259 — 콜백이 있을 때만 streaming 경로로 분기.
                 # 기존 호출 시그니처 호환성 유지(테스트 mock 회귀 0).
-                # BIZ-358 — 실시간 사실 질문은 웹 근거 확인 전 텍스트를 스트리밍하지 않는다.
-                # 모델이 첫 응답에서 환각 final 을 생성해도 아래 게이트가 버릴 수 있어야 한다.
+                # BIZ-359 — 실시간 질문인데 사전 evidence 스킬 결과가 없으면 첫 응답
+                # 스트리밍을 보수적으로 끈다. 단, synthetic tool call을 합성하지는 않는다.
                 text_delta_callback = on_text_delta
-                if live_web_fetch_call is not None and not live_web_evidence_seen:
+                if realtime_lookup_payload is not None and not live_evidence_seen:
                     text_delta_callback = None
                 if text_delta_callback is not None:
                     response = await self._router.send(
@@ -1142,38 +1202,6 @@ class AgentOrchestrator:
                 logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
                 final_text = (response.text or "").strip()
                 if final_text:
-                    if live_web_fetch_call is not None and not live_web_evidence_seen:
-                        tc = live_web_fetch_call
-                        logger.warning(
-                            "BIZ-358: live fact final answer blocked before web evidence; "
-                            "forcing %s(%s)",
-                            tc.name,
-                            json.dumps(tc.arguments, ensure_ascii=False)[:200],
-                        )
-                        invoked_tool_sequence.append(tc.name)
-                        messages.append({
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": tc.id,
-                                    "name": tc.name,
-                                    "arguments": tc.arguments,
-                                }
-                            ],
-                        })
-                        result = await self._dispatch_tool_call(tc)
-                        sanitized = sanitize_tool_output(result)
-                        tool_results_for_empty_final.append((tc.name, sanitized))
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": tc.name,
-                            "content": sanitized[:3000],
-                        })
-                        live_web_evidence_seen = True
-                        logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
-                        continue
                     return final_text
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -1258,8 +1286,8 @@ class AgentOrchestrator:
                 # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
                 # 출력 변형(envelope 없음) 만 사용.
                 sanitized = sanitize_tool_output(result)
-                if tc.name == "web_fetch" or self._call_invokes_agent_browser(tc):
-                    live_web_evidence_seen = True
+                if _tool_call_provides_live_evidence(tc) or self._call_invokes_agent_browser(tc):
+                    live_evidence_seen = True
                 tool_results_for_empty_final.append((tc.name, sanitized))
                 messages.append({
                     "role": "tool",
