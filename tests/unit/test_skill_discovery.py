@@ -66,6 +66,93 @@ class TestSkillDiscovery:
         assert "test" in test_skill.trigger.lower()
         assert test_skill.scope == SkillScope.LOCAL
 
+    def test_script_path_inferred_from_single_python_command(self, tmp_path):
+        """``## Script``가 없어도 명령 예시의 단일 Python 스크립트를 대표 경로로 추론한다."""
+        local = tmp_path / "local"
+        local.mkdir()
+        skill_dir = local / "news-search-skill"
+        scripts_dir = skill_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+        script = scripts_dir / "news_search.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        venv_python = scripts_dir / "venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: news-search-skill\n"
+            "description: Search recent news.\n"
+            "---\n"
+            "# News Search Skill\n\n"
+            "```bash\n"
+            f"{venv_python} {script} --query \\\"Latest AI news\\\"\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        result = discover_skills(local, tmp_path / "no_global")
+        skill = next(s for s in result if s.name == "news-search-skill")
+
+        assert skill.script_path == str(script)
+
+    def test_script_path_inferred_from_repeated_skill_dir_variable_command(self, tmp_path):
+        """``$SKILL_DIR`` 기반 예시도 같은 단일 스크립트면 대표 경로로 추론한다."""
+        local = tmp_path / "local"
+        local.mkdir()
+        skill_dir = local / "kr-stock-skill"
+        scripts_dir = skill_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+        script = scripts_dir / "kr_stock.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: kr-stock-skill\n"
+            "description: Korean stock lookup.\n"
+            "---\n"
+            "# Korean Stock Skill\n\n"
+            "```bash\n"
+            "SKILL_DIR=\\\"/ignored/by/parser\\\"\n"
+            "$SKILL_DIR/scripts/venv/bin/python $SKILL_DIR/scripts/kr_stock.py --help\n"
+            "$SKILL_DIR/scripts/venv/bin/python $SKILL_DIR/scripts/kr_stock.py search --keywords \\\"삼성전자\\\"\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        result = discover_skills(local, tmp_path / "no_global")
+        skill = next(s for s in result if s.name == "kr-stock-skill")
+
+        assert skill.script_path == str(script)
+
+    def test_script_path_not_inferred_when_commands_reference_multiple_scripts(self, tmp_path):
+        """여러 스크립트가 섞인 문서형 스킬은 임의 대표 스크립트를 고르지 않는다."""
+        local = tmp_path / "local"
+        local.mkdir()
+        skill_dir = local / "office-skill"
+        scripts_dir = skill_dir / "scripts"
+        scripts_dir.mkdir(parents=True)
+        (scripts_dir / "read.py").write_text("print('read')\n", encoding="utf-8")
+        (scripts_dir / "write.py").write_text("print('write')\n", encoding="utf-8")
+
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: office-skill\n"
+            "description: Multiple office helpers.\n"
+            "---\n"
+            "# Office Skill\n\n"
+            "```bash\n"
+            "python scripts/read.py input.docx\n"
+            "python scripts/write.py output.docx\n"
+            "```\n",
+            encoding="utf-8",
+        )
+
+        result = discover_skills(local, tmp_path / "no_global")
+        skill = next(s for s in result if s.name == "office-skill")
+
+        assert skill.script_path == ""
+
     def test_retry_policy_parsed_from_frontmatter(self, tmp_path):
         """프론트매터의 ``retry`` 블록이 ``RetryPolicy``로 파싱되어야 한다."""
         local = tmp_path / "local"
