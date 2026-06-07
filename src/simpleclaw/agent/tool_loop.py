@@ -112,6 +112,36 @@ class ToolLoopResult:
     text: str
 
 
+
+
+def _legacy_react_action_to_tool_call(text: str) -> ToolCall | None:
+    """구 ReAct ``Action: {...}`` 응답을 execute_skill ToolCall로 변환한다.
+
+    현재 런타임은 Native Function Calling이 정식 경로지만, 오래된 시나리오
+    fixture와 일부 CLI provider는 텍스트 Action JSON을 반환할 수 있다. 명시적 JSON
+    객체에 ``skill_name``과 ``command``가 모두 있을 때만 호환 변환한다.
+    """
+    marker = "Action:"
+    if marker not in text:
+        return None
+    payload = text.split(marker, 1)[1].strip().splitlines()[0].strip()
+    try:
+        args = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(args, dict):
+        return None
+    if not args.get("skill_name") or not args.get("command"):
+        return None
+    return ToolCall(id="legacy_react_action", name="execute_skill", arguments=args)
+
+
+def _legacy_observation_text(tool_call: ToolCall, sanitized_result: str) -> str:
+    """ReAct 호환 fixture가 기대하는 user_message Observation 문자열을 만든다."""
+    skill_name = str(tool_call.arguments.get("skill_name") or "unknown-skill")
+    return f"Observation: execute_skill({skill_name}) result:\n{sanitized_result[:3000]}"
+
+
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
     """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
     if tool_call.name == "web_fetch":
@@ -206,6 +236,12 @@ class ToolLoopRunner:
                 logger.error("Tool loop LLM error: %s", exc)
                 return ToolLoopResult(f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}")
 
+            legacy_action = None
+            if not response.tool_calls:
+                legacy_action = _legacy_react_action_to_tool_call(response.text or "")
+                if legacy_action is not None:
+                    response.tool_calls = [legacy_action]
+
             if not response.tool_calls:
                 logger.info(
                     "Tool loop [%d] final answer: %d chars",
@@ -294,6 +330,11 @@ class ToolLoopRunner:
                     "name": tc.name,
                     "content": sanitized[:3000],
                 })
+                if legacy_action is not None and tc.id == legacy_action.id:
+                    state.user_content = (
+                        f"{state.user_content}\n"
+                        f"{_legacy_observation_text(tc, sanitized)}"
+                    )
                 logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
 
             chat_id_for_clarify = clarify_chat_id_var.get()
@@ -397,3 +438,4 @@ class ToolLoopRunner:
                 iterations=self._orchestrator._max_tool_iterations,
             )
         )
+

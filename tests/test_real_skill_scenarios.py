@@ -129,6 +129,7 @@ class TestCmd_FindRestaurant:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 # ReAct: Action
                 resp.text = (
@@ -185,6 +186,7 @@ class TestCmd_CheckCalendar:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 사용자의 일정을 확인해야 합니다.\n'
@@ -236,6 +238,7 @@ class TestCmd_USStockNews:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 미국 주식 뉴스를 검색해야 합니다.\n'
@@ -288,6 +291,7 @@ class TestCmd_CheckEmail:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 읽지 않은 메일을 확인해야 합니다.\n'
@@ -333,6 +337,7 @@ class TestCmd_NewsSearch:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 뉴스를 검색해야 합니다.\n'
@@ -377,6 +382,7 @@ class TestCmd_StockInfo:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: AAPL 주가 정보를 조회해야 합니다.\n'
@@ -423,6 +429,7 @@ class TestCmd_MultiSkillConversation:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
 
             if call_count == 1:  # First message: Action
                 resp.text = (
@@ -487,6 +494,7 @@ class TestCmd_RouteQuery:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 경로를 검색해야 합니다.\n'
