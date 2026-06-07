@@ -248,6 +248,42 @@ llm:
         result = load_llm_config(cfg)
         assert result["providers"]["claude"]["api_key"] == ""
 
+
+    def test_reads_legacy_api_key_env_from_environment(self, tmp_path: Path, monkeypatch):
+        """레거시 api_key_env는 프로세스 환경변수에서 API 키를 해소해야 한다."""
+        monkeypatch.setenv("SC_TEST_LLM_KEY", "from-env")
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+llm:
+  providers:
+    gemini:
+      model: gemini-flash
+      api_key_env: SC_TEST_LLM_KEY
+""",
+        )
+        result = load_llm_config(cfg)
+        assert result["providers"]["gemini"]["api_key"] == "from-env"
+
+    def test_reads_legacy_api_key_env_from_adjacent_dotenv(self, tmp_path: Path, monkeypatch):
+        """환경변수가 없으면 config.yaml 옆 .env에서 api_key_env 값을 읽는다."""
+        monkeypatch.delenv("SC_TEST_LLM_KEY", raising=False)
+        (tmp_path / ".env").write_text("SC_TEST_LLM_KEY=from-dotenv\n", encoding="utf-8")
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+llm:
+  providers:
+    gemini:
+      model: gemini-flash
+      api_key_env: SC_TEST_LLM_KEY
+""",
+        )
+        result = load_llm_config(cfg)
+        assert result["providers"]["gemini"]["api_key"] == "from-dotenv"
+
     def test_non_dict_provider_is_skipped(self, tmp_path: Path):
         """provider 값이 dict가 아닌 경우(문자열 등) 해당 provider는 무시되어야 한다."""
         cfg = tmp_path / "config.yaml"
