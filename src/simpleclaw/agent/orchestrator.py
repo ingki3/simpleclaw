@@ -15,7 +15,6 @@ Hot-reload 정책:
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import logging
@@ -79,15 +78,11 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
-from simpleclaw.agent.progress import (
-    ProgressCallback,
-    ProgressEvent,
-    emit_progress_event,
-)
+from simpleclaw.agent.progress import ProgressCallback
+from simpleclaw.agent.tool_loop import ToolLoopRunner, ToolLoopState
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
-    format_footer,
 )
 from simpleclaw.agent.tool_schemas import build_tool_definitions
 
@@ -993,30 +988,19 @@ class AgentOrchestrator:
     # Native Function Calling loop
     # ------------------------------------------------------------------
 
-    async def _tool_loop(
+    async def _prepare_tool_loop_state(
         self,
         text: str,
-        isolated: bool = False,
+        isolated: bool,
         *,
-        attachments: list[MultimodalAttachment] | None = None,
-        on_text_delta: TextDeltaCallback | None = None,
-        on_progress: ProgressCallback | None = None,
-    ) -> str:
-        """Native Function Calling 루프를 실행한다.
+        attachments: list[MultimodalAttachment] | None,
+        on_text_delta: TextDeltaCallback | None,
+        on_progress: ProgressCallback | None,
+    ) -> ToolLoopState:
+        """tool loop runner 입력 상태를 조립한다.
 
-        LLM에 도구 정의(tools)와 함께 메시지를 전송하고,
-        tool_calls가 반환되면 실행 후 결과를 메시지에 추가하여 재호출한다.
-        텍스트만 반환되면 최종 응답으로 반환한다.
-
-        Args:
-            text: 사용자 원본 메시지
-            isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등). 크론 분기는
-                ``final_only_for_cron`` 정책에 따라 호출 측에서 ``on_text_delta`` 를
-                None 으로 넘긴다 — 본 함수는 콜백 유무로만 동작 분기.
-            on_text_delta: BIZ-259 — 텍스트 델타 콜백. 주어지면 라우터의 ``stream()``
-                경로로 전환되어 각 iteration 의 텍스트 델타가 콜백으로 흐른다.
-                tool-call iteration 의 ReAct thought 텍스트도 그대로 흐르므로 sink
-                측에서 finalize 시 최종 텍스트로 덮어쓰는 패턴을 따른다.
+        컨텍스트/RAG/자산 선택/실시간 evidence 준비는 오케스트레이터 경계에 남기고,
+        실제 반복 lifecycle은 ``ToolLoopRunner``가 담당하도록 상태 객체만 만든다.
         """
         # 현재 시각을 KST로 주입
         from datetime import datetime, timezone, timedelta
@@ -1153,259 +1137,53 @@ class AgentOrchestrator:
         )
         live_evidence_seen = bool(realtime_lookup_context)
 
-        # BIZ-160 — budget-exhausted 분기에서 운영자가 패턴을 추적할 수 있도록
-        # 호출된 도구 이름을 순서대로 누적한다. (logger.warning 으로 박제됨)
-        invoked_tool_sequence: list[str] = []
-        tool_results_for_empty_final: list[tuple[str, str]] = []
-
-        # BIZ-190 — 같은 turn 안에서 ``agent-browser`` 호출 횟수 카운터. 첫 시도가
-        # 실패하면 LLM 이 같은 명령을 cli/execute_skill 채널로 재시도하면서 max-iter
-        # 까지 누적 소진하는 패턴(seed-2/3/8/9, 2026-05-13 20:19~20:36 KST) 을 차단.
-        # ``_AGENT_BROWSER_PER_TURN_CALL_CAP`` 초과 시 subprocess 진입 전에 합성 응답.
-        agent_browser_call_count = 0
-
-        # BIZ-251 — per-turn file mutation verifier footer.
-        # 매 iteration 의 tool call 직후, 워크스페이스/페르소나 디스크 상태를
-        # diff 하여 마지막 tool result 메시지에 footer 로 부착한다. 다음
-        # iteration 의 LLM 입력에서 디스크 사실(SoT) 을 강제 노출함으로써
-        # "파일 저장했다" 류 환각과 스킬 silent-fail 을 잡는다.
-        prev_snapshot = self._mutation_tracker.snapshot()
-
-        for i in range(self._max_tool_iterations):
-            try:
-                request = LLMRequest(
-                    system_prompt=system_prompt,
-                    user_message=user_content,
-                    messages=messages,
-                    tools=tools,
-                    system_blocks=system_blocks,
-                )
-                # BIZ-259 — 콜백이 있을 때만 streaming 경로로 분기.
-                # 기존 호출 시그니처 호환성 유지(테스트 mock 회귀 0).
-                # BIZ-359 — 실시간 질문인데 사전 evidence 스킬 결과가 없으면 첫 응답
-                # 스트리밍을 보수적으로 끈다. 단, synthetic tool call을 합성하지는 않는다.
-                text_delta_callback = on_text_delta
-                if realtime_lookup_payload is not None and not live_evidence_seen:
-                    text_delta_callback = None
-                if text_delta_callback is not None:
-                    response = await self._router.send(
-                        request, on_text_delta=text_delta_callback,
-                    )
-                else:
-                    response = await self._router.send(request)
-            except Exception as exc:
-                logger.error("Tool loop LLM error: %s", exc)
-                return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
-
-            # tool_calls가 없으면 텍스트 응답 → 최종 답변
-            if not response.tool_calls:
-                logger.info("Tool loop [%d] final answer: %d chars", i + 1, len(response.text))
-                final_text = (response.text or "").strip()
-                if final_text:
-                    return final_text
-                if tool_results_for_empty_final:
-                    logger.warning(
-                        "Tool loop [%d] empty final answer after tool results; "
-                        "returning synthesized fallback",
-                        i + 1,
-                    )
-                    return _fallback_for_empty_final_after_tools(
-                        tool_results_for_empty_final,
-                    )
-                return _EMPTY_DIRECT_RESPONSE_MESSAGE
-
-
-            # tool_calls가 있으면 실행 후 결과를 메시지에 추가
-            logger.info(
-                "Tool loop [%d] %d tool call(s)",
-                i + 1, len(response.tool_calls),
-            )
-
-            # assistant 메시지 추가 (tool_calls 포함)
-            # _raw_content: Gemini의 thought_signature를 보존하기 위한 원본 Content 객체
-            assistant_msg: dict = {
-                "role": "assistant",
-                "content": response.text or "",
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in response.tool_calls
-                ],
-            }
-            if response.raw_assistant_message is not None:
-                assistant_msg["_raw_content"] = response.raw_assistant_message
-            messages.append(assistant_msg)
-
-            # 각 tool_call 실행 → 결과를 tool 메시지로 추가
-            for tc in response.tool_calls:
-                invoked_tool_sequence.append(tc.name)
-                logger.info("Tool call: %s(%s)", tc.name, json.dumps(tc.arguments, ensure_ascii=False)[:200])
-
-                # BIZ-190: 같은 turn 안에서 ``agent-browser`` 호출 횟수가 cap 을
-                # 넘으면 subprocess 진입 전에 합성 응답으로 즉시 종결한다. cap 자체는
-                # ``execute_skill`` 의 ``command`` 또는 ``args`` 가 agent-browser 를
-                # 호출하는지로 판별 — ``cli`` 도구로 우회 호출하는 경우도 동일하게 적용.
-                if self._call_invokes_agent_browser(tc):
-                    agent_browser_call_count += 1
-                    if agent_browser_call_count > _AGENT_BROWSER_PER_TURN_CALL_CAP:
-                        result = _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE.format(
-                            count=agent_browser_call_count - 1,
-                        )
-                        logger.warning(
-                            "BIZ-190: agent-browser per-turn cap exceeded "
-                            "(%d > %d); synthesizing blocked response",
-                            agent_browser_call_count - 1,
-                            _AGENT_BROWSER_PER_TURN_CALL_CAP,
-                        )
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": tc.name,
-                            "content": result[:3000],
-                        })
-                        continue
-
-                progress_kind, progress_name = self._progress_identity_for_tool_call(tc)
-                await emit_progress_event(
-                    on_progress,
-                    ProgressEvent(progress_kind, progress_name, "start", tc.arguments),
-                )
-                try:
-                    result = await self._dispatch_tool_call(tc)
-                except Exception as exc:  # noqa: BLE001
-                    await emit_progress_event(
-                        on_progress,
-                        ProgressEvent(progress_kind, progress_name, "fail", str(exc)),
-                    )
-                    raise
-                await emit_progress_event(
-                    on_progress,
-                    ProgressEvent(progress_kind, progress_name, "complete", result),
-                )
-                # PRD §3.5.6 — 다음 턴의 ``role=tool`` 메시지로 들어가기
-                # 직전에 구조적 framing 토큰 / 제어문자를 제거한다. 도구
-                # 핸들러는 이미 에러 envelope 을 부착해 반환하므로 여기서는
-                # 출력 변형(envelope 없음) 만 사용.
-                sanitized = sanitize_tool_output(result)
-                if _tool_call_provides_live_evidence(tc) or self._call_invokes_agent_browser(tc):
-                    live_evidence_seen = True
-                tool_results_for_empty_final.append((tc.name, sanitized))
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": tc.name,
-                    "content": sanitized[:3000],
-                })
-                logger.info("Tool result: %s → %d chars", tc.name, len(sanitized))
-
-            # BIZ-260 — clarify 가 이번 iteration 안에서 호출됐다면 추가 LLM
-            # 호출 없이 즉시 종결한다. clarify 는 그 자체로 "사용자에게 되묻기"
-            # 의도이므로 다음 도구 호출 / 텍스트 응답이 의미 없다. 반환 텍스트는
-            # 빈 문자열 — ``process_message`` 가 ``_pending_clarify`` 에서
-            # ``format_user_visible`` 로 다시 조립한다.
-            chat_id_for_clarify = clarify_chat_id_var.get()
-            if (
-                chat_id_for_clarify is not None
-                and chat_id_for_clarify in self._pending_clarify
-            ):
-                logger.info(
-                    "Tool loop [%d] terminated by clarify call (chat=%d)",
-                    i + 1, chat_id_for_clarify,
-                )
-                return ""
-
-            # BIZ-251 — verifier footer.
-            # iteration 안의 모든 tool call 직후 워크스페이스/페르소나 dir 의
-            # 디스크 사실을 캡처해 마지막 tool result 메시지에 부착한다.
-            # 다음 iteration 의 LLM 컨텍스트가 이전 step 에서 *실제로*
-            # 무엇이 디스크에 쓰였는지를 SoT 로 본다.
-            #
-            # 변경 없음 + 파일-쓰기 도구 호출이 *있었다* → 명시적 "none"
-            # 마커를 부착해 LLM 이 silent-fail/환각을 다음 step 에서 인지
-            # 하도록 한다. 어느 쪽도 아니면 footer 를 생략해 토큰을 절약
-            # 한다 (DoD: "변경 없음 시 footer 생략").
-            try:
-                new_snapshot = self._mutation_tracker.snapshot(
-                    previous=prev_snapshot,
-                )
-                file_diff = self._mutation_tracker.diff(
-                    prev_snapshot, new_snapshot,
-                )
-                footer = format_footer(file_diff)
-                iteration_had_mutating_call = any(
-                    tc.name in _FILE_MUTATING_TOOLS
-                    for tc in response.tool_calls
-                )
-                if not footer and iteration_had_mutating_call:
-                    footer = "[file changes this turn: none]"
-                if footer and messages and messages[-1].get("role") == "tool":
-                    messages[-1]["content"] = (
-                        messages[-1]["content"] + "\n\n" + footer
-                    )
-                prev_snapshot = new_snapshot
-            except Exception as exc:  # noqa: BLE001 — verifier 는 best-effort
-                # 추적기는 보조 신호이므로 실패해도 turn 을 막지 않는다.
-                logger.warning(
-                    "FileMutationTracker footer 부착 실패: %s", exc,
-                )
-
-        # 예산 소진 — tools=None으로 최종 LLM 호출 (텍스트 강제)
-        # BIZ-160 — 사용된 도구 시퀀스를 한 줄로 박제. 운영자가 logs 검색으로
-        # 동일 패턴(예: "skill_docs → web_fetch → skill_docs → execute_skill → skill_docs")
-        # 을 추적해 max_tool_iterations / 도구 동작을 튜닝할 근거로 사용한다.
-        logger.warning(
-            "Tool loop max iterations (%d) reached, forcing final answer; "
-            "tool_sequence=%s",
-            self._max_tool_iterations,
-            invoked_tool_sequence,
+        return ToolLoopState(
+            user_content=user_content,
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+            system_blocks=system_blocks,
+            live_evidence_seen=live_evidence_seen,
+            live_fact_requires_evidence=realtime_lookup_payload is not None,
+            previous_mutation_snapshot=self._mutation_tracker.snapshot(),
+            on_text_delta=on_text_delta,
+            on_progress=on_progress,
         )
-        try:
-            final_request = LLMRequest(
-                system_prompt=system_prompt,
-                user_message=user_content,
-                messages=messages,
-                system_blocks=system_blocks,
-            )
-            # BIZ-141 — provider 측 hang 으로 메시지가 영구 침묵하는 사고를 막는
-            # 방어선. 빈 응답(BIZ-160)·예외와 별개로 hang 클래스를 처리.
-            # BIZ-259 — forced-final 호출도 sink 가 마지막으로 받을 텍스트이므로
-            # 콜백을 그대로 흘려보낸다. 콜백이 None 이면 기존 호출 시그니처 유지.
-            if on_text_delta is not None:
-                final_send = self._router.send(
-                    final_request, on_text_delta=on_text_delta,
-                )
-            else:
-                final_send = self._router.send(final_request)
-            final_response = await asyncio.wait_for(
-                final_send,
-                timeout=_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            logger.error(
-                "Tool loop final generation timeout after %ss",
-                _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
-            )
-            return _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE.format(
-                timeout=_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,
-            )
-        except Exception as exc:
-            logger.error("Tool loop final generation error: %s", exc)
-            return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
-        # BIZ-160 — final_response.text 가 빈 문자열이면 채널 라우터의
-        # `if response:` 가드가 sendMessage 를 skip 한다. 사용자 채널에
-        # 항상 안내가 도달하도록 두 분기로 나눠 빈 응답을 메우거나
-        # 의미 있는 응답에 한도 도달 사실을 한 줄 부보한다.
-        final_text = (final_response.text or "").strip()
-        if not final_text:
-            return _BUDGET_EXHAUSTED_EMPTY_MESSAGE.format(
-                iterations=self._max_tool_iterations,
-            )
-        return (
-            f"{final_text}\n\n"
-            + _BUDGET_EXHAUSTED_HINT_SUFFIX.format(
-                iterations=self._max_tool_iterations,
-            )
+    async def _tool_loop(
+        self,
+        text: str,
+        isolated: bool = False,
+        *,
+        attachments: list[MultimodalAttachment] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> str:
+        """Native Function Calling 루프를 실행한다.
+
+        LLM에 도구 정의(tools)와 함께 메시지를 전송하고,
+        tool_calls가 반환되면 실행 후 결과를 메시지에 추가하여 재호출한다.
+        텍스트만 반환되면 최종 응답으로 반환한다.
+
+        Args:
+            text: 사용자 원본 메시지
+            isolated: True면 대화 이력 없이 독립 실행 (크론 잡 등). 크론 분기는
+                ``final_only_for_cron`` 정책에 따라 호출 측에서 ``on_text_delta`` 를
+                None 으로 넘긴다 — 본 함수는 콜백 유무로만 동작 분기.
+            on_text_delta: BIZ-259 — 텍스트 델타 콜백. 주어지면 라우터의 ``stream()``
+                경로로 전환되어 각 iteration 의 텍스트 델타가 콜백으로 흐른다.
+                tool-call iteration 의 ReAct thought 텍스트도 그대로 흐르므로 sink
+                측에서 finalize 시 최종 텍스트로 덮어쓰는 패턴을 따른다.
+        """
+        state = await self._prepare_tool_loop_state(
+            text,
+            isolated,
+            attachments=attachments,
+            on_text_delta=on_text_delta,
+            on_progress=on_progress,
         )
+        result = await ToolLoopRunner(self).run(state)
+        return result.text
 
     # ------------------------------------------------------------------
     # Asset selector
