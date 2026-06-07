@@ -16,25 +16,38 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.config import (
+    _ADMIN_API_DEFAULTS,
     _AGENT_DEFAULTS,
+    _ASSET_SELECTION_DEFAULTS,
     _DAEMON_DEFAULTS,
     _DEFAULTS,
     _LLM_DEFAULTS,
+    _MEMORY_DEFAULTS,
     _RECIPES_DEFAULTS,
     _SUB_AGENTS_DEFAULTS,
     _TELEGRAM_DEFAULTS,
     _VOICE_DEFAULTS,
     _WEBHOOK_DEFAULTS,
+    load_admin_api_config,
     load_agent_config,
+    load_asset_selection_config,
     load_daemon_config,
     load_llm_config,
+    load_memory_config,
     load_persona_config,
     load_recipes_config,
+    load_security_config,
     load_sub_agents_config,
     load_telegram_config,
     load_voice_config,
     load_webhook_config,
 )
+from simpleclaw.config_sections import agents as agents_config
+from simpleclaw.config_sections import channels as channels_config
+from simpleclaw.config_sections import daemon as daemon_config
+from simpleclaw.config_sections import llm as llm_config
+from simpleclaw.config_sections import memory as memory_config
+from simpleclaw.config_sections import security as security_config
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,6 +71,96 @@ def _write_yaml(path: Path, content: str) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
 
+
+
+
+# ---------------------------------------------------------------------------
+# 0. config.py facade와 subsystem 모듈 동일 결과 검증
+# ---------------------------------------------------------------------------
+
+
+def test_config_facade_exports_match_subsystem_loaders(tmp_path: Path):
+    """config.py facade와 config_sections 로더가 같은 YAML에서 동일 결과를 반환한다."""
+    cfg = tmp_path / "config.yaml"
+    _write_yaml(
+        cfg,
+        """\
+persona:
+  token_budget: 1234
+llm:
+  default: openai
+  providers:
+    openai:
+      model: gpt-4
+agent:
+  history_limit: 7
+  asset_selection:
+    enabled: true
+daemon:
+  heartbeat_interval: 42
+  dreaming:
+    max_tokens:
+      memory: 1111
+    proactive:
+      enabled: true
+recipes:
+  dir: /tmp/recipes
+asset_selection:
+  enabled: true
+memory:
+  rag:
+    enabled: true
+voice:
+  stt:
+    provider: google
+telegram:
+  bot_token: test-token
+webhook:
+  port: 9090
+admin_api:
+  enabled: false
+  token_secret: ""
+security:
+  vault_path: ~/vault.json
+sub_agents:
+  max_concurrent: 4
+""",
+    )
+
+    pairs = [
+        (load_persona_config, agents_config.load_persona_config),
+        (load_llm_config, llm_config.load_llm_config),
+        (load_agent_config, agents_config.load_agent_config),
+        (load_asset_selection_config, agents_config.load_asset_selection_config),
+        (load_daemon_config, daemon_config.load_daemon_config),
+        (load_recipes_config, agents_config.load_recipes_config),
+        (load_memory_config, memory_config.load_memory_config),
+        (load_voice_config, channels_config.load_voice_config),
+        (load_telegram_config, channels_config.load_telegram_config),
+        (load_webhook_config, channels_config.load_webhook_config),
+        (load_admin_api_config, channels_config.load_admin_api_config),
+        (load_security_config, security_config.load_security_config),
+        (load_sub_agents_config, agents_config.load_sub_agents_config),
+    ]
+
+    for facade_loader, section_loader in pairs:
+        assert facade_loader(cfg) == section_loader(cfg)
+
+
+def test_config_facade_reexports_subsystem_defaults():
+    """기존 simpleclaw.config import 호환을 위해 facade 기본값도 subsystem 객체와 동일해야 한다."""
+    assert _DEFAULTS is agents_config._DEFAULTS
+    assert _LLM_DEFAULTS is llm_config._LLM_DEFAULTS
+    assert _AGENT_DEFAULTS is agents_config._AGENT_DEFAULTS
+    assert _ASSET_SELECTION_DEFAULTS is agents_config._ASSET_SELECTION_DEFAULTS
+    assert _DAEMON_DEFAULTS is daemon_config._DAEMON_DEFAULTS
+    assert _RECIPES_DEFAULTS is agents_config._RECIPES_DEFAULTS
+    assert _MEMORY_DEFAULTS is memory_config._MEMORY_DEFAULTS
+    assert _VOICE_DEFAULTS is channels_config._VOICE_DEFAULTS
+    assert _TELEGRAM_DEFAULTS is channels_config._TELEGRAM_DEFAULTS
+    assert _WEBHOOK_DEFAULTS is channels_config._WEBHOOK_DEFAULTS
+    assert _ADMIN_API_DEFAULTS is channels_config._ADMIN_API_DEFAULTS
+    assert _SUB_AGENTS_DEFAULTS is agents_config._SUB_AGENTS_DEFAULTS
 
 # ---------------------------------------------------------------------------
 # 1. load_persona_config
