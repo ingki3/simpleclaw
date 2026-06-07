@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from pathlib import Path
 
 import yaml
@@ -162,6 +163,9 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
             if line and not line.startswith("#"):
                 commands.append(line)
 
+    if not script_path:
+        script_path = _infer_script_path_from_commands(commands, skill_md.parent)
+
     # ## Trigger 또는 ## When to use 섹션에서 트리거 조건 추출
     trigger_match = re.search(
         r"##\s+(?:Trigger|When to [Uu]se(?:\s*\(.+?\))?)\s*\n+(.+?)(?=\n##|\Z)",
@@ -180,6 +184,60 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
         commands=commands,
         retry_policy=retry_policy,
     )
+
+
+_SCRIPT_SUFFIXES = {".py", ".sh", ".js"}
+
+
+def _infer_script_path_from_commands(commands: list[str], skill_dir: Path) -> str:
+    """명령 예시에서 단일 대표 스크립트 경로를 보수적으로 추론한다.
+
+    Claude-style SKILL.md는 실행 예시만 있고 ``## Script / Target``이 없는 경우가
+    많다. 이때 모든 명령 예시가 같은 실제 스크립트 파일을 가리키면 그 경로를
+    ``script_path``로 승격한다. 여러 스크립트가 섞인 문서형 스킬은 임의로 고르지
+    않고 빈 문자열을 유지해 잘못된 자동 실행을 방지한다.
+    """
+    candidates: dict[str, Path] = {}
+    for command in commands:
+        normalized = _replace_skill_dir_variable(command, skill_dir)
+        try:
+            tokens = shlex.split(normalized)
+        except ValueError:
+            tokens = normalized.split()
+        for token in tokens:
+            candidate = _resolve_script_token(token, skill_dir)
+            if candidate is None:
+                continue
+            candidates[str(candidate)] = candidate
+
+    existing_candidates = [path for path in candidates.values() if path.is_file()]
+    if len(existing_candidates) == 1:
+        return str(existing_candidates[0])
+    return ""
+
+
+def _replace_skill_dir_variable(command: str, skill_dir: Path) -> str:
+    """명령 안의 ``$SKILL_DIR`` 변수를 실제 스킬 디렉터리로 치환한다."""
+    value = str(skill_dir)
+    return (
+        command.replace("${SKILL_DIR}", value)
+        .replace("$SKILL_DIR", value)
+        .replace('"${SKILL_DIR}"', value)
+        .replace('"$SKILL_DIR"', value)
+    )
+
+
+def _resolve_script_token(token: str, skill_dir: Path) -> Path | None:
+    """셸 토큰 하나가 실행 가능한 스크립트 경로라면 절대 경로로 반환한다."""
+    cleaned = token.strip().strip("'\"")
+    if not cleaned or any(marker in cleaned for marker in ("<", ">")):
+        return None
+    path = Path(cleaned).expanduser()
+    if path.suffix.lower() not in _SCRIPT_SUFFIXES:
+        return None
+    if not path.is_absolute():
+        path = skill_dir / path
+    return path
 
 
 def _parse_retry_policy(
