@@ -349,7 +349,7 @@ class TestPRD_3_4_Recipes:
             "steps:\n"
             "  - name: step1\n"
             "    type: command\n"
-            "    command: echo ${target}\n"
+            "    content: echo ${target}\n"
         )
         recipe = load_recipe(recipe_dir / "recipe.yaml")
         assert recipe.name == "test-recipe"
@@ -373,7 +373,7 @@ class TestPRD_3_4_Recipes:
             "steps:\n"
             "  - name: say-hello\n"
             "    type: command\n"
-            "    command: echo Hello ${who}\n"
+            "    content: echo Hello ${who}\n"
         )
         recipe = load_recipe(recipe_dir / "recipe.yaml")
         result = await execute_recipe(recipe)
@@ -828,6 +828,7 @@ class TestPRD_E2E_AgentPipeline:
         mock_resp = MagicMock()
         mock_resp.text = "Hello!"
         mock_resp.backend_name = "gemini"
+        mock_resp.tool_calls = None
         orch._router = MagicMock()
         orch._router.send = AsyncMock(return_value=mock_resp)
 

@@ -160,7 +160,7 @@ webhook:
         "steps:\n"
         "  - name: generate\n"
         "    type: command\n"
-        "    command: echo Daily report for ${date}\n"
+        "    content: echo Daily report for ${date}\n"
     )
 
     return tmp_path, config
@@ -171,6 +171,7 @@ def _mock_llm_response(text):
     resp = MagicMock()
     resp.text = text
     resp.backend_name = "gemini"
+    resp.tool_calls = None
     resp.model = "gemini-flash"
     resp.usage = {"input_tokens": 100, "output_tokens": 50}
     return resp

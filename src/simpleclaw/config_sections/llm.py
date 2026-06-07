@@ -5,8 +5,10 @@ LLM provider 설정과 api_key 시크릿 해소를 담당한다.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from dotenv import dotenv_values
 import yaml
 
 from simpleclaw.config_sections.common import _resolve_secret_field
@@ -16,6 +18,34 @@ _LLM_DEFAULTS: dict = {
     "default": "claude",
     "providers": {},
 }
+
+
+def _resolve_provider_api_key(provider: dict, config_dir: Path) -> str:
+    """provider의 api_key/api_key_env 설정을 실제 API 키 문자열로 해소한다.
+
+    새 시크릿 참조 문법(``api_key: env:NAME`` 등)을 우선하되, 기존
+    scenario/live 설정이 쓰던 ``api_key_env``도 계속 지원한다. ``api_key_env``는
+    현재 프로세스 환경변수를 먼저 보고, 없으면 config.yaml 옆의 .env 파일에서
+    한 번만 조회한다.
+    """
+    api_key = _resolve_secret_field(provider.get("api_key", ""))
+    if api_key:
+        return api_key
+
+    api_key_env = provider.get("api_key_env")
+    if not isinstance(api_key_env, str) or not api_key_env:
+        return ""
+
+    env_value = os.environ.get(api_key_env)
+    if env_value:
+        return env_value
+
+    env_file = config_dir / ".env"
+    if not env_file.is_file():
+        return ""
+
+    dotenv_value = dotenv_values(env_file).get(api_key_env)
+    return str(dotenv_value or "")
 
 
 def load_llm_config(config_path: str | Path) -> dict:
@@ -49,9 +79,7 @@ def load_llm_config(config_path: str | Path) -> dict:
             continue
         provider = dict(pconfig)
         provider["name"] = name
-
-        # api_key는 참조 문자열일 수 있으므로 항상 시크릿 매니저를 거쳐 해소한다.
-        provider["api_key"] = _resolve_secret_field(provider.get("api_key", ""))
+        provider["api_key"] = _resolve_provider_api_key(provider, config_path.parent)
 
         providers[name] = provider
 
@@ -59,4 +87,3 @@ def load_llm_config(config_path: str | Path) -> dict:
         "default": llm.get("default", _LLM_DEFAULTS["default"]),
         "providers": providers,
     }
-
