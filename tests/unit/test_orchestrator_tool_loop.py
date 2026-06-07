@@ -15,6 +15,7 @@ import logging
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
@@ -71,6 +72,21 @@ def _tool_response(call_id: str, name: str, args: dict | None = None) -> LLMResp
 def _text_response(text: str) -> LLMResponse:
     return LLMResponse(text=text, model="test", tool_calls=None)
 
+
+
+
+def test_tool_loop_runner_contract_is_importable():
+    """BIZ-346 — tool loop lifecycle은 전용 runner/dataclass 계약으로 분리된다."""
+
+    assert ToolLoopRunner.__name__ == "ToolLoopRunner"
+    assert set(ToolLoopState.__dataclass_fields__) >= {
+        "user_content",
+        "messages",
+        "system_prompt",
+        "tools",
+        "system_blocks",
+    }
+    assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
 
 @pytest.mark.asyncio
 async def test_empty_final_response_returns_user_friendly_message(
