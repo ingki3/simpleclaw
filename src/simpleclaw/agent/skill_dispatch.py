@@ -175,7 +175,17 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
         return None
 
     try:
-        args = args_str.split() if args_str else None
+        if args_str:
+            try:
+                # LLM tool-call의 args는 문자열 하나로 넘어온다. quoted query를 단순
+                # split하면 news-search `-q "... ..."` 같은 단일 인자가 깨지므로
+                # shell-like parsing으로 보존한다.
+                args = shlex.split(args_str)
+            except ValueError:
+                # 잘못 닫힌 quote 등은 기존 best-effort 동작을 유지한다.
+                args = args_str.split()
+        else:
+            args = None
         result = await run_skill(
             skill,
             args=args,
