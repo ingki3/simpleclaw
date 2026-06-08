@@ -239,7 +239,9 @@ async def _run_once(
 def _build_command(script: Path) -> list[str]:
     """파일 확장자에 따라 적절한 실행 명령을 구성한다.
 
-    .py -> python, .sh -> bash, .js -> node, 그 외 -> 직접 실행
+    .py 스킬은 script-local venv가 있으면 그 Python을 우선 사용한다. 런타임
+    Python으로 실행하면 개별 스킬이 자체 venv에 설치한 의존성(yfinance 등)을
+    찾지 못하기 때문이다. .sh/.js/직접 실행 동작은 기존과 동일하다.
 
     Args:
         script: 실행할 스크립트 파일 경로
@@ -249,7 +251,9 @@ def _build_command(script: Path) -> list[str]:
     """
     suffix = script.suffix.lower()
     if suffix == ".py":
-        return [sys.executable, str(script)]
+        venv_python = _find_adjacent_venv_python(script)
+        python = venv_python if venv_python is not None else Path(sys.executable)
+        return [str(python), str(script)]
     elif suffix == ".sh":
         return ["bash", str(script)]
     elif suffix == ".js":
@@ -257,3 +261,22 @@ def _build_command(script: Path) -> list[str]:
     else:
         # 직접 실행 시도 (실행 권한 필요)
         return [str(script)]
+
+
+def _find_adjacent_venv_python(script: Path) -> Path | None:
+    """스킬 스크립트 주변의 venv Python을 찾는다.
+
+    런타임 스킬 패키지는 보통 ``scripts/<tool>.py``와 ``scripts/venv`` 또는
+    패키지 루트 ``venv``를 함께 둔다. 둘 다 지원해 기존 skill 문서의 venv 실행
+    예시와 등록 스킬 실행 경로를 일치시킨다.
+    """
+    for venv_dir in (
+        script.parent / "venv",
+        script.parent.parent / "venv",
+        script.parent / ".venv",
+        script.parent.parent / ".venv",
+    ):
+        venv_python = venv_dir / "bin" / "python"
+        if venv_python.is_file():
+            return venv_python
+    return None
