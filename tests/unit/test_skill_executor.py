@@ -104,6 +104,44 @@ class TestSkillExecutor:
         assert snap.process_kills_sigterm + snap.process_kills_sigkill == 1
         assert snap.process_group_leaks == 0
 
+
+    @pytest.mark.asyncio
+    async def test_python_script_prefers_adjacent_venv_python(self, tmp_path, monkeypatch):
+        """등록 .py 스킬은 런타임 Python 대신 script 인근 venv python 으로 실행된다."""
+        from simpleclaw.skills import executor as executor_mod
+
+        script = tmp_path / "skill" / "scripts" / "run.py"
+        script.parent.mkdir(parents=True)
+        script.write_text("print('ok')")
+        venv_python = script.parent / "venv" / "bin" / "python"
+        venv_python.parent.mkdir(parents=True)
+        venv_python.write_text("#!/bin/sh\nexec python3 \"$@\"\n")
+        venv_python.chmod(0o755)
+        skill = _make_skill("venv-skill", str(script), str(script.parent))
+        seen_cmd: list[str] = []
+
+        class _FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return b"ok", b""
+
+        async def fake_create_subprocess_exec(*cmd, **kwargs):
+            seen_cmd.extend(str(part) for part in cmd)
+            return _FakeProc()
+
+        monkeypatch.setattr(
+            executor_mod.asyncio,
+            "create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+
+        result = await execute_skill(skill)
+
+        assert result.success
+        assert result.output == "ok"
+        assert seen_cmd[:2] == [str(venv_python), str(script)]
+
     @pytest.mark.asyncio
     async def test_trace_id_passed_to_subprocess_env(self, tmp_path):
         """현재 컨텍스트의 trace_id가 SIMPLECLAW_TRACE_ID 환경변수로 전달되어야 한다."""
@@ -346,3 +384,4 @@ class TestRetryPolicy:
         assert policy.compute_backoff(0) == 1.0
         assert policy.compute_backoff(1) == 5.0  # 10 → clamp to 5
         assert policy.compute_backoff(5) == 5.0  # 100000 → clamp to 5
+
