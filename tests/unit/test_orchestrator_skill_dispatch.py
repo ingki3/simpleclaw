@@ -253,6 +253,77 @@ def test_format_skills_for_prompt_includes_invocation(config_file, tmp_path):
     assert "Do NOT compose your own bare command" in formatted
 
 
+@pytest.mark.asyncio
+async def test_execute_registered_skill_preserves_quoted_args(
+    config_file, tmp_path, monkeypatch,
+):
+    """BIZ-362 — 등록 skill args 파싱은 quoted query를 하나의 인자로 보존한다."""
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+    orch._skills_by_name = {skill.name: skill}
+    captured: dict[str, object] = {}
+
+    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+        captured["skill"] = skill_arg
+        captured["args"] = args
+        captured["timeout"] = timeout
+        captured["metrics"] = metrics
+        return SimpleNamespace(output="ok", success=True)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.skill_dispatch.run_skill",
+        fake_run_skill,
+    )
+
+    result = await orch._execute_skill(
+        "news-search-skill",
+        '-q "US stock market closing report"',
+    )
+
+    assert result == "ok"
+    assert captured["args"] == ["-q", "US stock market closing report"]
+
+
+@pytest.mark.asyncio
+async def test_registered_python_skill_prefers_adjacent_venv_python(
+    tmp_path, monkeypatch,
+):
+    """BIZ-362 — .py skill은 런타임 Python 대신 skill-local venv를 우선 실행한다."""
+    from simpleclaw.skills.executor import execute_skill
+
+    skill = _make_python_skill(tmp_path, "us-stock-skill")
+    expected_python = Path(skill.skill_dir) / "venv" / "bin" / "python"
+    expected_script = Path(skill.script_path)
+    captured_cmd: list[str] = []
+    captured_cwd: str | None = None
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        nonlocal captured_cmd, captured_cwd
+        captured_cmd = list(cmd)
+        captured_cwd = kwargs.get("cwd")
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+
+    result = await execute_skill(skill, ["info", "--symbol", "NVDA"], timeout=5)
+
+    assert result.output == "ok"
+    assert captured_cmd[:2] == [str(expected_python), str(expected_script)]
+    assert captured_cmd[2:] == ["info", "--symbol", "NVDA"]
+    assert captured_cwd == skill.skill_dir
+
+
 def test_format_skills_falls_back_to_skill_docs_for_non_python(
     config_file, tmp_path,
 ):
