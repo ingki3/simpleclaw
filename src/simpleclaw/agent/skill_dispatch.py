@@ -160,6 +160,20 @@ async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
     return result or "[no output]"
 
 
+def _parse_skill_args(args_str: str) -> list[str] | None:
+    """등록 스킬 args 문자열을 shell quoting 규칙으로 파싱한다.
+
+    닫히지 않은 quote 등 LLM 생성 오류는 기존 split 동작으로 fallback 해서
+    tool loop 전체를 죽이지 않는다.
+    """
+    if not args_str:
+        return None
+    try:
+        return shlex.split(args_str)
+    except ValueError:
+        return args_str.split()
+
+
 async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str: str) -> str | None:
     """이름으로 스킬을 찾아 실행하고 출력을 반환한다."""
     skill = orchestrator._resolve_skill_name(skill_name)
@@ -175,7 +189,7 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
         return None
 
     try:
-        args = args_str.split() if args_str else None
+        args = _parse_skill_args(args_str)
         result = await run_skill(
             skill,
             args=args,
@@ -187,3 +201,4 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
     except Exception as exc:  # noqa: BLE001 — tool loop를 죽이지 않고 오류 문자열 반환.
         logger.error("Skill '%s' execution failed: %s", skill_name, exc)
         return f"Error executing skill {skill_name}: {str(exc)[:200]}"
+

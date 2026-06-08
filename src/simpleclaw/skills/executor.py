@@ -249,7 +249,8 @@ def _build_command(script: Path) -> list[str]:
     """
     suffix = script.suffix.lower()
     if suffix == ".py":
-        return [sys.executable, str(script)]
+        python = _find_venv_python(script) or Path(sys.executable)
+        return [str(python), str(script)]
     elif suffix == ".sh":
         return ["bash", str(script)]
     elif suffix == ".js":
@@ -257,3 +258,21 @@ def _build_command(script: Path) -> list[str]:
     else:
         # 직접 실행 시도 (실행 권한 필요)
         return [str(script)]
+
+
+def _find_venv_python(script: Path) -> Path | None:
+    """스크립트 인근 venv 의 Python 을 찾아 등록 스킬 의존성을 우선 사용한다.
+
+    SimpleClaw 런타임 venv 와 스킬-local venv 는 의존성이 다를 수 있으므로,
+    ``scripts/venv`` 와 skill root ``venv`` 를 런타임 인터프리터보다 먼저 본다.
+    """
+    for venv_dir in (
+        script.parent / "venv",
+        script.parent.parent / "venv",
+        script.parent / ".venv",
+        script.parent.parent / ".venv",
+    ):
+        python = venv_dir / "bin" / "python"
+        if python.is_file():
+            return python
+    return None
