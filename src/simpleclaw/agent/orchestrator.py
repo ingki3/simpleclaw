@@ -88,6 +88,7 @@ from simpleclaw.agent.file_mutation_tracker import (
     TrackedRoot,
 )
 from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.system_prompts import load_system_prompt
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -96,139 +97,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 시스템 프롬프트에 추가할 도구 사용 안내 (ReAct 형식 대신 간결한 지시).
+# 시스템 프롬프트에 추가할 도구 사용 안내.
 #
-# BIZ-171 — 각 가드는 별도 const 로 선언하고 ``"\n".join`` 으로 합친다.
-# 새 가드를 추가할 때는 ``_GUARD_X`` 상수 한 줄 + 아래 join 리스트 한 줄만
-# 수정한다. 이전에는 트리플-쿼트 한 줄 옆으로 두 PR 이 동시에 끼어들어 git
-# 자동 머지가 실패했음 (2026-05-12: BIZ-164 #151 ↔ BIZ-166 #152, 별도 릴리스
-# release/2026-05-12e #155 강제).
-_BASE_INSTRUCTION = (
-    "Priority for tool use:\n"
-    "1. MUST use tools for real-time facts, system state, file contents, git state, "
-    "external service state, calculations, and any action that changes state.\n"
-    "2. Use tools when verification materially improves correctness. Do NOT fabricate "
-    "information that a tool can verify.\n"
-    "3. For small talk, greetings, thanks, capability/self-state questions, or purely "
-    "conversational replies that do not depend on live/system/file/external state, "
-    "do not use tools; answer directly and briefly.\n"
-    "Only for complex tasks, summarize your understanding first before proceeding; "
-    "do not prepend an understanding summary to simple conversational replies."
-)
-
-_GUARD_SKILL_DOCS_FIRST = (
-    "Before using a user-installed skill for the first time, "
-    "call skill_docs to read its usage."
-)
-
-# BIZ-166 — 사용자 설치 스킬을 ``uvx``/``pipx run`` 으로 호출하려다 실패하는
-# 패턴 차단. 라우팅 자체는 executor 가 막지만, 이 한 줄은 모델이 첫 시도부터
-# ``execute_skill`` 을 고르도록 유도한다.
-_GUARD_SKILL_DISPATCH = (
-    "User-installed skills run from local venvs, NOT from a package registry. "
-    "Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms "
-    "always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime "
-    "resolve the venv path for you. Use `execute_skill` primarily for numeric calculations, "
-    "data processing, complex logic, or dedicated data-collection skills that need local code. "
-    "Do NOT use `execute_skill` as a generic shell escape for simple web reading, memory lookup, "
-    "or plain text questions; use the dedicated built-in tool instead."
-)
-
-# BIZ-164 — 작은 모델이 과거 대화에 남은 실패 도구 호출(예: 5/10 의
-# ``link-git-summarizer``) 흔적을 보고 새 사용자 메시지에서도 같은 도구를
-# 다시 시도하는 패턴(2026-05-12 17:46 "오늘 롯데 선발투수" 사고)을 줄이기 위한
-# 프롬프트 가드. 도구 라우팅 자체는 ``_tool_loop`` 의 history 필터(#2)가 끊고,
-# 이 한 줄은 그 필터를 빠져나가는 텍스트 흔적까지 모델이 무시하게 보강한다.
-_GUARD_PRIOR_TURN_FAILURE = (
-    "Do not re-run a skill that you saw fail in a prior turn — "
-    "those traces belong to a previous, unrelated request."
-)
-
-_GUARD_LANGUAGE = "Respond in the same language as the user."
-
-_GUARD_OPEN_COMMAND = (
-    "NEVER use the `open` command. This agent runs in a headless environment."
-)
-
-# BIZ-167 — 모델이 페이지 본문 회수에 ``execute_skill agent-browser open ... &&
-# agent-browser wait --load networkidle && agent-browser text`` composite 명령을
-# 첫 시도로 골라 ``networkidle`` 이 settle 하지 않는 SPA(wikidocs.net 등)에서
-# 60초 skill timeout 을 통째로 소진하는 사고 다발(2026-05-12). 같은 일을 하는
-# 내장 ``web_fetch`` 는 정적 fetch + 헤드리스 자동 폴백을 8초 ``load`` wait 로
-# 묶고 부분 결과라도 반환하므로, 본문 읽기는 무조건 ``web_fetch`` 가 정답.
-# ``agent-browser`` 는 클릭/폼/스크린샷처럼 상호작용이 필요한 경우에만.
-#
-# BIZ-187 follow-up — agent-browser 가 정말 필요할 때조차도 ``open && wait && text``
-# 를 한 줄 composite 로 묶어 보내면 SPA 에서 단일 호출이 60s 를 넘기고 (max 180s
-# 로 늘렸어도) 모델이 한 turn 안에 결과를 못 보고 또 같은 chain 으로 재시도하면서
-# tool loop 가 죽는다. 단계별로 turn 을 분리하면 각 단일 명령은 안정 구간 안에
-# 끝난다 — 이 가이드를 명시적으로 박아 둠.
-_GUARD_WEB_FETCH_PREFERRED = (
-    "To read page text (articles, blogs, search results, docs), use the "
-    "`web_fetch` tool — it auto-falls back to a headless browser when needed. "
-    "Do NOT compose `execute_skill agent-browser open ... && wait ... && text` "
-    "commands for plain text retrieval; reserve `agent-browser` for interactive "
-    "tasks (clicks, form fills, screenshots). When you do call agent-browser, "
-    "use `wait --load load` — `networkidle` rarely settles on modern SPAs and "
-    "wastes the entire skill timeout. Also issue each agent-browser step as its "
-    "own tool call (open → wait → text/snapshot in separate turns) instead of "
-    "chaining them with `&&`; chained chains amplify single-step timeouts and "
-    "exhaust the tool loop on SPA sites. "
-    # BIZ-190 — wikidocs.net / npmjs.com 같이 Cloudflare/anti-bot 가드를 띄우는
-    # 사이트에서 web_fetch 가 짧은 본문(예: 27자, 202자) 이나 ``FETCH_BLOCKED:``
-    # 마커를 돌려주면, 같은 URL 을 agent-browser/cli/skill 로 재시도하지 말 것.
-    # web_fetch 는 이미 정적 + 헤드리스 두 경로를 시도한 결과이므로 추가 우회는
-    # 무의미하고 tool loop 만 소진한다. 사용자에게 "사이트가 자동 회수를 차단함"
-    # 으로 보고하고 종료한다.
-    "If `web_fetch` returns a short body or a `FETCH_BLOCKED:` marker for a URL, "
-    "the site is blocking automated fetching — `web_fetch` has already tried "
-    "both static and headless paths. Do NOT retry the same URL via "
-    "`agent-browser`, `cli`, or any other skill; reply to the user that the "
-    "page cannot be retrieved automatically and offer a graceful alternative "
-    "(ask for the text directly, summarize from prior knowledge, etc.)."
-)
-
-# BIZ-260 — clarify 다지선다 도구 사용 가이드. 사용자가 명확하지 않은 의도
-# (예: 후보가 여러 개인 메일/캘린더/파일/주식 종목 선택) 를 보일 때 LLM 이
-# clarify 도구를 잡도록 유도. 자유형 질문(이름·주제 등) 에는 평문 응답이 더
-# 자연스럽다.
-_GUARD_CLARIFY_TOOL = (
-    "When the user's request has multiple short, enumerable candidate answers "
-    "(which email/event/file/ticker to act on), call `clarify(question, options)` "
-    "instead of asking in plain text. On channels that support it, the options "
-    "render as tap buttons. Calling clarify ends the turn — do NOT also send a "
-    "text response in the same turn."
-)
-
-_GUARD_ACTIVE_MEMORY = (
-    "When the answer depends on older user preferences, project history, prior "
-    "decisions, or memories that are not present in the current prompt, call "
-    "`search_memory(query=...)` with a focused natural-language query. Do not use "
-    "it for real-time facts, file contents, system state, or web lookup."
-)
-
-_GUARD_LIVE_FACT_WEB_EVIDENCE = (
-    "For live facts — current games/scores, stock or market prices, weather, and "
-    "news — use `realtime-lookup-skill` via `execute_skill` when it is available. "
-    "If that skill is not available, use `web_fetch` yourself. Never answer these "
-    "from memory or guesswork, and base the final answer only on the returned "
-    "evidence/sources."
-)
-
-_TOOL_USAGE_INSTRUCTION = "\n".join(
-    [
-        _BASE_INSTRUCTION,
-        _GUARD_SKILL_DOCS_FIRST,
-        _GUARD_SKILL_DISPATCH,
-        _GUARD_PRIOR_TURN_FAILURE,
-        _GUARD_LANGUAGE,
-        _GUARD_OPEN_COMMAND,
-        _GUARD_WEB_FETCH_PREFERRED,
-        _GUARD_CLARIFY_TOOL,
-        _GUARD_ACTIVE_MEMORY,
-        _GUARD_LIVE_FACT_WEB_EVIDENCE,
-    ]
-)
+# 운영 지침에 따라 하드코딩 대신 ``prompts/system/tool_usage.yaml`` 을
+# 단일 Source of Truth 로 사용한다.
+_TOOL_USAGE_INSTRUCTION = load_system_prompt("tool_usage").prompt
 
 # BIZ-160 — tool 루프가 max_tool_iterations 를 다 쓰고도 LLM 이 빈 텍스트를 돌려준
 # 사고(2026-05-08)에서 사용자에게 아무 메시지도 가지 않아 봇이 죽은 것처럼 보였음.
@@ -1226,10 +1099,7 @@ class AgentOrchestrator:
         try:
             response = await self._router.send(
                 LLMRequest(
-                    system_prompt=(
-                        "You are a conservative asset candidate reducer. "
-                        "Always call select_assets; never answer the user."
-                    ),
+                    system_prompt=load_system_prompt("asset_selector").system_prompt,
                     user_message=prompt,
                     backend_name=str(cfg["backend"]),
                     tools=[build_selector_tool_definition()],
@@ -1341,20 +1211,13 @@ class AgentOrchestrator:
         recipes_dir = Path(str(recipes_config["dir"])).expanduser()
         conversation_db = Path(str(agent_config["db_path"])).expanduser()
         daemon_db = Path(str(daemon_config["db_path"])).expanduser()
-        return "\n".join(
-            [
-                "## Runtime Paths",
-                f"- Deploy repo/config: `{deploy_repo}`",
-                f"- Runtime state root: `{persona_dir}`",
-                f"- Persona files: `{persona_dir}/AGENT.md`, "
-                f"`{persona_dir}/USER.md`, `{persona_dir}/MEMORY.md`",
-                f"- Conversations DB: `{conversation_db}`",
-                f"- Daemon DB: `{daemon_db}`",
-                f"- Recipes directory: `{recipes_dir}`",
-                f"- Workspace directory: `{workspace_dir}`",
-                "- Treat the deploy repo as code/config only; read and write live state "
-                "under the runtime state root unless config explicitly says otherwise.",
-            ]
+        return load_system_prompt("runtime_paths").format_field(
+            deploy_repo=deploy_repo,
+            persona_dir=persona_dir,
+            conversation_db=conversation_db,
+            daemon_db=daemon_db,
+            recipes_dir=recipes_dir,
+            workspace_dir=workspace_dir,
         )
 
     def _build_system_blocks(
@@ -1501,16 +1364,7 @@ class AgentOrchestrator:
         """
         if not recipes:
             return ""
-        lines = [
-            "## Available Recipes",
-            "",
-            (
-                "Recipes are pre-defined workflows. Do not treat this list as an "
-                "execution decision; use it only as context when the user explicitly "
-                "asks to run or discuss a recipe-like report/workflow."
-            ),
-            "",
-        ]
+        lines = [*load_system_prompt("recipe_listing").prompt.splitlines(), ""]
         for recipe in recipes:
             desc = recipe.description or recipe.instructions[:160]
             lines.append(f"- **{recipe.name}**: {desc}")

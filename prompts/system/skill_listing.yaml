@@ -1,0 +1,8 @@
+name: skill_listing
+version: 1
+description: Header shown before installed skill summaries in the main system prompt.
+required_vars: []
+prompt: |-
+  ## Available Skills
+
+  Invoke each skill via `execute_skill` with `skill_name` + `args`. Do NOT compose your own bare command — the runtime resolves the venv path for you. NEVER prefix the skill name with `uvx` or `pipx run`; these skills are NOT on PyPI.

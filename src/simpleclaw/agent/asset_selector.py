@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import ToolCall, ToolDefinition
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.models import SkillDefinition
@@ -166,14 +167,13 @@ def build_selector_prompt(
         }
         for asset in known_assets
     ]
-    return (
-        "You are an asset selector for SimpleClaw. Pick only candidates that may help "
-        "the main LLM answer the user's latest request. Use the select_assets tool. "
-        "Recipes are conservative: include recipes only when the user explicitly asks "
-        "to run/schedule/send a recipe-like report. If unsure, set fallback=true.\n\n"
-        f"Limits: skill_top_k={skill_top_k}, recipe_top_k={recipe_top_k}.\n"
-        f"User message:\n{user_message}\n\n"
-        f"Asset manifest JSON:\n{json.dumps(manifest, ensure_ascii=False, indent=2)}"
+    asset_manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2)
+    return load_system_prompt("asset_selector").format_field(
+        "user_prompt",
+        skill_top_k=skill_top_k,
+        recipe_top_k=recipe_top_k,
+        user_message=user_message,
+        asset_manifest_json=asset_manifest_json,
     )
 
 
