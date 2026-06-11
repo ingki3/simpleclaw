@@ -82,7 +82,6 @@ from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.tool_loop import (
     ToolLoopRunner,
     ToolLoopState,
-    tool_result_provides_live_evidence,
 )
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
@@ -1142,25 +1141,12 @@ class AgentOrchestrator:
             active_skills,
             cron_available=self._cron_scheduler is not None,
         )
-        live_evidence_seen = False
-        if realtime_lookup_context:
-            live_evidence_seen = tool_result_provides_live_evidence(
-                ToolCall(
-                    id="preflight_realtime_lookup",
-                    name="execute_skill",
-                    arguments={"skill_name": _REALTIME_LOOKUP_SKILL_NAME},
-                ),
-                realtime_lookup_context,
-            )
-
         return ToolLoopState(
             user_content=user_content,
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
             system_blocks=system_blocks,
-            live_evidence_seen=live_evidence_seen,
-            live_fact_requires_evidence=realtime_lookup_payload is not None,
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=on_text_delta,
             on_progress=on_progress,
