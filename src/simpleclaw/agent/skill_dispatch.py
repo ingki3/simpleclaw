@@ -12,6 +12,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.skills.executor import execute_skill as run_skill
 from simpleclaw.skills.models import SkillDefinition
 
@@ -22,17 +23,7 @@ def format_skills_for_prompt(skills: list[SkillDefinition]) -> str:
     """시스템 프롬프트용 스킬 개요 목록을 생성한다."""
     if not skills:
         return ""
-    lines = [
-        "## Available Skills",
-        "",
-        (
-            "Invoke each skill via `execute_skill` with `skill_name` + `args`. "
-            "Do NOT compose your own bare command — the runtime resolves the "
-            "venv path for you. NEVER prefix the skill name with `uvx` or "
-            "`pipx run`; these skills are NOT on PyPI."
-        ),
-        "",
-    ]
+    lines = [*load_system_prompt("skill_listing").prompt.splitlines(), ""]
     for skill in skills:
         lines.append(f"- **{skill.name}**: {skill.description}")
         script_path = Path(skill.script_path) if skill.script_path else None

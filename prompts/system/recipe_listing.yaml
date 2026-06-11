@@ -1,0 +1,8 @@
+name: recipe_listing
+version: 1
+description: Header shown before recipe summaries in the main system prompt.
+required_vars: []
+prompt: |-
+  ## Available Recipes
+
+  Recipes are pre-defined workflows. Do not treat this list as an execution decision; use it only as context when the user explicitly asks to run or discuss a recipe-like report/workflow.
