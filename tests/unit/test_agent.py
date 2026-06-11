@@ -1540,10 +1540,10 @@ class TestToolLoop:
         )
 
     def test_tool_usage_instruction_contains_failed_skill_guard(self):
-        """BIZ-164 #3 — system prompt 가드가 ``_TOOL_USAGE_INSTRUCTION`` 에 박혀 있어야 한다."""
+        """BIZ-164 #3 — prior-turn 실패 trace를 stale context로 취급하는 가드."""
         from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-        assert "fail in a prior turn" in _TOOL_USAGE_INSTRUCTION, (
+        assert "failed tool/skill traces from prior unrelated turns" in _TOOL_USAGE_INSTRUCTION, (
             "BIZ-164 prompt guard missing — 과거 실패 도구 재시도 가드 한 줄이 누락됨"
         )
 

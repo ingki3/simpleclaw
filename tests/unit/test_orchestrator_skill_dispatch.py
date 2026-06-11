@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.skills.models import SkillDefinition, SkillScope
 
@@ -195,39 +196,38 @@ def test_format_skills_for_prompt_bans_uvx(config_file, tmp_path):
     assert "pipx" in formatted
 
 
-def test_tool_usage_instruction_bans_uvx():
-    """`_TOOL_USAGE_INSTRUCTION` 에 uvx/pipx 금지 안내가 명시되어 있다.
+def test_skill_listing_instruction_bans_uvx():
+    """skill listing 프롬프트에 uvx/pipx 금지 안내가 명시되어 있다.
 
-    BIZ-166: 시스템 프롬프트가 모델의 첫 시도를 venv-direct 형태로 유도해야 한다.
+    BIZ-166: 스킬 목록 프롬프트가 모델의 첫 시도를 registered skill 형태로 유도해야 한다.
     """
+    skill_listing = load_system_prompt("skill_listing", refresh=True).prompt
+
+    assert "uvx" in skill_listing
+    assert "pipx" in skill_listing
+    assert "execute_skill" in skill_listing
+
+
+def test_skill_listing_instruction_limits_execute_skill_scope():
+    """BIZ-363 — execute_skill 권장 용도는 스킬 설명과 전용 작업 중심이다."""
+    skill_listing = load_system_prompt("skill_listing", refresh=True).prompt
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-    assert "uvx" in _TOOL_USAGE_INSTRUCTION
-    assert "pipx" in _TOOL_USAGE_INSTRUCTION
-    assert "execute_skill" in _TOOL_USAGE_INSTRUCTION
+    assert "numeric calculations" in skill_listing
+    assert "data processing" in skill_listing
+    assert "complex logic" in skill_listing
+    assert "explicitly covered by the skill description" in skill_listing
+    assert "Do NOT use skills as a generic shell escape" in _TOOL_USAGE_INSTRUCTION
 
 
-def test_tool_usage_instruction_limits_execute_skill_scope():
-    """BIZ-363 — execute_skill 권장 용도는 계산·데이터 처리·복잡 로직 중심이다."""
+def test_tool_usage_instruction_avoids_specific_browser_routing():
+    """tool_usage 에 특정 web/browser 스킬 사용법을 박제하지 않는다."""
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-    assert "numeric calculations" in _TOOL_USAGE_INSTRUCTION
-    assert "data processing" in _TOOL_USAGE_INSTRUCTION
-    assert "complex logic" in _TOOL_USAGE_INSTRUCTION
-    assert "Do NOT use `execute_skill` as a generic shell escape" in _TOOL_USAGE_INSTRUCTION
-
-
-def test_tool_usage_instruction_prefers_web_fetch_over_agent_browser():
-    """BIZ-167 — 본문 읽기는 web_fetch 우선, agent-browser networkidle 함정 경고."""
-    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
-
-    # web_fetch 가 본문 회수의 디폴트라는 안내가 박혀 있어야 한다.
-    assert "web_fetch" in _TOOL_USAGE_INSTRUCTION
-    # composite agent-browser 명령 첫 시도 패턴을 명시적으로 차단한다.
-    assert "agent-browser" in _TOOL_USAGE_INSTRUCTION
-    # networkidle 함정 + 권장 wait strategy 가 동시에 보여야 한다.
-    assert "networkidle" in _TOOL_USAGE_INSTRUCTION
-    assert "wait --load load" in _TOOL_USAGE_INSTRUCTION
+    assert "web_fetch" not in _TOOL_USAGE_INSTRUCTION
+    assert "agent-browser" not in _TOOL_USAGE_INSTRUCTION
+    assert "networkidle" not in _TOOL_USAGE_INSTRUCTION
+    assert "wait --load load" not in _TOOL_USAGE_INSTRUCTION
 
 
 def test_python_script_interpreter_substitution_preserved(config_file, tmp_path):
@@ -463,14 +463,12 @@ def test_agent_browser_timeout_disabled_when_below_skill_timeout(config_file):
     )
 
 
-def test_tool_usage_instruction_warns_against_chained_agent_browser():
-    """BIZ-187 — composite chain 분해 가이드가 시스템 프롬프트에 박혀 있다."""
+def test_tool_usage_instruction_does_not_embed_agent_browser_chain_manual():
+    """BIZ-187 — composite chain 세부 매뉴얼은 tool_usage 에 넣지 않는다."""
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-    # ``open → wait → text`` 를 각자 별 turn 으로 쪼개라는 안내 키워드.
-    assert "separate turns" in _TOOL_USAGE_INSTRUCTION
-    # composite chain 의 위험성을 명시적으로 박아 둠.
-    assert "&&" in _TOOL_USAGE_INSTRUCTION
+    assert "separate turns" not in _TOOL_USAGE_INSTRUCTION
+    assert "&&" not in _TOOL_USAGE_INSTRUCTION
 
 
 # ----------------------------------------------------------------------
@@ -757,10 +755,9 @@ def test_call_invokes_agent_browser_ignores_unrelated_calls():
         )
 
 
-def test_tool_usage_instruction_includes_fetch_blocked_guidance():
-    """BIZ-190 — FETCH_BLOCKED 마커 대응 가이드가 시스템 프롬프트에 박혀 있다."""
+def test_tool_usage_instruction_excludes_fetch_blocked_tool_manual():
+    """BIZ-190 — FETCH_BLOCKED 세부 대응은 tool_usage 에 박제하지 않는다."""
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-    assert "FETCH_BLOCKED" in _TOOL_USAGE_INSTRUCTION
-    # 재시도 금지 + graceful 대안 안내 키워드.
-    assert "Do NOT retry" in _TOOL_USAGE_INSTRUCTION
+    assert "FETCH_BLOCKED" not in _TOOL_USAGE_INSTRUCTION
+    assert "Do NOT retry" not in _TOOL_USAGE_INSTRUCTION

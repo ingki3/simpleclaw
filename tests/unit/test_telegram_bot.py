@@ -29,11 +29,12 @@ class _FakeBot:
     뒤 정상화 — flood-wait / parse-error 시나리오를 흉내.
     """
 
-    def __init__(self, edit_failures: int = 0, send_failures: int = 0):
+    def __init__(self, edit_failures: int = 0, send_failures: int = 0, reject_duplicate_edit: bool = False):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
         self._edit_failures = edit_failures
         self._send_failures = send_failures
+        self._reject_duplicate_edit = reject_duplicate_edit
         self._next_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -49,8 +50,15 @@ class _FakeBot:
         if self._edit_failures > 0:
             self._edit_failures -= 1
             raise RuntimeError("simulated edit failure")
+        if self._reject_duplicate_edit and self.edits and self.edits[-1]["text"] == text:
+            raise RuntimeError("Message is not modified")
         self.edits.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "kwargs": kwargs,
+            }
         )
 
 
@@ -621,6 +629,22 @@ class TestTelegramStreamSink:
         assert fake.edits[0]["text"] == "1234567890ab"[:11] or fake.edits[0]["text"] == "123456789ab"
 
     @pytest.mark.asyncio
+    async def test_finalize_renders_common_markdown_bold_with_telegram_html(self):
+        """최종 답변의 **굵게** 마크다운은 Telegram 에서 실제 bold 로 보이게 변환한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=13, min_interval_ms=10000, min_delta_chars=1000,
+        )
+        await sink.start()
+
+        sent = await sink.finalize("**기술주 매도세**: 엔비디아 <테스트> & 반도체")
+
+        assert sent == ["**기술주 매도세**: 엔비디아 <테스트> & 반도체"]
+        assert fake.edits[-1]["text"] == "<b>기술주 매도세</b>: 엔비디아 &lt;테스트&gt; &amp; 반도체"
+        assert fake.edits[-1]["kwargs"]["parse_mode"] == "HTML"
+        assert len(fake.sent) == 1  # placeholder only
+
+    @pytest.mark.asyncio
     async def test_finalize_short_text_edits_placeholder_once(self):
         fake = _FakeBot()
         sink = TelegramStreamSink(
@@ -653,6 +677,23 @@ class TestTelegramStreamSink:
         assert len(fake.sent) == 2  # placeholder + 두 번째 청크
         for chunk in sent:
             assert len(chunk) <= TELEGRAM_MESSAGE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_finalize_skips_duplicate_edit_after_stream_already_committed_final_text(self):
+        """스트리밍 중 이미 최종 본문이 edit 됐으면 finalize 가 새 메시지 fallback 을 만들지 않는다."""
+        fake = _FakeBot(reject_duplicate_edit=True)
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=9, min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+        await sink.on_text_delta("answer")
+
+        sent = await sink.finalize("answer")
+
+        assert sent == ["answer"]
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "answer"
+        assert len(fake.sent) == 1  # placeholder only; no duplicate fallback send
 
     @pytest.mark.asyncio
     async def test_finalize_idempotent(self):

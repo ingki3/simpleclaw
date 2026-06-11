@@ -5,4 +5,6 @@ required_vars: []
 prompt: |-
   ## Available Skills
 
-  Invoke each skill via `execute_skill` with `skill_name` + `args`. Do NOT compose your own bare command — the runtime resolves the venv path for you. NEVER prefix the skill name with `uvx` or `pipx run`; these skills are NOT on PyPI.
+  Skills are selected by their descriptions and documented usage. Before using a user-installed skill for the first time, call `skill_docs` when available.
+
+  Invoke each skill via `execute_skill` with `skill_name` + `args`. Do NOT compose your own bare command — the runtime resolves the venv path for you. NEVER prefix the skill name with `uvx` or `pipx run`; these skills are NOT on PyPI. Prefer skills for dedicated local data collection, numeric calculations, data processing, complex logic, document/media handling, and other tasks explicitly covered by the skill description.
