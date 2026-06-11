@@ -760,6 +760,31 @@ class TestBuiltinWebFetch:
         )
 
     @pytest.mark.asyncio
+    async def test_web_fetch_google_search_redirect_returns_marker(self):
+        """BIZ-363 — Google Search redirect/차단성 본문은 factual evidence가 아니다."""
+        from simpleclaw.agent import builtin_tools
+
+        google_redirect_body = (
+            "Google Search\n"
+            "2026 World Cup South Korea match schedule\n"
+            "몇 초 안에 이동하지 않는 경우 여기를 클릭하세요. "
+            "Google 검색 결과로 이동하는 중입니다. " * 30
+        )
+        static_mock = AsyncMock(return_value="short")
+        headless_mock = AsyncMock(return_value=google_redirect_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://www.google.com/search?q=2026+World+Cup+South+Korea+match+schedule"}
+            )
+
+        assert result.startswith("FETCH_BLOCKED: https://www.google.com/search"), (
+            "Google redirect shell 은 일정 근거가 아니므로 FETCH_BLOCKED 여야 한다"
+        )
+        assert "Do NOT retry" in result
+
+    @pytest.mark.asyncio
     async def test_web_fetch_force_headless_short_body_returns_marker(self):
         """BIZ-190 — force_headless 결과가 매우 짧으면(< 400 chars) FETCH_BLOCKED."""
         from simpleclaw.agent import builtin_tools

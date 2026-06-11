@@ -170,6 +170,8 @@ _BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
     "attention required",
     "please turn javascript on",
     "ddos protection",
+    "몇 초 안에 이동하지 않는 경우",
+    "google 검색 결과로 이동",
 )
 
 # 본문이 이 길이 미만이면 (시그니처가 안 잡혀도) 차단된 것으로 간주. 정적/헤드리스
