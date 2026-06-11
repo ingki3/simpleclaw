@@ -151,13 +151,44 @@ def find_venv_python(script_path: Path) -> Path | None:
 
 async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
     """execute_skill 도구 호출을 처리한다."""
-    skill_name = args.get("skill_name", "")
-    command = args.get("command", "")
+    skill_name = str(args.get("skill_name", "") or "").strip()
+    command = str(args.get("command", "") or "").strip()
+    skill_args = str(args.get("args", "") or "")
+    if skill_name and orchestrator._resolve_skill_name(skill_name) is not None:
+        if not skill_args and command:
+            skill_args = _extract_registered_skill_args_from_command(skill_name, command)
+        result = await execute_registered_skill(orchestrator, skill_name, skill_args)
+        return result or "[no output]"
     if command:
         return await orchestrator._execute_command(skill_name, command)
-    skill_args = args.get("args", "")
     result = await execute_registered_skill(orchestrator, skill_name, skill_args)
     return result or "[no output]"
+
+
+def _extract_registered_skill_args_from_command(skill_name: str, command: str) -> str:
+    """legacy ``command`` 필드에서 등록 skill 뒤의 인자만 추출한다.
+
+    모델이 ``skill_name``과 함께 ``command='skill-name "query"'``를 보내도
+    등록 skill executor로 normalize하기 위해 shell runner 접두부만 걷어낸다.
+    """
+    stripped = command.strip()
+    if not stripped:
+        return ""
+    first = stripped.split(None, 1)
+    if first[0] == skill_name:
+        return first[1] if len(first) > 1 else ""
+    uvx_parts = stripped.split(None, 2)
+    if uvx_parts[0] == "uvx" and len(uvx_parts) >= 2 and uvx_parts[1] == skill_name:
+        return uvx_parts[2] if len(uvx_parts) > 2 else ""
+    pipx_parts = stripped.split(None, 3)
+    if (
+        pipx_parts[0] == "pipx"
+        and len(pipx_parts) >= 3
+        and pipx_parts[1] == "run"
+        and pipx_parts[2] == skill_name
+    ):
+        return pipx_parts[3] if len(pipx_parts) > 3 else ""
+    return stripped
 
 
 async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str: str) -> str | None:

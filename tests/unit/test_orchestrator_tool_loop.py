@@ -195,6 +195,79 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
+async def test_live_fact_final_without_evidence_is_blocked(config_file):
+    """BIZ-363 — 실시간 사실 질문은 evidence 없이 final text를 수락하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_send(_request):
+        return _text_response("대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다.")
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert "확인된 근거" in result.text
+    assert "우루과이" not in result.text
+    assert "6월 19일" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_live_fact_fetch_blocked_does_not_count_as_evidence(
+    config_file, monkeypatch,
+):
+    """BIZ-363 — FETCH_BLOCKED 결과 이후에도 일정/스코어 환각 final을 차단한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "FETCH_BLOCKED: https://www.google.com/search?q=2026+World+Cup\n"
+            "This site appears to block automated fetching."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "web_fetch",
+            {"url": "https://www.google.com/search?q=2026+World+Cup"},
+        ),
+        _text_response("대한민국 vs 미국: 6월 23일 22시에 중계됩니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert "확인된 근거" in result.text
+    assert "미국" not in result.text
+    assert "6월 23일" not in result.text
+
+
+@pytest.mark.asyncio
 async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answer(
     config_file, monkeypatch,
 ):
@@ -218,7 +291,9 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert result == "LG가 두산을 7:4로 이겼습니다."
+    assert "확인된 근거" in result
+    assert "LG" not in result
+    assert "7:4" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
@@ -255,7 +330,8 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert result == "조회 없이 만든 답변"
+    assert "확인된 근거" in result
+    assert "조회 없이 만든 답변" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
