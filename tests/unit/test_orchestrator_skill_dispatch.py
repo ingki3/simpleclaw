@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.llm.models import ToolCall
 from simpleclaw.skills.models import SkillDefinition, SkillScope
 
 
@@ -206,6 +207,16 @@ def test_tool_usage_instruction_bans_uvx():
     assert "execute_skill" in _TOOL_USAGE_INSTRUCTION
 
 
+def test_tool_usage_instruction_limits_execute_skill_scope():
+    """BIZ-363 — execute_skill 권장 용도는 계산·데이터 처리·복잡 로직 중심이다."""
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    assert "numeric calculations" in _TOOL_USAGE_INSTRUCTION
+    assert "data processing" in _TOOL_USAGE_INSTRUCTION
+    assert "complex logic" in _TOOL_USAGE_INSTRUCTION
+    assert "Do NOT use `execute_skill` as a generic shell escape" in _TOOL_USAGE_INSTRUCTION
+
+
 def test_tool_usage_instruction_prefers_web_fetch_over_agent_browser():
     """BIZ-167 — 본문 읽기는 web_fetch 우선, agent-browser networkidle 함정 경고."""
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
@@ -284,6 +295,58 @@ async def test_execute_registered_skill_preserves_quoted_args(
 
     assert result == "ok"
     assert captured["args"] == ["-q", "US stock market closing report"]
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_prefers_registered_skill_when_command_also_present(
+    config_file, tmp_path, monkeypatch,
+):
+    """BIZ-363 — skill_name 이 있으면 legacy command 보다 등록 skill 실행이 우선이다.
+
+    2026-06-11 운영 로그에서 모델이 ``skill_name`` 과 ``command`` 를 동시에
+    보냈고, 기존 dispatch 는 command 를 raw shell 로 먼저 실행해
+    ``realtime-lookup-skill: command not found`` 를 만들었다. 등록 skill 이름이
+    명시된 호출은 shell PATH 에 맡기지 말고 executor 경로로 보내야 한다.
+    """
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "realtime-lookup-skill")
+    orch._skills_by_name = {skill.name: skill}
+    command_calls: list[tuple[str, str]] = []
+    captured: dict[str, object] = {}
+
+    async def fake_command(skill_name, command):
+        command_calls.append((skill_name, command))
+        return "raw-shell"
+
+    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+        captured["skill"] = skill_arg
+        captured["args"] = args
+        return SimpleNamespace(output="registered-skill", success=True)
+
+    monkeypatch.setattr(orch, "_execute_command", fake_command)
+    monkeypatch.setattr(
+        "simpleclaw.agent.skill_dispatch.run_skill",
+        fake_run_skill,
+    )
+
+    result = await orch._dispatch_tool_call(
+        ToolCall(
+            id="c1",
+            name="execute_skill",
+            arguments={
+                "skill_name": "realtime-lookup-skill",
+                "command": 'realtime-lookup-skill "2026 북중미 월드컵 일정"',
+                "args": "2026 북중미 월드컵 일정",
+            },
+        )
+    )
+
+    assert result == "registered-skill"
+    assert command_calls == []
+    assert captured["skill"] == skill
+    assert captured["args"] == ["2026", "북중미", "월드컵", "일정"]
 
 
 @pytest.mark.asyncio

@@ -40,6 +40,12 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE = (
 _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE = (
     "확인은 했지만 답변을 마무리하지 못했습니다. 확인한 결과: {detail}"
 )
+_LIVE_FACT_MISSING_EVIDENCE_MESSAGE = (
+    "실시간 정보는 확인된 근거가 필요하지만, 이번 조회에서는 신뢰할 수 있는 "
+    "근거를 확보하지 못했습니다. 근거 없이 날짜·상대팀·점수·가격 같은 "
+    "구체값을 추측해 답하지 않겠습니다. 공식 일정표나 확인할 URL을 보내주시면 "
+    "그 자료 기준으로 다시 정리해 드리겠습니다."
+)
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
     "0 chars",
     "0 rows",
@@ -175,6 +181,42 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
     return False
 
 
+def _tool_result_looks_unusable_as_live_evidence(content: str) -> bool:
+    """도구 결과가 실시간 사실 근거로 사용할 수 없는 실패/차단/무결과인지 판정한다."""
+    stripped = content.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if "fetch_blocked:" in lowered:
+        return True
+    if "skill command failed" in lowered or "command not found" in lowered:
+        return True
+    if _tool_result_looks_like_explicit_error(stripped):
+        return True
+    if any(
+        marker in lowered or marker in stripped
+        for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS
+    ):
+        return True
+    try:
+        payload_start = stripped.find("{")
+        payload = json.loads(stripped[payload_start:] if payload_start >= 0 else stripped)
+    except Exception:  # noqa: BLE001 — JSON 이 아니면 일반 텍스트 evidence 로 둔다.
+        return False
+    if isinstance(payload, dict):
+        facts = payload.get("facts")
+        confidence = str(payload.get("confidence", "")).lower()
+        limitations = payload.get("limitations")
+        if facts == [] and (confidence in {"", "low"} or limitations):
+            return True
+    return False
+
+
+def tool_result_provides_live_evidence(tool_call: ToolCall, content: str) -> bool:
+    """tool call + 결과 문자열이 실시간 factual final answer의 근거로 충분한지 판정한다."""
+    return _tool_call_provides_live_evidence(tool_call) and not _tool_result_looks_unusable_as_live_evidence(content)
+
+
 def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) -> str:
     """도구 실행 후 LLM final 텍스트가 비었을 때 사용자 가시 fallback을 만든다."""
     if not tool_results:
@@ -250,6 +292,11 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
+                    if state.live_fact_requires_evidence and not state.live_evidence_seen:
+                        logger.warning(
+                            "BIZ-363: blocked live factual final answer without usable evidence",
+                        )
+                        return ToolLoopResult(_LIVE_FACT_MISSING_EVIDENCE_MESSAGE)
                     return ToolLoopResult(final_text)
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -321,7 +368,10 @@ class ToolLoopRunner:
                     ProgressEvent(progress_kind, progress_name, "complete", result),
                 )
                 sanitized = sanitize_tool_output(result)
-                if _tool_call_provides_live_evidence(tc) or self._orchestrator._call_invokes_agent_browser(tc):
+                if tool_result_provides_live_evidence(tc, sanitized) or (
+                    self._orchestrator._call_invokes_agent_browser(tc)
+                    and not _tool_result_looks_unusable_as_live_evidence(sanitized)
+                ):
                     state.live_evidence_seen = True
                 tool_results_for_empty_final.append((tc.name, sanitized))
                 state.messages.append({
@@ -397,6 +447,9 @@ class ToolLoopRunner:
             self._orchestrator._max_tool_iterations,
             invoked_tool_sequence,
         )
+        if state.live_fact_requires_evidence and not state.live_evidence_seen:
+            logger.warning("BIZ-363: live factual forced-final skipped; no usable evidence")
+            return _LIVE_FACT_MISSING_EVIDENCE_MESSAGE
         try:
             final_request = LLMRequest(
                 system_prompt=state.system_prompt,

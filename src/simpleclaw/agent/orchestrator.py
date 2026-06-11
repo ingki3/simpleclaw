@@ -79,7 +79,11 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalService,
 )
 from simpleclaw.agent.progress import ProgressCallback
-from simpleclaw.agent.tool_loop import ToolLoopRunner, ToolLoopState
+from simpleclaw.agent.tool_loop import (
+    ToolLoopRunner,
+    ToolLoopState,
+    tool_result_provides_live_evidence,
+)
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
@@ -125,7 +129,10 @@ _GUARD_SKILL_DISPATCH = (
     "User-installed skills run from local venvs, NOT from a package registry. "
     "Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms "
     "always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime "
-    "resolve the venv path for you."
+    "resolve the venv path for you. Use `execute_skill` primarily for numeric calculations, "
+    "data processing, complex logic, or dedicated data-collection skills that need local code. "
+    "Do NOT use `execute_skill` as a generic shell escape for simple web reading, memory lookup, "
+    "or plain text questions; use the dedicated built-in tool instead."
 )
 
 # BIZ-164 — 작은 모델이 과거 대화에 남은 실패 도구 호출(예: 5/10 의
@@ -1135,7 +1142,16 @@ class AgentOrchestrator:
             active_skills,
             cron_available=self._cron_scheduler is not None,
         )
-        live_evidence_seen = bool(realtime_lookup_context)
+        live_evidence_seen = False
+        if realtime_lookup_context:
+            live_evidence_seen = tool_result_provides_live_evidence(
+                ToolCall(
+                    id="preflight_realtime_lookup",
+                    name="execute_skill",
+                    arguments={"skill_name": _REALTIME_LOOKUP_SKILL_NAME},
+                ),
+                realtime_lookup_context,
+            )
 
         return ToolLoopState(
             user_content=user_content,
