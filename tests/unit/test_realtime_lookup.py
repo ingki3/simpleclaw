@@ -153,8 +153,7 @@ async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
 
     result = await orchestrator.process_message("오늘 AI 최신 뉴스 알려줘", 1, 1)
 
-    assert "확인된 근거" in result
-    assert "직접 답변" not in result
+    assert result == "직접 답변"
     orchestrator._execute_skill.assert_not_called()
     assert orchestrator._router.send.call_count == 1
     request = orchestrator._router.send.call_args_list[0][0][0]

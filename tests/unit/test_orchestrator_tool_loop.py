@@ -195,8 +195,8 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
-async def test_live_fact_final_without_evidence_is_blocked(config_file):
-    """BIZ-363 — 실시간 사실 질문은 evidence 없이 final text를 수락하지 않는다."""
+async def test_live_fact_final_without_evidence_is_accepted_by_tool_loop(config_file):
+    """실시간 사실 final text는 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
     orch = AgentOrchestrator(config_file)
 
     async def fake_send(_request):
@@ -215,16 +215,14 @@ async def test_live_fact_final_without_evidence_is_blocked(config_file):
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert "확인된 근거" in result.text
-    assert "우루과이" not in result.text
-    assert "6월 19일" not in result.text
+    assert result.text == "대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다."
 
 
 @pytest.mark.asyncio
-async def test_live_fact_fetch_blocked_does_not_count_as_evidence(
+async def test_live_fact_fetch_blocked_final_is_not_post_filtered(
     config_file, monkeypatch,
 ):
-    """BIZ-363 — FETCH_BLOCKED 결과 이후에도 일정/스코어 환각 final을 차단한다."""
+    """FETCH_BLOCKED 이후 final text도 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
     orch = AgentOrchestrator(config_file)
 
     async def fake_dispatch(tc):
@@ -262,9 +260,7 @@ async def test_live_fact_fetch_blocked_does_not_count_as_evidence(
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert "확인된 근거" in result.text
-    assert "미국" not in result.text
-    assert "6월 23일" not in result.text
+    assert result.text == "대한민국 vs 미국: 6월 23일 22시에 중계됩니다."
 
 
 @pytest.mark.asyncio
@@ -291,9 +287,7 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert "확인된 근거" in result
-    assert "LG" not in result
-    assert "7:4" not in result
+    assert result == "LG가 두산을 7:4로 이겼습니다."
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
@@ -330,8 +324,7 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert "확인된 근거" in result
-    assert "조회 없이 만든 답변" not in result
+    assert result == "조회 없이 만든 답변"
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
