@@ -206,6 +206,15 @@ def test_tool_usage_instruction_bans_uvx():
     assert "execute_skill" in _TOOL_USAGE_INSTRUCTION
 
 
+def test_tool_usage_instruction_scopes_execute_skill_to_computation_and_data():
+    """BIZ-363 — execute_skill 안내는 계산/데이터 처리/전용 수집 중심이어야 한다."""
+    from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
+
+    assert "numerical calculations" in _TOOL_USAGE_INSTRUCTION
+    assert "data processing" in _TOOL_USAGE_INSTRUCTION
+    assert "specialized data collection" in _TOOL_USAGE_INSTRUCTION
+
+
 def test_tool_usage_instruction_prefers_web_fetch_over_agent_browser():
     """BIZ-167 — 본문 읽기는 web_fetch 우선, agent-browser networkidle 함정 경고."""
     from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
@@ -284,6 +293,72 @@ async def test_execute_registered_skill_preserves_quoted_args(
 
     assert result == "ok"
     assert captured["args"] == ["-q", "US stock market closing report"]
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_prefers_skill_name_over_command(
+    config_file, tmp_path, monkeypatch,
+):
+    """BIZ-363 — skill_name 이 있으면 command raw shell 보다 등록 skill 실행이 우선."""
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "realtime-lookup-skill")
+    orch._skills_by_name = {skill.name: skill}
+    captured: dict[str, object] = {}
+
+    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+        captured["skill"] = skill_arg
+        captured["args"] = args
+        return SimpleNamespace(output="registered evidence", success=True)
+
+    async def fail_raw_shell(skill_name, command):  # pragma: no cover - 실패 시 assertion
+        raise AssertionError(f"raw shell must not run: {skill_name=} {command=}")
+
+    monkeypatch.setattr("simpleclaw.agent.skill_dispatch.run_skill", fake_run_skill)
+    monkeypatch.setattr(orch, "_execute_command", fail_raw_shell)
+
+    result = await orch._dispatch_external_skill({
+        "skill_name": "realtime-lookup-skill",
+        "command": "realtime-lookup-skill encoded-payload",
+        "args": "encoded-payload",
+    })
+
+    assert result == "registered evidence"
+    assert captured["skill"] is skill
+    assert captured["args"] == ["encoded-payload"]
+
+
+@pytest.mark.asyncio
+async def test_execute_skill_rewrites_registered_skill_command_to_dispatch(
+    config_file, tmp_path, monkeypatch,
+):
+    """BIZ-363 — command 첫 토큰이 등록 skill 이면 command-not-found 대신 registry dispatch."""
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "realtime-lookup-skill")
+    orch._skills_by_name = {skill.name: skill}
+    captured: dict[str, object] = {}
+
+    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+        captured["skill"] = skill_arg
+        captured["args"] = args
+        return SimpleNamespace(output="rewritten evidence", success=True)
+
+    async def fail_raw_shell(skill_name, command):  # pragma: no cover - 실패 시 assertion
+        raise AssertionError(f"raw shell must not run: {skill_name=} {command=}")
+
+    monkeypatch.setattr("simpleclaw.agent.skill_dispatch.run_skill", fake_run_skill)
+    monkeypatch.setattr(orch, "_execute_command", fail_raw_shell)
+
+    result = await orch._dispatch_external_skill({
+        "command": "realtime-lookup-skill encoded-payload",
+    })
+
+    assert result == "rewritten evidence"
+    assert captured["skill"] is skill
+    assert captured["args"] == ["encoded-payload"]
 
 
 @pytest.mark.asyncio

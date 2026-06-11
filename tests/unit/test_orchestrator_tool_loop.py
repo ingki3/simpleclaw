@@ -218,7 +218,8 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert result == "LG가 두산을 7:4로 이겼습니다."
+    assert "확인하지 못" in result
+    assert "7:4" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
@@ -255,7 +256,8 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert result == "조회 없이 만든 답변"
+    assert "확인하지 못" in result
+    assert "조회 없이 만든 답변" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 

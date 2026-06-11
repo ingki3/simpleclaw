@@ -170,12 +170,23 @@ _BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
     "attention required",
     "please turn javascript on",
     "ddos protection",
+    # BIZ-363: Google Search redirects / automated-traffic interstitials are
+    # not usable factual evidence for live schedules or broadcasts.
+    "trouble accessing google search",
+    "automated traffic",
+    "redirects prevent normal search result rendering",
 )
 
 # 본문이 이 길이 미만이면 (시그니처가 안 잡혀도) 차단된 것으로 간주. 정적/헤드리스
 # 양쪽이 모두 짧은 응답을 돌려준 경우만 적용 — 정상적인 짧은 페이지(에러 404 등)
 # 까지는 잡지 않도록 ``handle_web_fetch`` 에서 fallback 경로를 거친 뒤에만 검사.
 _BLOCK_PAGE_SHORT_THRESHOLD = 400
+
+
+def _contains_block_page_signature(body: str) -> bool:
+    """짧은 길이와 무관하게 알려진 anti-bot 시그니처만 판정한다."""
+    lower = body.strip().lower()
+    return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
 
 
 def _looks_like_block_page(body: str) -> bool:
@@ -190,8 +201,7 @@ def _looks_like_block_page(body: str) -> bool:
     stripped = body.strip()
     if len(stripped) < _BLOCK_PAGE_SHORT_THRESHOLD:
         return True
-    lower = stripped.lower()
-    return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
+    return _contains_block_page_signature(stripped)
 
 
 def _format_block_page_response(url: str, body: str, *, via: str) -> str:
@@ -427,6 +437,13 @@ async def handle_web_fetch(
         return static_text
 
     static_len = len(static_text.strip())
+    if _contains_block_page_signature(static_text):
+        logger.info(
+            "web_fetch static returned block page signature for %s (%d chars)",
+            url, static_len,
+        )
+        return _format_block_page_response(url, static_text, via="static signature")
+
     if static_len < STATIC_FALLBACK_THRESHOLD:
         logger.info(
             "web_fetch static returned %d chars (< %d), falling back to headless",
