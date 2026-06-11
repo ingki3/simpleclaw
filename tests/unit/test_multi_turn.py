@@ -280,3 +280,54 @@ class TestMultiTurnExecution:
         assert len(tool_msgs) == 1
         assert tool_msgs[0]["name"] == "execute_skill"
         assert tool_msgs[0]["tool_call_id"] == "c1"
+
+
+class TestRealtimeEvidenceGuard:
+    """BIZ-363 — 실시간 사실 질문은 검증 가능한 fresh evidence 없이는 답하지 않는다."""
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_sports_schedule_final_answer_blocked_without_evidence(
+        self, config_file, tmp_path,
+    ):
+        orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(
+            return_value=_text_response("한국은 6월 12일 20:00에 경기합니다.")
+        )
+
+        result = await orchestrator.process_message(
+            "이번 월드컵 한국 경기 중계 일정 알려줘", 1, 1,
+        )
+
+        assert "확인하지 못" in result
+        assert "6월 12일" not in result
+        assert "20:00" not in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_fetch_blocked_does_not_unlock_sports_schedule_answer(
+        self, config_file, tmp_path,
+    ):
+        orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
+        step1 = _tool_response([
+            ToolCall(
+                id="w1",
+                name="web_fetch",
+                arguments={"url": "https://www.google.com/search?q=worldcup+korea"},
+            )
+        ])
+        step2 = _text_response("한국은 6월 12일 20:00에 경기합니다.")
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(side_effect=[step1, step2])
+        orchestrator._dispatch_tool_call = AsyncMock(
+            return_value="FETCH_BLOCKED: https://www.google.com/search?q=worldcup+korea"
+        )
+
+        result = await orchestrator.process_message(
+            "이번 월드컵 한국 경기 중계 일정 알려줘", 1, 1,
+        )
+
+        assert "확인하지 못" in result
+        assert "6월 12일" not in result
+        assert "20:00" not in result

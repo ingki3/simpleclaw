@@ -204,6 +204,8 @@ _GUARD_ACTIVE_MEMORY = (
 _GUARD_LIVE_FACT_WEB_EVIDENCE = (
     "For live facts — current games/scores, stock or market prices, weather, and "
     "news — use `realtime-lookup-skill` via `execute_skill` when it is available. "
+    "Use `execute_skill` for numerical calculations, data processing, and "
+    "specialized data collection when a registered skill provides that workflow. "
     "If that skill is not available, use `web_fetch` yourself. Never answer these "
     "from memory or guesswork, and base the final answer only on the returned "
     "evidence/sources."
@@ -289,6 +291,11 @@ _LIVE_FACT_TIME_CUES = (
     "예보",
     "마감",
     "장마감",
+    # BIZ-363: 경기 일정/중계 편성은 사전지식으로 답하면 쉽게 stale 해진다.
+    "일정",
+    "중계",
+    "방송",
+    "편성",
 )
 _LIVE_FACT_CORRECTION_CUES = (
     "틀렸",
@@ -304,6 +311,8 @@ _LIVE_FACT_SPORTS_TERMS = (
     "축구",
     "농구",
     "배구",
+    "월드컵",
+    "경기",
     "경기 결과",
     "스코어",
 )
