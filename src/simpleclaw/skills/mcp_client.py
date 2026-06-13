@@ -79,33 +79,78 @@ class MCPManager:
 
             async with stdio_client(server_params) as (read, write):
                 async with ClientSession(read, write) as session:
-                    await session.initialize()
+                    try:
+                        initialize_result = await session.initialize()
+                    except Exception as e:
+                        raise MCPConnectionError(
+                            f"Failed to initialize MCP server '{name}': {e}"
+                        ) from e
 
-                    tools_result = await session.list_tools()
-                    for tool in tools_result.tools:
-                        tool_def = ToolDefinition(
-                            name=tool.name,
-                            description=tool.description or "",
-                            source=ToolSource.MCP,
-                            source_name=name,
-                        )
-                        self._tools[tool.name] = tool_def
+                    tool_count = 0
+                    if self._has_tools_capability(initialize_result):
+                        try:
+                            tools_result = await session.list_tools()
+                        except Exception as e:
+                            raise MCPConnectionError(
+                                f"Failed to list tools for MCP server "
+                                f"'{name}': {e}"
+                            ) from e
+
+                        for tool in tools_result.tools:
+                            tool_def = ToolDefinition(
+                                name=tool.name,
+                                description=tool.description or "",
+                                source=ToolSource.MCP,
+                                source_name=name,
+                            )
+                            self._tools[tool.name] = tool_def
+                        tool_count = len(tools_result.tools)
 
             self._connected_servers.append(name)
             self._server_configs[name] = config
-            logger.info(
-                "Connected to MCP server '%s', loaded %d tools.",
-                name, len(tools_result.tools),
-            )
+            if tool_count == 0:
+                logger.info(
+                    "Connected to MCP server '%s'; tools capability absent "
+                    "or no tools advertised, loaded 0 tools.",
+                    name,
+                )
+            else:
+                logger.info(
+                    "Connected to MCP server '%s', loaded %d tools.",
+                    name, tool_count,
+                )
 
         except ImportError:
             raise MCPConnectionError(
                 "MCP package not installed. Install with: pip install mcp"
             )
+        except MCPConnectionError:
+            raise
         except Exception as e:
             raise MCPConnectionError(
                 f"Failed to connect to MCP server '{name}': {e}"
             ) from e
+
+    def _has_tools_capability(self, initialize_result: object) -> bool:
+        """서버 initialize 결과가 tools/list 호출을 허용하는지 확인한다.
+
+        MCP 서버는 prompts/resources만 제공할 수 있으므로, tools capability가
+        명시된 경우에만 tools/list를 호출해야 prompt-only 서버 연결을 실패로
+        오인하지 않는다.
+        """
+        capabilities = None
+        if isinstance(initialize_result, dict):
+            capabilities = initialize_result.get("capabilities")
+        else:
+            capabilities = getattr(initialize_result, "capabilities", None)
+
+        if capabilities is None:
+            return False
+
+        if isinstance(capabilities, dict):
+            return capabilities.get("tools") is not None
+
+        return getattr(capabilities, "tools", None) is not None
 
     async def call_tool(
         self, tool_name: str, arguments: dict | None = None
