@@ -160,7 +160,10 @@ class TestTelegramBot:
         api_bot.get_file.assert_awaited_once_with("large")
         assert attachments == [
             MultimodalAttachment(
-                data=b"largest", mime_type="image/jpeg", name="telegram-photo-large"
+                data=b"largest",
+                mime_type="image/jpeg",
+                name="telegram-photo-large",
+                size_bytes=7,
             )
         ]
 
@@ -181,7 +184,10 @@ class TestTelegramBot:
         api_bot.get_file.assert_awaited_once_with("doc-1")
         assert attachments == [
             MultimodalAttachment(
-                data=b"png", mime_type="image/png", name="diagram.png"
+                data=b"png",
+                mime_type="image/png",
+                name="diagram.png",
+                size_bytes=3,
             )
         ]
 
@@ -211,6 +217,7 @@ class TestTelegramBot:
                 mime_type="application/pdf",
                 name="paper.pdf",
                 path=str(tmp_path / "paper.pdf"),
+                size_bytes=8,
             )
         ]
         assert (tmp_path / "paper.pdf").read_bytes() == b"%PDF-1.7"
@@ -303,8 +310,20 @@ class TestTelegramBot:
             data=b"%PDF", mime_type="application/pdf", name="paper.pdf"
         )
 
+        prompt = TelegramBot._default_message_text_for_attachments([attachment])
+
+        assert "첨부 문서" in prompt
+        assert "paper.pdf" in prompt
+        assert "application/pdf" in prompt
+        assert "분석" in prompt
+
+    def test_image_only_prompt_preserves_image_analysis_intent(self):
+        attachment = MultimodalAttachment(
+            data=b"jpg", mime_type="image/jpeg", name="photo.jpg"
+        )
+
         assert TelegramBot._default_message_text_for_attachments([attachment]) == (
-            "첨부 파일을 분석해 주세요."
+            "이미지를 분석해 주세요."
         )
 
 

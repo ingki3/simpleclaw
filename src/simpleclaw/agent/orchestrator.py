@@ -97,6 +97,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_ATTACHMENT_CONTEXT_HEADER = "Attachment context"
+
 # 시스템 프롬프트에 추가할 도구 사용 안내.
 #
 # 운영 지침에 따라 하드코딩 대신 ``prompts/system/tool_usage.yaml`` 을
@@ -314,6 +316,35 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             evidence.strip() or "{}",
         ]
     )
+
+
+def _format_attachment_context_note(
+    attachments: list[MultimodalAttachment] | None,
+) -> str:
+    """현재 turn 첨부 메타데이터와 분석 지시를 provider 입력용 note로 만든다."""
+    if not attachments:
+        return ""
+
+    lines = [
+        f"## {_ATTACHMENT_CONTEXT_HEADER}",
+        "첨부 내용을 직접 분석해 주세요. 불가능하면 이유와 필요한 조치를 설명해 주세요.",
+    ]
+    for index, attachment in enumerate(attachments, start=1):
+        name = attachment.name or f"attachment-{index}"
+        size_bytes = attachment.size_bytes
+        if size_bytes is None:
+            size_bytes = len(attachment.data) if attachment.data is not None else None
+        parts = [
+            f"- Attachment {index}",
+            f"File name: {name}",
+            f"MIME: {attachment.mime_type}",
+        ]
+        if size_bytes is not None:
+            parts.append(f"Size: {size_bytes} bytes")
+        if attachment.path:
+            parts.append(f"Sandbox path: {attachment.path}")
+        lines.append("; ".join(parts))
+    return "\n".join(lines)
 
 
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
@@ -927,6 +958,9 @@ class AgentOrchestrator:
             "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
         )
         user_content = f"{datetime_context}\n{text}"
+        attachment_note = _format_attachment_context_note(attachments)
+        if attachment_note:
+            user_content = f"{user_content}\n\n{attachment_note}"
         current_user_message: dict = {"role": "user", "content": user_content}
         if attachments:
             # 이미지 bytes는 현재 turn에만 첨부한다. 영속 대화 저장소에는 대용량

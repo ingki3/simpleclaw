@@ -983,6 +983,13 @@ class TelegramBot:
         """첨부만 있는 Telegram 메시지에 사용할 안전한 기본 요청문을 고른다."""
         if attachments and all(a.mime_type.startswith("image/") for a in attachments):
             return "이미지를 분석해 주세요."
+        document_summaries = [
+            f"{a.name or '이름 없는 파일'} ({a.mime_type})"
+            for a in attachments
+            if not a.mime_type.startswith("image/")
+        ]
+        if document_summaries:
+            return "첨부 문서를 분석해 주세요: " + ", ".join(document_summaries)
         return "첨부 파일을 분석해 주세요."
 
     @staticmethod
@@ -1015,6 +1022,7 @@ class TelegramBot:
                             data=bytes(payload),
                             mime_type="image/jpeg",
                             name=f"telegram-photo-{file_id}",
+                            size_bytes=len(payload),
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1071,6 +1079,7 @@ class TelegramBot:
                             mime_type=str(mime_type),
                             name=filename,
                             path=saved_path,
+                            size_bytes=len(payload),
                         )
                     )
                 except Exception as exc:  # noqa: BLE001
