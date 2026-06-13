@@ -83,6 +83,7 @@
 ### 2026-06-13
 
 - [x] **BIZ-368: MCP tools capability gate 추가** — MCP 서버 initialize 결과의 `tools` capability를 확인한 뒤에만 `list_tools()`를 호출하도록 수정해 prompt-only/resource-only 서버를 연결 실패로 오인하지 않게 했다. tools capability가 없는 서버는 connected server로 기록하되 loaded tools 0개로 로그를 남기고, initialize 실패와 tools/list 실패 메시지를 구분한다. 회귀 테스트 3개 추가(`tests/unit/test_mcp_client.py`: prompt-only 미호출 연결, tools capability 도구 등록 유지, tools/list 실패 시 다른 서버 계속 연결) (2026-06-13)
+- [x] **BIZ-366: Telegram `/undo N` 대화 컨텍스트 되돌리기** — `messages.deleted_at` soft-delete 마이그레이션(0004) 추가, `ConversationStore.hide_recent_user_turns()` 및 기본 context 조회 숨김 처리(`get_recent`/`get_since`/ID 포함 조회는 감사용 include 옵션 유지), `AgentOrchestrator.process_message()`에서 LLM/tool loop 전에 `/undo`/`/undo N` 선처리. `/undo` 명령 자체는 대화 이력에 저장하지 않고, 잘못된 N/되돌릴 user turn 없음 케이스는 즉시 안내한다. 단위 테스트: store soft-delete/감사 조회/2턴 rewind + orchestrator 명령 파싱/저장 정책/invalid/empty 케이스 추가. 검증: `tests/unit/` 1675 passed, `uvx ruff check src/` passed. (2026-06-13)
 
 ### 2026-04-24 ~ 04-25
 

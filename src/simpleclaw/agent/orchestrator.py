@@ -118,6 +118,12 @@ _BUDGET_EXHAUSTED_HINT_SUFFIX = (
 _EMPTY_DIRECT_RESPONSE_MESSAGE = (
     "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
 )
+_UNDO_USAGE_MESSAGE = "사용법: /undo 또는 /undo N (N은 1 이상의 정수)"
+_UNDO_NO_TURNS_MESSAGE = "되돌릴 대화 턴이 없습니다."
+_UNDO_SUCCESS_MESSAGE = (
+    "최근 {turns}턴을 다음 응답부터 제외했습니다. "
+    "원본 메시지는 감사용으로 DB에 남겨 두며, 이 /undo 명령 자체는 대화 이력에 저장하지 않습니다."
+)
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE = (
     "확인해 봤지만 관련 기록을 찾지 못했습니다."
 )
@@ -244,6 +250,29 @@ def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
         context = prior_context[-3000:]
         return _looks_like_live_fact_request(context, prior_context="")
     return False
+
+
+def _parse_undo_command(text: str) -> tuple[bool, int | None]:
+    """/undo 명령 여부와 요청 turn 수를 파싱한다.
+
+    Telegram은 slash command를 일반 텍스트로 전달하므로 LLM/tool loop에 넣기 전
+    오케스트레이터에서 선처리한다. ``/undo``의 기본값은 1이고, ``/undo N``만
+    허용한다. 그 외 토큰/음수/0은 사용법 안내로 돌린다.
+    """
+    parts = text.strip().split()
+    if not parts or parts[0] != "/undo":
+        return False, None
+    if len(parts) == 1:
+        return True, 1
+    if len(parts) != 2:
+        return True, None
+    try:
+        turns = int(parts[1])
+    except ValueError:
+        return True, None
+    if turns < 1:
+        return True, None
+    return True, turns
 
 
 def _realtime_lookup_skill_payload(
@@ -715,6 +744,15 @@ class AgentOrchestrator:
                 trace_id, user_id, chat_id,
             )
             self._reload_dynamic_files()
+
+            undo_command, undo_turns = _parse_undo_command(text)
+            if undo_command:
+                if undo_turns is None:
+                    return _UNDO_USAGE_MESSAGE
+                hidden_turns = self._store.hide_recent_user_turns(undo_turns)
+                if hidden_turns == 0:
+                    return _UNDO_NO_TURNS_MESSAGE
+                return _UNDO_SUCCESS_MESSAGE.format(turns=hidden_turns)
 
             # BIZ-260 — clarify 도구가 발생시킬 ClarifyRequest 를 chat_id 키로
             # 적재할 수 있도록 contextvar 에 chat_id 를 매단다. tool 핸들러는
