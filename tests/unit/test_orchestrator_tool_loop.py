@@ -16,7 +16,7 @@ import pytest
 
 from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
-from simpleclaw.llm.models import LLMResponse, ToolCall
+from simpleclaw.llm.models import LLMResponse, MultimodalAttachment, ToolCall
 
 
 @pytest.fixture
@@ -192,6 +192,76 @@ async def test_normal_text_response_unaffected(config_file):
     assert result == "정상 답변입니다."
     assert "한도" not in result
     assert "tool loop" not in result
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_note_is_in_current_user_message_not_saved(
+    config_file,
+):
+    """문서 첨부 메타 note는 provider 요청에만 붙고 대화 DB 저장 텍스트에는 남지 않는다."""
+    orch = AgentOrchestrator(config_file)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return _text_response("첨부를 확인했습니다.")
+
+    orch._router.send = fake_send
+    attachment = MultimodalAttachment(
+        data=b"%PDF-1.7",
+        mime_type="application/pdf",
+        name="paper.pdf",
+        path="/tmp/simpleclaw-attachments/paper.pdf",
+        size_bytes=8,
+    )
+
+    result = await orch.process_message(
+        "요약해줘",
+        user_id=1,
+        chat_id=1,
+        attachments=[attachment],
+    )
+
+    assert result == "첨부를 확인했습니다."
+    assert len(seen_requests) == 1
+    current_message = seen_requests[0].messages[-1]
+    assert current_message["attachments"] == [attachment]
+    content = current_message["content"]
+    assert "Attachment context" in content
+    assert "paper.pdf" in content
+    assert "application/pdf" in content
+    assert "/tmp/simpleclaw-attachments/paper.pdf" in content
+    assert "8 bytes" in content
+    assert "직접 분석" in content
+    assert "불가능하면" in content
+
+    saved = orch._store.get_recent(limit=2)
+    assert saved[0].content == "요약해줘"
+    assert "Attachment context" not in saved[0].content
+    assert "%PDF" not in saved[0].content
+    assert "/tmp/simpleclaw-attachments/paper.pdf" not in saved[0].content
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_note_includes_attachment_without_path(config_file):
+    orch = AgentOrchestrator(config_file)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return _text_response("이미지 확인")
+
+    orch._router.send = fake_send
+    attachment = MultimodalAttachment(
+        data=b"jpg", mime_type="image/jpeg", name="photo.jpg"
+    )
+
+    await orch.process_message("이미지를 분석해 주세요.", 1, 1, attachments=[attachment])
+
+    content = seen_requests[0].messages[-1]["content"]
+    assert "photo.jpg" in content
+    assert "image/jpeg" in content
+    assert "Sandbox path" not in content
 
 
 @pytest.mark.asyncio

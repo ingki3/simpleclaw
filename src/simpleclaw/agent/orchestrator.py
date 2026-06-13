@@ -97,6 +97,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_ATTACHMENT_CONTEXT_HEADER = "Attachment context"
+
 # 시스템 프롬프트에 추가할 도구 사용 안내.
 #
 # 운영 지침에 따라 하드코딩 대신 ``prompts/system/tool_usage.yaml`` 을
@@ -117,6 +119,12 @@ _BUDGET_EXHAUSTED_HINT_SUFFIX = (
 )
 _EMPTY_DIRECT_RESPONSE_MESSAGE = (
     "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
+)
+_UNDO_USAGE_MESSAGE = "사용법: /undo 또는 /undo N (N은 1 이상의 정수)"
+_UNDO_NO_TURNS_MESSAGE = "되돌릴 대화 턴이 없습니다."
+_UNDO_SUCCESS_MESSAGE = (
+    "최근 {turns}턴을 다음 응답부터 제외했습니다. "
+    "원본 메시지는 감사용으로 DB에 남겨 두며, 이 /undo 명령 자체는 대화 이력에 저장하지 않습니다."
 )
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE = (
     "확인해 봤지만 관련 기록을 찾지 못했습니다."
@@ -246,6 +254,29 @@ def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
     return False
 
 
+def _parse_undo_command(text: str) -> tuple[bool, int | None]:
+    """/undo 명령 여부와 요청 turn 수를 파싱한다.
+
+    Telegram은 slash command를 일반 텍스트로 전달하므로 LLM/tool loop에 넣기 전
+    오케스트레이터에서 선처리한다. ``/undo``의 기본값은 1이고, ``/undo N``만
+    허용한다. 그 외 토큰/음수/0은 사용법 안내로 돌린다.
+    """
+    parts = text.strip().split()
+    if not parts or parts[0] != "/undo":
+        return False, None
+    if len(parts) == 1:
+        return True, 1
+    if len(parts) != 2:
+        return True, None
+    try:
+        turns = int(parts[1])
+    except ValueError:
+        return True, None
+    if turns < 1:
+        return True, None
+    return True, turns
+
+
 def _realtime_lookup_skill_payload(
     text: str,
     now_kst: object,
@@ -285,6 +316,35 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             evidence.strip() or "{}",
         ]
     )
+
+
+def _format_attachment_context_note(
+    attachments: list[MultimodalAttachment] | None,
+) -> str:
+    """현재 turn 첨부 메타데이터와 분석 지시를 provider 입력용 note로 만든다."""
+    if not attachments:
+        return ""
+
+    lines = [
+        f"## {_ATTACHMENT_CONTEXT_HEADER}",
+        "첨부 내용을 직접 분석해 주세요. 불가능하면 이유와 필요한 조치를 설명해 주세요.",
+    ]
+    for index, attachment in enumerate(attachments, start=1):
+        name = attachment.name or f"attachment-{index}"
+        size_bytes = attachment.size_bytes
+        if size_bytes is None:
+            size_bytes = len(attachment.data) if attachment.data is not None else None
+        parts = [
+            f"- Attachment {index}",
+            f"File name: {name}",
+            f"MIME: {attachment.mime_type}",
+        ]
+        if size_bytes is not None:
+            parts.append(f"Size: {size_bytes} bytes")
+        if attachment.path:
+            parts.append(f"Sandbox path: {attachment.path}")
+        lines.append("; ".join(parts))
+    return "\n".join(lines)
 
 
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
@@ -716,6 +776,15 @@ class AgentOrchestrator:
             )
             self._reload_dynamic_files()
 
+            undo_command, undo_turns = _parse_undo_command(text)
+            if undo_command:
+                if undo_turns is None:
+                    return _UNDO_USAGE_MESSAGE
+                hidden_turns = self._store.hide_recent_user_turns(undo_turns)
+                if hidden_turns == 0:
+                    return _UNDO_NO_TURNS_MESSAGE
+                return _UNDO_SUCCESS_MESSAGE.format(turns=hidden_turns)
+
             # BIZ-260 — clarify 도구가 발생시킬 ClarifyRequest 를 chat_id 키로
             # 적재할 수 있도록 contextvar 에 chat_id 를 매단다. tool 핸들러는
             # 자기 시그니처를 바꾸지 않고도 contextvar 로 chat_id 를 얻는다.
@@ -889,6 +958,9 @@ class AgentOrchestrator:
             "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
         )
         user_content = f"{datetime_context}\n{text}"
+        attachment_note = _format_attachment_context_note(attachments)
+        if attachment_note:
+            user_content = f"{user_content}\n\n{attachment_note}"
         current_user_message: dict = {"role": "user", "content": user_content}
         if attachments:
             # 이미지 bytes는 현재 turn에만 첨부한다. 영속 대화 저장소에는 대용량
