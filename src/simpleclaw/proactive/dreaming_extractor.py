@@ -176,6 +176,11 @@ class DreamingOpportunityExtractor:
             if confidence < self.min_confidence:
                 continue
             sample = items[-1].message.content.strip()
+            cron_payload = self._build_repeated_request_cron_payload(
+                topic_key=topic_key,
+                bucket_start=bucket_start,
+                sample=sample,
+            )
             opportunities.append(
                 ProactiveOpportunity(
                     type=OpportunityType.REPEATED_REQUEST,
@@ -198,13 +203,7 @@ class DreamingOpportunityExtractor:
                     suggested_action=SuggestedAction(
                         kind=SuggestedActionKind.CREATE_CRON,
                         label="반복 요청 cron 제안 검토",
-                        payload={
-                            "topic": topic_key,
-                            "hour": bucket_start,
-                            "timezone": "local",
-                            "source": "dreaming",
-                            "min_occurrences": self.min_occurrences,
-                        },
+                        payload=cron_payload,
                     ),
                     requires_user_approval=True,
                     source="dreaming",
@@ -215,6 +214,34 @@ class DreamingOpportunityExtractor:
             key=lambda item: (item.confidence, len(item.source_msg_ids)), reverse=True
         )
         return opportunities
+
+    def _build_repeated_request_cron_payload(
+        self,
+        *,
+        topic_key: str,
+        bucket_start: int,
+        sample: str,
+    ) -> dict[str, object]:
+        """반복 요청 후보를 즉시 승인 가능한 create_cron payload로 완성한다.
+
+        Presenter가 ``CREATE_CRON`` 버튼을 노출하는 이상 accept 경로는
+        ``cron_expression``과 ``action_reference``를 반드시 필요로 한다. Dreaming
+        extractor 단계에서 보수적인 매일 실행 cron과 최근 대표 요청문을 함께 저장해
+        사용자가 등록 버튼을 눌렀을 때 validation 실패로 빠지지 않게 한다.
+        """
+        safe_topic = re.sub(r"[^a-z0-9_-]+", "-", topic_key.replace("_", "-"))
+        safe_topic = safe_topic.strip("-") or "request"
+        return {
+            "name": f"dreaming-repeated-{safe_topic}-{bucket_start:02d}",
+            "cron_expression": f"0 {bucket_start} * * *",
+            "action_type": "prompt",
+            "action_reference": sample[:500],
+            "topic": topic_key,
+            "hour": bucket_start,
+            "timezone": "local",
+            "source": "dreaming",
+            "min_occurrences": self.min_occurrences,
+        }
 
     def _extract_unfinished_intents(
         self, items: list[tuple[int, ConversationMessage]]
