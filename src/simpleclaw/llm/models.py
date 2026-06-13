@@ -74,6 +74,7 @@ class MultimodalAttachment:
     mime_type: str
     name: str | None = None
     path: str | None = None
+    size_bytes: int | None = None
 
 
 @dataclass

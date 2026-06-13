@@ -97,10 +97,15 @@ class GeminiProvider(LLMProvider):
             mime_type = raw.get("mime_type") or raw.get("mimeType")
             name = raw.get("name") or raw.get("file_name")
             path = raw.get("path")
+            size_bytes = raw.get("size_bytes") or raw.get("sizeBytes")
             if data is None or not mime_type:
                 return None
             attachment = MultimodalAttachment(
-                data=bytes(data), mime_type=str(mime_type), name=name, path=path
+                data=bytes(data),
+                mime_type=str(mime_type),
+                name=name,
+                path=path,
+                size_bytes=size_bytes,
             )
         else:
             return None
@@ -117,6 +122,7 @@ class GeminiProvider(LLMProvider):
             mime_type=mime_type,
             name=attachment.name,
             path=attachment.path,
+            size_bytes=attachment.size_bytes,
         )
 
     @classmethod
