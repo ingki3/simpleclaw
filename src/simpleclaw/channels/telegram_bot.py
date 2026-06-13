@@ -52,6 +52,11 @@ _CODE_FENCE_RE = re.compile(r"^```([^\n]*)$", re.MULTILINE)
 # 기준 수일~수주 분량. 한계 초과 시 가장 오래된 항목부터 evict.
 _CLARIFY_CACHE_MAX_ENTRIES = 100
 
+_PARTIAL_DELIVERY_NOTICE = (
+    "⚠️ 일부 응답이 전송되지 않았습니다. "
+    "답변 뒷부분이 누락되었을 수 있어요."
+)
+
 
 def _scan_fence_state(
     text: str, start_in_code: bool, start_fence: str
@@ -307,6 +312,15 @@ class TelegramStreamSink:
                             "TelegramStreamSink finalize send fallback failed: %s",
                             exc2,
                         )
+                        await self._recover_unsent_chunks(
+                            chunks,
+                            failed_index=0,
+                            sent_chunks=sent_chunks,
+                        )
+                        self._last_committed_text = (
+                            sent_chunks[-1] if sent_chunks else ""
+                        )
+                        return sent_chunks
             else:
                 # placeholder 가 안 보내졌으면 fresh send.
                 try:
@@ -318,8 +332,17 @@ class TelegramStreamSink:
                     logger.error(
                         "TelegramStreamSink finalize send failed: %s", exc,
                     )
+                    await self._recover_unsent_chunks(
+                        chunks,
+                        failed_index=0,
+                        sent_chunks=sent_chunks,
+                    )
+                    self._last_committed_text = (
+                        sent_chunks[-1] if sent_chunks else ""
+                    )
+                    return sent_chunks
 
-            for chunk in chunks[1:]:
+            for index, chunk in enumerate(chunks[1:], start=1):
                 try:
                     await self._bot.send_message(
                         chat_id=self._chat_id, text=chunk,
@@ -327,12 +350,84 @@ class TelegramStreamSink:
                     sent_chunks.append(chunk)
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
-                        "TelegramStreamSink finalize chunk send failed: %s",
+                        "TelegramStreamSink finalize chunk send failed: "
+                        "chunk=%d/%d delivered_chunks=%d total_chunks=%d: %s",
+                        index + 1,
+                        len(chunks),
+                        len(sent_chunks),
+                        len(chunks),
                         exc,
                     )
+                    await self._recover_unsent_chunks(
+                        chunks,
+                        failed_index=index,
+                        sent_chunks=sent_chunks,
+                    )
+                    break
 
             self._last_committed_text = sent_chunks[-1] if sent_chunks else ""
             return sent_chunks
+
+    async def _recover_unsent_chunks(
+        self,
+        chunks: list[str],
+        *,
+        failed_index: int,
+        sent_chunks: list[str],
+    ) -> None:
+        """실패한 지점부터 tail 만 재전송해 prefix 중복을 피한다.
+
+        첫 청크 edit 가 이미 성공했다면 ``failed_index`` 는 continuation 위치가 되고,
+        이 메서드는 그 뒤의 남은 청크만 다룬다. 이미 전달된 prefix 를 다시 보내지
+        않아 긴 리포트에서 앞부분이 중복되는 UX 회귀를 막는다.
+        """
+        for retry_index, chunk in enumerate(chunks[failed_index:], start=failed_index):
+            try:
+                await self._bot.send_message(chat_id=self._chat_id, text=chunk)
+                sent_chunks.append(chunk)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "TelegramStreamSink finalize tail fallback failed: "
+                    "chunk=%d/%d delivered_chunks=%d total_chunks=%d: %s",
+                    retry_index + 1,
+                    len(chunks),
+                    len(sent_chunks),
+                    len(chunks),
+                    exc,
+                )
+                await self._send_partial_delivery_notice(
+                    delivered_chunks=len(sent_chunks),
+                    total_chunks=len(chunks),
+                )
+                return
+
+        logger.warning(
+            "TelegramStreamSink finalize recovered partial delivery: "
+            "delivered_chunks=%d total_chunks=%d",
+            len(sent_chunks),
+            len(chunks),
+        )
+
+    async def _send_partial_delivery_notice(
+        self,
+        *,
+        delivered_chunks: int,
+        total_chunks: int,
+    ) -> None:
+        """tail 전달 실패를 사용자에게 best-effort 로 짧게 알린다."""
+        try:
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=_PARTIAL_DELIVERY_NOTICE,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "TelegramStreamSink partial-delivery notice failed: "
+                "delivered_chunks=%d total_chunks=%d: %s",
+                delivered_chunks,
+                total_chunks,
+                exc,
+            )
 
 
 class TelegramBot:

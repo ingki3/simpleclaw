@@ -472,6 +472,61 @@ class TestTelegramStreamSink:
             assert len(chunk) <= TELEGRAM_MESSAGE_LIMIT
 
     @pytest.mark.asyncio
+    async def test_finalize_all_chunks_success_keeps_existing_contract(self):
+        """continuation 이 모두 성공하면 첫 청크 edit + 후속 send 계약을 유지한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert len(sent) == 2
+        assert [edit["text"] for edit in fake.edits] == [sent[0]]
+        assert [item["text"] for item in fake.sent] == ["…", sent[1]]
+
+    @pytest.mark.asyncio
+    async def test_finalize_first_edit_failure_still_falls_back_to_send(self):
+        """첫 edit 실패는 기존처럼 첫 청크 fresh send 로 회복한다."""
+        fake = _FakeBot(edit_failures=1)
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+
+        sent = await sink.finalize("final answer")
+
+        assert sent == ["final answer"]
+        assert [item["text"] for item in fake.sent] == ["…", "final answer"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_partial_tail_fallback_does_not_duplicate_prefix(self):
+        """후속 청크 실패 시 이미 edit 된 prefix 없이 남은 tail 만 재시도한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+        chunks = split_for_telegram("x" * 8000)
+        fake._send_failures = 1
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert sent == chunks
+        assert [edit["text"] for edit in fake.edits] == [chunks[0]]
+        assert [item["text"] for item in fake.sent] == ["…", chunks[1]]
+
+    @pytest.mark.asyncio
+    async def test_finalize_reports_or_recovers_partial_chunk_failure(self, caplog):
+        """tail 재전송도 실패하면 안내 메시지와 delivered/total 로그를 남긴다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+        chunks = split_for_telegram("x" * 8000)
+        fake._send_failures = 2
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert sent == [chunks[0]]
+        assert any("일부 응답이 전송되지 않았습니다" in item["text"] for item in fake.sent)
+        assert "delivered_chunks=1 total_chunks=2" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_finalize_idempotent(self):
         """finalize 두 번 호출해도 두 번째는 no-op (메시지 중복 방지)."""
         fake = _FakeBot()
