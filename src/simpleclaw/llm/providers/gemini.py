@@ -22,6 +22,7 @@ from simpleclaw.llm.models import (
     LLMAuthError,
     LLMProviderError,
     LLMResponse,
+    MultimodalAttachment,
     SystemBlock,
     ToolCall,
     ToolDefinition,
@@ -33,6 +34,21 @@ from simpleclaw.llm.providers.base import (
 )
 
 logger = logging.getLogger(__name__)
+
+_GEMINI_INLINE_ATTACHMENT_MIME_TYPES = frozenset({
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/json",
+    "application/rtf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+})
 
 
 class GeminiProvider(LLMProvider):
@@ -71,6 +87,59 @@ class GeminiProvider(LLMProvider):
             )
         return [types.Tool(function_declarations=declarations)]
 
+    @staticmethod
+    def _coerce_multimodal_attachment(raw: object) -> MultimodalAttachment | None:
+        """dict/dataclass 첨부를 Gemini inline bytes attachment로 정규화한다."""
+        if isinstance(raw, MultimodalAttachment):
+            attachment = raw
+        elif isinstance(raw, dict):
+            data = raw.get("data")
+            mime_type = raw.get("mime_type") or raw.get("mimeType")
+            name = raw.get("name") or raw.get("file_name")
+            path = raw.get("path")
+            if data is None or not mime_type:
+                return None
+            attachment = MultimodalAttachment(
+                data=bytes(data), mime_type=str(mime_type), name=name, path=path
+            )
+        else:
+            return None
+        mime_type = attachment.mime_type.lower()
+        if not attachment.data:
+            return None
+        if not (
+            mime_type.startswith("image/")
+            or mime_type in _GEMINI_INLINE_ATTACHMENT_MIME_TYPES
+        ):
+            return None
+        return MultimodalAttachment(
+            data=attachment.data,
+            mime_type=mime_type,
+            name=attachment.name,
+            path=attachment.path,
+        )
+
+    @classmethod
+    def _content_parts_for_message(cls, msg: dict) -> list[types.Part]:
+        """텍스트 + 지원 첨부를 Gemini Content.parts 순서로 변환한다."""
+        parts: list[types.Part] = []
+        text = msg.get("content", "")
+        if text:
+            parts.append(types.Part(text=text))
+        for raw_attachment in msg.get("attachments") or []:
+            attachment = cls._coerce_multimodal_attachment(raw_attachment)
+            if attachment is None:
+                continue
+            parts.append(
+                types.Part.from_bytes(
+                    data=attachment.data,
+                    mime_type=attachment.mime_type,
+                )
+            )
+        if not parts:
+            parts.append(types.Part(text=""))
+        return parts
+
     def _convert_messages(
         self, messages: list[dict]
     ) -> list[types.Content]:
@@ -78,7 +147,9 @@ class GeminiProvider(LLMProvider):
 
         assistant, user, tool 세 가지 role을 처리한다.
         tool result 메시지는 FunctionResponse로 변환하고,
-        assistant의 tool_calls는 FunctionCall part로 변환한다.
+        assistant의 tool_calls는 FunctionCall part로 변환한다. user 메시지에
+        ``attachments``가 있으면 Gemini inline bytes 방식,
+        즉 ``types.Part.from_bytes(data=..., mime_type=...)`` 로 지원 Part를 붙인다.
         """
         contents: list[types.Content] = []
         for msg in messages:
@@ -125,12 +196,13 @@ class GeminiProvider(LLMProvider):
                         parts.insert(0, types.Part(text=msg["content"]))
                     contents.append(types.Content(role="model", parts=parts))
             else:
-                # 일반 user/assistant 텍스트 메시지
+                # 일반 user/assistant 텍스트 메시지. user 메시지는 이미지 attachment를
+                # inline bytes Part로 함께 전달한다.
                 gemini_role = "model" if role == "assistant" else "user"
                 contents.append(
                     types.Content(
                         role=gemini_role,
-                        parts=[types.Part(text=msg.get("content", ""))],
+                        parts=self._content_parts_for_message(msg),
                     )
                 )
         return contents

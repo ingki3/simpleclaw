@@ -1,7 +1,6 @@
 """Tests for the sub-agent spawner."""
 
 import asyncio
-import json
 import sys
 import textwrap
 

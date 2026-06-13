@@ -1,6 +1,5 @@
 """Tests for the workspace manager."""
 
-import pytest
 
 from simpleclaw.agents.workspace import WorkspaceManager
 

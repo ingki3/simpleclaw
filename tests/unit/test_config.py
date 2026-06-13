@@ -16,25 +16,38 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.config import (
+    _ADMIN_API_DEFAULTS,
     _AGENT_DEFAULTS,
+    _ASSET_SELECTION_DEFAULTS,
     _DAEMON_DEFAULTS,
     _DEFAULTS,
     _LLM_DEFAULTS,
+    _MEMORY_DEFAULTS,
     _RECIPES_DEFAULTS,
     _SUB_AGENTS_DEFAULTS,
     _TELEGRAM_DEFAULTS,
     _VOICE_DEFAULTS,
     _WEBHOOK_DEFAULTS,
+    load_admin_api_config,
     load_agent_config,
+    load_asset_selection_config,
     load_daemon_config,
     load_llm_config,
+    load_memory_config,
     load_persona_config,
     load_recipes_config,
+    load_security_config,
     load_sub_agents_config,
     load_telegram_config,
     load_voice_config,
     load_webhook_config,
 )
+from simpleclaw.config_sections import agents as agents_config
+from simpleclaw.config_sections import channels as channels_config
+from simpleclaw.config_sections import daemon as daemon_config
+from simpleclaw.config_sections import llm as llm_config
+from simpleclaw.config_sections import memory as memory_config
+from simpleclaw.config_sections import security as security_config
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,6 +71,96 @@ def _write_yaml(path: Path, content: str) -> Path:
     path.write_text(content, encoding="utf-8")
     return path
 
+
+
+
+# ---------------------------------------------------------------------------
+# 0. config.py facade와 subsystem 모듈 동일 결과 검증
+# ---------------------------------------------------------------------------
+
+
+def test_config_facade_exports_match_subsystem_loaders(tmp_path: Path):
+    """config.py facade와 config_sections 로더가 같은 YAML에서 동일 결과를 반환한다."""
+    cfg = tmp_path / "config.yaml"
+    _write_yaml(
+        cfg,
+        """\
+persona:
+  token_budget: 1234
+llm:
+  default: openai
+  providers:
+    openai:
+      model: gpt-4
+agent:
+  history_limit: 7
+  asset_selection:
+    enabled: true
+daemon:
+  heartbeat_interval: 42
+  dreaming:
+    max_tokens:
+      memory: 1111
+    proactive:
+      enabled: true
+recipes:
+  dir: /tmp/recipes
+asset_selection:
+  enabled: true
+memory:
+  rag:
+    enabled: true
+voice:
+  stt:
+    provider: google
+telegram:
+  bot_token: test-token
+webhook:
+  port: 9090
+admin_api:
+  enabled: false
+  token_secret: ""
+security:
+  vault_path: ~/vault.json
+sub_agents:
+  max_concurrent: 4
+""",
+    )
+
+    pairs = [
+        (load_persona_config, agents_config.load_persona_config),
+        (load_llm_config, llm_config.load_llm_config),
+        (load_agent_config, agents_config.load_agent_config),
+        (load_asset_selection_config, agents_config.load_asset_selection_config),
+        (load_daemon_config, daemon_config.load_daemon_config),
+        (load_recipes_config, agents_config.load_recipes_config),
+        (load_memory_config, memory_config.load_memory_config),
+        (load_voice_config, channels_config.load_voice_config),
+        (load_telegram_config, channels_config.load_telegram_config),
+        (load_webhook_config, channels_config.load_webhook_config),
+        (load_admin_api_config, channels_config.load_admin_api_config),
+        (load_security_config, security_config.load_security_config),
+        (load_sub_agents_config, agents_config.load_sub_agents_config),
+    ]
+
+    for facade_loader, section_loader in pairs:
+        assert facade_loader(cfg) == section_loader(cfg)
+
+
+def test_config_facade_reexports_subsystem_defaults():
+    """기존 simpleclaw.config import 호환을 위해 facade 기본값도 subsystem 객체와 동일해야 한다."""
+    assert _DEFAULTS is agents_config._DEFAULTS
+    assert _LLM_DEFAULTS is llm_config._LLM_DEFAULTS
+    assert _AGENT_DEFAULTS is agents_config._AGENT_DEFAULTS
+    assert _ASSET_SELECTION_DEFAULTS is agents_config._ASSET_SELECTION_DEFAULTS
+    assert _DAEMON_DEFAULTS is daemon_config._DAEMON_DEFAULTS
+    assert _RECIPES_DEFAULTS is agents_config._RECIPES_DEFAULTS
+    assert _MEMORY_DEFAULTS is memory_config._MEMORY_DEFAULTS
+    assert _VOICE_DEFAULTS is channels_config._VOICE_DEFAULTS
+    assert _TELEGRAM_DEFAULTS is channels_config._TELEGRAM_DEFAULTS
+    assert _WEBHOOK_DEFAULTS is channels_config._WEBHOOK_DEFAULTS
+    assert _ADMIN_API_DEFAULTS is channels_config._ADMIN_API_DEFAULTS
+    assert _SUB_AGENTS_DEFAULTS is agents_config._SUB_AGENTS_DEFAULTS
 
 # ---------------------------------------------------------------------------
 # 1. load_persona_config
@@ -144,6 +247,42 @@ llm:
         )
         result = load_llm_config(cfg)
         assert result["providers"]["claude"]["api_key"] == ""
+
+
+    def test_reads_legacy_api_key_env_from_environment(self, tmp_path: Path, monkeypatch):
+        """레거시 api_key_env는 프로세스 환경변수에서 API 키를 해소해야 한다."""
+        monkeypatch.setenv("SC_TEST_LLM_KEY", "from-env")
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+llm:
+  providers:
+    gemini:
+      model: gemini-flash
+      api_key_env: SC_TEST_LLM_KEY
+""",
+        )
+        result = load_llm_config(cfg)
+        assert result["providers"]["gemini"]["api_key"] == "from-env"
+
+    def test_reads_legacy_api_key_env_from_adjacent_dotenv(self, tmp_path: Path, monkeypatch):
+        """환경변수가 없으면 config.yaml 옆 .env에서 api_key_env 값을 읽는다."""
+        monkeypatch.delenv("SC_TEST_LLM_KEY", raising=False)
+        (tmp_path / ".env").write_text("SC_TEST_LLM_KEY=from-dotenv\n", encoding="utf-8")
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+llm:
+  providers:
+    gemini:
+      model: gemini-flash
+      api_key_env: SC_TEST_LLM_KEY
+""",
+        )
+        result = load_llm_config(cfg)
+        assert result["providers"]["gemini"]["api_key"] == "from-dotenv"
 
     def test_non_dict_provider_is_skipped(self, tmp_path: Path):
         """provider 값이 dict가 아닌 경우(문자열 등) 해당 provider는 무시되어야 한다."""
@@ -471,6 +610,7 @@ telegram:
         assert result["streaming"]["min_delta_chars"] == 40
         assert result["streaming"]["initial_placeholder"]
         assert result["streaming"]["final_only_for_cron"] is True
+        assert result["streaming"]["tool_progress"] is True
 
     def test_streaming_values_overridden(self, tmp_path: Path):
         """BIZ-259 — streaming 키가 명시되면 값이 그대로 로드된다."""
@@ -486,6 +626,7 @@ telegram:
     min_delta_chars: 64
     initial_placeholder: "처리 중…"
     final_only_for_cron: false
+    tool_progress: false
 """,
         )
         result = load_telegram_config(cfg)
@@ -494,6 +635,7 @@ telegram:
         assert result["streaming"]["min_delta_chars"] == 64
         assert result["streaming"]["initial_placeholder"] == "처리 중…"
         assert result["streaming"]["final_only_for_cron"] is False
+        assert result["streaming"]["tool_progress"] is False
 
 
 # ---------------------------------------------------------------------------

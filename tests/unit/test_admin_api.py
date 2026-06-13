@@ -25,6 +25,8 @@ from simpleclaw.channels.admin_policy import (
     validate_patch,
 )
 from simpleclaw.security.secrets import SecretsManager
+from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.structured_logger import StructuredLogger
 
 
 class _InMemoryBackend:
@@ -93,6 +95,13 @@ def tmp_state(tmp_path):
         "daemon": {
             "heartbeat_interval": 300,
             "db_path": ".agent/daemon.db",
+        },
+        "admin_api": {
+            "enabled": True,
+            "bind_host": "127.0.0.1",
+            "bind_port": 8082,
+            "token_secret": "file:admin_api_token",
+            "request_max_body_kb": 256,
         },
     }
     config_path.write_text(yaml.safe_dump(initial), encoding="utf-8")
@@ -185,6 +194,59 @@ class TestConfigGet:
         data = await resp.json()
         assert "telegram" in data["config"]
         assert "webhook" in data["config"]
+
+    @pytest.mark.asyncio
+    async def test_get_admin_api_area_config(self, client):
+        resp = await client.get("/admin/v1/config/admin_api", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["area"] == "admin_api"
+        assert data["config"]["bind_port"] == 8082
+        assert data["config"]["token_secret"] == "file:admin_api_token"
+
+
+class TestDashboardRoutesOnAdminAPI:
+    @pytest.mark.asyncio
+    async def test_dashboard_routes_share_admin_api_app(self, tmp_state, aiohttp_client):
+        metrics = MetricsCollector()
+        metrics.record_execution(success=True, duration_ms=100, tokens_used=7)
+        logger = StructuredLogger(log_dir=tmp_state["state_dir"] / "logs")
+        logger.log(action_type="dashboard-admin", status="success", duration_ms=5)
+        server = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dashboard_metrics=metrics,
+            dashboard_structured_logger=logger,
+        )
+        client = await aiohttp_client(server.get_app())
+
+        dashboard = await client.get("/")
+        assert dashboard.status == 200
+        assert "SimpleClaw Dashboard" in await dashboard.text()
+
+        metrics_resp = await client.get("/api/metrics")
+        assert metrics_resp.status == 200
+        assert (await metrics_resp.json())["total_tokens_used"] == 7
+
+        logs_resp = await client.get("/api/logs")
+        assert logs_resp.status == 200
+        assert (await logs_resp.json())[0]["action_type"] == "dashboard-admin"
+
+        trace_resp = await client.get("/api/trace?trace_id=missing")
+        assert trace_resp.status == 200
+        assert (await trace_resp.json())["steps"] == []
+
+        memory_resp = await client.get("/api/memory_stats")
+        assert memory_resp.status == 200
+        assert await memory_resp.json() == {"disabled": True}
+
+        health_without_token = await client.get("/admin/v1/health")
+        assert health_without_token.status == 401
+        health_with_token = await client.get("/admin/v1/health", headers=HEADERS)
+        assert health_with_token.status == 200
 
 
 # ---------------------------------------------------------------------------
@@ -1718,4 +1780,256 @@ class TestBlocklistList:
         body = await resp.json()
         assert body["total"] == 0
         assert body["entries"] == []
+
+# ---------------------------------------------------------------------------
+# BIZ-344 — route-module split 전 주요 Admin API route smoke contract
+# ---------------------------------------------------------------------------
+
+
+class TestAdminAPIRouteSmokeContracts:
+    """큰 Admin API 모듈을 route group으로 더 쪼개기 전 URL/응답 계약을 고정한다."""
+
+    @pytest.mark.asyncio
+    async def test_config_patch_happy_and_error_path_smoke(self, client, tmp_state):
+        bad = await client.patch(
+            "/admin/v1/config/agent",
+            headers=HEADERS,
+            json={"history_limit": 9999},
+        )
+        assert bad.status == 422
+        assert "history_limit" in " ".join((await bad.json())["errors"])
+
+        good = await client.patch(
+            "/admin/v1/config/agent",
+            headers=HEADERS,
+            json={"history_limit": 42},
+        )
+        assert good.status == 200
+        good_body = await good.json()
+        assert good_body["outcome"] == "applied"
+        assert good_body["policy"]["level"] == HOT
+        on_disk = yaml.safe_load(tmp_state["config_path"].read_text())
+        assert on_disk["agent"]["history_limit"] == 42
+
+    @pytest.mark.asyncio
+    async def test_secrets_reveal_rotate_auth_and_masking_smoke(
+        self, client, server, tmp_state
+    ):
+        unauthenticated = await client.get("/admin/v1/secrets")
+        assert unauthenticated.status == 401
+
+        server._secrets.store("keyring", "smoke_token", "plain-secret-value")
+        listed = await client.get("/admin/v1/secrets", headers=HEADERS)
+        assert listed.status == 200
+        listed_body = await listed.json()
+        item = next(s for s in listed_body["secrets"] if s["name"] == "smoke_token")
+        assert item["backend"] == "keyring"
+        assert "value" not in item
+
+        revealed = await client.post(
+            "/admin/v1/secrets/smoke_token/reveal", headers=HEADERS
+        )
+        assert revealed.status == 200
+        assert (await revealed.json())["value"] == "plain-secret-value"
+
+        rotated = await client.post(
+            "/admin/v1/secrets/smoke_token/rotate",
+            headers=HEADERS,
+            json={"value": "rotated-secret-value"},
+        )
+        assert rotated.status == 200
+        assert server._secrets.resolve("keyring:smoke_token") == "rotated-secret-value"
+        audit_after = AuditLog(tmp_state["audit_dir"]).search(limit=1)[0].after
+        assert audit_after["value"] == "••••alue"
+
+    @pytest.mark.asyncio
+    async def test_suggestions_accept_reject_edit_smoke(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        from simpleclaw.memory.conversation_store import ConversationStore
+        from simpleclaw.memory.insights import InsightMeta
+        from simpleclaw.memory.models import ConversationMessage, MessageRole
+        from simpleclaw.memory.suggestions import BlocklistStore, SuggestionStore
+
+        conv = ConversationStore(tmp_path / "suggestions-conv.db")
+        mid = conv.add_message(
+            ConversationMessage(role=MessageRole.USER, content="기억해줘", channel="cli")
+        )
+        store = SuggestionStore(tmp_path / "suggestions.jsonl")
+        suggestions = []
+        for topic, text in (
+            ("accept-topic", "accept text"),
+            ("edit-topic", "edit text"),
+            ("reject-topic", "reject text"),
+        ):
+            meta = InsightMeta(
+                topic=topic,
+                text=text,
+                evidence_count=1,
+                confidence=0.5,
+                source_msg_ids=[mid],
+            )
+            meta.recompute_id_range()
+            suggestions.append(store.upsert_pending(meta))
+        blocklist = BlocklistStore(tmp_path / "blocklist.jsonl")
+        applied: list[str] = []
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            conversation_store=conv,
+            suggestion_store=store,
+            blocklist_store=blocklist,
+            suggestion_writer=applied.append,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        pending = await c.get("/admin/v1/memory/suggestions", headers=HEADERS)
+        assert pending.status == 200
+        assert (await pending.json())["pending_count"] == 3
+
+        accept = await c.post(
+            f"/admin/v1/memory/suggestions/{suggestions[0].id}/accept",
+            headers=HEADERS,
+        )
+        assert accept.status == 200
+        assert (await accept.json())["status"] == "accepted"
+
+        edit = await c.post(
+            f"/admin/v1/memory/suggestions/{suggestions[1].id}/edit",
+            headers=HEADERS,
+            json={"text": "edited smoke text"},
+        )
+        assert edit.status == 200
+        assert (await edit.json())["edited_text"] == "edited smoke text"
+
+        reject = await c.post(
+            f"/admin/v1/memory/suggestions/{suggestions[2].id}/reject",
+            headers=HEADERS,
+            json={"reason": "not useful"},
+        )
+        assert reject.status == 200
+        assert (await reject.json())["status"] == "rejected"
+        assert blocklist.is_blocked("reject-topic")
+        assert applied == ["accept text", "edited smoke text"]
+
+    @pytest.mark.asyncio
+    async def test_insights_list_and_source_smoke(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        from simpleclaw.memory.conversation_store import ConversationStore
+        from simpleclaw.memory.insights import InsightMeta, InsightStore
+        from simpleclaw.memory.models import ConversationMessage, MessageRole
+
+        conv = ConversationStore(tmp_path / "insights-conv.db")
+        mid = conv.add_message(
+            ConversationMessage(role=MessageRole.USER, content="정치 뉴스", channel="cli")
+        )
+        insight_store = InsightStore(tmp_path / "insights.jsonl")
+        meta = InsightMeta(
+            topic="정치뉴스",
+            text="정치 뉴스 관심",
+            evidence_count=1,
+            confidence=0.7,
+            source_msg_ids=[mid],
+        )
+        meta.recompute_id_range()
+        insight_store.save_all({"정치뉴스": meta})
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            conversation_store=conv,
+            insight_store=insight_store,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        listed = await c.get("/admin/v1/memory/insights", headers=HEADERS)
+        assert listed.status == 200
+        listed_body = await listed.json()
+        assert listed_body["total"] == 1
+        assert listed_body["insights"][0]["topic"] == "정치뉴스"
+
+        sources = await c.get(
+            "/admin/v1/memory/insights/정치뉴스/sources", headers=HEADERS
+        )
+        assert sources.status == 200
+        source_body = await sources.json()
+        assert source_body["source_msg_ids"] == [mid]
+        assert source_body["sources"][0]["content"] == "정치 뉴스"
+
+    @pytest.mark.asyncio
+    async def test_dreaming_status_and_list_runs_smoke(
+        self, tmp_state, tmp_path, aiohttp_client
+    ):
+        from datetime import datetime
+
+        from simpleclaw.memory.dreaming_runs import DreamingRunRecord, DreamingRunStore
+
+        run_store = DreamingRunStore(tmp_path / "dreaming-runs.jsonl")
+        run_store.append(
+            DreamingRunRecord(
+                started_at=datetime.now(),
+                ended_at=datetime.now(),
+                input_msg_count=2,
+                generated_insight_count=1,
+            )
+        )
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            dreaming_run_store=run_store,
+            dreaming_status_provider=lambda: {"next_run": "2026-06-08T03:00:00"},
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        runs = await c.get("/admin/v1/memory/dreaming/runs", headers=HEADERS)
+        assert runs.status == 200
+        assert (await runs.json())["runs"][0]["status"] == "success"
+
+        status = await c.get("/admin/v1/memory/dreaming/status", headers=HEADERS)
+        assert status.status == 200
+        status_body = await status.json()
+        assert status_body["metrics_enabled"] is True
+        assert status_body["next_run"] == "2026-06-08T03:00:00"
+        assert status_body["last_run"]["input_msg_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_system_info_and_restart_callback_smoke(
+        self, tmp_state, aiohttp_client
+    ):
+        restart_calls: list[dict] = []
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            restart_callback=restart_calls.append,
+        )
+        c = await aiohttp_client(srv.get_app())
+
+        info = await c.get("/admin/v1/system/info", headers=HEADERS)
+        assert info.status == 200
+        info_body = await info.json()
+        assert info_body["config_path"] == str(tmp_state["config_path"])
+        assert info_body["pid"]
+
+        restarted = await c.post(
+            "/admin/v1/system/restart",
+            headers=HEADERS,
+            json={"reason": "smoke-test"},
+        )
+        assert restarted.status == 200
+        restart_body = await restarted.json()
+        assert restart_body["outcome"] == "applied"
+        assert restart_body["applied_pending"] == 0
+        assert restart_calls == [{"reason": "smoke-test"}]
 

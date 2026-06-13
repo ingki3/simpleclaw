@@ -1,7 +1,7 @@
 """Tests for the dreaming trigger."""
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -9,7 +9,7 @@ from simpleclaw.daemon.dreaming_trigger import DreamingTrigger, LAST_DREAMING_KE
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
-from simpleclaw.memory.models import ConversationMessage, MessageRole, MemoryEntry
+from simpleclaw.memory.models import ConversationMessage, MessageRole
 
 
 class TestDreamingTrigger:

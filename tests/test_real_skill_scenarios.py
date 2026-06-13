@@ -29,10 +29,7 @@ correctly by checking:
 
 from __future__ import annotations
 
-import json
-import os
 import sqlite3
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -132,6 +129,7 @@ class TestCmd_FindRestaurant:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 # ReAct: Action
                 resp.text = (
@@ -188,6 +186,7 @@ class TestCmd_CheckCalendar:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 사용자의 일정을 확인해야 합니다.\n'
@@ -239,6 +238,7 @@ class TestCmd_USStockNews:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 미국 주식 뉴스를 검색해야 합니다.\n'
@@ -291,6 +291,7 @@ class TestCmd_CheckEmail:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 읽지 않은 메일을 확인해야 합니다.\n'
@@ -336,6 +337,7 @@ class TestCmd_NewsSearch:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 뉴스를 검색해야 합니다.\n'
@@ -380,6 +382,7 @@ class TestCmd_StockInfo:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: AAPL 주가 정보를 조회해야 합니다.\n'
@@ -426,6 +429,7 @@ class TestCmd_MultiSkillConversation:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
 
             if call_count == 1:  # First message: Action
                 resp.text = (
@@ -451,7 +455,7 @@ class TestCmd_MultiSkillConversation:
         await bot.handle_message("AAPL 주가 알려줘", USER_ID, CHAT_ID)
 
         # Command 2
-        response = await bot.handle_message("관련 뉴스도 찾아줘", USER_ID, CHAT_ID)
+        await bot.handle_message("관련 뉴스도 찾아줘", USER_ID, CHAT_ID)
 
         # History should contain first conversation
         assert len(captured_messages) == 1
@@ -490,6 +494,7 @@ class TestCmd_RouteQuery:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 경로를 검색해야 합니다.\n'

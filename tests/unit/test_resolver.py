@@ -1,7 +1,5 @@
 """Tests for the persona file resolver."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
 

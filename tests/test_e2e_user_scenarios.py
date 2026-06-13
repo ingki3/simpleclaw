@@ -17,7 +17,6 @@ import sys
 import textwrap
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -161,7 +160,7 @@ webhook:
         "steps:\n"
         "  - name: generate\n"
         "    type: command\n"
-        "    command: echo Daily report for ${date}\n"
+        "    content: echo Daily report for ${date}\n"
     )
 
     return tmp_path, config
@@ -172,6 +171,7 @@ def _mock_llm_response(text):
     resp = MagicMock()
     resp.text = text
     resp.backend_name = "gemini"
+    resp.tool_calls = None
     resp.model = "gemini-flash"
     resp.usage = {"input_tokens": 100, "output_tokens": 50}
     return resp
@@ -302,7 +302,7 @@ class TestScenario_SkillExecution:
         orch._router = MagicMock()
         orch._router.send = AsyncMock(side_effect=mock_send)
 
-        response = await orch.process_message("지금 몇 시야?", 123456, 789)
+        await orch.process_message("지금 몇 시야?", 123456, 789)
 
         # 스킬이 실제로 실행되어 결과가 Observation에 포함되었는지
         assert captured_user_message is not None

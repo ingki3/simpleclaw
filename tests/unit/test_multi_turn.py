@@ -1,6 +1,5 @@
 """Tests for Native Function Calling tool loop in AgentOrchestrator."""
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

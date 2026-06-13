@@ -34,6 +34,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
 from simpleclaw.recipes.models import (
     OnErrorPolicy,
     RecipeDefinition,
@@ -71,6 +72,7 @@ async def execute_recipe(
     *,
     metrics: MetricsCollector | None = None,
     resume_from: str | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> RecipeResult:
     """레시피의 스텝들을 순차 실행한다.
 
@@ -85,6 +87,7 @@ async def execute_recipe(
         metrics: 타임아웃 시 ``kill_process_group`` 결과를 누적할 메트릭 수집기.
         resume_from: 지정 시 해당 이름의 스텝부터 실행하고, 그 이전 스텝은
             SKIPPED 로 기록한다. 이전 실패의 재실행(resume) 용도.
+        on_progress: BIZ-329 — recipe/step 실행 상태 이벤트 콜백.
 
     Returns:
         전체 실행 결과를 담은 RecipeResult
@@ -107,8 +110,15 @@ async def execute_recipe(
         if param.name not in variables and param.default:
             variables[param.name] = param.default
 
+    await emit_progress_event(
+        on_progress, ProgressEvent("recipe", recipe.name, "start", f"{len(recipe.steps)} steps")
+    )
+
     if not recipe.steps:
         logger.warning("Recipe '%s' has no steps.", recipe.name)
+        await emit_progress_event(
+            on_progress, ProgressEvent("recipe", recipe.name, "complete", "0 steps")
+        )
         return RecipeResult(recipe_name=recipe.name, success=True)
 
     # resume_from이 실제 스텝에 존재하는지 미리 검증해 사용자에게 명확한 오류를 준다.
@@ -140,6 +150,10 @@ async def execute_recipe(
                 )
                 continue
 
+        step_event_name = f"{recipe.name}:{step.name}"
+        await emit_progress_event(
+            on_progress, ProgressEvent("recipe", step_event_name, "start", step.step_type.value)
+        )
         result = await _run_step(
             step,
             variables,
@@ -148,6 +162,15 @@ async def execute_recipe(
             metrics=metrics,
         )
         step_results.append(result)
+        await emit_progress_event(
+            on_progress,
+            ProgressEvent(
+                "recipe",
+                step_event_name,
+                "fail" if result.failed else "complete",
+                result.error or result.output or step.step_type.value,
+            ),
+        )
 
         if result.debug_log:
             debug_chunks.append(f"[{step.name}] {result.debug_log}")
@@ -187,6 +210,16 @@ async def execute_recipe(
 
     error_summary = "\n".join(error_chunks)
     debug_log = "\n".join(c for c in debug_chunks if c)
+
+    await emit_progress_event(
+        on_progress,
+        ProgressEvent(
+            "recipe",
+            recipe.name,
+            "complete" if overall_success else "fail",
+            f"{len(step_results)} steps",
+        ),
+    )
 
     return RecipeResult(
         recipe_name=recipe.name,

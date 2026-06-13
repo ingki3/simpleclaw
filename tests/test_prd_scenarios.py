@@ -16,13 +16,9 @@ PRD Sections:
 
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 import sys
 import textwrap
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -353,7 +349,7 @@ class TestPRD_3_4_Recipes:
             "steps:\n"
             "  - name: step1\n"
             "    type: command\n"
-            "    command: echo ${target}\n"
+            "    content: echo ${target}\n"
         )
         recipe = load_recipe(recipe_dir / "recipe.yaml")
         assert recipe.name == "test-recipe"
@@ -377,7 +373,7 @@ class TestPRD_3_4_Recipes:
             "steps:\n"
             "  - name: say-hello\n"
             "    type: command\n"
-            "    command: echo Hello ${who}\n"
+            "    content: echo Hello ${who}\n"
         )
         recipe = load_recipe(recipe_dir / "recipe.yaml")
         result = await execute_recipe(recipe)
@@ -661,8 +657,7 @@ class TestPRD_4_1_WorkspaceRules:
     def test_config_loaded_from_yaml(self, tmp_path):
         """config.yaml에서 모든 설정 로드."""
         from simpleclaw.config import (
-            load_persona_config, load_llm_config,
-            load_daemon_config, load_sub_agents_config,
+            load_persona_config,
         )
         config = tmp_path / "config.yaml"
         config.write_text("persona:\n  token_budget: 2048\n")
@@ -833,6 +828,7 @@ class TestPRD_E2E_AgentPipeline:
         mock_resp = MagicMock()
         mock_resp.text = "Hello!"
         mock_resp.backend_name = "gemini"
+        mock_resp.tool_calls = None
         orch._router = MagicMock()
         orch._router.send = AsyncMock(return_value=mock_resp)
 

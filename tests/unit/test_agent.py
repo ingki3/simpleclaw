@@ -760,6 +760,31 @@ class TestBuiltinWebFetch:
         )
 
     @pytest.mark.asyncio
+    async def test_web_fetch_google_search_redirect_returns_marker(self):
+        """BIZ-363 — Google Search redirect/차단성 본문은 factual evidence가 아니다."""
+        from simpleclaw.agent import builtin_tools
+
+        google_redirect_body = (
+            "Google Search\n"
+            "2026 World Cup South Korea match schedule\n"
+            "몇 초 안에 이동하지 않는 경우 여기를 클릭하세요. "
+            "Google 검색 결과로 이동하는 중입니다. " * 30
+        )
+        static_mock = AsyncMock(return_value="short")
+        headless_mock = AsyncMock(return_value=google_redirect_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://www.google.com/search?q=2026+World+Cup+South+Korea+match+schedule"}
+            )
+
+        assert result.startswith("FETCH_BLOCKED: https://www.google.com/search"), (
+            "Google redirect shell 은 일정 근거가 아니므로 FETCH_BLOCKED 여야 한다"
+        )
+        assert "Do NOT retry" in result
+
+    @pytest.mark.asyncio
     async def test_web_fetch_force_headless_short_body_returns_marker(self):
         """BIZ-190 — force_headless 결과가 매우 짧으면(< 400 chars) FETCH_BLOCKED."""
         from simpleclaw.agent import builtin_tools
@@ -1090,7 +1115,6 @@ class TestBuiltinFileRead:
         assert "not found" in result
 
     def test_file_read_success(self, tmp_path):
-        from pathlib import Path
         ws = tmp_path / "workspace"
         ws.mkdir()
         result = handle_file_read(
@@ -1105,7 +1129,7 @@ class TestBuiltinFileRead:
             {"skill_name": "file-read", "path": "config.yaml", "offset": 0, "limit": 3}, ws
         )
         if "Error" not in result:
-            lines = [l for l in result.split("\n") if l.strip() and "|" in l]
+            lines = [line for line in result.split("\n") if line.strip() and "|" in line]
             assert len(lines) <= 3
 
     def test_file_read_negative_offset(self, tmp_path):
@@ -1516,9 +1540,44 @@ class TestToolLoop:
         )
 
     def test_tool_usage_instruction_contains_failed_skill_guard(self):
-        """BIZ-164 #3 — system prompt 가드가 ``_TOOL_USAGE_INSTRUCTION`` 에 박혀 있어야 한다."""
+        """BIZ-164 #3 — prior-turn 실패 trace를 stale context로 취급하는 가드."""
         from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-        assert "fail in a prior turn" in _TOOL_USAGE_INSTRUCTION, (
+        assert "failed tool/skill traces from prior unrelated turns" in _TOOL_USAGE_INSTRUCTION, (
             "BIZ-164 prompt guard missing — 과거 실패 도구 재시도 가드 한 줄이 누락됨"
         )
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_tool_loop_emits_progress_events_for_tool_call(self, config_file):
+        """BIZ-329 — tool start/complete 이벤트가 실제 dispatch 전후에 callback 으로 전달된다."""
+        orchestrator = AgentOrchestrator(config_file)
+
+        mock_response_1 = MagicMock()
+        mock_response_1.text = ""
+        mock_response_1.tool_calls = [
+            ToolCall(id="call_1", name="cli", arguments={"command": "echo hello"})
+        ]
+        mock_response_1.raw_assistant_message = None
+
+        mock_response_2 = MagicMock()
+        mock_response_2.text = "done"
+        mock_response_2.tool_calls = None
+        mock_response_2.raw_assistant_message = None
+
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(side_effect=[mock_response_1, mock_response_2])
+        events = []
+
+        async def on_progress(event):
+            events.append(event)
+
+        response = await orchestrator.process_message(
+            "Run echo", 123, 456, on_progress=on_progress,
+        )
+
+        assert response == "done"
+        assert [(e.kind, e.name, e.status) for e in events] == [
+            ("command", "cli", "start"),
+            ("command", "cli", "complete"),
+        ]

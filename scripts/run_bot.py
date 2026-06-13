@@ -27,6 +27,7 @@ from simpleclaw.channels.admin_api_setup import (
     build_admin_api_server,
 )
 from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
@@ -34,11 +35,11 @@ from simpleclaw.config import (
     load_recipes_config,
     load_security_config,
     load_telegram_config,
+    load_webhook_config,
 )
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
-from simpleclaw.logging.dashboard import DashboardServer
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.clustering import IncrementalClusterer
@@ -46,6 +47,18 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.language_policy import LanguagePolicy
 from simpleclaw.memory.safety_backup import SafetyBackupManager
+from simpleclaw.proactive.actions import ProactiveActionExecutor
+from simpleclaw.proactive.context_collectors import (
+    CalendarContextCollector,
+    ConversationContextCollector,
+    MailContextCollector,
+    merge_snapshots,
+)
+from simpleclaw.proactive.context_planner import ContextCronPlanner
+from simpleclaw.proactive.context_provider_resolver import resolve_context_providers
+from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
+from simpleclaw.proactive.presenter import ProactivePresenter
+from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security.secrets import configure_default_manager
 
 logging.basicConfig(
@@ -87,6 +100,96 @@ def _create_telegram_notifier(bot_token: str, chat_id: int):
     return notifier
 
 
+def _select_webhook_alert_chat_id(whitelist: dict) -> int | None:
+    """웹훅 운영 알림 대상 chat_id를 결정한다.
+
+    그룹/토픽 운영 채널이 별도로 있으면 ``chat_ids``를 우선 사용하고, 없으면 현재
+    단일 운영자 DM으로 동작하는 ``user_ids`` 첫 항목을 fallback으로 삼는다. 별도
+    config 키를 도입하지 않아도 기존 Telegram whitelist만으로 BIZ-34 알림을 켤 수
+    있게 하기 위한 보수적 정책이다.
+    """
+    chat_ids = whitelist.get("chat_ids") or []
+    if chat_ids:
+        return int(chat_ids[0])
+    user_ids = whitelist.get("user_ids") or []
+    if user_ids:
+        return int(user_ids[0])
+    return None
+
+
+def _format_webhook_alert(alert_type: str, details: dict) -> str:
+    """WebhookServer의 alert payload를 운영자가 읽기 쉬운 한국어로 변환한다."""
+    remote = details.get("remote", "unknown")
+    count = details.get("count")
+    threshold = details.get("threshold")
+    window_seconds = details.get("window_seconds")
+
+    if alert_type == "consecutive_blocks":
+        title = "웹훅 이상 트래픽 감지: 연속 차단"
+        summary = f"동일 원격 주소에서 차단 이벤트가 {count}회 연속 발생했습니다."
+    elif alert_type == "burst":
+        title = "웹훅 이상 트래픽 감지: 단일 IP 폭주"
+        summary = f"{window_seconds}초 윈도우 안에서 요청 {count}건이 감지됐습니다."
+    elif alert_type in {"queue_full", "queue_saturated"}:
+        title = "웹훅 처리 큐 포화 감지"
+        summary = "웹훅 동시 처리 한도를 초과해 요청이 거절됐습니다."
+    elif alert_type == "rate_limited":
+        title = "웹훅 rate limit 감지"
+        summary = "웹훅 요청이 설정된 rate limit을 초과했습니다."
+    else:
+        title = f"웹훅 이상 알림: {alert_type}"
+        summary = "웹훅 서버가 운영자 확인이 필요한 이벤트를 감지했습니다."
+
+    lines = [
+        f"⚠️ {title}",
+        summary,
+        "",
+        f"- remote: {remote}",
+        f"- alert_type: {alert_type}",
+    ]
+    if count is not None:
+        lines.append(f"- count: {count}")
+    if threshold is not None:
+        lines.append(f"- threshold: {threshold}")
+    if window_seconds is not None:
+        lines.append(f"- window_seconds: {window_seconds}")
+    lines.append("- action: 차단/제한 이벤트는 서버에서 이미 처리됐습니다.")
+    return "\n".join(lines)
+
+
+def _create_webhook_alert_notifier(
+    bot_token: str,
+    chat_id: int,
+    structured_logger: StructuredLogger,
+):
+    """Create an async webhook alert callback that dispatches to Telegram.
+
+    Telegram API 실패는 구조화 로그로 남기되 예외를 흡수한다. WebhookServer는 이
+    콜백을 background task로 실행하므로, 실패가 HTTP 응답 경로를 막지 않는다.
+    """
+    async def notifier(alert_type: str, details: dict) -> None:
+        text = _format_webhook_alert(alert_type, details)
+        try:
+            from telegram import Bot
+            tg_bot = Bot(token=bot_token)
+            async with tg_bot:
+                await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
+        except Exception as exc:  # noqa: BLE001 — 운영 알림 실패는 본 요청을 막지 않는다.
+            logger.exception("Webhook alert Telegram dispatch failed")
+            structured_logger.log(
+                action_type="webhook_alert_dispatch_failed",
+                input_summary=str(details.get("remote", "")),
+                output_summary=str(exc),
+                status="failed",
+                level="ERROR",
+                alert_type=alert_type,
+                remote=details.get("remote"),
+                error_type=type(exc).__name__,
+            )
+
+    return notifier
+
+
 async def main():
     _kill_existing_bots()
 
@@ -117,6 +220,10 @@ async def main():
         metrics=metrics,
         structured_logger=structured_logger,
     )
+    agent_config = load_agent_config(CONFIG_PATH)
+    attachment_dir = (
+        Path(agent_config["workspace_dir"]).expanduser() / "attachments" / "telegram"
+    )
 
     whitelist = tg_config["whitelist"]
     # BIZ-259 — telegram.streaming 블록을 봇에 전달. 기본 enabled=false 이므로
@@ -132,6 +239,7 @@ async def main():
         # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
         clarify_provider=orchestrator.pop_pending_clarify,
         streaming_config=streaming_config,
+        attachment_dir=attachment_dir,
     )
 
     # Cron scheduler — notifier is the only external wiring.
@@ -150,6 +258,60 @@ async def main():
             tg_config["bot_token"], notify_chat_id
         )
         logger.info("Cron → Telegram notification enabled (chat_id=%d)", notify_chat_id)
+
+    # BIZ-34 — WebhookServer의 이상 트래픽 alert_callback을 Telegram 운영자
+    # 알림으로 실제 배선한다. 기존 whitelist만으로 발신 대상을 결정해 config schema
+    # 변경 없이 live 운영 알림을 켤 수 있게 한다.
+    webhook_server = None
+    webhook_config = load_webhook_config(CONFIG_PATH)
+    if bool(webhook_config.get("enabled", False)):
+        webhook_alert_chat_id = _select_webhook_alert_chat_id(whitelist)
+        webhook_alert_callback = None
+        if webhook_alert_chat_id is None:
+            logger.warning(
+                "Webhook alert disabled: telegram whitelist has no chat/user target"
+            )
+        else:
+            webhook_alert_callback = _create_webhook_alert_notifier(
+                tg_config["bot_token"],
+                webhook_alert_chat_id,
+                structured_logger,
+            )
+            logger.info(
+                "Webhook → Telegram alert enabled (chat_id=%d)",
+                webhook_alert_chat_id,
+            )
+
+        webhook_server = WebhookServer(
+            host=webhook_config["host"],
+            port=webhook_config["port"],
+            auth_token=webhook_config["auth_token"],
+            max_body_size=webhook_config["max_body_size"],
+            rate_limit=webhook_config["rate_limit"],
+            rate_limit_window=webhook_config["rate_limit_window"],
+            max_concurrent_connections=webhook_config[
+                "max_concurrent_connections"
+            ],
+            queue_size=webhook_config["queue_size"],
+            alert_callback=webhook_alert_callback,
+            alert_cooldown=webhook_config["alert_cooldown"],
+            structured_logger=structured_logger,
+        )
+        try:
+            await webhook_server.start()
+        except Exception as exc:  # noqa: BLE001 — 부팅 단계에서 명시적으로 중단.
+            print(f"ERROR: Webhook 서버 바인딩 실패 — {exc}")
+            structured_logger.log(
+                action_type="webhook_start_failed",
+                input_summary=(
+                    f"{webhook_config['host']}:{webhook_config['port']}"
+                ),
+                output_summary=str(exc),
+                status="failed",
+                level="ERROR",
+                error_type=type(exc).__name__,
+            )
+            return
 
     # BIZ-202: 봇이 채팅에서 작성한 레시피와 데몬이 cron 으로 로드하는 레시피가 같은
     # 절대 경로(`~/.simpleclaw/recipes/`)를 보도록 한다 — 데몬 CWD/봇 워크스페이스
@@ -171,7 +333,6 @@ async def main():
     # Dreaming — 야간 자동 대화 요약 (5분마다 조건 체크)
     dreaming_config = daemon_config.get("dreaming", {})
     # orchestrator와 동일한 대화 DB를 사용
-    agent_config = load_agent_config(CONFIG_PATH)
     conv_store = ConversationStore(Path(agent_config["db_path"]).expanduser())
     llm_router = orchestrator._router  # 오케스트레이터의 LLM 라우터 재사용
 
@@ -225,6 +386,97 @@ async def main():
         if path_str is None:
             return None
         return str(Path(path_str).expanduser())
+
+    # BIZ-333 — Dreaming 회차에서 proactive 후보만 추출해 pending queue 에 적재한다.
+    # 기본값은 off 이며, daemon.proactive.extractors.dreaming.enabled=true 일 때만 주입된다.
+    proactive_cfg = daemon_config.get("proactive", {}) or {}
+    dreaming_proactive_cfg = (
+        proactive_cfg.get("extractors", {}).get("dreaming", {}) or {}
+    )
+    proactive_extractor = None
+    opportunity_store = None
+    if bool(proactive_cfg.get("enabled")) and bool(
+        dreaming_proactive_cfg.get("enabled")
+    ):
+        repeated_task_cfg = dreaming_proactive_cfg.get("repeated_task", {}) or {}
+        context_cron_cfg = dreaming_proactive_cfg.get("context_cron", {}) or {}
+        context_collector = None
+        context_planner = None
+        if bool(context_cron_cfg.get("enabled", False)):
+            conv_context = ConversationContextCollector(
+                conv_store,
+                lookback_hours=int(context_cron_cfg.get("conversation_lookback_hours", 24)),
+            )
+            # BIZ-357 — live skill/config resolver로 Calendar/Gmail provider를 주입한다.
+            # 경로/인증 장애는 provider/collector 단계에서 context_unavailable warning으로
+            # 축약되어 Dreaming run 전체를 실패시키지 않는다.
+            calendar_provider, mail_provider = resolve_context_providers(context_cron_cfg)
+            calendar_context = CalendarContextCollector(
+                calendar_provider,
+                lookahead_hours=int(context_cron_cfg.get("calendar_lookahead_hours", 24)),
+            )
+            mail_context = MailContextCollector(
+                mail_provider,
+                lookback_hours=int(context_cron_cfg.get("mail_lookback_hours", 24)),
+                query=str(context_cron_cfg.get("mail_query", "in:inbox newer_than:1d")),
+            )
+
+            class _MergedContextCollector:
+                """런타임 provider 미구성도 graceful warning으로 합치는 collector."""
+
+                def collect(self):
+                    return merge_snapshots(
+                        conv_context.collect(),
+                        calendar_context.collect(),
+                        mail_context.collect(),
+                    )
+
+            context_collector = _MergedContextCollector()
+            context_planner = ContextCronPlanner(
+                allow_one_shot=bool(context_cron_cfg.get("allow_one_shot", True)),
+                allow_recurring=bool(context_cron_cfg.get("allow_recurring", True)),
+                max_opportunities=int(context_cron_cfg.get("max_context_opportunities_per_run", 3)),
+            )
+        proactive_extractor = DreamingOpportunityExtractor(
+            min_confidence=float(proactive_cfg.get("min_confidence", 0.75)),
+            lookback_days=int(dreaming_proactive_cfg.get("lookback_days", 14)),
+            repeated_task_min_occurrences=int(
+                repeated_task_cfg.get("min_occurrences", 5)
+            ),
+            repeated_task_time_bucket_hours=int(
+                repeated_task_cfg.get("time_bucket_hours", 2)
+            ),
+            context_collector=context_collector,
+            context_planner=context_planner,
+        )
+        opportunity_store = OpportunityStore(
+            Path(_expand(proactive_cfg.get("store_file")))
+        )
+
+    # BIZ-335 — Presenter/ActionExecutor wiring. 후보 발송과 side effect 실행을
+    # 분리해, Telegram callback 승인 전에는 cron 생성이 절대 일어나지 않게 한다.
+    proactive_presenter = None
+    presenter_cfg = proactive_cfg.get("presenter", {}) or {}
+    if bool(proactive_cfg.get("enabled")) and bool(presenter_cfg.get("enabled")):
+        if opportunity_store is None:
+            opportunity_store = OpportunityStore(
+                Path(_expand(proactive_cfg.get("store_file")))
+            )
+        action_cfg = proactive_cfg.get("actions", {}) or {}
+        create_cron_cfg = action_cfg.get("create_cron", {}) or {}
+        action_executor = ProactiveActionExecutor(
+            store=opportunity_store,
+            cron_scheduler=cron,
+            create_cron_enabled=bool(create_cron_cfg.get("enabled", False)),
+        )
+        proactive_presenter = ProactivePresenter(
+            store=opportunity_store,
+            telegram_bot=bot,
+            chat_id=notify_chat_id,
+            config=proactive_cfg,
+            action_executor=action_executor,
+        )
+        bot.set_proactive_callback_handler(proactive_presenter.handle_callback)
 
     # BIZ-132 / BIZ-133 / BIZ-138 — 사이클 직전 통째 백업 매니저. 위험 파일 목록(라이브
     # 페르소나 4종 + dreaming sidecar 들 + 데몬 상태 파일 + DB)을 매 사이클 직전
@@ -316,6 +568,8 @@ async def main():
         # ``DreamingPipeline`` 의 ``summarize_*`` 호출이 각자 자기 key 의 max_tokens 를
         # ``LLMRequest.max_tokens`` 로 전달 — None / 0 / 음수는 프로바이더 기본값으로 회귀.
         max_tokens=dreaming_config.get("max_tokens"),
+        proactive_extractor=proactive_extractor,
+        opportunity_store=opportunity_store,
     )
     overnight_hour_cfg = int(dreaming_config.get("overnight_hour", 3))
     idle_threshold_cfg = int(dreaming_config.get("idle_threshold", 7200))
@@ -415,6 +669,25 @@ async def main():
     apscheduler.add_job(
         _dreaming_check, "interval", minutes=5, id="dreaming-check",
     )
+    if proactive_presenter is not None:
+        async def _proactive_presenter_tick():
+            """APScheduler interval job: pending proactive 제안을 Telegram으로 노출."""
+            try:
+                await proactive_presenter.tick()
+            except Exception:
+                logger.exception("Proactive presenter tick failed")
+
+        interval_minutes = int(presenter_cfg.get("interval_minutes", 30))
+        apscheduler.add_job(
+            _proactive_presenter_tick,
+            "interval",
+            minutes=interval_minutes,
+            id="proactive-presenter",
+        )
+        logger.info(
+            "Proactive presenter enabled: check every %dmin",
+            interval_minutes,
+        )
     logger.info(
         "Dreaming enabled: overnight_hour=%d, idle_threshold=%ds, check every 5min, "
         "clusters=%s (threshold=%.2f)",
@@ -424,20 +697,8 @@ async def main():
         cluster_threshold,
     )
 
-    # 대시보드 — 메트릭 스냅샷을 127.0.0.1:8081에 노출.
-    # 외부 노출 없이 로컬 점검 용도로만 바인딩한다.
-    dashboard = DashboardServer(
-        metrics=metrics,
-        structured_logger=structured_logger,
-        host="127.0.0.1",
-        port=8081,
-        conversation_store=conv_store,
-    )
-    try:
-        await dashboard.start()
-    except Exception as exc:  # noqa: BLE001 — 대시보드 실패는 봇 동작을 막지 않음.
-        logger.warning("Dashboard failed to start: %s", exc)
-        dashboard = None
+    # 대시보드 — 별도 8081 listener를 띄우지 않고 Admin API(8082) 앱에 통합한다.
+    # localhost:8081 이 다른 개발 서버(Expo/Node)로 라우팅돼도 운영자는 8082만 보면 된다.
 
     # Admin API (BIZ-58) — Admin UI 백엔드. 토큰 검증·시크릿/감사 매니저는 모두
     # build_admin_api_server에 위임. ``admin_api.enabled=False``면 None이 반환된다.
@@ -451,7 +712,14 @@ async def main():
             return {
                 "daemon": {
                     "telegram_running": bool(getattr(bot, "is_running", False)),
-                    "dashboard_running": dashboard is not None,
+                    "webhook_running": bool(
+                        webhook_server is not None
+                        and getattr(webhook_server, "is_running", False)
+                    ),
+                    "dashboard_running": bool(
+                        admin_api is not None
+                        and admin_api.dashboard_routes_registered
+                    ),
                     "cron_jobs_active": len(cron.list_jobs()),
                     "scheduler_running": apscheduler.running,
                 }
@@ -478,15 +746,13 @@ async def main():
             # last_run/KPI만 반환한다. dreaming_pipeline 와 동일한 sidecar 를 공유.
             dreaming_run_store=dreaming_pipeline.runs_store,
             dreaming_status_provider=_dreaming_status_provider,
+            dashboard_metrics=metrics,
+            dashboard_structured_logger=structured_logger,
+            dashboard_conversation_store=conv_store,
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
         print(f"ERROR: Admin API 부팅 실패 — {exc}")
-        if dashboard is not None:
-            try:
-                await dashboard.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Dashboard stop failed during admin boot abort")
         return
 
     if admin_api is not None:
@@ -494,11 +760,6 @@ async def main():
             await admin_api.start()
         except Exception as exc:  # noqa: BLE001 — 포트 충돌 등은 명시적 에러로 종료.
             print(f"ERROR: Admin API 바인딩 실패 — {exc}")
-            if dashboard is not None:
-                try:
-                    await dashboard.stop()
-                except Exception:  # noqa: BLE001
-                    logger.exception("Dashboard stop failed during admin bind abort")
             return
 
     # Start cron + dreaming scheduler
@@ -537,11 +798,11 @@ async def main():
             await admin_api.stop()
         except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
             logger.exception("Admin API stop failed")
-    if dashboard is not None:
+    if webhook_server is not None:
         try:
-            await dashboard.stop()
+            await webhook_server.stop()
         except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
-            logger.exception("Dashboard stop failed")
+            logger.exception("Webhook server stop failed")
     await bot.stop()
     print("Done.")
 

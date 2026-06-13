@@ -30,6 +30,7 @@ from simpleclaw.daemon.models import (
 )
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.recipes.models import StepType
+from simpleclaw.proactive.event_detector import EventDetector
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class CronScheduler:
         recipe_executor=None,
         agent_orchestrator=None,
         notifier: Callable[[str, str], Awaitable[None]] | None = None,
+        event_detector: EventDetector | None = None,
         recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
         legacy_recipes_dir: str | Path | None = ".agent/recipes",
     ) -> None:
@@ -144,6 +146,7 @@ class CronScheduler:
         self._recipe_executor = recipe_executor
         self._agent = agent_orchestrator
         self._notifier = notifier
+        self._event_detector = event_detector
         # BIZ-202: cron 의 action_reference 가 이름(예: "krstock") 일 때 어느 디렉터리에서
         # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw-agent/default/recipes`)를 보도록
         # 호출 측(run_bot.py)에서 명시적으로 주입. 레거시 `.agent/recipes/` 는 한 번 폴백.
@@ -171,10 +174,13 @@ class CronScheduler:
         """
         jobs = self._store.list_jobs()
         count = 0
+        now = datetime.now()
         for job in jobs:
-            if job.enabled:
+            if job.enabled and not self._is_job_expired(job, now):
                 self._register_apscheduler_job(job)
                 count += 1
+            elif job.enabled and self._is_job_expired(job, now):
+                self.update_job(job.name, enabled=False)
         logger.info("Loaded %d persisted cron jobs.", count)
         return count
 
@@ -189,6 +195,9 @@ class CronScheduler:
         backoff_seconds: float | None = None,
         backoff_strategy: BackoffStrategy | str | None = None,
         circuit_break_threshold: int | None = None,
+        run_once: bool | None = None,
+        expires_at: datetime | None = None,
+        max_runs: int | None = None,
     ) -> CronJob:
         """새 크론 작업을 생성하고 DB 및 APScheduler에 등록한다.
 
@@ -210,6 +219,12 @@ class CronScheduler:
             )
         if circuit_break_threshold is not None:
             kwargs["circuit_break_threshold"] = circuit_break_threshold
+        if run_once is not None:
+            kwargs["run_once"] = bool(run_once)
+        if expires_at is not None:
+            kwargs["expires_at"] = expires_at
+        if max_runs is not None:
+            kwargs["max_runs"] = max(1, int(max_runs))
 
         job = CronJob(
             name=name,
@@ -361,6 +376,7 @@ class CronScheduler:
             execution.status = ExecutionStatus.SUCCESS
             execution.result_summary = summary
             self._reset_consecutive_failures(job)
+            self._cleanup_one_shot_if_needed(job)
             if attempt > 1:
                 logger.info(
                     "Cron job '%s' succeeded on attempt %d/%d.",
@@ -374,6 +390,26 @@ class CronScheduler:
         await self._record_failure_and_maybe_break(job, last_error or "")
         assert last_execution is not None  # 루프가 1회 이상 돌았음을 보장
         return last_execution
+
+    def _is_job_expired(self, job: CronJob, now: datetime | None = None) -> bool:
+        """temporary/one-shot job의 만료 또는 max-run 도달 여부를 판단한다."""
+        now = now or datetime.now()
+        if job.expires_at is not None and job.expires_at <= now:
+            return True
+        if job.max_runs is not None and int(job.run_count or 0) >= int(job.max_runs):
+            return True
+        return False
+
+    def _cleanup_one_shot_if_needed(self, job: CronJob) -> None:
+        """성공 실행 후 run_count를 올리고 one-shot/max_runs job을 비활성화한다."""
+        if not (job.run_once or job.max_runs is not None):
+            return
+        job.run_count = int(job.run_count or 0) + 1
+        if job.run_once or (job.max_runs is not None and job.run_count >= int(job.max_runs)):
+            job.enabled = False
+            self._unregister_apscheduler_job(job.name)
+        job.updated_at = datetime.now()
+        self._store.save_job(job)
 
     def _reset_consecutive_failures(self, job: CronJob) -> None:
         """성공 시 누적 실패 카운터를 0으로 리셋한다 (이미 0이면 no-op)."""
@@ -408,12 +444,26 @@ class CronScheduler:
             await self._send_circuit_break_notification(
                 job, last_error
             )
+            await self._capture_cron_event(
+                event_type="circuit_break",
+                job=job,
+                error_details=last_error,
+                attempt=max(1, int(job.max_attempts)),
+                max_attempts=max(1, int(job.max_attempts)),
+            )
         else:
             self._store.save_job(job)
             logger.error(
                 "Cron job '%s' failed after %d retries (consecutive failures: %d).",
                 job.name, max(1, int(job.max_attempts)) - 1,
                 job.consecutive_failures,
+            )
+            await self._capture_cron_event(
+                event_type="failure",
+                job=job,
+                error_details=last_error,
+                attempt=max(1, int(job.max_attempts)),
+                max_attempts=max(1, int(job.max_attempts)),
             )
 
     async def _send_circuit_break_notification(
@@ -438,6 +488,37 @@ class CronScheduler:
                 "Failed to send circuit-break notification for cron '%s'",
                 job.name,
             )
+
+    async def _capture_cron_event(
+        self,
+        *,
+        event_type: str,
+        job: CronJob,
+        error_details: str | None = None,
+        result_summary: str | None = None,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> None:
+        """cron 이벤트 hook을 best-effort로 실행해 scheduler 본 흐름을 보호한다."""
+        if self._event_detector is None:
+            return
+        try:
+            self._event_detector.capture_cron_event(
+                event_type=event_type,
+                job_name=job.name,
+                error_details=error_details,
+                result_summary=result_summary,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                payload={
+                    "action_type": job.action_type.value,
+                    "action_reference": job.action_reference,
+                    "consecutive_failures": job.consecutive_failures,
+                    "enabled": job.enabled,
+                },
+            )
+        except Exception:  # noqa: BLE001 — proactive hook 실패가 cron 실행/기록을 깨면 안 된다.
+            logger.exception("Cron proactive event hook failed for '%s'", job.name)
 
     async def _run_action(self, job: CronJob) -> str:
         """작업의 대상 액션을 실행하고, NO_NOTIFY 필터링 후 알림을 전송한다.

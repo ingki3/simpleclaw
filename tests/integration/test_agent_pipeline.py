@@ -1,6 +1,5 @@
 """Integration tests for the sub-agent pipeline."""
 
-import json
 import sys
 import textwrap
 

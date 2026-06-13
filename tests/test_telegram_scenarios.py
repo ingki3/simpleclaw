@@ -19,13 +19,9 @@ Only LLM API calls are mocked. Everything else is real.
 
 from __future__ import annotations
 
-import json
-import os
 import sqlite3
 import sys
-import textwrap
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -184,6 +180,7 @@ def _mock_router(orch, routing_response, final_response):
         call_count += 1
         resp = MagicMock()
         resp.backend_name = "gemini"
+        resp.tool_calls = None
         resp.model = "gemini-flash"
 
         if call_count == 1:
@@ -276,6 +273,7 @@ class TestCmd_TimeSkill:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:  # ReAct: Action
                 resp.text = (
                     'Thought: 시간을 확인해야 합니다.\n'
@@ -332,6 +330,7 @@ class TestCmd_CalcSkill:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             if call_count == 1:
                 resp.text = (
                     'Thought: 계산을 수행해야 합니다.\n'
@@ -346,7 +345,7 @@ class TestCmd_CalcSkill:
         orch._router.send = AsyncMock(side_effect=mock_send)
 
         # ── 사용자 명령 ──
-        response = await bot.handle_message("123 * 456 계산해줘", USER_ID, CHAT_ID)
+        await bot.handle_message("123 * 456 계산해줘", USER_ID, CHAT_ID)
 
         # ── 예상 행동: 계산 결과가 Observation에 포함 ──
         assert "Result: 56088" in captured["user_message"]
@@ -383,6 +382,7 @@ class TestCmd_MultiTurn:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
 
             if call_count == 1:  # First message: Answer directly
                 resp.text = "Thought: 이름을 기억합니다.\nAnswer: 네, 김철수님으로 기억하겠습니다."
@@ -398,7 +398,7 @@ class TestCmd_MultiTurn:
         await bot.handle_message("내 이름은 김철수야", USER_ID, CHAT_ID)
 
         # ── 명령 2 ──
-        response = await bot.handle_message("내 이름이 뭐였지?", USER_ID, CHAT_ID)
+        await bot.handle_message("내 이름이 뭐였지?", USER_ID, CHAT_ID)
 
         # ── 예상 행동: 히스토리에 이전 대화 포함 ──
         assert len(captured_messages) == 1
@@ -475,6 +475,7 @@ class TestCmd_NoSkillNeeded:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             captured["system_prompt"] = request.system_prompt
             # Answer directly, no skill needed
             resp.text = "Thought: 스킬이 필요 없습니다.\nAnswer: 파이썬은 프로그래밍 언어입니다."
@@ -684,8 +685,8 @@ class TestCmd_DreamingMemoryUpdate:
         assert len(updated) > len(original)
         assert "##" in updated  # date-based header from dreaming summary
 
-        # ── 데이터 변경 2: .bak 백업 생성 ──
-        backups = list(agent_dir.glob("MEMORY.*.bak"))
+        # ── 데이터 변경 2: memory-backup/에 .bak 백업 생성 ──
+        backups = list((agent_dir / "memory-backup").glob("MEMORY.*.bak"))
         assert len(backups) >= 1
         backup_content = backups[0].read_text()
         assert backup_content == original  # 백업 = 변경 전 내용
@@ -724,6 +725,7 @@ class TestCmd_PersonaReflection:
             call_count += 1
             resp = MagicMock()
             resp.backend_name = "gemini"
+            resp.tool_calls = None
             captured["system_prompt"] = request.system_prompt
             captured["messages"] = request.messages
             resp.text = "Thought: 자기소개를 합니다.\nAnswer: 저는 SimpleClaw입니다."
@@ -744,3 +746,4 @@ class TestCmd_PersonaReflection:
         assert "time-skill" in sp
         assert "calc-skill" in sp
         assert "echo-skill" in sp
+

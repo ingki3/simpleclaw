@@ -13,9 +13,7 @@ BIZ-244 사고 — vault 만 회전되고 ``web/admin/.env.local`` 이 stale 인
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
-import pytest
 
 from simpleclaw.channels.admin_env_local import (
     BASE_KEY,

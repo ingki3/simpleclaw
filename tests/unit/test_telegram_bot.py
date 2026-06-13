@@ -17,6 +17,7 @@ from simpleclaw.channels.telegram_bot import (
     TelegramStreamSink,
     split_for_telegram,
 )
+from simpleclaw.llm.models import MultimodalAttachment
 
 
 class _FakeBot:
@@ -28,11 +29,12 @@ class _FakeBot:
     뒤 정상화 — flood-wait / parse-error 시나리오를 흉내.
     """
 
-    def __init__(self, edit_failures: int = 0, send_failures: int = 0):
+    def __init__(self, edit_failures: int = 0, send_failures: int = 0, reject_duplicate_edit: bool = False):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
         self._edit_failures = edit_failures
         self._send_failures = send_failures
+        self._reject_duplicate_edit = reject_duplicate_edit
         self._next_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -48,8 +50,15 @@ class _FakeBot:
         if self._edit_failures > 0:
             self._edit_failures -= 1
             raise RuntimeError("simulated edit failure")
+        if self._reject_duplicate_edit and self.edits and self.edits[-1]["text"] == text:
+            raise RuntimeError("Message is not modified")
         self.edits.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "kwargs": kwargs,
+            }
         )
 
 
@@ -115,6 +124,188 @@ class TestTelegramBot:
         assert response is not None
         # The response should contain truncated message
         assert len(response) < 10000
+
+    @pytest.mark.asyncio
+    async def test_handle_message_forwards_multimodal_attachments(self):
+        handler = AsyncMock(return_value="ok")
+        attachment = MultimodalAttachment(
+            data=b"jpeg-bytes", mime_type="image/jpeg", name="photo.jpg"
+        )
+        bot = TelegramBot("token", whitelist_user_ids=[1], message_handler=handler)
+
+        response = await bot.handle_message(
+            "이 이미지를 설명해줘", 1, 1, attachments=[attachment]
+        )
+
+        assert response == "ok"
+        handler.assert_awaited_once_with(
+            "이 이미지를 설명해줘", 1, 1, attachments=[attachment]
+        )
+
+    @pytest.mark.asyncio
+    async def test_download_photo_attachment_uses_largest_photo_size(self):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"largest"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = [
+            SimpleNamespace(file_id="small", width=10, height=10),
+            SimpleNamespace(file_id="large", width=100, height=100),
+        ]
+        message.document = None
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        api_bot.get_file.assert_awaited_once_with("large")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"largest", mime_type="image/jpeg", name="telegram-photo-large"
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_download_image_document_attachment_preserves_mime_and_name(self):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"png"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1", mime_type="image/png", file_name="diagram.png"
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        api_bot.get_file.assert_awaited_once_with("doc-1")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"png", mime_type="image/png", name="diagram.png"
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_download_pdf_document_attachment_preserves_mime_name_and_path(self, tmp_path):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"%PDF-1.7"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="paper.pdf",
+            file_size=8,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        api_bot.get_file.assert_awaited_once_with("doc-1")
+        assert attachments == [
+            MultimodalAttachment(
+                data=b"%PDF-1.7",
+                mime_type="application/pdf",
+                name="paper.pdf",
+                path=str(tmp_path / "paper.pdf"),
+            )
+        ]
+        assert (tmp_path / "paper.pdf").read_bytes() == b"%PDF-1.7"
+
+    @pytest.mark.asyncio
+    async def test_download_document_attachment_does_not_overwrite_existing_file(
+        self, tmp_path
+    ):
+        (tmp_path / "paper.pdf").write_bytes(b"old")
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(return_value=bytearray(b"new"))
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="paper.pdf",
+            file_size=3,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        assert attachments[0].path == str(tmp_path / "paper-1.pdf")
+        assert (tmp_path / "paper.pdf").read_bytes() == b"old"
+        assert (tmp_path / "paper-1.pdf").read_bytes() == b"new"
+
+    @pytest.mark.asyncio
+    async def test_download_unsupported_document_is_ignored(self):
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock()
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1", mime_type="application/octet-stream", file_name="tool.bin"
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        assert attachments == []
+        api_bot.get_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_oversized_document_is_ignored(self):
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock()
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="huge.pdf",
+            file_size=TelegramBot.MAX_DOCUMENT_ATTACHMENT_BYTES + 1,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(message, api_bot)
+
+        assert attachments == []
+        api_bot.get_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_document_over_limit_after_download_is_ignored(self, tmp_path):
+        file_obj = MagicMock()
+        file_obj.download_as_bytearray = AsyncMock(
+            return_value=bytearray(b"x" * (TelegramBot.MAX_DOCUMENT_ATTACHMENT_BYTES + 1))
+        )
+        api_bot = MagicMock()
+        api_bot.get_file = AsyncMock(return_value=file_obj)
+        message = MagicMock()
+        message.photo = []
+        message.document = SimpleNamespace(
+            file_id="doc-1",
+            mime_type="application/pdf",
+            file_name="huge.pdf",
+            file_size=1,
+        )
+
+        attachments = await TelegramBot._download_message_attachments(
+            message, api_bot, attachment_dir=tmp_path
+        )
+
+        assert attachments == []
+        assert not (tmp_path / "huge.pdf").exists()
+
+    def test_document_only_prompt_mentions_attachment_file(self):
+        attachment = MultimodalAttachment(
+            data=b"%PDF", mime_type="application/pdf", name="paper.pdf"
+        )
+
+        assert TelegramBot._default_message_text_for_attachments([attachment]) == (
+            "첨부 파일을 분석해 주세요."
+        )
 
 
 class TestSplitForTelegram:
@@ -438,6 +629,22 @@ class TestTelegramStreamSink:
         assert fake.edits[0]["text"] == "1234567890ab"[:11] or fake.edits[0]["text"] == "123456789ab"
 
     @pytest.mark.asyncio
+    async def test_finalize_renders_common_markdown_bold_with_telegram_html(self):
+        """최종 답변의 **굵게** 마크다운은 Telegram 에서 실제 bold 로 보이게 변환한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=13, min_interval_ms=10000, min_delta_chars=1000,
+        )
+        await sink.start()
+
+        sent = await sink.finalize("**기술주 매도세**: 엔비디아 <테스트> & 반도체")
+
+        assert sent == ["**기술주 매도세**: 엔비디아 <테스트> & 반도체"]
+        assert fake.edits[-1]["text"] == "<b>기술주 매도세</b>: 엔비디아 &lt;테스트&gt; &amp; 반도체"
+        assert fake.edits[-1]["kwargs"]["parse_mode"] == "HTML"
+        assert len(fake.sent) == 1  # placeholder only
+
+    @pytest.mark.asyncio
     async def test_finalize_short_text_edits_placeholder_once(self):
         fake = _FakeBot()
         sink = TelegramStreamSink(
@@ -525,6 +732,23 @@ class TestTelegramStreamSink:
         assert sent == [chunks[0]]
         assert any("일부 응답이 전송되지 않았습니다" in item["text"] for item in fake.sent)
         assert "delivered_chunks=1 total_chunks=2" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_finalize_skips_duplicate_edit_after_stream_already_committed_final_text(self):
+        """스트리밍 중 이미 최종 본문이 edit 됐으면 finalize 가 새 메시지 fallback 을 만들지 않는다."""
+        fake = _FakeBot(reject_duplicate_edit=True)
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=9, min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+        await sink.on_text_delta("answer")
+
+        sent = await sink.finalize("answer")
+
+        assert sent == ["answer"]
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "answer"
+        assert len(fake.sent) == 1  # placeholder only; no duplicate fallback send
 
     @pytest.mark.asyncio
     async def test_finalize_idempotent(self):
@@ -623,3 +847,34 @@ class TestTelegramBotStreaming:
         )
         response = await bot.handle_message("ping", 1, 1)
         assert response == "got ping"
+
+    @pytest.mark.asyncio
+    async def test_progress_event_edits_placeholder_and_finalize_removes_progress(self):
+        """BIZ-329 — progress 는 placeholder 에만 보이고 최종 답변에서는 제거된다."""
+        from simpleclaw.agent.progress import ProgressEvent
+
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=12, min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+
+        await sink.on_progress_event(
+            ProgressEvent(
+                kind="tool",
+                name="cli",
+                status="start",
+                detail={"command": "echo password=hunter2"},
+            )
+        )
+
+        assert fake.edits
+        progress_text = fake.edits[-1]["text"]
+        assert "진행 상황" in progress_text
+        assert "cli 시작" in progress_text
+        assert "hunter2" not in progress_text
+
+        await sink.finalize("최종 답변")
+
+        assert fake.edits[-1]["text"] == "최종 답변"
+        assert "진행 상황" not in fake.edits[-1]["text"]

@@ -13,6 +13,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
 from simpleclaw.recipes.loader import discover_recipes
 
 if TYPE_CHECKING:
@@ -164,6 +165,7 @@ async def try_recipe_command(
     react_loop_fn,
     recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
     legacy_recipes_dir: str | Path | None = ".agent/recipes",
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[str, str] | None:
     """텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.
 
@@ -176,6 +178,7 @@ async def try_recipe_command(
             (기본 ``~/.simpleclaw-agent/default/recipes``). 봇/데몬이 동일 경로를 보도록 한다.
         legacy_recipes_dir: BIZ-202 이전 위치 폴백. 기본 ``.agent/recipes``
             (프로젝트 working tree). ``None`` 이면 폴백 비활성.
+        on_progress: BIZ-329 — recipe 명령 시작/완료/실패 이벤트 콜백.
 
     Returns:
         ``(result_text, recipe_name)`` 튜플. 레시피 명령이 아니면 *None*.
@@ -221,7 +224,22 @@ async def try_recipe_command(
         from simpleclaw.recipes.executor import render_instructions
         rendered = render_instructions(recipe.instructions, variables=params)
 
-        result = await react_loop_fn(rendered)
+        await emit_progress_event(
+            on_progress, ProgressEvent("recipe", cmd_name, "start", "instructions")
+        )
+        try:
+            result = await react_loop_fn(rendered, on_progress=on_progress)
+        except TypeError:
+            # 기존 테스트/호출자가 1-arg react_loop_fn 을 쓰는 경우 하위 호환.
+            result = await react_loop_fn(rendered)
+        except Exception as exc:
+            await emit_progress_event(
+                on_progress, ProgressEvent("recipe", cmd_name, "fail", str(exc))
+            )
+            raise
+        await emit_progress_event(
+            on_progress, ProgressEvent("recipe", cmd_name, "complete", "instructions")
+        )
         return result, cmd_name
 
     return (

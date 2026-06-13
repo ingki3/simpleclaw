@@ -15,6 +15,7 @@ import logging
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
@@ -71,6 +72,21 @@ def _tool_response(call_id: str, name: str, args: dict | None = None) -> LLMResp
 def _text_response(text: str) -> LLMResponse:
     return LLMResponse(text=text, model="test", tool_calls=None)
 
+
+
+
+def test_tool_loop_runner_contract_is_importable():
+    """BIZ-346 — tool loop lifecycle은 전용 runner/dataclass 계약으로 분리된다."""
+
+    assert ToolLoopRunner.__name__ == "ToolLoopRunner"
+    assert set(ToolLoopState.__dataclass_fields__) >= {
+        "user_content",
+        "messages",
+        "system_prompt",
+        "tools",
+        "system_blocks",
+    }
+    assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
 
 @pytest.mark.asyncio
 async def test_empty_final_response_returns_user_friendly_message(
@@ -179,6 +195,141 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
+async def test_live_fact_final_without_evidence_is_accepted_by_tool_loop(config_file):
+    """실시간 사실 final text는 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_send(_request):
+        return _text_response("대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다.")
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다."
+
+
+@pytest.mark.asyncio
+async def test_live_fact_fetch_blocked_final_is_not_post_filtered(
+    config_file, monkeypatch,
+):
+    """FETCH_BLOCKED 이후 final text도 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "FETCH_BLOCKED: https://www.google.com/search?q=2026+World+Cup\n"
+            "This site appears to block automated fetching."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "web_fetch",
+            {"url": "https://www.google.com/search?q=2026+World+Cup"},
+        ),
+        _text_response("대한민국 vs 미국: 6월 23일 22시에 중계됩니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "대한민국 vs 미국: 6월 23일 22시에 중계됩니다."
+
+
+@pytest.mark.asyncio
+async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answer(
+    config_file, monkeypatch,
+):
+    """실시간 경기 질문에서도 Gemini-breaking synthetic web_fetch를 만들지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    dispatch_calls: list[ToolCall] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc)
+        return "네이버 스포츠 확인 결과: KT 7:3 SSG"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        call_idx["i"] += 1
+        return _text_response("LG가 두산을 7:4로 이겼습니다.")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
+
+    assert result == "LG가 두산을 7:4로 이겼습니다."
+    assert call_idx["i"] == 1
+    assert dispatch_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "삼성전자 현재 주가 알려줘",
+        "서울 날씨 지금 어때?",
+        "AI 최신 뉴스 찾아줘",
+    ],
+)
+async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
+    config_file, monkeypatch, message,
+):
+    """주가·날씨·뉴스 질문도 synthetic web_fetch 없이 모델/스킬 경로에 맡긴다."""
+    orch = AgentOrchestrator(config_file)
+
+    dispatch_calls: list[ToolCall] = []
+
+    async def fake_dispatch(tc):
+        dispatch_calls.append(tc)
+        return f"웹 확인 결과: {message}"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        call_idx["i"] += 1
+        return _text_response("조회 없이 만든 답변")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(message)
+
+    assert result == "조회 없이 만든 답변"
+    assert call_idx["i"] == 1
+    assert dispatch_calls == []
+
+
+@pytest.mark.asyncio
 async def test_empty_direct_text_response_returns_fallback(config_file):
     """tool_calls 없이 빈 최종 텍스트가 와도 사용자에게 빈 메시지를 보내지 않는다."""
     orch = AgentOrchestrator(config_file)
@@ -225,6 +376,40 @@ async def test_empty_final_after_empty_tool_result_reports_not_found(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_zero_rows_tool_result_reports_not_found(
+    config_file, monkeypatch,
+):
+    """도구 결과가 0 rows 성격이면 빈 final 대신 '못 찾음'으로 답해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "김경열 골프 일정 검색 결과: 0 rows"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "conversation_search", {"query": "김경열 골프"}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "김경열님과 골프 일정을 넣어달라고 한 적이 있었나?",
+    )
+
+    assert result.strip()
+    assert "찾지 못했습니다" in result
+    assert "응답을 생성하지 못했습니다" not in result
+    assert call_idx["i"] == 2
+
+
+@pytest.mark.asyncio
 async def test_empty_final_after_tool_error_reports_checked_but_failed(
     config_file, monkeypatch,
 ):
@@ -253,6 +438,77 @@ async def test_empty_final_after_tool_error_reports_checked_but_failed(
     assert "확인 중 오류" in result
     assert "sqlite3 database is locked" in result
     assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_transcript_with_error_words_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """정상 transcript 본문 속 error/failed 단어는 도구 오류로 오판하지 않아야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Transcript:\n"
+            "This video explains how an agent can fail when context is noisy.\n"
+            "The speaker also says previous approaches had an error rate problem.\n"
+            "하지만 이 텍스트는 정상적으로 추출된 유튜브 transcript 본문입니다."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "summarize", "args": "https://youtu.be/example --youtube auto"},
+        ),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("https://youtu.be/example")
+
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "execute_skill: Transcript:" in result
+    assert "확인 중 오류" not in result
+    assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_command_failed_header_reports_error(
+    config_file, monkeypatch,
+):
+    """명시적인 오류 헤더는 계속 확인 실패 fallback으로 분류해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Command failed: summarize exited with status 1\nstderr: network timeout"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 유튜브 요약해줘")
+
+    assert "확인 중 오류" in result
+    assert "Command failed" in result
 
 
 @pytest.mark.asyncio

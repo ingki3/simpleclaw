@@ -71,6 +71,21 @@ class ConversationStore:
         self._db_path = str(db_path)
         self._ensure_schema()
 
+    def close(self) -> None:
+        """저장소 종료 hook.
+
+        현재 구현은 메서드 호출마다 SQLite 연결을 열고 닫으므로 인스턴스가 보유한
+        장기 연결은 없다. 그래도 fixture/호출자가 ``close()`` 또는 context manager를
+        일관되게 사용할 수 있도록 idempotent no-op으로 명시한다.
+        """
+
+    def __enter__(self) -> "ConversationStore":
+        """``with ConversationStore(...)`` 패턴에서 저장소 자신을 반환한다."""
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """context manager 종료 시 close 정책을 한곳으로 모은다."""
+        self.close()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -745,6 +760,8 @@ class ConversationStore:
         min_confidence: float = 0.0,
     ) -> list[tuple[MemoryItem, float]]:
         """active memory_items를 embedding cosine similarity로 검색한다."""
+        from simpleclaw.memory.supersession import memory_item_supersession_boost
+
         query = np.asarray(query_vector, dtype=_EMBEDDING_DTYPE)
         if query.ndim != 1 or query.size == 0:
             raise ValueError("query_vector must be a non-empty 1-D vector")
@@ -771,7 +788,7 @@ class ConversationStore:
             score = float(np.dot(query_unit, item.embedding / emb_norm))
             if score < min_score:
                 continue
-            results.append((item, score))
+            results.append((item, score + memory_item_supersession_boost(item)))
         results.sort(key=lambda pair: pair[1], reverse=True)
         return results[:k]
     # ------------------------------------------------------------------
