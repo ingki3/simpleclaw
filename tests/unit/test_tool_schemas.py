@@ -44,16 +44,16 @@ class TestToolCount:
     def test_without_cron_returns_8_tools(self):
         """cron 비활성 시 기본 내장 도구 8개만 반환되어야 한다.
 
-        기본 내장 도구: cli, web_fetch, file_read, file_write, file_manage,
-        skill_docs, search_memory (BIZ-325), clarify (BIZ-260).
+        기본 내장 도구: cli, web_fetch, web_search, file_read, file_write,
+        file_manage, skill_docs, search_memory (BIZ-325), clarify (BIZ-365/BIZ-260).
         """
         tools = build_tool_definitions(skills=[], cron_available=False)
-        assert len(tools) == 8
-
-    def test_with_cron_returns_9_tools(self):
-        """cron 활성 시 기본 8개 + cron 1개 = 9개가 반환되어야 한다."""
-        tools = build_tool_definitions(skills=[], cron_available=True)
         assert len(tools) == 9
+
+    def test_with_cron_returns_10_tools(self):
+        """cron 활성 시 기본 9개 + cron 1개 = 10개가 반환되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        assert len(tools) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +77,35 @@ class TestExecuteSkill:
         assert "execute_skill" not in tool_names
 
     def test_with_skills_total_count(self):
-        """스킬이 있으면 기본 8 + execute_skill 1 = 9 (BIZ-325/BIZ-260)."""
+        """스킬이 있으면 기본 9 + execute_skill 1 = 10 (BIZ-365/BIZ-325/BIZ-260)."""
         skills = [_make_skill()]
         tools = build_tool_definitions(skills=skills, cron_available=False)
-        assert len(tools) == 9
-
-    def test_with_skills_and_cron_total_count(self):
-        """스킬 + cron이면 기본 8 + cron 1 + execute_skill 1 = 10."""
-        skills = [_make_skill()]
-        tools = build_tool_definitions(skills=skills, cron_available=True)
         assert len(tools) == 10
 
+    def test_with_skills_and_cron_total_count(self):
+        """스킬 + cron이면 기본 9 + cron 1 + execute_skill 1 = 11."""
+        skills = [_make_skill()]
+        tools = build_tool_definitions(skills=skills, cron_available=True)
+        assert len(tools) == 11
+
+class TestWebSearchSchema:
+    """BIZ-365 — query 기반 web_search 도구 스키마를 검증한다."""
+
+    def test_web_search_is_exposed(self):
+        """기본 도구 목록에 web_search가 포함되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        assert "web_search" in [tool.name for tool in tools]
+
+    def test_web_search_limit_is_bounded(self):
+        """limit 파라미터는 1~10 범위로 스키마에 명시되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        web_search = next(tool for tool in tools if tool.name == "web_search")
+        limit_schema = web_search.parameters["properties"]["limit"]
+
+        assert limit_schema["type"] == "integer"
+        assert limit_schema["minimum"] == 1
+        assert limit_schema["maximum"] == 10
+        assert web_search.parameters["required"] == ["query"]
 
 # ---------------------------------------------------------------------------
 # 4. 내장 도구 필수 필드 검증
