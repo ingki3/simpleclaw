@@ -9,6 +9,7 @@ from simpleclaw.agent.config_inspect import handle_config_inspect
 from simpleclaw.agent.deploy_status import handle_deploy_status
 from simpleclaw.agent.log_debug import handle_log_debug
 from simpleclaw.agent.recipe_validate import handle_recipe_validate
+from simpleclaw.agent.restart_runtime import handle_restart_runtime
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.builtin_tools import (
@@ -104,6 +105,14 @@ async def dispatch_tool_call(
             args,
             config_path=orchestrator._config_path,
             skills=getattr(orchestrator, "_skills", None),
+        )
+    if name == "restart_runtime":
+        if not operator_tools:
+            return "Error: restart_runtime is available only in operator context."
+        return handle_restart_runtime(
+            args,
+            config_path=orchestrator._config_path,
+            scheduler=orchestrator._cron_scheduler,
         )
     if name == "clarify":
         return handle_clarify(

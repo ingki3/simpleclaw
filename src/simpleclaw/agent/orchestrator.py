@@ -121,6 +121,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "deploy_status",
     "recipe_validate",
     "skill_validate",
+    "restart_runtime",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,

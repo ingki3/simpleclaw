@@ -545,6 +545,36 @@ _SKILL_VALIDATE_TOOL = ToolDefinition(
 )
 
 
+_RESTART_RUNTIME_TOOL = ToolDefinition(
+    name="restart_runtime",
+    description=(
+        "운영자 전용 승인형 런타임 재시작 도구. confirm=true와 reason을 명시한 경우에만 "
+        "macOS LaunchAgent kickstart -k를 수행하고, 재시작 후 PID 변경, Admin health, "
+        "Telegram/scheduler/dashboard flags, FD count를 검증해 반환한다. "
+        "일반 사용자 context에는 노출되지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "method": {
+                "type": "string",
+                "enum": ["launchagent_kickstart"],
+                "description": "재시작 방식. 현재는 macOS LaunchAgent kickstart만 지원한다.",
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": "True일 때만 실제 restart side effect를 수행한다. 기본/False는 차단된다.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "운영자가 승인한 재시작 사유. 결과 JSON과 감사 로그 맥락에 남긴다.",
+            },
+        },
+        "required": ["method", "confirm", "reason"],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -596,6 +626,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
         _SKILL_VALIDATE_TOOL,
         scope=ToolScope.DEVELOPMENT,
         risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _RESTART_RUNTIME_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.HIGH,
         operator_gate_required=True,
     ),
 )
