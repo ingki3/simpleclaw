@@ -1,7 +1,7 @@
 """내장 도구 및 외부 스킬의 Function Calling 스키마 레지스트리.
 
 Native Function Calling에 사용할 ToolDefinition 목록을 조립한다.
-내장 도구 7종의 고정 스키마와, 외부 스킬을 위한 execute_skill 함수 1종을 정의한다.
+내장 도구 8종의 고정 스키마와, 외부 스킬을 위한 execute_skill 함수 1종을 정의한다.
 
 설계 결정:
   - 외부 스킬은 개별 함수로 등록하지 않고, 단일 execute_skill 함수에
@@ -18,7 +18,7 @@ from simpleclaw.skills.models import SkillDefinition
 
 
 # ---------------------------------------------------------------------------
-# 내장 도구 스키마 정의 (7종)
+# 내장 도구 스키마 정의 (8종)
 # ---------------------------------------------------------------------------
 
 _CLI_TOOL = ToolDefinition(
@@ -56,6 +56,30 @@ _WEB_FETCH_TOOL = ToolDefinition(
             },
         },
         "required": ["url"],
+    },
+)
+
+_WEB_SEARCH_TOOL = ToolDefinition(
+    name="web_search",
+    description="일반 질의어로 웹 검색을 수행해 후보 URL 목록을 찾는다. "
+                "결과는 제목, URL, 짧은 snippet/source만 포함하며 상세 본문은 "
+                "필요한 URL을 골라 web_fetch로 가져온다. 최신 뉴스, 기업/시장 이슈처럼 "
+                "URL을 모르는 실시간 정보 탐색에 사용한다.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "검색할 질의어",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "반환할 검색 결과 개수 (1~10, 기본값: 5)",
+            },
+        },
+        "required": ["query"],
     },
 )
 
@@ -266,6 +290,7 @@ def build_tool_definitions(
     tools: list[ToolDefinition] = [
         _CLI_TOOL,
         _WEB_FETCH_TOOL,
+        _WEB_SEARCH_TOOL,
         _FILE_READ_TOOL,
         _FILE_WRITE_TOOL,
         _FILE_MANAGE_TOOL,

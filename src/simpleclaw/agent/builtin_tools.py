@@ -5,6 +5,7 @@ AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
 
 제공 도구:
 - web-fetch: URL에서 웹 페이지 내용 가져오기
+- web-search: 일반 질의어로 후보 URL 검색
 - file-read: 파일 텍스트 읽기 (프로젝트 내)
 - file-write: 파일 쓰기 (워크스페이스 내)
 - file-manage: 파일/디렉토리 관리 (list, mkdir, delete, info)
@@ -20,6 +21,8 @@ import logging
 import os
 import re
 import shutil
+import urllib.parse
+from html import unescape
 import stat as _stat
 from datetime import datetime
 from pathlib import Path
@@ -52,8 +55,8 @@ _AGENT_BROWSER_GLOB_CANDIDATES: tuple[str, ...] = (
 # BIZ-260: ``clarify`` 추가 — LLM 이 사용자에게 다지선다 질문을 던질 때 인라인
 # 키보드로 렌더하는 채널 브리지.
 BUILTIN_TOOL_NAMES = frozenset({
-    "cron", "cli", "web-fetch", "file-read", "file-write", "file-manage",
-    "skill-docs", "clarify",
+    "cron", "cli", "web-fetch", "web-search", "file-read", "file-write",
+    "file-manage", "skill-docs", "clarify",
 })
 
 
@@ -467,6 +470,143 @@ async def handle_web_fetch(
         return f"(via headless render; static fetch returned {static_len} chars)\n\n{body}"
 
     return static_text
+
+
+# ------------------------------------------------------------------
+# web-search — query 기반 후보 URL 검색
+# ------------------------------------------------------------------
+
+_WEB_SEARCH_MAX_RESULTS = 10
+
+
+def _strip_search_html(value: str) -> str:
+    """검색 결과 HTML 조각을 LLM 에 안전한 짧은 텍스트로 정규화한다."""
+    without_tags = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unescape(without_tags)).strip()
+
+
+def _decode_duckduckgo_href(href: str) -> str:
+    """DuckDuckGo redirect URL 에서 실제 목적지 URL을 복원한다."""
+    href = unescape(href)
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urllib.parse.urlparse(href)
+    query = urllib.parse.parse_qs(parsed.query)
+    if "uddg" in query and query["uddg"]:
+        return query["uddg"][0]
+    return href
+
+
+def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
+    """DuckDuckGo HTML 결과 페이지에서 title/url/snippet 목록을 추출한다."""
+    results: list[dict[str, str]] = []
+    blocks = re.split(
+        r'<div[^>]+class="(?:result(?:\s|")|[^"]*\sresult(?:\s|"))[^>]*>',
+        html,
+        flags=re.I,
+    )
+    for block in blocks[1:]:
+        link_match = re.search(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            block,
+            flags=re.I | re.S,
+        )
+        if not link_match:
+            continue
+        url = _decode_duckduckgo_href(link_match.group(1))
+        title = _strip_search_html(link_match.group(2))
+        snippet_match = re.search(
+            r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|'
+            r'<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>',
+            block,
+            flags=re.I | re.S,
+        )
+        snippet = ""
+        if snippet_match:
+            snippet = _strip_search_html(snippet_match.group(1) or snippet_match.group(2) or "")
+        if title and url:
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "source": "duckduckgo-html",
+            })
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]:
+    """API key 없이 DuckDuckGo HTML endpoint에서 compact 검색 결과를 가져온다."""
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        )
+    }
+    params = {"q": query}
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.get(
+            "https://html.duckduckgo.com/html/",
+            params=params,
+            allow_redirects=True,
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"DuckDuckGo returned HTTP {resp.status} — {resp.reason}")
+            body = await resp.text(errors="replace")
+    return _parse_duckduckgo_html(body, limit)
+
+
+def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
+    """검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다."""
+    if not results:
+        return (
+            f"WEB_SEARCH_RESULTS: {query!r} — no results found.\n"
+            "Try a more specific query, or use web_fetch if you already know the URL."
+        )
+
+    lines = [f"WEB_SEARCH_RESULTS: {query!r} ({len(results)} results)"]
+    for index, item in enumerate(results, start=1):
+        lines.append(f"{index}. {item.get('title', '').strip()}")
+        lines.append(f"   URL: {item.get('url', '').strip()}")
+        snippet = item.get("snippet", "").strip()
+        if snippet:
+            lines.append(f"   Snippet: {snippet}")
+        source = item.get("source", "").strip()
+        if source:
+            lines.append(f"   Source: {source}")
+    lines.append(
+        "Detailed page content is not included. Call web_fetch with a selected URL "
+        "when you need the article/page body."
+    )
+    return "\n".join(lines)
+
+
+async def handle_web_search(routing: dict, search_backend=None) -> str:
+    """질의어로 후보 URL을 검색하고 title/url/snippet 중심의 compact 결과를 반환한다."""
+    query = str(routing.get("query", "")).strip()
+    if not query:
+        return "Error: 'query' field is required."
+
+    raw_limit = routing.get("limit", 5)
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 5
+    limit = max(1, min(_WEB_SEARCH_MAX_RESULTS, limit))
+
+    backend = search_backend or _web_search_duckduckgo
+    try:
+        results = await backend(query, limit)
+    except Exception as exc:
+        return (
+            f"Error: web_search failed — {str(exc)[:200]}. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        )
+    return _format_web_search_results(query, results[:limit])
 
 
 # ------------------------------------------------------------------
