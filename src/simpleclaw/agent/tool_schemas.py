@@ -515,6 +515,36 @@ _RECIPE_VALIDATE_TOOL = ToolDefinition(
 )
 
 
+_SKILL_VALIDATE_TOOL = ToolDefinition(
+    name="skill_validate",
+    description=(
+        "운영자/개발 전용 read-only runtime skill 검증. configured skills local/global dir에서 "
+        "name으로 SKILL.md discovery 결과를 찾고, script_path 추론/스크립트와 venv/python runner "
+        "존재 여부를 확인한다. smoke=True일 때만 짧은 --help 실행을 timeout/redaction과 함께 수행한다. "
+        "skill 파일을 쓰거나 설치/재시작/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "검증할 runtime skill 이름. SKILL.md discovery 결과의 name과 정확히 일치해야 한다.",
+            },
+            "smoke": {
+                "type": "boolean",
+                "description": "True이면 script를 짧게 실행해 --help smoke를 수행한다. 기본값 false라 side effect가 없다.",
+            },
+            "command_args": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "smoke=True일 때 script에 전달할 args. 생략하면 ['--help']를 사용한다.",
+            },
+        },
+        "required": ["name"],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -558,6 +588,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _RECIPE_VALIDATE_TOOL,
+        scope=ToolScope.DEVELOPMENT,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _SKILL_VALIDATE_TOOL,
         scope=ToolScope.DEVELOPMENT,
         risk=ToolRisk.LOW,
         operator_gate_required=True,

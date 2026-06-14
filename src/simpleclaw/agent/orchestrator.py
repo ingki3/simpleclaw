@@ -119,10 +119,12 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "log_debug",
     "asset_inventory",
     "deploy_status",
+    "recipe_validate",
+    "skill_validate",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
-    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
     operator_gate=True,
 )
 
