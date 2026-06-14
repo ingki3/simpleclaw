@@ -1,20 +1,57 @@
 """내장 도구 및 외부 스킬의 Function Calling 스키마 레지스트리.
 
 Native Function Calling에 사용할 ToolDefinition 목록을 조립한다.
-내장 도구 8종의 고정 스키마와, 외부 스킬을 위한 execute_skill 함수 1종을 정의한다.
+내장 도구 스키마를 NativeToolSpec registry로 관리하고, 외부 스킬을 위한
+execute_skill 함수 1종을 동적으로 정의한다.
 
 설계 결정:
   - 외부 스킬은 개별 함수로 등록하지 않고, 단일 execute_skill 함수에
     skill_name 인자로 디스패치 (Hermes Agent 방식). 스킬 추가/삭제 시
     스키마 재생성이 불필요하여 hot-reload와 호환됨.
   - 도구 이름은 API 호환성을 위해 언더스코어 사용 (web_fetch 등).
-    orchestrator에서 핸들러 매핑 시 이 이름을 그대로 사용.
+    orchestrator에서 핸들러 매핑 시 이 이름을 그대로 사용하며,
+    registry/dispatch 검증으로 drift를 부팅 시점에 잡는다.
+  - operator/development scope 도구는 operator_gate가 열릴 때만 노출한다.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
+from typing import Iterable
+
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
+
+
+class ToolScope(str, Enum):
+    """Native tool이 노출될 수 있는 실행 context 범위."""
+
+    RUNTIME = "runtime"
+    OPERATOR = "operator"
+    DEVELOPMENT = "development"
+
+
+class ToolRisk(str, Enum):
+    """운영자 gate 판단에 쓰는 Native tool 위험도 metadata."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True)
+class NativeToolSpec:
+    """ToolDefinition에 scope/risk/operator gate metadata를 붙인 registry 항목."""
+
+    definition: ToolDefinition
+    scope: ToolScope = ToolScope.RUNTIME
+    risk: ToolRisk = ToolRisk.LOW
+    operator_gate_required: bool = False
+    aliases: tuple[str, ...] = ()
+
+
+DEFAULT_TOOL_SCOPES = (ToolScope.RUNTIME,)
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +307,93 @@ _CRON_TOOL = ToolDefinition(
 )
 
 
+_NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
+    NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
+    NativeToolSpec(_WEB_FETCH_TOOL),
+    NativeToolSpec(_WEB_SEARCH_TOOL),
+    NativeToolSpec(_FILE_READ_TOOL),
+    NativeToolSpec(_FILE_WRITE_TOOL, risk=ToolRisk.MEDIUM),
+    NativeToolSpec(_FILE_MANAGE_TOOL, risk=ToolRisk.MEDIUM),
+    NativeToolSpec(_SKILL_DOCS_TOOL),
+    NativeToolSpec(_SEARCH_MEMORY_TOOL),
+    NativeToolSpec(_CLARIFY_TOOL),
+    NativeToolSpec(_CRON_TOOL, risk=ToolRisk.MEDIUM),
+)
+
+
+def _normalize_scopes(scopes: Iterable[ToolScope | str]) -> frozenset[ToolScope]:
+    """호출자가 문자열/Enum 중 무엇을 넘겨도 ToolScope 집합으로 정규화한다."""
+    return frozenset(ToolScope(scope) for scope in scopes)
+
+
+def build_native_tool_registry(
+    *,
+    cron_available: bool = False,
+    scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
+    operator_gate: bool = False,
+    extra_specs: Iterable[NativeToolSpec] = (),
+) -> tuple[NativeToolSpec, ...]:
+    """현재 context에 노출 가능한 native tool registry 항목을 반환한다.
+
+    Args:
+        cron_available: CronScheduler가 주입되었으면 True. False면 cron spec을 제외한다.
+        scopes: 노출을 허용할 scope 목록. 기본값은 일반 사용자 runtime만 허용한다.
+        operator_gate: True일 때만 operator/development gated spec이 노출된다.
+        extra_specs: 후속 운영 도구 이슈가 추가 spec을 주입해 검증할 수 있는 확장점.
+
+    Returns:
+        scope/gate/cron 조건을 통과한 NativeToolSpec 튜플.
+    """
+    allowed_scopes = _normalize_scopes(scopes)
+    specs: list[NativeToolSpec] = []
+    for spec in (*_NATIVE_TOOL_SPECS, *tuple(extra_specs)):
+        if spec.definition.name == "cron" and not cron_available:
+            continue
+        if spec.scope not in allowed_scopes:
+            continue
+        if spec.operator_gate_required and not operator_gate:
+            continue
+        specs.append(spec)
+    return tuple(specs)
+
+
+def native_tool_names(
+    *,
+    cron_available: bool = False,
+    scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
+    operator_gate: bool = False,
+    extra_specs: Iterable[NativeToolSpec] = (),
+) -> frozenset[str]:
+    """registry 조건을 통과한 native tool function-call 이름 집합을 반환한다."""
+    return frozenset(
+        spec.definition.name
+        for spec in build_native_tool_registry(
+            cron_available=cron_available,
+            scopes=scopes,
+            operator_gate=operator_gate,
+            extra_specs=extra_specs,
+        )
+    )
+
+
+def validate_dispatch_tool_names(dispatch_names: Iterable[str]) -> None:
+    """dispatch mapping이 runtime native registry와 일치하는지 검증한다.
+
+    execute_skill은 외부 스킬 동적 도구라 이 static native registry 검증 대상이
+    아니다. 후속 operator/development 도구는 registry에 추가하면서 이 검증의
+    기준 집합도 자연스럽게 넓어진다.
+    """
+    expected = native_tool_names(cron_available=True)
+    actual = frozenset(dispatch_names)
+    missing = expected - actual
+    unknown = actual - expected
+    if missing or unknown:
+        raise ValueError(
+            "native tool dispatch mismatch: "
+            f"missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # 빌더 함수
 # ---------------------------------------------------------------------------
@@ -277,30 +401,28 @@ _CRON_TOOL = ToolDefinition(
 def build_tool_definitions(
     skills: list[SkillDefinition],
     cron_available: bool = False,
+    scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
+    operator_gate: bool = False,
 ) -> list[ToolDefinition]:
     """현재 상태에 맞는 ToolDefinition 목록을 조립한다.
 
     Args:
         skills: 등록된 외부 스킬 목록.
         cron_available: CronScheduler가 주입되었으면 True.
+        scopes: 노출할 native tool scope 목록. 기본값은 runtime만 허용한다.
+        operator_gate: operator/development scope 노출을 허가하는 명시 gate.
 
     Returns:
         LLM에 전달할 ToolDefinition 리스트.
     """
     tools: list[ToolDefinition] = [
-        _CLI_TOOL,
-        _WEB_FETCH_TOOL,
-        _WEB_SEARCH_TOOL,
-        _FILE_READ_TOOL,
-        _FILE_WRITE_TOOL,
-        _FILE_MANAGE_TOOL,
-        _SKILL_DOCS_TOOL,
-        _SEARCH_MEMORY_TOOL,
-        _CLARIFY_TOOL,
+        spec.definition
+        for spec in build_native_tool_registry(
+            cron_available=cron_available,
+            scopes=scopes,
+            operator_gate=operator_gate,
+        )
     ]
-
-    if cron_available:
-        tools.append(_CRON_TOOL)
 
     # 외부 스킬이 있으면 execute_skill 함수 추가
     if skills:

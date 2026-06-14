@@ -87,7 +87,10 @@ from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
-from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.tool_schemas import (
+    build_tool_definitions,
+    validate_dispatch_tool_names,
+)
 from simpleclaw.agent.system_prompts import load_system_prompt
 
 if TYPE_CHECKING:
@@ -98,6 +101,20 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _ATTACHMENT_CONTEXT_HEADER = "Attachment context"
+
+_NATIVE_DISPATCH_TOOL_NAMES = frozenset({
+    "cli",
+    "web_fetch",
+    "web_search",
+    "file_read",
+    "file_write",
+    "file_manage",
+    "skill_docs",
+    "search_memory",
+    "clarify",
+    "cron",
+})
+validate_dispatch_tool_names(_NATIVE_DISPATCH_TOOL_NAMES)
 
 # 시스템 프롬프트에 추가할 도구 사용 안내.
 #
