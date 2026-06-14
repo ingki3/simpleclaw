@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
 
+from simpleclaw.agent.tool_schemas import native_tool_names
+
 logger = logging.getLogger(__name__)
 
 # 정적 HTML fetch 결과가 이 길이(공백 strip 후) 미만이면 자동으로 헤드리스 폴백.
@@ -51,13 +53,10 @@ _AGENT_BROWSER_GLOB_CANDIDATES: tuple[str, ...] = (
     "/opt/homebrew/bin/agent-browser",
 )
 
-# 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록.
-# BIZ-260: ``clarify`` 추가 — LLM 이 사용자에게 다지선다 질문을 던질 때 인라인
-# 키보드로 렌더하는 채널 브리지.
-BUILTIN_TOOL_NAMES = frozenset({
-    "cron", "cli", "web-fetch", "web-search", "file-read", "file-write",
-    "file-manage", "skill-docs", "clarify",
-})
+# 오케스트레이터의 native dispatch에서 인식하는 내장 도구 이름 목록.
+# BIZ-370: 이름의 단일 출처를 tool_schemas registry로 옮겨 하이픈 alias와
+# function-call 이름(언더스코어)이 어긋나는 사고를 방지한다.
+BUILTIN_TOOL_NAMES = native_tool_names(cron_available=True)
 
 
 # ------------------------------------------------------------------
