@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from dataclasses import dataclass
@@ -104,6 +105,7 @@ class ToolLoopState:
     previous_mutation_snapshot: dict[str, Any] | None = None
     on_text_delta: TextDeltaCallback | None = None
     on_progress: ProgressCallback | None = None
+    operator_tools: bool = False
 
 
 @dataclass
@@ -298,7 +300,13 @@ class ToolLoopRunner:
                     ProgressEvent(progress_kind, progress_name, "start", tc.arguments),
                 )
                 try:
-                    result = await self._orchestrator._dispatch_tool_call(tc)
+                    dispatch = self._orchestrator._dispatch_tool_call
+                    if "operator_tools" in inspect.signature(dispatch).parameters:
+                        result = await dispatch(tc, operator_tools=state.operator_tools)
+                    else:
+                        # 기존 테스트/플러그인이 _dispatch_tool_call(tc) 형태로
+                        # monkeypatch한 경우를 보존한다.
+                        result = await dispatch(tc)
                 except Exception as exc:  # noqa: BLE001
                     await emit_progress_event(
                         state.on_progress,

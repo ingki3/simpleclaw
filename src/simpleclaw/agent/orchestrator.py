@@ -87,7 +87,11 @@ from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
-from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.tool_schemas import (
+    ToolScope,
+    build_tool_definitions,
+    validate_dispatch_tool_names,
+)
 from simpleclaw.agent.system_prompts import load_system_prompt
 
 if TYPE_CHECKING:
@@ -98,6 +102,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _ATTACHMENT_CONTEXT_HEADER = "Attachment context"
+
+_NATIVE_DISPATCH_TOOL_NAMES = frozenset({
+    "cli",
+    "web_fetch",
+    "web_search",
+    "file_read",
+    "file_write",
+    "file_manage",
+    "skill_docs",
+    "search_memory",
+    "clarify",
+    "cron",
+    "runtime_status",
+    "config_inspect",
+})
+validate_dispatch_tool_names(
+    _NATIVE_DISPATCH_TOOL_NAMES,
+    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+    operator_gate=True,
+)
 
 # 시스템 프롬프트에 추가할 도구 사용 안내.
 #
@@ -757,6 +781,7 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
     ) -> str:
         """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
@@ -844,6 +869,23 @@ class AgentOrchestrator:
                 return response_text
             finally:
                 clarify_chat_id_var.reset(clarify_token)
+
+    async def process_operator_message(
+        self,
+        text: str,
+        *,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> str:
+        """운영자 context에서만 operator scope native tool을 노출해 메시지를 처리한다."""
+        with trace_scope() as trace_id:
+            logger.info("Operator message received: trace_id=%s", trace_id)
+            self._reload_dynamic_files()
+            return await self._tool_loop(
+                text,
+                isolated=True,
+                on_text_delta=on_text_delta,
+                operator_tools=True,
+            )
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
@@ -944,6 +986,7 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None,
         on_text_delta: TextDeltaCallback | None,
         on_progress: ProgressCallback | None,
+        operator_tools: bool = False,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -1082,9 +1125,12 @@ class AgentOrchestrator:
             recipes_before_skills=active_recipes_before_skills,
         )
         system_prompt = self._flatten_system_blocks(system_blocks)
+        scopes = (ToolScope.RUNTIME, ToolScope.OPERATOR) if operator_tools else (ToolScope.RUNTIME,)
         tools = build_tool_definitions(
             active_skills,
             cron_available=self._cron_scheduler is not None,
+            scopes=scopes,
+            operator_gate=operator_tools,
         )
         return ToolLoopState(
             user_content=user_content,
@@ -1095,6 +1141,7 @@ class AgentOrchestrator:
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=on_text_delta,
             on_progress=on_progress,
+            operator_tools=operator_tools,
         )
 
     async def _tool_loop(
@@ -1105,6 +1152,7 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
     ) -> str:
         """Native Function Calling 루프를 실행한다.
 
@@ -1128,6 +1176,7 @@ class AgentOrchestrator:
             attachments=attachments,
             on_text_delta=on_text_delta,
             on_progress=on_progress,
+            operator_tools=operator_tools,
         )
         result = await ToolLoopRunner(self).run(state)
         return result.text
@@ -1215,9 +1264,13 @@ class AgentOrchestrator:
     # Tool dispatch
     # ------------------------------------------------------------------
 
-    async def _dispatch_tool_call(self, tool_call: ToolCall) -> str:
+    async def _dispatch_tool_call(
+        self, tool_call: ToolCall, *, operator_tools: bool = False
+    ) -> str:
         """ToolCall 라우팅을 전용 모듈에 위임한다."""
-        return await tool_dispatch.dispatch_tool_call(self, tool_call)
+        return await tool_dispatch.dispatch_tool_call(
+            self, tool_call, operator_tools=operator_tools
+        )
 
 
     @staticmethod

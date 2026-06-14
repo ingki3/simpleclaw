@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import pytest
 
-from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.tool_schemas import (
+    ToolScope,
+    build_native_tool_registry,
+    build_tool_definitions,
+)
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
 
@@ -217,3 +221,43 @@ class TestToolNamingConvention:
             assert "-" not in tool.name, (
                 f"Tool name '{tool.name}' contains hyphen; use underscores for API compatibility"
             )
+
+
+class TestToolScopeFiltering:
+    """Native tool registry의 scope gate가 기본 사용자 context를 보호하는지 검증한다."""
+
+    def test_default_build_exposes_only_runtime_scoped_tools(self):
+        """기본 build는 operator/development 도구를 노출하지 않아야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        runtime_names = {
+            spec.definition.name
+            for spec in build_native_tool_registry(cron_available=True)
+            if spec.scope is ToolScope.RUNTIME
+        }
+
+        assert {tool.name for tool in tools} == runtime_names
+
+    def test_operator_and_development_scopes_are_explicit_opt_in(self):
+        """비-runtime scope는 scopes 인자를 명시해야만 build 대상이 된다."""
+        registry = build_native_tool_registry(cron_available=True)
+        protected_names = {
+            spec.definition.name
+            for spec in registry
+            if spec.scope in {ToolScope.OPERATOR, ToolScope.DEVELOPMENT}
+        }
+
+        default_names = {
+            tool.name for tool in build_tool_definitions(skills=[], cron_available=True)
+        }
+        assert default_names.isdisjoint(protected_names)
+
+        expanded_names = {
+            tool.name
+            for tool in build_tool_definitions(
+                skills=[],
+                cron_available=True,
+                scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
+                operator_gate=True,
+            )
+        }
+        assert protected_names <= expanded_names
