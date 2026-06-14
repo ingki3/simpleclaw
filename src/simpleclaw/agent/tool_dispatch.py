@@ -12,6 +12,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_file_write,
     handle_skill_docs,
     handle_web_fetch,
+    handle_web_search,
 )
 from simpleclaw.agent.clarify import clarify_chat_id_var
 from simpleclaw.llm.models import ToolCall
@@ -31,6 +32,8 @@ async def dispatch_tool_call(orchestrator: Any, tool_call: ToolCall) -> str:
         return await orchestrator._execute_command("cli", cmd)
     if name == "web_fetch":
         return await handle_web_fetch(args, headless_binary=orchestrator._headless_binary)
+    if name == "web_search":
+        return await handle_web_search(args)
     if name == "file_read":
         return handle_file_read(
             args,
