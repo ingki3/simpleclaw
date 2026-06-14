@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
     handle_cron_action,
@@ -18,7 +19,9 @@ from simpleclaw.agent.clarify import clarify_chat_id_var
 from simpleclaw.llm.models import ToolCall
 
 
-async def dispatch_tool_call(orchestrator: Any, tool_call: ToolCall) -> str:
+async def dispatch_tool_call(
+    orchestrator: Any, tool_call: ToolCall, *, operator_tools: bool = False
+) -> str:
     """ToolCall을 적절한 핸들러로 라우팅하여 실행 결과를 반환한다."""
     name = tool_call.name
     args = tool_call.arguments
@@ -54,6 +57,14 @@ async def dispatch_tool_call(orchestrator: Any, tool_call: ToolCall) -> str:
         return await orchestrator._search_memory(args)
     if name == "cron":
         return handle_cron_action(args, orchestrator._cron_scheduler)
+    if name == "runtime_status":
+        if not operator_tools:
+            return "Error: runtime_status is available only in operator context."
+        return handle_runtime_status(
+            args,
+            config_path=orchestrator._config_path,
+            scheduler=orchestrator._cron_scheduler,
+        )
     if name == "clarify":
         return handle_clarify(
             args,
