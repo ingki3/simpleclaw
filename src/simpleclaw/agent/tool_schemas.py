@@ -343,6 +343,46 @@ _RUNTIME_STATUS_TOOL = ToolDefinition(
 )
 
 
+_CONFIG_INSPECT_TOOL = ToolDefinition(
+    name="config_inspect",
+    description=(
+        "운영자 전용 read-only effective config 요약. live config path를 명시하고 "
+        "llm/agent/memory/skills/recipes/daemon/admin_api/security 섹션을 "
+        "시크릿 redaction 및 선택적 경로 절대화와 함께 보여준다. "
+        "설정 파일을 쓰거나 재시작/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "section": {
+                "type": "string",
+                "enum": [
+                    "all",
+                    "llm",
+                    "agent",
+                    "memory",
+                    "skills",
+                    "recipes",
+                    "daemon",
+                    "admin_api",
+                    "security",
+                ],
+                "description": "조회할 config 섹션. 생략하면 all.",
+            },
+            "resolve_paths": {
+                "type": "boolean",
+                "description": "True이면 *_path/*_dir/*_file 및 path/dir/file 키의 ~를 절대 경로로 확장한다.",
+            },
+            "redact": {
+                "type": "boolean",
+                "description": "True이면 token/api_key/master_key 등 실제 시크릿 값을 마스킹한다 (기본값: true).",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -356,6 +396,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CRON_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(
         _RUNTIME_STATUS_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _CONFIG_INSPECT_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.LOW,
         operator_gate_required=True,
