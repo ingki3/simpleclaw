@@ -307,6 +307,42 @@ _CRON_TOOL = ToolDefinition(
 )
 
 
+_RUNTIME_STATUS_TOOL = ToolDefinition(
+    name="runtime_status",
+    description=(
+        "운영자 전용 read-only 런타임 진단. 프로세스/PID/cwd/HOME, LaunchAgent, "
+        "git HEAD, Admin API health, listen port, FD count, scheduler 상태를 요약한다. "
+        "재시작/파일 수정/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "include": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "process",
+                        "launchd",
+                        "git",
+                        "health",
+                        "ports",
+                        "fd",
+                        "scheduler",
+                    ],
+                },
+                "description": "포함할 진단 섹션. 생략하면 전체 read-only 섹션을 반환한다.",
+            },
+            "verbose": {
+                "type": "boolean",
+                "description": "True이면 ps/lsof 원문을 더 길게 포함한다 (기본값: false).",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -318,6 +354,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_SEARCH_MEMORY_TOOL),
     NativeToolSpec(_CLARIFY_TOOL),
     NativeToolSpec(_CRON_TOOL, risk=ToolRisk.MEDIUM),
+    NativeToolSpec(
+        _RUNTIME_STATUS_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
 )
 
 
@@ -376,14 +418,23 @@ def native_tool_names(
     )
 
 
-def validate_dispatch_tool_names(dispatch_names: Iterable[str]) -> None:
-    """dispatch mapping이 runtime native registry와 일치하는지 검증한다.
+def validate_dispatch_tool_names(
+    dispatch_names: Iterable[str],
+    *,
+    scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
+    operator_gate: bool = False,
+) -> None:
+    """dispatch mapping이 native registry와 일치하는지 검증한다.
 
     execute_skill은 외부 스킬 동적 도구라 이 static native registry 검증 대상이
     아니다. 후속 operator/development 도구는 registry에 추가하면서 이 검증의
     기준 집합도 자연스럽게 넓어진다.
     """
-    expected = native_tool_names(cron_available=True)
+    expected = native_tool_names(
+        cron_available=True,
+        scopes=scopes,
+        operator_gate=operator_gate,
+    )
     actual = frozenset(dispatch_names)
     missing = expected - actual
     unknown = actual - expected
