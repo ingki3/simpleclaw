@@ -84,6 +84,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "asset_inventory",
         "deploy_status",
         "recipe_validate",
+        "skill_validate",
     }
     assert runtime_names.isdisjoint(protected_names)
 

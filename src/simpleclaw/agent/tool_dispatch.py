@@ -10,6 +10,7 @@ from simpleclaw.agent.deploy_status import handle_deploy_status
 from simpleclaw.agent.log_debug import handle_log_debug
 from simpleclaw.agent.recipe_validate import handle_recipe_validate
 from simpleclaw.agent.runtime_status import handle_runtime_status
+from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
     handle_cron_action,
@@ -96,6 +97,14 @@ async def dispatch_tool_call(
         if not operator_tools:
             return "Error: recipe_validate is available only in operator context."
         return handle_recipe_validate(args, config_path=orchestrator._config_path)
+    if name == "skill_validate":
+        if not operator_tools:
+            return "Error: skill_validate is available only in operator context."
+        return handle_skill_validate(
+            args,
+            config_path=orchestrator._config_path,
+            skills=getattr(orchestrator, "_skills", None),
+        )
     if name == "clarify":
         return handle_clarify(
             args,
