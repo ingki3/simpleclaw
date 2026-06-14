@@ -118,6 +118,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "config_inspect",
     "log_debug",
     "asset_inventory",
+    "deploy_status",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,

@@ -82,6 +82,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "config_inspect",
         "log_debug",
         "asset_inventory",
+        "deploy_status",
     }
     assert runtime_names.isdisjoint(protected_names)
 

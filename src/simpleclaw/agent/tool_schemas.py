@@ -459,6 +459,32 @@ _ASSET_INVENTORY_TOOL = ToolDefinition(
 )
 
 
+_DEPLOY_STATUS_TOOL = ToolDefinition(
+    name="deploy_status",
+    description=(
+        "운영자 전용 read-only 배포 상태 진단. live checkout의 branch/HEAD, "
+        "origin/main 또는 origin/dev ahead/behind, dirty paths와 deploy range overlap, "
+        "origin/main..origin/dev unreleased commit, open PR 요약을 보여준다. "
+        "pull/merge/restart/deploy 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "compare": {
+                "type": "string",
+                "enum": ["main", "dev"],
+                "description": "HEAD와 비교할 origin branch. 생략하면 main.",
+            },
+            "include_prs": {
+                "type": "boolean",
+                "description": "True이면 gh pr list로 open PR 요약을 포함한다 (gh 실패 시 git-only fallback).",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -490,6 +516,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _ASSET_INVENTORY_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _DEPLOY_STATUS_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.LOW,
         operator_gate_required=True,
