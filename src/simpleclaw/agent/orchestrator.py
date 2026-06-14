@@ -1128,7 +1128,11 @@ class AgentOrchestrator:
             recipes_before_skills=active_recipes_before_skills,
         )
         system_prompt = self._flatten_system_blocks(system_blocks)
-        scopes = (ToolScope.RUNTIME, ToolScope.OPERATOR) if operator_tools else (ToolScope.RUNTIME,)
+        scopes = (
+            (ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT)
+            if operator_tools
+            else (ToolScope.RUNTIME,)
+        )
         tools = build_tool_definitions(
             active_skills,
             cron_available=self._cron_scheduler is not None,

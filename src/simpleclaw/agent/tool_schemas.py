@@ -485,6 +485,36 @@ _DEPLOY_STATUS_TOOL = ToolDefinition(
 )
 
 
+_RECIPE_VALIDATE_TOOL = ToolDefinition(
+    name="recipe_validate",
+    description=(
+        "운영자/개발 전용 read-only recipe.yaml 검증. configured recipes.dir 기준으로 "
+        "name 또는 path를 resolve해 YAML parse, 필수 필드, empty/provided params 렌더 "
+        "sanity, slash command 충돌 warning을 반환한다. live recipe 파일을 쓰거나 "
+        "실행/재시작/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "recipes.dir 아래의 recipe 디렉터리 이름. path가 없을 때 사용한다.",
+            },
+            "path": {
+                "type": "string",
+                "description": "recipes.dir 아래 recipe.yaml 또는 recipe.yml 경로. name보다 우선한다.",
+            },
+            "render_params": {
+                "type": "object",
+                "description": "렌더 smoke에 사용할 선택적 파라미터 dict. 값은 문자열로 정규화된다.",
+                "additionalProperties": {"type": "string"},
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -523,6 +553,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(
         _DEPLOY_STATUS_TOOL,
         scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _RECIPE_VALIDATE_TOOL,
+        scope=ToolScope.DEVELOPMENT,
         risk=ToolRisk.LOW,
         operator_gate_required=True,
     ),
