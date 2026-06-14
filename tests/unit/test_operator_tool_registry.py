@@ -77,7 +77,12 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         if spec.scope in {ToolScope.OPERATOR, ToolScope.DEVELOPMENT}
     }
 
-    assert protected_names == {"runtime_status", "config_inspect", "log_debug"}
+    assert protected_names == {
+        "runtime_status",
+        "config_inspect",
+        "log_debug",
+        "asset_inventory",
+    }
     assert runtime_names.isdisjoint(protected_names)
 
 
