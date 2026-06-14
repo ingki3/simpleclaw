@@ -429,6 +429,36 @@ _LOG_DEBUG_TOOL = ToolDefinition(
 )
 
 
+_ASSET_INVENTORY_TOOL = ToolDefinition(
+    name="asset_inventory",
+    description=(
+        "운영자 전용 read-only asset inventory. native tool registry, "
+        "SimpleClaw runtime skills, recipes, MCP server/tool 상태, selector config를 "
+        "source/path/error metadata와 함께 요약한다. Hermes skill과 런타임 skill을 "
+        "구분하기 위해 source를 명시하며 파일 수정/재시작 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["all", "native_tools", "skills", "recipes", "mcp", "selector"],
+                "description": "조회할 asset 범위. 생략하면 all.",
+            },
+            "include_paths": {
+                "type": "boolean",
+                "description": "True이면 skill_dir/recipe path/MCP server config path성 metadata를 포함한다.",
+            },
+            "include_errors": {
+                "type": "boolean",
+                "description": "True이면 recipe/config parse error와 discovery failure 요약을 포함한다.",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -454,6 +484,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _LOG_DEBUG_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _ASSET_INVENTORY_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.LOW,
         operator_gate_required=True,
