@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [x] **BIZ-373: 운영자용 log_debug native 도구 추가** — operator scope에만 노출되는 `log_debug` native tool을 추가해 `/Users/simplist/.simpleclaw-agent/default/bot.log` 기준 최근 로그, ERROR/Traceback, trace_id, tool_loop/recipe/skill/telegram/admin_api/scheduler 관련 줄을 read-only JSON으로 확인할 수 있게 했다. 토큰/API 키/긴 사용자 본문 redaction, line/pattern limit, 파일 읽기 실패 LLM-readable 오류를 포함한다. 단위 테스트 6개(`tests/unit/test_log_debug_tool.py`)와 registry/operator dispatch gate 회귀 업데이트 포함. 검증: `tests/unit/` 1715 passed, `.venv/bin/python -m ruff check src/` 통과. (2026-06-14)
+
 - [x] **BIZ-372: 운영자용 config_inspect native 도구 추가** — operator scope에만 노출되는 `config_inspect` native tool을 추가해 `/Users/simplist/.simpleclaw/config.yaml` 기준 effective config 요약을 read-only JSON으로 확인할 수 있게 했다. `section=all|llm|agent|memory|skills|recipes|daemon|admin_api|security`, `resolve_paths`, `redact` 옵션을 지원하고, 실제 token/api_key/master_key 값은 마스킹하되 `file:admin_api_token` 같은 시크릿 참조는 보존한다. 단위 테스트 5개(`tests/unit/test_config_inspect_tool.py`)와 registry/operator gate 회귀 업데이트 포함. 검증: `tests/unit/` 1709 passed, `uv run --extra dev --with ruff python -m ruff check src/` 통과. (2026-06-14)
 
 - [x] **BIZ-370: 운영자 native tool scope registry 추가** — native function calling tool registry에 scope/risk/operator gate metadata를 추가하고, 기본 runtime context에서 operator/development 도구가 노출되지 않도록 회귀 테스트를 보강했다. `tests/unit/test_operator_tool_registry.py` 추가, `test_tool_schemas.py` scope filtering 보강, 전체 `tests/unit/` 1529 green + `ruff check src/` 통과. (2026-06-14)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from simpleclaw.agent.config_inspect import handle_config_inspect
+from simpleclaw.agent.log_debug import handle_log_debug
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
@@ -70,6 +71,10 @@ async def dispatch_tool_call(
         if not operator_tools:
             return "Error: config_inspect is available only in operator context."
         return handle_config_inspect(args, config_path=orchestrator._config_path)
+    if name == "log_debug":
+        if not operator_tools:
+            return "Error: log_debug is available only in operator context."
+        return handle_log_debug(args)
     if name == "clarify":
         return handle_clarify(
             args,
