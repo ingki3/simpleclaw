@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from simpleclaw.agent.asset_inventory import handle_asset_inventory
 from simpleclaw.agent.config_inspect import handle_config_inspect
+from simpleclaw.agent.log_debug import handle_log_debug
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
@@ -70,6 +72,20 @@ async def dispatch_tool_call(
         if not operator_tools:
             return "Error: config_inspect is available only in operator context."
         return handle_config_inspect(args, config_path=orchestrator._config_path)
+    if name == "log_debug":
+        if not operator_tools:
+            return "Error: log_debug is available only in operator context."
+        return handle_log_debug(args)
+    if name == "asset_inventory":
+        if not operator_tools:
+            return "Error: asset_inventory is available only in operator context."
+        return handle_asset_inventory(
+            args,
+            config_path=orchestrator._config_path,
+            skills=orchestrator._skills,
+            recipes=getattr(orchestrator, "_recipes", []),
+            mcp_manager=getattr(orchestrator, "_mcp_manager", None),
+        )
     if name == "clarify":
         return handle_clarify(
             args,

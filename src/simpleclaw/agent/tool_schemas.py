@@ -383,6 +383,82 @@ _CONFIG_INSPECT_TOOL = ToolDefinition(
 )
 
 
+_LOG_DEBUG_TOOL = ToolDefinition(
+    name="log_debug",
+    description=(
+        "운영자 전용 read-only 로그 진단. 최근 bot.log tail, ERROR/Traceback, "
+        "trace_id 주변, tool loop/recipe/skill/Telegram/Admin API/scheduler 관련 줄을 "
+        "시크릿 redaction과 줄 수 제한을 적용해 반환한다. 로그 파일을 쓰거나 "
+        "프로세스 재시작 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "recent",
+                    "errors",
+                    "trace",
+                    "tool_loop",
+                    "recipe",
+                    "skill",
+                    "telegram",
+                    "admin_api",
+                    "scheduler",
+                ],
+                "description": "조회할 로그 관점. 생략하면 recent.",
+            },
+            "lines": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "description": "반환할 최대 줄 수. 1~200으로 제한되며 기본값은 80.",
+            },
+            "pattern": {
+                "type": "string",
+                "description": "추가 부분 문자열 필터. 정규식으로 실행하지 않고 대소문자 무시 contains로만 사용한다.",
+            },
+            "trace_id": {
+                "type": "string",
+                "description": "특정 trace_id가 포함된 줄만 조회한다. action=trace와 함께 쓰면 한 요청 흐름을 좁힐 수 있다.",
+            },
+        },
+        "required": [],
+    },
+)
+
+
+_ASSET_INVENTORY_TOOL = ToolDefinition(
+    name="asset_inventory",
+    description=(
+        "운영자 전용 read-only asset inventory. native tool registry, "
+        "SimpleClaw runtime skills, recipes, MCP server/tool 상태, selector config를 "
+        "source/path/error metadata와 함께 요약한다. Hermes skill과 런타임 skill을 "
+        "구분하기 위해 source를 명시하며 파일 수정/재시작 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["all", "native_tools", "skills", "recipes", "mcp", "selector"],
+                "description": "조회할 asset 범위. 생략하면 all.",
+            },
+            "include_paths": {
+                "type": "boolean",
+                "description": "True이면 skill_dir/recipe path/MCP server config path성 metadata를 포함한다.",
+            },
+            "include_errors": {
+                "type": "boolean",
+                "description": "True이면 recipe/config parse error와 discovery failure 요약을 포함한다.",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -402,6 +478,18 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _CONFIG_INSPECT_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _LOG_DEBUG_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _ASSET_INVENTORY_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.LOW,
         operator_gate_required=True,
