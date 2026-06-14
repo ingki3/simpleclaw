@@ -115,6 +115,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "clarify",
     "cron",
     "runtime_status",
+    "config_inspect",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
