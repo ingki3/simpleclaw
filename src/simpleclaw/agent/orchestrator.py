@@ -118,10 +118,14 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "config_inspect",
     "log_debug",
     "asset_inventory",
+    "deploy_status",
+    "recipe_validate",
+    "skill_validate",
+    "restart_runtime",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
-    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
     operator_gate=True,
 )
 
@@ -772,7 +776,11 @@ class AgentOrchestrator:
         with trace_scope() as trace_id:
             logger.info("Cron message received: trace_id=%s", trace_id)
             self._reload_dynamic_files()
-            return await self._tool_loop(text, isolated=True)
+            return await self._tool_loop(
+                text,
+                isolated=True,
+                allow_cron_mutation=False,
+            )
 
     async def process_message(
         self,
@@ -989,6 +997,7 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None,
         on_progress: ProgressCallback | None,
         operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -1127,7 +1136,11 @@ class AgentOrchestrator:
             recipes_before_skills=active_recipes_before_skills,
         )
         system_prompt = self._flatten_system_blocks(system_blocks)
-        scopes = (ToolScope.RUNTIME, ToolScope.OPERATOR) if operator_tools else (ToolScope.RUNTIME,)
+        scopes = (
+            (ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT)
+            if operator_tools
+            else (ToolScope.RUNTIME,)
+        )
         tools = build_tool_definitions(
             active_skills,
             cron_available=self._cron_scheduler is not None,
@@ -1144,6 +1157,7 @@ class AgentOrchestrator:
             on_text_delta=on_text_delta,
             on_progress=on_progress,
             operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
         )
 
     async def _tool_loop(
@@ -1155,6 +1169,7 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
     ) -> str:
         """Native Function Calling 루프를 실행한다.
 
@@ -1179,6 +1194,7 @@ class AgentOrchestrator:
             on_text_delta=on_text_delta,
             on_progress=on_progress,
             operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
         )
         result = await ToolLoopRunner(self).run(state)
         return result.text
@@ -1267,11 +1283,18 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     async def _dispatch_tool_call(
-        self, tool_call: ToolCall, *, operator_tools: bool = False
+        self,
+        tool_call: ToolCall,
+        *,
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
     ) -> str:
         """ToolCall 라우팅을 전용 모듈에 위임한다."""
         return await tool_dispatch.dispatch_tool_call(
-            self, tool_call, operator_tools=operator_tools
+            self,
+            tool_call,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
         )
 
 

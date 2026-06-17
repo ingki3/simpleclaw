@@ -275,7 +275,8 @@ _CLARIFY_TOOL = ToolDefinition(
 _CRON_TOOL = ToolDefinition(
     name="cron",
     description="크론 스케줄 관리. 반복/예약 작업을 등록, 조회, 삭제, 활성화/비활성화한다. "
-                "사용자가 '~시에 ~해줘', '매일 ~시에 알려줘' 같은 요청을 하면 이 도구를 사용한다.",
+                "반복 또는 one-shot 여부는 run_once/max_runs/expires_at metadata로 명시한다. "
+                "cron 실행 컨텍스트 안에서는 list 외 mutation(add/remove/enable/disable)이 허용되지 않는다.",
     parameters={
         "type": "object",
         "properties": {
@@ -300,6 +301,19 @@ _CRON_TOOL = ToolDefinition(
             "action_reference": {
                 "type": "string",
                 "description": "recipe일 때는 레시피 파일 경로, prompt일 때는 실행할 프롬프트 텍스트",
+            },
+            "run_once": {
+                "type": "boolean",
+                "description": "True이면 한 번 실행 후 자동 비활성/정리되는 one-shot 작업으로 등록한다.",
+            },
+            "max_runs": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "최대 실행 횟수. run_once=True이면 반드시 1이어야 하며 생략 시 1로 정규화된다.",
+            },
+            "expires_at": {
+                "type": "string",
+                "description": "작업 만료 시각 ISO-8601 문자열. 현재 시각보다 미래여야 한다.",
             },
         },
         "required": ["cron_action"],
@@ -459,6 +473,122 @@ _ASSET_INVENTORY_TOOL = ToolDefinition(
 )
 
 
+_DEPLOY_STATUS_TOOL = ToolDefinition(
+    name="deploy_status",
+    description=(
+        "운영자 전용 read-only 배포 상태 진단. live checkout의 branch/HEAD, "
+        "origin/main 또는 origin/dev ahead/behind, dirty paths와 deploy range overlap, "
+        "origin/main..origin/dev unreleased commit, open PR 요약을 보여준다. "
+        "pull/merge/restart/deploy 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "compare": {
+                "type": "string",
+                "enum": ["main", "dev"],
+                "description": "HEAD와 비교할 origin branch. 생략하면 main.",
+            },
+            "include_prs": {
+                "type": "boolean",
+                "description": "True이면 gh pr list로 open PR 요약을 포함한다 (gh 실패 시 git-only fallback).",
+            },
+        },
+        "required": [],
+    },
+)
+
+
+_RECIPE_VALIDATE_TOOL = ToolDefinition(
+    name="recipe_validate",
+    description=(
+        "운영자/개발 전용 read-only recipe.yaml 검증. configured recipes.dir 기준으로 "
+        "name 또는 path를 resolve해 YAML parse, 필수 필드, empty/provided params 렌더 "
+        "sanity, slash command 충돌 warning을 반환한다. live recipe 파일을 쓰거나 "
+        "실행/재시작/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "recipes.dir 아래의 recipe 디렉터리 이름. path가 없을 때 사용한다.",
+            },
+            "path": {
+                "type": "string",
+                "description": "recipes.dir 아래 recipe.yaml 또는 recipe.yml 경로. name보다 우선한다.",
+            },
+            "render_params": {
+                "type": "object",
+                "description": "렌더 smoke에 사용할 선택적 파라미터 dict. 값은 문자열로 정규화된다.",
+                "additionalProperties": {"type": "string"},
+            },
+        },
+        "required": [],
+    },
+)
+
+
+_SKILL_VALIDATE_TOOL = ToolDefinition(
+    name="skill_validate",
+    description=(
+        "운영자/개발 전용 read-only runtime skill 검증. configured skills local/global dir에서 "
+        "name으로 SKILL.md discovery 결과를 찾고, script_path 추론/스크립트와 venv/python runner "
+        "존재 여부를 확인한다. smoke=True일 때만 짧은 --help 실행을 timeout/redaction과 함께 수행한다. "
+        "skill 파일을 쓰거나 설치/재시작/배포 같은 side effect는 수행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "검증할 runtime skill 이름. SKILL.md discovery 결과의 name과 정확히 일치해야 한다.",
+            },
+            "smoke": {
+                "type": "boolean",
+                "description": "True이면 script를 짧게 실행해 --help smoke를 수행한다. 기본값 false라 side effect가 없다.",
+            },
+            "command_args": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "smoke=True일 때 script에 전달할 args. 생략하면 ['--help']를 사용한다.",
+            },
+        },
+        "required": ["name"],
+    },
+)
+
+
+_RESTART_RUNTIME_TOOL = ToolDefinition(
+    name="restart_runtime",
+    description=(
+        "운영자 전용 승인형 런타임 재시작 도구. confirm=true와 reason을 명시한 경우에만 "
+        "macOS LaunchAgent kickstart -k를 수행하고, 재시작 후 PID 변경, Admin health, "
+        "Telegram/scheduler/dashboard flags, FD count를 검증해 반환한다. "
+        "일반 사용자 context에는 노출되지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "method": {
+                "type": "string",
+                "enum": ["launchagent_kickstart"],
+                "description": "재시작 방식. 현재는 macOS LaunchAgent kickstart만 지원한다.",
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": "True일 때만 실제 restart side effect를 수행한다. 기본/False는 차단된다.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "운영자가 승인한 재시작 사유. 결과 JSON과 감사 로그 맥락에 남긴다.",
+            },
+        },
+        "required": ["method", "confirm", "reason"],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -492,6 +622,30 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
         _ASSET_INVENTORY_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _DEPLOY_STATUS_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _RECIPE_VALIDATE_TOOL,
+        scope=ToolScope.DEVELOPMENT,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _SKILL_VALIDATE_TOOL,
+        scope=ToolScope.DEVELOPMENT,
+        risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _RESTART_RUNTIME_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.HIGH,
         operator_gate_required=True,
     ),
 )
