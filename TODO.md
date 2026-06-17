@@ -95,6 +95,10 @@
 
 ## Done
 
+### 2026-06-17
+
+- [x] **BIZ-380: Cron one-shot 알림 메타데이터와 실행 컨텍스트 가드 추가** — cron native tool schema에 `run_once`/`max_runs`/`expires_at` metadata를 노출하고, `handle_cron_action()`이 one-shot metadata를 검증·정규화해 `CronScheduler.add_job()`으로 전달하도록 했다. `process_cron_message()` 경로는 구조적 context flag로 cron mutation(add/remove/enable/disable)을 차단하며 `list`는 유지한다. 회귀 테스트: `tests/unit/test_agent.py -k 'cron'`, `tests/unit/test_tool_schemas.py`, 전체 `tests/unit/` 통과. (2026-06-17)
+
 ### 2026-06-13
 
 - [x] **BIZ-368: MCP tools capability gate 추가** — MCP 서버 initialize 결과의 `tools` capability를 확인한 뒤에만 `list_tools()`를 호출하도록 수정해 prompt-only/resource-only 서버를 연결 실패로 오인하지 않게 했다. tools capability가 없는 서버는 connected server로 기록하되 loaded tools 0개로 로그를 남기고, initialize 실패와 tools/list 실패 메시지를 구분한다. 회귀 테스트 3개 추가(`tests/unit/test_mcp_client.py`: prompt-only 미호출 연결, tools capability 도구 등록 유지, tools/list 실패 시 다른 서버 계속 연결) (2026-06-13)

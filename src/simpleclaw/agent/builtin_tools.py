@@ -884,6 +884,8 @@ def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
 def handle_cron_action(
     routing: dict,
     cron_scheduler: CronScheduler | None,
+    *,
+    allow_mutation: bool = True,
 ) -> str:
     """ReAct 루프에서 발생한 cron 액션을 처리한다.
 
@@ -897,6 +899,12 @@ def handle_cron_action(
     if cron_action == "list":
         return _cron_list(cron_scheduler)
 
+    if not allow_mutation and cron_action in {"add", "remove", "enable", "disable"}:
+        return (
+            "Error: cron mutation is not allowed in cron execution context. "
+            "Nested scheduled jobs must not add, remove, enable, or disable cron jobs."
+        )
+
     if cron_action == "add":
         from simpleclaw.daemon.models import ActionType
 
@@ -907,6 +915,55 @@ def handle_cron_action(
 
         if not name or not cron_expr or not action_ref:
             return "Error: name, cron_expression, action_reference are required."
+
+        metadata: dict[str, object] = {}
+        run_once_raw = routing.get("run_once")
+        if isinstance(run_once_raw, str):
+            normalized_run_once = run_once_raw.strip().lower()
+            if normalized_run_once in {"true", "1", "yes"}:
+                run_once_raw = True
+            elif normalized_run_once in {"false", "0", "no"}:
+                run_once_raw = False
+            else:
+                return "Error: run_once must be a boolean."
+        elif run_once_raw is not None and not isinstance(run_once_raw, bool):
+            return "Error: run_once must be a boolean."
+        run_once = None if run_once_raw is None else bool(run_once_raw)
+        if run_once is not None:
+            metadata["run_once"] = run_once
+
+        max_runs_raw = routing.get("max_runs")
+        max_runs: int | None = None
+        if max_runs_raw is not None:
+            try:
+                max_runs = int(max_runs_raw)
+            except (TypeError, ValueError):
+                return "Error: max_runs must be an integer."
+            if max_runs < 1:
+                return "Error: max_runs must be >= 1."
+
+        if run_once is True:
+            if max_runs is None:
+                max_runs = 1
+            elif max_runs != 1:
+                return "Error: run_once=True requires max_runs=1."
+        if max_runs is not None:
+            metadata["max_runs"] = max_runs
+
+        expires_at_raw = routing.get("expires_at")
+        if expires_at_raw:
+            if not isinstance(expires_at_raw, str):
+                return "Error: expires_at must be an ISO datetime string."
+            try:
+                expires_at = datetime.fromisoformat(
+                    expires_at_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return "Error: expires_at must be a valid ISO datetime string."
+            now = datetime.now(expires_at.tzinfo) if expires_at.tzinfo else datetime.now()
+            if expires_at <= now:
+                return "Error: expires_at must be in the future."
+            metadata["expires_at"] = expires_at
 
         action_type = (
             ActionType.RECIPE if action_type_str == "recipe"
@@ -922,6 +979,7 @@ def handle_cron_action(
                 cron_expression=cron_expr,
                 action_type=action_type,
                 action_reference=action_ref,
+                **metadata,
             )
             return (
                 f"Success: cron job created.\n"

@@ -204,6 +204,19 @@ class TestCronExclusion:
         tool_names = [t.name for t in tools]
         assert "cron" in tool_names
 
+    def test_cron_schema_exposes_one_shot_metadata(self):
+        """cron 도구는 one-shot/temporary metadata 필드를 LLM에 노출해야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        cron_tool = next(tool for tool in tools if tool.name == "cron")
+        props = cron_tool.parameters["properties"]
+
+        assert props["run_once"]["type"] == "boolean"
+        assert props["max_runs"]["type"] == "integer"
+        assert props["max_runs"]["minimum"] == 1
+        assert props["expires_at"]["type"] == "string"
+        assert "metadata" in cron_tool.description
+        assert "mutation" in cron_tool.description
+
 
 # ---------------------------------------------------------------------------
 # 7. 도구 이름이 언더스코어 사용 (하이픈 미사용)

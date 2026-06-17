@@ -106,6 +106,7 @@ class ToolLoopState:
     on_text_delta: TextDeltaCallback | None = None
     on_progress: ProgressCallback | None = None
     operator_tools: bool = False
+    allow_cron_mutation: bool = True
 
 
 @dataclass
@@ -301,8 +302,14 @@ class ToolLoopRunner:
                 )
                 try:
                     dispatch = self._orchestrator._dispatch_tool_call
-                    if "operator_tools" in inspect.signature(dispatch).parameters:
-                        result = await dispatch(tc, operator_tools=state.operator_tools)
+                    dispatch_params = inspect.signature(dispatch).parameters
+                    dispatch_kwargs: dict[str, Any] = {}
+                    if "operator_tools" in dispatch_params:
+                        dispatch_kwargs["operator_tools"] = state.operator_tools
+                    if "allow_cron_mutation" in dispatch_params:
+                        dispatch_kwargs["allow_cron_mutation"] = state.allow_cron_mutation
+                    if dispatch_kwargs:
+                        result = await dispatch(tc, **dispatch_kwargs)
                     else:
                         # 기존 테스트/플러그인이 _dispatch_tool_call(tc) 형태로
                         # monkeypatch한 경우를 보존한다.

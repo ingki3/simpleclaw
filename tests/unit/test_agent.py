@@ -1,5 +1,6 @@
 """Tests for the agent orchestrator."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +16,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_web_fetch,
     resolve_safe_path,
 )
-from simpleclaw.llm.models import ToolCall
+from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
 @pytest.fixture
@@ -507,6 +508,118 @@ class TestCronToolIntegration:
         assert "daily-news" in result
         mock_scheduler.add_job.assert_called_once()
 
+    def test_handle_cron_action_add_passes_one_shot_metadata(self):
+        from simpleclaw.daemon.models import ActionType, CronJob
+
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        mock_scheduler.add_job.return_value = CronJob(
+            name="one-shot-reminder",
+            cron_expression="0 20 17 6 *",
+            action_type=ActionType.PROMPT,
+            action_reference="문서 확인 알림을 보내라",
+            enabled=True,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            run_once=True,
+            max_runs=1,
+            expires_at=expires_at,
+        )
+
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "one-shot-reminder",
+            "cron_expression": "0 20 17 6 *",
+            "action_type": "prompt",
+            "action_reference": "문서 확인 알림을 보내라",
+            "run_once": True,
+            "max_runs": 1,
+            "expires_at": expires_at.isoformat(),
+        }, mock_scheduler)
+
+        assert "Success" in result
+        mock_scheduler.add_job.assert_called_once_with(
+            name="one-shot-reminder",
+            cron_expression="0 20 17 6 *",
+            action_type=ActionType.PROMPT,
+            action_reference="문서 확인 알림을 보내라",
+            run_once=True,
+            max_runs=1,
+            expires_at=expires_at,
+        )
+
+    def test_handle_cron_action_rejects_conflicting_one_shot_metadata(self):
+        mock_scheduler = MagicMock()
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "bad-one-shot",
+            "cron_expression": "0 20 17 6 *",
+            "action_type": "prompt",
+            "action_reference": "알림을 보내라",
+            "run_once": True,
+            "max_runs": 2,
+        }, mock_scheduler)
+
+        assert "max_runs" in result
+        mock_scheduler.add_job.assert_not_called()
+
+    def test_handle_cron_action_rejects_mutating_actions_in_cron_context(self):
+        mock_scheduler = MagicMock()
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "nested-reminder",
+            "cron_expression": "0 20 * * *",
+            "action_type": "prompt",
+            "action_reference": "알림을 등록해줘",
+        }, mock_scheduler, allow_mutation=False)
+
+        assert "not allowed" in result
+        mock_scheduler.add_job.assert_not_called()
+
+        mock_scheduler.list_jobs.return_value = []
+        list_result = handle_cron_action(
+            {"skill_name": "cron", "cron_action": "list"},
+            mock_scheduler,
+            allow_mutation=False,
+        )
+        assert "없습니다" in list_result
+
+    def test_handle_cron_action_recurring_without_metadata_still_supported(self):
+        from simpleclaw.daemon.models import ActionType, CronJob
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        mock_scheduler.add_job.return_value = CronJob(
+            name="daily-news",
+            cron_expression="15 20 * * *",
+            action_type=ActionType.PROMPT,
+            action_reference="뉴스 정리",
+            enabled=True,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "daily-news",
+            "cron_expression": "15 20 * * *",
+            "action_type": "prompt",
+            "action_reference": "뉴스 정리",
+        }, mock_scheduler)
+
+        assert "Success" in result
+        mock_scheduler.add_job.assert_called_once_with(
+            name="daily-news",
+            cron_expression="15 20 * * *",
+            action_type=ActionType.PROMPT,
+            action_reference="뉴스 정리",
+        )
+
     def test_handle_cron_action_list(self):
         mock_scheduler = MagicMock()
         mock_scheduler.list_jobs.return_value = []
@@ -550,6 +663,44 @@ class TestCronToolIntegration:
         tc = ToolCall(id="call_1", name="cron", arguments={"cron_action": "list"})
         result = await orchestrator._dispatch_tool_call(tc)
         assert "없습니다" in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_process_cron_message_disables_cron_mutations(self, config_file):
+        """cron 실행 진입점은 프롬프트 문구와 무관하게 cron mutation을 막는다."""
+        orchestrator = AgentOrchestrator(config_file)
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        orchestrator.set_cron_scheduler(mock_scheduler)
+
+        tool_response = LLMResponse(
+            text="",
+            backend_name="test",
+            model="test",
+            tool_calls=[ToolCall(
+                id="call_1",
+                name="cron",
+                arguments={
+                    "cron_action": "add",
+                    "name": "nested-reminder",
+                    "cron_expression": "0 20 * * *",
+                    "action_type": "prompt",
+                    "action_reference": "알림을 설정해줘",
+                },
+            )],
+        )
+        final_response = LLMResponse(text="차단했습니다.", backend_name="test", model="test")
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(side_effect=[tool_response, final_response])
+
+        result = await orchestrator.process_cron_message("예약 작업 실행")
+
+        assert result == "차단했습니다."
+        mock_scheduler.add_job.assert_not_called()
+        second_request = orchestrator._router.send.call_args_list[1][0][0]
+        tool_messages = [m for m in second_request.messages if m.get("role") == "tool"]
+        assert tool_messages
+        assert "not allowed" in tool_messages[-1]["content"]
 
     def test_handle_cron_action_recipe_type(self):
         from simpleclaw.daemon.models import ActionType, CronJob
