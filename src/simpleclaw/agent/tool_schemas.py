@@ -275,7 +275,8 @@ _CLARIFY_TOOL = ToolDefinition(
 _CRON_TOOL = ToolDefinition(
     name="cron",
     description="크론 스케줄 관리. 반복/예약 작업을 등록, 조회, 삭제, 활성화/비활성화한다. "
-                "사용자가 '~시에 ~해줘', '매일 ~시에 알려줘' 같은 요청을 하면 이 도구를 사용한다.",
+                "반복 또는 one-shot 여부는 run_once/max_runs/expires_at metadata로 명시한다. "
+                "cron 실행 컨텍스트 안에서는 list 외 mutation(add/remove/enable/disable)이 허용되지 않는다.",
     parameters={
         "type": "object",
         "properties": {
@@ -300,6 +301,19 @@ _CRON_TOOL = ToolDefinition(
             "action_reference": {
                 "type": "string",
                 "description": "recipe일 때는 레시피 파일 경로, prompt일 때는 실행할 프롬프트 텍스트",
+            },
+            "run_once": {
+                "type": "boolean",
+                "description": "True이면 한 번 실행 후 자동 비활성/정리되는 one-shot 작업으로 등록한다.",
+            },
+            "max_runs": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "최대 실행 횟수. run_once=True이면 반드시 1이어야 하며 생략 시 1로 정규화된다.",
+            },
+            "expires_at": {
+                "type": "string",
+                "description": "작업 만료 시각 ISO-8601 문자열. 현재 시각보다 미래여야 한다.",
             },
         },
         "required": ["cron_action"],

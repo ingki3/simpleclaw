@@ -27,7 +27,11 @@ from simpleclaw.llm.models import ToolCall
 
 
 async def dispatch_tool_call(
-    orchestrator: Any, tool_call: ToolCall, *, operator_tools: bool = False
+    orchestrator: Any,
+    tool_call: ToolCall,
+    *,
+    operator_tools: bool = False,
+    allow_cron_mutation: bool = True,
 ) -> str:
     """ToolCall을 적절한 핸들러로 라우팅하여 실행 결과를 반환한다."""
     name = tool_call.name
@@ -63,7 +67,11 @@ async def dispatch_tool_call(
     if name == "search_memory":
         return await orchestrator._search_memory(args)
     if name == "cron":
-        return handle_cron_action(args, orchestrator._cron_scheduler)
+        return handle_cron_action(
+            args,
+            orchestrator._cron_scheduler,
+            allow_mutation=allow_cron_mutation,
+        )
     if name == "runtime_status":
         if not operator_tools:
             return "Error: runtime_status is available only in operator context."
