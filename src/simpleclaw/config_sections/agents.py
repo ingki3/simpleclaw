@@ -167,6 +167,17 @@ _RECIPES_DEFAULTS: dict = {
     "dir": "~/.simpleclaw-agent/default/recipes",
 }
 
+_SKILL_LEARNING_DEFAULTS: dict = {
+    "enabled": False,
+    "min_tool_calls": 2,
+    "min_distinct_tools": 2,
+    "min_final_chars": 500,
+    "suggestions_file": "~/.simpleclaw-agent/default/skill_suggestions.jsonl",
+    "target_dir": None,
+    "require_operator_accept": True,
+    "max_trace_observation_chars": 1200,
+}
+
 
 def load_recipes_config(config_path: str | Path) -> dict:
     """config.yaml 에서 레시피 디렉터리 설정을 로드한다 (BIZ-202).
@@ -194,6 +205,36 @@ def load_recipes_config(config_path: str | Path) -> dict:
 
     return {
         "dir": recipes.get("dir", _RECIPES_DEFAULTS["dir"]),
+    }
+
+
+def load_skills_learning_config(config_path: str | Path) -> dict:
+    """config.yaml의 ``skills.learning`` 블록을 안전한 기본값으로 보강해 로드한다."""
+    config_path = Path(config_path)
+    raw: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            skills = data.get("skills", {}) if isinstance(data, dict) else {}
+            raw = skills.get("learning", {}) if isinstance(skills, dict) else {}
+        except (yaml.YAMLError, OSError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _SKILL_LEARNING_DEFAULTS
+    target_dir = raw.get("target_dir", defaults["target_dir"])
+    if isinstance(target_dir, str) and not target_dir.strip():
+        target_dir = None
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "min_tool_calls": _coerce_int_config(raw.get("min_tool_calls", defaults["min_tool_calls"]), defaults["min_tool_calls"], minimum=1),
+        "min_distinct_tools": _coerce_int_config(raw.get("min_distinct_tools", defaults["min_distinct_tools"]), defaults["min_distinct_tools"], minimum=1),
+        "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
+        "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
+        "target_dir": target_dir,
+        "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
+        "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
     }
 
 

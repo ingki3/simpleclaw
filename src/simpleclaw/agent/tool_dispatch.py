@@ -12,6 +12,7 @@ from simpleclaw.agent.recipe_validate import handle_recipe_validate
 from simpleclaw.agent.restart_runtime import handle_restart_runtime
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
+from simpleclaw.agent.skill_learning_tool import handle_skill_learning
 from simpleclaw.agent.builtin_tools import (
     handle_clarify,
     handle_cron_action,
@@ -121,6 +122,14 @@ async def dispatch_tool_call(
             args,
             config_path=orchestrator._config_path,
             scheduler=orchestrator._cron_scheduler,
+        )
+    if name == "skill_learning":
+        if not operator_tools:
+            return "Error: skill_learning is available only in operator context."
+        return handle_skill_learning(
+            args,
+            config=orchestrator._skill_learning_config,
+            skills_config=orchestrator._skills_config,
         )
     if name == "clarify":
         return handle_clarify(

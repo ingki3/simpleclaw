@@ -589,6 +589,27 @@ _RESTART_RUNTIME_TOOL = ToolDefinition(
 )
 
 
+_SKILL_LEARNING_TOOL = ToolDefinition(
+    name="skill_learning",
+    description=(
+        "운영자 전용 skill learning review 도구. 성공한 복잡 tool trace에서 생성된 "
+        "pending skill 후보를 list/show/accept/reject/materialize 한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["list", "show", "accept", "reject", "materialize"]},
+            "id": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "all"]},
+            "reason": {"type": "string"},
+            "target_dir": {"type": "string"},
+            "overwrite": {"type": "boolean"},
+        },
+        "required": ["action"],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -644,6 +665,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _RESTART_RUNTIME_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.HIGH,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _SKILL_LEARNING_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.HIGH,
         operator_gate_required=True,
