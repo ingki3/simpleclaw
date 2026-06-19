@@ -86,6 +86,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "recipe_validate",
         "skill_validate",
         "restart_runtime",
+        "skill_learning",
     }
     assert runtime_names.isdisjoint(protected_names)
 
@@ -105,6 +106,19 @@ def test_builtin_tool_names_follow_registry_underscore_names():
 def test_dispatch_name_validation_accepts_registry_names():
     """dispatch mapping이 registry와 어긋나면 부팅 시점에 잡을 수 있어야 한다."""
     validate_dispatch_tool_names(native_tool_names(cron_available=True))
+
+
+def test_skill_learning_tool_operator_only():
+    """skill_learning은 operator gate가 열린 context에만 노출된다."""
+    runtime_names = native_tool_names(cron_available=True)
+    operator_names = native_tool_names(
+        cron_available=True,
+        scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+        operator_gate=True,
+    )
+
+    assert "skill_learning" not in runtime_names
+    assert "skill_learning" in operator_names
 
 
 def test_dispatch_name_validation_rejects_missing_or_unknown_names():
