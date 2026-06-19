@@ -29,6 +29,7 @@ from simpleclaw.config import (
     load_persona_config,
     load_recipes_config,
     load_security_config,
+    load_skills_learning_config,
 )
 from simpleclaw.llm.models import (
     LLMRequest,
@@ -56,6 +57,15 @@ from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills.learning import (
+    SkillSuggestion,
+    SkillSuggestionStore,
+    build_skill_candidate_prompt,
+    is_complex_successful_trace,
+    snapshots_from_trace,
+    suggestion_from_candidate_payload,
+    trace_fingerprint,
+)
 from simpleclaw.skills.models import SkillDefinition
 
 from simpleclaw.agent import (
@@ -80,6 +90,7 @@ from simpleclaw.agent.context_retrieval import (
 )
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.tool_loop import (
+    ToolLoopResult,
     ToolLoopRunner,
     ToolLoopState,
 )
@@ -122,6 +133,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "recipe_validate",
     "skill_validate",
     "restart_runtime",
+    "skill_learning",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
@@ -560,6 +572,7 @@ class AgentOrchestrator:
         self._persona_config = persona_config
         skills_config = self._load_skills_config()
         self._skills_config = skills_config
+        self._skill_learning_config = load_skills_learning_config(config_path)
 
         # Cron scheduler — build_tool_definitions에서 참조하므로 리로드 전에 초기화
         self._cron_scheduler: CronScheduler | None = None
@@ -855,12 +868,22 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                response_text = await self._tool_loop(
-                    text,
-                    attachments=attachments,
-                    on_text_delta=on_text_delta,
-                    on_progress=on_progress,
-                )
+                if self._skill_learning_config.get("enabled", False):
+                    tool_loop_result = await self._run_tool_loop_result(
+                        text,
+                        attachments=attachments,
+                        on_text_delta=on_text_delta,
+                        on_progress=on_progress,
+                    )
+                    response_text = tool_loop_result.text
+                else:
+                    response_text = await self._tool_loop(
+                        text,
+                        attachments=attachments,
+                        on_text_delta=on_text_delta,
+                        on_progress=on_progress,
+                    )
+                    tool_loop_result = ToolLoopResult(response_text)
 
                 # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
                 # 종결했을 수 있다. 대화 이력 저장은 항상 "질문 + 번호 옵션"
@@ -875,6 +898,9 @@ class AgentOrchestrator:
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
+                )
+                await self._capture_skill_learning_candidate(
+                    text, response_text, tool_loop_result, list(msg_ids)
                 )
                 return response_text
             finally:
@@ -944,6 +970,67 @@ class AgentOrchestrator:
             )
         except Exception:  # noqa: BLE001 — proactive 후보 실패가 사용자 응답을 깨면 안 된다.
             logger.exception("Conversation-end proactive hook failed")
+
+    async def _capture_skill_learning_candidate(
+        self,
+        user_text: str,
+        assistant_text: str,
+        result: ToolLoopResult,
+        source_msg_ids: list[int],
+    ) -> None:
+        """성공한 복잡 tool trace를 best-effort pending skill 후보로 적재한다."""
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+        try:
+            trace = list(result.trace or [])
+            if not result.success or not is_complex_successful_trace(
+                trace,
+                assistant_text,
+                min_tool_calls=int(cfg.get("min_tool_calls", 2)),
+                min_distinct_tools=int(cfg.get("min_distinct_tools", 2)),
+                min_final_chars=int(cfg.get("min_final_chars", 500)),
+            ):
+                return
+            snapshots = snapshots_from_trace(
+                trace,
+                max_observation_chars=int(cfg.get("max_trace_observation_chars", 1200)),
+            )
+            suggestion = await self._draft_skill_suggestion(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                snapshots=snapshots,
+                source_msg_ids=source_msg_ids,
+            )
+            SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+            logger.exception("Skill-learning candidate hook failed")
+
+    async def _draft_skill_suggestion(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        snapshots: list,
+        source_msg_ids: list[int],
+    ) -> SkillSuggestion:
+        """LLM으로 skill package 후보 JSON을 생성한다."""
+        fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
+        prompt = build_skill_candidate_prompt(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            trace=snapshots,
+        )
+        response = await self._router.send(LLMRequest(user_message=prompt, max_tokens=2048))
+        payload = json.loads((response.text or "{}").strip())
+        if not isinstance(payload, dict):
+            raise ValueError("Skill candidate response must be a JSON object")
+        return suggestion_from_candidate_payload(
+            payload,
+            trace_fingerprint_value=fp,
+            source_msg_ids=source_msg_ids,
+            trace=snapshots,
+        )
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.
@@ -1160,7 +1247,7 @@ class AgentOrchestrator:
             allow_cron_mutation=allow_cron_mutation,
         )
 
-    async def _tool_loop(
+    async def _run_tool_loop_result(
         self,
         text: str,
         isolated: bool = False,
@@ -1170,8 +1257,8 @@ class AgentOrchestrator:
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
         allow_cron_mutation: bool = True,
-    ) -> str:
-        """Native Function Calling 루프를 실행한다.
+    ) -> ToolLoopResult:
+        """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
         LLM에 도구 정의(tools)와 함께 메시지를 전송하고,
         tool_calls가 반환되면 실행 후 결과를 메시지에 추가하여 재호출한다.
@@ -1197,6 +1284,29 @@ class AgentOrchestrator:
             allow_cron_mutation=allow_cron_mutation,
         )
         result = await ToolLoopRunner(self).run(state)
+        return result
+
+    async def _tool_loop(
+        self,
+        text: str,
+        isolated: bool = False,
+        *,
+        attachments: list[MultimodalAttachment] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
+    ) -> str:
+        """기존 호출자를 위한 문자열 compatibility wrapper."""
+        result = await self._run_tool_loop_result(
+            text,
+            isolated,
+            attachments=attachments,
+            on_text_delta=on_text_delta,
+            on_progress=on_progress,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
+        )
         return result.text
 
     # ------------------------------------------------------------------

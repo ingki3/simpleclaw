@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from simpleclaw.agent.clarify import clarify_chat_id_var
@@ -110,10 +110,28 @@ class ToolLoopState:
 
 
 @dataclass
+class ToolTraceStep:
+    """학습/진단용 tool 실행 snapshot.
+
+    사용자 응답에는 영향을 주지 않으며, arguments와 observation은 이미 redaction 및
+    길이 제한된 preview만 담아 후속 skill-learning hook이 원본 민감값을 저장하지
+    않도록 한다.
+    """
+
+    tool_name: str
+    arguments: dict[str, Any]
+    observation_preview: str
+    success: bool = True
+
+
+@dataclass
 class ToolLoopResult:
     """ToolLoopRunner가 오케스트레이터 wrapper에 돌려주는 최종 결과."""
 
     text: str
+    trace: list[ToolTraceStep] = field(default_factory=list)
+    iterations: int = 0
+    success: bool = True
 
 
 
@@ -169,6 +187,21 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
     return False
 
 
+def _redacted_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """trace snapshot에 저장할 tool arguments에서 secret-like 값을 마스킹한다."""
+    redacted: dict[str, Any] = {}
+    for key, value in (arguments or {}).items():
+        if any(marker in str(key).lower() for marker in ("token", "secret", "password", "api_key", "apikey")):
+            redacted[str(key)] = "[REDACTED_SECRET]"
+        elif isinstance(value, dict):
+            redacted[str(key)] = _redacted_arguments(value)
+        elif isinstance(value, str):
+            redacted[str(key)] = value[:500]
+        else:
+            redacted[str(key)] = value
+    return redacted
+
+
 def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) -> str:
     """도구 실행 후 LLM final 텍스트가 비었을 때 사용자 가시 fallback을 만든다."""
     if not tool_results:
@@ -205,6 +238,7 @@ class ToolLoopRunner:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
         invoked_tool_sequence: list[str] = []
         tool_results_for_empty_final: list[tuple[str, str]] = []
+        trace: list[ToolTraceStep] = []
         agent_browser_call_count = 0
         prev_snapshot = state.previous_mutation_snapshot
 
@@ -226,7 +260,12 @@ class ToolLoopRunner:
                     response = await self._orchestrator._router.send(request)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Tool loop LLM error: %s", exc)
-                return ToolLoopResult(f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}")
+                return ToolLoopResult(
+                    f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}",
+                    trace=trace,
+                    iterations=i + 1,
+                    success=False,
+                )
 
             legacy_action = None
             if not response.tool_calls:
@@ -242,7 +281,7 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
-                    return ToolLoopResult(final_text)
+                    return ToolLoopResult(final_text, trace=trace, iterations=i + 1)
                 if tool_results_for_empty_final:
                     logger.warning(
                         "Tool loop [%d] empty final answer after tool results; "
@@ -251,8 +290,10 @@ class ToolLoopRunner:
                     )
                     return ToolLoopResult(
                         fallback_for_empty_final_after_tools(tool_results_for_empty_final),
+                        trace=trace,
+                        iterations=i + 1,
                     )
-                return ToolLoopResult(_EMPTY_DIRECT_RESPONSE_MESSAGE)
+                return ToolLoopResult(_EMPTY_DIRECT_RESPONSE_MESSAGE, trace=trace, iterations=i + 1)
 
             logger.info("Tool loop [%d] %d tool call(s)", i + 1, len(response.tool_calls))
             assistant_msg: dict[str, Any] = {
@@ -293,6 +334,14 @@ class ToolLoopRunner:
                             "name": tc.name,
                             "content": result[:3000],
                         })
+                        trace.append(
+                            ToolTraceStep(
+                                tool_name=tc.name,
+                                arguments=_redacted_arguments(tc.arguments),
+                                observation_preview=sanitize_tool_output(result)[:1200],
+                                success=False,
+                            )
+                        )
                         continue
 
                 progress_kind, progress_name = self._orchestrator._progress_identity_for_tool_call(tc)
@@ -319,12 +368,28 @@ class ToolLoopRunner:
                         state.on_progress,
                         ProgressEvent(progress_kind, progress_name, "fail", str(exc)),
                     )
+                    trace.append(
+                        ToolTraceStep(
+                            tool_name=tc.name,
+                            arguments=_redacted_arguments(tc.arguments),
+                            observation_preview=f"Error: {str(exc)[:1200]}",
+                            success=False,
+                        )
+                    )
                     raise
                 await emit_progress_event(
                     state.on_progress,
                     ProgressEvent(progress_kind, progress_name, "complete", result),
                 )
                 sanitized = sanitize_tool_output(result)
+                trace.append(
+                    ToolTraceStep(
+                        tool_name=tc.name,
+                        arguments=_redacted_arguments(tc.arguments),
+                        observation_preview=sanitized[:1200],
+                        success=not _tool_result_looks_like_explicit_error(sanitized),
+                    )
+                )
                 tool_results_for_empty_final.append((tc.name, sanitized))
                 state.messages.append({
                     "role": "tool",
@@ -349,7 +414,7 @@ class ToolLoopRunner:
                     i + 1,
                     chat_id_for_clarify,
                 )
-                return ToolLoopResult("")
+                return ToolLoopResult("", trace=trace, iterations=i + 1)
 
             prev_snapshot = self._append_mutation_footer(
                 state=state,
@@ -358,7 +423,7 @@ class ToolLoopRunner:
             )
 
         forced_text = await self._force_final_answer(state, invoked_tool_sequence)
-        return ToolLoopResult(forced_text)
+        return ToolLoopResult(forced_text, trace=trace, iterations=self._orchestrator._max_tool_iterations)
 
     def _append_mutation_footer(
         self,
