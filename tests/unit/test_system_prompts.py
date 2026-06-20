@@ -19,6 +19,8 @@ def test_load_system_prompt_reads_tool_usage_yaml():
     assert prompt.source_path.as_posix().endswith("prompts/system/tool_usage.yaml")
     assert "Priority for tool use:" in prompt.prompt
     assert "most specific available tool or skill" in prompt.prompt
+    assert "context clues" in prompt.prompt
+    assert "practical goal" in prompt.prompt
     assert "realtime-lookup-skill" not in prompt.prompt
     assert _TOOL_USAGE_INSTRUCTION == prompt.prompt
 
