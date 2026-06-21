@@ -6,6 +6,7 @@
 # 임시 산출물이 만들어질 수 있으므로 통째로 ignore 한다(저장소 깨끗함 보존).
 .agent
 .logs
+.log/
 specs
 # 루트의 에이전트 설정 파일만 무시 (tests/fixtures/agent.md 등 하위 경로는 추적 대상)
 /AGENT.md
