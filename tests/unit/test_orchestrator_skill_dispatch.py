@@ -276,11 +276,19 @@ async def test_execute_registered_skill_preserves_quoted_args(
     orch._skills_by_name = {skill.name: skill}
     captured: dict[str, object] = {}
 
-    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+    async def fake_run_skill(
+        skill_arg,
+        args=None,
+        timeout=60,
+        *,
+        metrics=None,
+        env_passthrough=None,
+    ):
         captured["skill"] = skill_arg
         captured["args"] = args
         captured["timeout"] = timeout
         captured["metrics"] = metrics
+        captured["env_passthrough"] = env_passthrough
         return SimpleNamespace(output="ok", success=True)
 
     monkeypatch.setattr(
@@ -320,9 +328,17 @@ async def test_execute_skill_prefers_registered_skill_when_command_also_present(
         command_calls.append((skill_name, command))
         return "raw-shell"
 
-    async def fake_run_skill(skill_arg, args=None, timeout=60, *, metrics=None):
+    async def fake_run_skill(
+        skill_arg,
+        args=None,
+        timeout=60,
+        *,
+        metrics=None,
+        env_passthrough=None,
+    ):
         captured["skill"] = skill_arg
         captured["args"] = args
+        captured["env_passthrough"] = env_passthrough
         return SimpleNamespace(output="registered-skill", success=True)
 
     monkeypatch.setattr(orch, "_execute_command", fake_command)
