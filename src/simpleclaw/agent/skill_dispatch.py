@@ -213,6 +213,7 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
             args=args,
             timeout=orchestrator._skill_timeout,
             metrics=orchestrator._metrics,
+            env_passthrough=orchestrator._env_passthrough,
         )
         logger.info("Skill '%s' executed: success=%s", skill_name, result.success)
         return result.output

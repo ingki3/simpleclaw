@@ -122,6 +122,30 @@ class TestSkillExecutor:
         assert result.output == "test-trace-xyz"
 
     @pytest.mark.asyncio
+    async def test_sensitive_env_requires_explicit_passthrough(self, tmp_path, monkeypatch):
+        """API 키류 환경변수는 기본 차단되고, passthrough 지정 시에만 전달된다."""
+        script = tmp_path / "echo_env.py"
+        script.write_text(
+            "import os\n"
+            "for key in ['GOOGLE_MAPS_API_KEY', 'NAVER_CLIENT_SECRET']:\n"
+            "    print(f'{key}=' + ('SET' if os.environ.get(key) else 'MISSING'))\n"
+        )
+        skill = _make_skill("env-echo", str(script))
+        monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-google-maps-key")
+        monkeypatch.setenv("NAVER_CLIENT_SECRET", "test-naver-secret")
+
+        blocked = await execute_skill(skill)
+        assert "GOOGLE_MAPS_API_KEY=MISSING" in blocked.output
+        assert "NAVER_CLIENT_SECRET=MISSING" in blocked.output
+
+        allowed = await execute_skill(
+            skill,
+            env_passthrough=["GOOGLE_MAPS_API_KEY", "NAVER_CLIENT_SECRET"],
+        )
+        assert "GOOGLE_MAPS_API_KEY=SET" in allowed.output
+        assert "NAVER_CLIENT_SECRET=SET" in allowed.output
+
+    @pytest.mark.asyncio
     async def test_attempts_field_is_one_on_first_success(self):
         """기본 동작: 첫 시도에 성공하면 ``attempts == 1``."""
         skill = _make_skill(
