@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -53,6 +54,7 @@ from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security import CommandGuard
+from simpleclaw.security.secrets import default_manager
 from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
@@ -140,6 +142,30 @@ validate_dispatch_tool_names(
     scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
     operator_gate=True,
 )
+
+
+def _inject_env_secret_refs(env_secret_refs: object) -> None:
+    """config의 시크릿 참조를 스킬 실행용 환경변수로 주입한다.
+
+    런타임 스킬은 기존 CLI 생태계와 호환되도록 API 키를 환경변수로 읽는 경우가
+    많다. 평문 config/LaunchAgent 대신 암호화 vault에는 ``file:<name>`` 참조를
+    저장하고, 봇 프로세스 시작 시 필요한 키만 ``os.environ``에 복원한다.
+    실제 자식 프로세스 전달 여부는 ``security.env_passthrough``가 별도로 제어한다.
+    """
+    if not isinstance(env_secret_refs, dict):
+        return
+
+    manager = default_manager()
+    for env_name, ref in env_secret_refs.items():
+        if not isinstance(env_name, str) or not env_name:
+            continue
+        if not isinstance(ref, str) or not ref:
+            continue
+        value = manager.resolve(ref)
+        if not value:
+            logger.warning("Configured env secret could not be resolved: %s", env_name)
+            continue
+        os.environ[env_name] = value
 
 # 시스템 프롬프트에 추가할 도구 사용 안내.
 #
@@ -661,6 +687,7 @@ class AgentOrchestrator:
             enabled=guard_config.get("enabled", True),
         )
         self._env_passthrough = security_config.get("env_passthrough", [])
+        _inject_env_secret_refs(security_config.get("env_secret_refs", {}))
 
         # Multi-turn tool execution budget
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)

@@ -48,6 +48,7 @@ async def execute_skill(
     timeout: int = 60,
     *,
     metrics: MetricsCollector | None = None,
+    env_passthrough: list[str] | None = None,
 ) -> SkillResult:
     """스킬의 대상 스크립트를 비동기 서브프로세스로 실행한다.
 
@@ -61,6 +62,8 @@ async def execute_skill(
         timeout: 최대 실행 시간 (초)
         metrics: 타임아웃 시 ``kill_process_group`` 결과와 재시도 카운터를 누적할
             메트릭 수집기. None이면 기록되지 않으며 기존 동작과 호환된다.
+        env_passthrough: 보안 필터의 민감 키 차단에도 스킬 자식 프로세스에
+            전달할 환경변수 이름 목록.
 
     Returns:
         출력, 종료 코드, 에러 정보, 시도 횟수를 포함하는 SkillResult
@@ -89,7 +92,14 @@ async def execute_skill(
     while True:
         attempt += 1
         try:
-            result = await _run_once(skill, script, args, timeout, metrics=metrics)
+            result = await _run_once(
+                skill,
+                script,
+                args,
+                timeout,
+                metrics=metrics,
+                env_passthrough=env_passthrough,
+            )
         except SkillExecutionError as exc:
             last_error = exc
             if not _should_retry(policy, attempt, max_retries, timeout=False):
@@ -174,6 +184,7 @@ async def _run_once(
     timeout: int,
     *,
     metrics: MetricsCollector | None,
+    env_passthrough: list[str] | None,
 ) -> SkillResult:
     """스킬을 한 번 실행한다 (재시도 루프 단위).
 
@@ -185,10 +196,9 @@ async def _run_once(
     if args:
         cmd.extend(args)
 
-    # filter_env()가 민감 키를 제거한 뒤 trace_id를 주입한다 — 분산 트레이싱
-    # 식별자는 비밀이 아니므로 차단 패턴 대상이 아니지만, 명시적으로 마지막에
-    # 추가하여 환경변수 차단 패턴 변경에도 영향을 받지 않도록 한다.
-    env = inject_trace_id_env(filter_env())
+    # filter_env()가 민감 키를 제거한 뒤, 설정에서 허용한 스킬용 API 키만
+    # 다시 통과시킨다. trace_id는 비밀이 아니므로 마지막에 주입한다.
+    env = inject_trace_id_env(filter_env(passthrough=env_passthrough))
 
     try:
         process = await asyncio.create_subprocess_exec(
