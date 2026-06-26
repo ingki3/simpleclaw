@@ -104,7 +104,50 @@ Target: `realtime_lookup_skill.py`
     )
     orchestrator._skills = [skill]
     orchestrator._skills_by_name = {skill.name: skill}
-    orchestrator._skills_prompt = orchestrator._format_skills_for_prompt([skill])
+    # 프로덕션 reload 경로와 동일하게 내부 evidence 스킬은 callable 목록에서 제외한다.
+    orchestrator._skills_prompt = orchestrator._format_skills_for_prompt(
+        orchestrator._exposable_skills()
+    )
+    return skill
+
+
+def _register_normal_skill(orchestrator: AgentOrchestrator, tmp_path):
+    """LLM callable 일반 스킬을 등록해 노출 대비군으로 둔다."""
+    skill_dir = tmp_path / "local_skills" / "echo-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    script = skill_dir / "echo_skill.py"
+    script.write_text("print('hi')\n")
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: echo-skill
+description: Echo helper for testing
+---
+# echo-skill
+
+## When to use
+echo
+
+## Script
+
+Target: `echo_skill.py`
+""",
+        encoding="utf-8",
+    )
+    skill = SkillDefinition(
+        name="echo-skill",
+        description="Echo helper for testing",
+        trigger="echo",
+        skill_dir=str(skill_dir),
+        script_path=str(script),
+        scope=SkillScope.LOCAL,
+    )
+    realtime = orchestrator._skills_by_name.get("realtime-lookup-skill")
+    skills = [skill] + ([realtime] if realtime is not None else [])
+    orchestrator._skills = skills
+    orchestrator._skills_by_name = {s.name: s for s in skills}
+    orchestrator._skills_prompt = orchestrator._format_skills_for_prompt(
+        orchestrator._exposable_skills()
+    )
     return skill
 
 
@@ -136,6 +179,9 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
     assert "AI 뉴스 근거" in request.system_prompt
+    # BIZ-383: timeline validation 사용 규칙이 evidence context에 포함된다.
+    assert "timeline_validation" in request.system_prompt
+    assert "stale_or_pre_event" in request.system_prompt
     assert not any(m.get("role") == "tool" for m in request.messages)
     assert not any(m.get("tool_calls") for m in request.messages)
 
@@ -159,6 +205,38 @@ async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert not any(m.get("role") == "tool" for m in request.messages)
     assert not any(m.get("tool_calls") for m in request.messages)
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
+async def test_internal_realtime_skill_not_exposed_as_llm_callable(
+    config_file,
+    tmp_path,
+):
+    """내부 realtime skill evidence는 주입되지만 LLM callable 목록엔 노출되지 않는다."""
+    orchestrator = AgentOrchestrator(config_file)
+    _register_realtime_skill(orchestrator, tmp_path)
+    normal = _register_normal_skill(orchestrator, tmp_path)
+    orchestrator._execute_skill = AsyncMock(
+        return_value='{"kind":"news","facts":[{"claim":"근거"}]}'
+    )
+    orchestrator._router = MagicMock()
+    orchestrator._router.send = AsyncMock(return_value=_text_response("답변"))
+
+    # 내부 evidence 스킬은 by-name 매핑으로 여전히 직접 실행 가능해야 한다.
+    assert orchestrator._resolve_skill_name("realtime-lookup-skill") is not None
+    # 그러나 LLM callable 후보(_exposable_skills)에서는 제외된다.
+    exposable = {s.name for s in orchestrator._exposable_skills()}
+    assert "realtime-lookup-skill" not in exposable
+    assert normal.name in exposable
+
+    await orchestrator.process_message("오늘 AI 최신 뉴스 알려줘", 1, 1)
+
+    request = orchestrator._router.send.call_args_list[0][0][0]
+    # evidence 블록은 주입되지만 callable skill 목록엔 internal skill 이름이 없다.
+    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
+    assert "realtime-lookup-skill" not in request.system_prompt
+    assert normal.name in request.system_prompt
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})

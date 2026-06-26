@@ -381,6 +381,16 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             "Use only the evidence below for live/current facts. "
             "Do not invent numbers, dates, sources, winners, prices, or news not present here. "
             "If the evidence says it is limited, say so explicitly.",
+            # BIZ-383: 일정/상태성 질문은 timeline_validation 으로 출처의 시점 반영
+            # 범위를 검증한다. status 를 그대로 신뢰해 stale 전망을 확정처럼 말하지 말 것.
+            "If the evidence contains a `timeline_validation` object, respect its `status`: "
+            "`stale_or_pre_event` means the source only describes a future/scheduled event — "
+            "answer as a forecast, never as a confirmed result; "
+            "`current_pending` means some events finished while others remain — separate the "
+            "confirmed part from the pending part; "
+            "`partial` means results may be only partially reflected — flag the partiality; "
+            "`final` means a confirmed result — still state the as-of/source time; "
+            "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly.",
             evidence.strip() or "{}",
         ]
     )
@@ -784,9 +794,12 @@ class AgentOrchestrator:
             global_dir=self._skills_config.get("global_dir", "~/.agents/skills"),
         )
         # 이름 기반 조회용 딕셔너리 (fuzzy match에서도 사용)
+        # BIZ-383: realtime-lookup-skill 은 오케스트레이터가 LLM 루프 밖에서 직접
+        # 실행하는 내부 evidence 스킬이다. _resolve_skill_name 으로 내부 실행은 가능해야
+        # 하므로 by-name 매핑에는 남기되, LLM callable 목록/프롬프트에서는 제외한다.
         self._skills_by_name = {s.name: s for s in self._skills}
-        # 시스템 프롬프트용 스킬 목록
-        self._skills_prompt = self._format_skills_for_prompt(self._skills)
+        # 시스템 프롬프트용 스킬 목록 (내부 evidence 스킬 제외)
+        self._skills_prompt = self._format_skills_for_prompt(self._exposable_skills())
 
         # --- 레시피 리로드 (~/.simpleclaw-agent/default/recipes) ---
         # selector manifest와 선택 레시피 컨텍스트가 운영 recipe 디렉터리 변경을
@@ -1171,7 +1184,8 @@ class AgentOrchestrator:
                 text, exclude_contents=recent_contents,
             )
 
-        active_skills = self._skills
+        # BIZ-383: 내부 evidence 스킬을 LLM callable 후보(asset 선택/프롬프트)에서 제외.
+        active_skills = self._exposable_skills()
         active_recipes = getattr(self, "_recipes", [])
         active_skills_prompt = self._skills_prompt
         active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
@@ -1581,6 +1595,17 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
     # Skill execution
     # ------------------------------------------------------------------
+
+    def _exposable_skills(self) -> list[SkillDefinition]:
+        """LLM에 callable로 노출 가능한 스킬만 추린다.
+
+        BIZ-383: ``realtime-lookup-skill`` 은 오케스트레이터가 LLM 루프 밖에서 직접
+        실행해 evidence 만 주입하는 내부 스킬이다. LLM이 이를 일반 ``execute_skill``
+        대상으로 다시 호출하면 의도와 다른 raw 호출/중복 실행이 생기므로, 프롬프트
+        목록과 asset 선택 후보에서 제외한다. 내부 실행은 ``_skills_by_name`` 을 쓰는
+        ``_resolve_skill_name`` 으로 그대로 가능하다.
+        """
+        return [s for s in self._skills if s.name != _REALTIME_LOOKUP_SKILL_NAME]
 
     def _resolve_skill_name(self, name: str) -> SkillDefinition | None:
         """LLM이 반환한 스킬 이름을 등록된 스킬과 fuzzy-match한다."""
