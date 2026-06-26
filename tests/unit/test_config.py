@@ -336,6 +336,40 @@ agent:
         assert result["max_tool_iterations"] == 10
         assert result["workspace_dir"] == "/tmp/ws"
 
+    def test_goal_loop_defaults(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "agent:\n  history_limit: 5\n")
+
+        result = load_agent_config(cfg)
+
+        assert result["goal_loop"] == {
+            "enabled": True,
+            "max_rounds": 3,
+            "judge_max_tokens": 768,
+            "max_answer_chars_for_judge": 6000,
+        }
+
+    def test_goal_loop_coerces_ranges(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  goal_loop:
+    enabled: false
+    max_rounds: 0
+    judge_max_tokens: 50
+    max_answer_chars_for_judge: 100
+""",
+        )
+
+        result = load_agent_config(cfg)["goal_loop"]
+
+        assert result["enabled"] is False
+        assert result["max_rounds"] == 1
+        assert result["judge_max_tokens"] == 200
+        assert result["max_answer_chars_for_judge"] == 1000
+
 
 # ---------------------------------------------------------------------------
 # 4. load_daemon_config
