@@ -1,0 +1,19 @@
+{
+  "tool": "graphifyy",
+  "generated_at": "2026-06-26T00:08:08.618240+00:00",
+  "git_commit": "cd84409418b493780d00ae76c95be84f9d44aaf7",
+  "target": ".",
+  "mode": "code-only",
+  "cluster": "--no-label --no-viz",
+  "nodes": 8792,
+  "edges": 16444,
+  "tracked_outputs": [
+    "graphify-out/GRAPH_REPORT.md",
+    "graphify-out/graph.json",
+    "graphify-out/manifest.json"
+  ],
+  "notes": [
+    "EXTRACTED edges are navigation evidence; INFERRED edges are hints and must be verified in source.",
+    "Graphify is a development/review aid, not a CI gate."
+  ]
+}
