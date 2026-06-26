@@ -80,6 +80,12 @@ _AGENT_DEFAULTS: dict = {
         "fallback_top_k": 12,
         "max_tokens": 512,
     },
+    "goal_loop": {
+        "enabled": True,
+        "max_rounds": 3,
+        "judge_max_tokens": 768,
+        "max_answer_chars_for_judge": 6000,
+    },
 }
 
 
@@ -125,6 +131,11 @@ def _agent_with_defaults(agent: dict) -> dict:
         asset_selection = {}
     asset_defaults = _AGENT_DEFAULTS["asset_selection"]
 
+    goal_loop = agent.get("goal_loop", {})
+    if not isinstance(goal_loop, dict):
+        goal_loop = {}
+    goal_defaults = _AGENT_DEFAULTS["goal_loop"]
+
     return {
         "history_limit": agent.get(
             "history_limit", _AGENT_DEFAULTS["history_limit"]
@@ -154,6 +165,27 @@ def _agent_with_defaults(agent: dict) -> dict:
                 "fallback_top_k", asset_defaults["fallback_top_k"]
             ),
             "max_tokens": asset_selection.get("max_tokens", asset_defaults["max_tokens"]),
+        },
+        "goal_loop": {
+            "enabled": bool(goal_loop.get("enabled", goal_defaults["enabled"])),
+            "max_rounds": _coerce_int_config(
+                goal_loop.get("max_rounds", goal_defaults["max_rounds"]),
+                goal_defaults["max_rounds"],
+                minimum=1,
+            ),
+            "judge_max_tokens": _coerce_int_config(
+                goal_loop.get("judge_max_tokens", goal_defaults["judge_max_tokens"]),
+                goal_defaults["judge_max_tokens"],
+                minimum=200,
+            ),
+            "max_answer_chars_for_judge": _coerce_int_config(
+                goal_loop.get(
+                    "max_answer_chars_for_judge",
+                    goal_defaults["max_answer_chars_for_judge"],
+                ),
+                goal_defaults["max_answer_chars_for_judge"],
+                minimum=1000,
+            ),
         },
     }
 
