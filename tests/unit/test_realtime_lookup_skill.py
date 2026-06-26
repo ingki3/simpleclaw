@@ -50,6 +50,9 @@ def test_parse_args_empty_returns_empty_dict():
 def test_main_with_raw_korean_args_does_not_error(monkeypatch, capsys):
     """raw Korean args 직접 호출이 Unicode/base64 오류로 끝나지 않는다."""
     monkeypatch.setattr(
+        realtime_lookup, "discover_result_links", lambda query, limit=2: ([], [])
+    )
+    monkeypatch.setattr(
         realtime_lookup, "fetch_text", lambda url: ("", ["network disabled in test"])
     )
 
@@ -154,6 +157,7 @@ def test_extract_time_signals_collects_dates():
 
 def test_lookup_includes_timeline_validation_and_freshness(monkeypatch):
     """lookup()은 timeline_validation, freshness, limitations를 포함한다."""
+    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
     monkeypatch.setattr(
         realtime_lookup,
         "fetch_text",
@@ -176,6 +180,7 @@ def test_lookup_includes_timeline_validation_and_freshness(monkeypatch):
 
 def test_lookup_marks_pending_source_with_limitation(monkeypatch):
     """current_pending 출처는 부분 확정 한계를 limitations로 명시한다."""
+    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
     monkeypatch.setattr(
         realtime_lookup,
         "fetch_text",
@@ -194,6 +199,7 @@ def test_lookup_marks_pending_source_with_limitation(monkeypatch):
 
 def test_lookup_non_timeline_query_keeps_evidence(monkeypatch):
     """비일정 질문은 timeline 검증을 참고용으로만 두고 evidence는 유지한다."""
+    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
     monkeypatch.setattr(
         realtime_lookup,
         "fetch_text",
@@ -205,3 +211,103 @@ def test_lookup_non_timeline_query_keeps_evidence(monkeypatch):
     assert result["timeline_validation"]["is_timeline_sensitive"] is False
     assert result["evidence"]
     assert result["confidence"] == "medium"
+
+
+# ----------------------------------------------------------------------
+# multi-source 본문 추출 (검색 품질)
+# ----------------------------------------------------------------------
+
+
+def test_extract_result_links_decodes_ddg_and_filters_assets():
+    """DuckDuckGo HTML 결과에서 redirect URL을 복원하고 자산/내부 링크는 제외한다."""
+    ddg_html = """
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.a.com%2Fp1&amp;rut=x">기사1</a>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcdn.example.com%2Fapp.js">script</a>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.b.com%2Fp2&amp;rut=y">기사2</a>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.a.com%2Fp1">중복</a>
+    <a href="https://other.site/nav">non-result anchor</a>
+    """
+
+    links = realtime_lookup.extract_result_links(ddg_html, limit=5)
+
+    assert "https://news.a.com/p1" in links
+    assert "https://news.b.com/p2" in links
+    # 정적 자산(.js)·result__a 아닌 내비 앵커는 제외.
+    assert "https://cdn.example.com/app.js" not in links
+    assert "https://other.site/nav" not in links
+    # 중복은 순서를 보존하며 한 번만 남는다.
+    assert links.count("https://news.a.com/p1") == 1
+
+
+def test_gather_evidence_follows_links_to_article_bodies(monkeypatch):
+    """결과 링크를 따라 각 기사 본문을 개별 출처로 회수한다."""
+    monkeypatch.setattr(
+        realtime_lookup,
+        "discover_result_links",
+        lambda query, limit=2: (
+            ["https://news.a.com/p1", "https://news.b.com/p2"],
+            [],
+        ),
+    )
+    bodies = {
+        "https://news.a.com/p1": ("A 기사 본문 " * 30, []),
+        "https://news.b.com/p2": ("B 기사 본문 " * 30, []),
+    }
+    monkeypatch.setattr(realtime_lookup, "fetch_text", lambda url: bodies[url])
+
+    sources, limitations = realtime_lookup.gather_evidence("최신 뉴스", "news")
+
+    assert [s["url"] for s in sources] == [
+        "https://news.a.com/p1",
+        "https://news.b.com/p2",
+    ]
+    assert sources[0]["source"] == "news.a.com"
+    assert not limitations
+
+
+def test_lookup_multi_source_yields_high_confidence(monkeypatch):
+    """두 출처 본문을 확보하고 한계가 없으면 confidence가 high로 올라간다."""
+    monkeypatch.setattr(
+        realtime_lookup,
+        "discover_result_links",
+        lambda query, limit=2: (["https://a.com/x", "https://b.com/y"], []),
+    )
+    monkeypatch.setattr(
+        realtime_lookup,
+        "fetch_text",
+        lambda url: ("이정후 타율 0.332 시즌 기록 정리. " * 20, []),
+    )
+
+    result = realtime_lookup.lookup({"query": "이정후 시즌 타율"})
+
+    assert len(result["evidence"]) == 2
+    assert result["confidence"] == "high"
+    assert result["facts"][0]["source"] == "a.com, b.com"
+
+
+def test_gather_evidence_falls_back_to_serp_text_when_no_links(monkeypatch):
+    """결과 링크가 없으면 SERP 추출 텍스트로 폴백해 최소 동작을 보장한다."""
+    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
+    monkeypatch.setattr(
+        realtime_lookup, "fetch_text", lambda url: ("SERP 본문 텍스트 " * 20, [])
+    )
+
+    sources, _ = realtime_lookup.gather_evidence("오늘 뉴스", "news")
+
+    assert len(sources) == 1
+    assert sources[0]["source"] == "Naver Search"
+
+
+def test_html_to_text_strips_chrome_blocks():
+    """nav/header/footer 같은 chrome 블록은 본문 텍스트에서 제거된다."""
+    html_body = (
+        "<header>메뉴 로그인 관련검색어</header>"
+        "<article>핵심 기사 본문 내용</article>"
+        "<footer>저작권 약관 고객센터</footer>"
+    )
+
+    text = realtime_lookup._html_to_text(html_body)
+
+    assert "핵심 기사 본문 내용" in text
+    assert "메뉴 로그인" not in text
+    assert "저작권 약관" not in text

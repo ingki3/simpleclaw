@@ -23,11 +23,18 @@ import re
 import sys
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 from urllib.request import Request, urlopen
 
 _SEARCH_TIMEOUT_SECONDS = 8
+# SERP chrome 한 덩어리를 통째로 쓰던 시절의 보수적 cap. 폴백 경로에서만 쓴다.
 _MAX_SNIPPET_CHARS = 1800
+# 결과 기사 본문을 직접 추출할 때 허용하는 소스별 최대 길이.
+_MAX_SOURCE_CHARS = 2200
+# 한 질의에서 본문까지 회수할 최대 출처 수(교차검증용, 지연·타임아웃 균형).
+_MAX_SOURCES = 2
+# 읽을 만한 본문으로 인정하는 최소 길이(이 미만이면 chrome/차단 페이지로 간주).
+_MIN_READABLE_CHARS = 120
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -100,30 +107,144 @@ def build_search_url(query: str, kind: str) -> str:
     return f"https://search.naver.com/search.naver?where={where}&query={quote_plus(query)}"
 
 
-def _html_to_text(body: str) -> str:
-    """검색 결과 HTML에서 스크립트/태그를 제거해 짧은 evidence 텍스트로 축약한다."""
+def _html_to_text(body: str, limit: int = _MAX_SOURCE_CHARS) -> str:
+    """HTML에서 스크립트/페이지 chrome/태그를 제거해 본문 위주 텍스트로 축약한다.
+
+    SERP·기사 페이지 모두 내비/헤더/푸터/사이드/폼 영역이 "관련 검색어", 메뉴,
+    로그인 안내 같은 노이즈를 잔뜩 담는다. 이런 chrome 블록을 먼저 제거해 실제
+    기사·데이터 텍스트 비중을 높인 뒤 태그를 벗긴다.
+    """
     body = re.sub(r"(?is)<script.*?</script>", " ", body)
     body = re.sub(r"(?is)<style.*?</style>", " ", body)
+    body = re.sub(r"(?is)<(nav|header|footer|aside|form)\b.*?</\1>", " ", body)
     body = re.sub(r"(?is)<[^>]+>", " ", body)
     body = html.unescape(body)
     body = re.sub(r"\s+", " ", body).strip()
-    return body[:_MAX_SNIPPET_CHARS]
+    return body[:limit]
 
 
-def fetch_text(url: str) -> tuple[str, list[str]]:
-    """URL을 정적 fetch로 조회하고 evidence 텍스트와 limitation을 반환한다."""
+def _fetch_raw(url: str) -> tuple[str, list[str]]:
+    """URL을 정적 GET으로 조회해 raw HTML과 limitation을 반환한다."""
     req = Request(url, headers={"User-Agent": _USER_AGENT})
     try:
         with urlopen(req, timeout=_SEARCH_TIMEOUT_SECONDS) as response:
             charset = response.headers.get_content_charset() or "utf-8"
-            body = response.read(500_000).decode(charset, errors="replace")
+            return response.read(500_000).decode(charset, errors="replace"), []
     except Exception as exc:  # noqa: BLE001 — 스킬은 실패도 구조화 evidence로 반환
         return "", [f"fetch failed: {type(exc).__name__}: {str(exc)[:180]}"]
 
+
+def fetch_text(url: str) -> tuple[str, list[str]]:
+    """URL을 정적 fetch로 조회하고 본문 텍스트와 limitation을 반환한다."""
+    body, limitations = _fetch_raw(url)
+    if not body:
+        return "", limitations
     text = _html_to_text(body)
-    if len(text) < 120:
+    if len(text) < _MIN_READABLE_CHARS:
         return text, ["fetched page contained very little readable text"]
     return text, []
+
+
+# 결과 링크는 DuckDuckGo HTML 엔드포인트로 발견한다. 네이버 SERP 정적 HTML에는
+# 실제 결과 기사 링크가 JS 렌더링돼 들어있지 않아(자산/트래커 링크만 노출) 본문
+# 추적이 불가능한 반면, DuckDuckGo HTML은 정적으로 실제 목적지 URL을 돌려준다.
+_DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html/"
+_DDG_RESULT_RE = re.compile(
+    r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"', re.IGNORECASE
+)
+_STATIC_ASSET_SUFFIXES = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".xml")
+
+
+def _source_label(url: str) -> str:
+    """URL에서 사람이 읽을 출처 호스트 라벨을 만든다."""
+    host = urlparse(url).netloc
+    return re.sub(r"^www\.", "", host) or "Web"
+
+
+def _decode_ddg_href(href: str) -> str:
+    """DuckDuckGo redirect href(`/l/?uddg=...`)에서 실제 목적지 URL을 복원한다."""
+    href = html.unescape(href)
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urlparse(href)
+    query = parse_qs(parsed.query)
+    if query.get("uddg"):
+        return query["uddg"][0]
+    return href
+
+
+def extract_result_links(serp_html: str, limit: int = _MAX_SOURCES) -> list[str]:
+    """DuckDuckGo HTML 결과에서 실제 콘텐츠 출처 URL을 순서대로 추출한다.
+
+    SERP를 통째로 텍스트화하면 메뉴·광고 chrome만 남으므로, 결과 링크를 따라가
+    기사 본문을 직접 회수하기 위한 후보 URL을 모은다. 검색엔진 내부 링크·정적 자원
+    링크는 제외하고, 중복은 순서를 보존하며 제거한다.
+    """
+    links: list[str] = []
+    for raw in _DDG_RESULT_RE.findall(serp_html):
+        url = _decode_ddg_href(raw)
+        lowered = url.lower()
+        if not lowered.startswith(("http://", "https://")):
+            continue
+        if "duckduckgo.com" in lowered:
+            continue
+        if urlparse(lowered).path.endswith(_STATIC_ASSET_SUFFIXES):
+            continue
+        if url not in links:
+            links.append(url)
+        if len(links) >= limit:
+            break
+    return links
+
+
+def discover_result_links(
+    query: str,
+    limit: int = _MAX_SOURCES,
+) -> tuple[list[str], list[str]]:
+    """질의어로 DuckDuckGo HTML을 조회해 결과 링크 후보와 limitation을 반환한다."""
+    url = f"{_DUCKDUCKGO_ENDPOINT}?q={quote_plus(query)}"
+    body, limitations = _fetch_raw(url)
+    if not body:
+        return [], limitations
+    return extract_result_links(body, limit=limit), []
+
+
+def gather_evidence(
+    query: str,
+    kind: str,
+    max_sources: int = _MAX_SOURCES,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """검색 결과 링크를 따라 여러 출처의 본문을 회수해 evidence 소스 목록을 만든다.
+
+    1) SERP에서 결과 링크 후보를 뽑고, 2) 상위 N개의 실제 기사 본문을 추출한다.
+    링크를 못 얻거나 본문 회수에 모두 실패하면 SERP 추출 텍스트로 폴백해 최소한
+    기존 동작 수준은 보장한다.
+
+    Returns:
+        ``(sources, limitations)`` — ``sources`` 는 ``{source, url, text}`` dict 목록.
+    """
+    limitations: list[str] = []
+    links, link_lims = discover_result_links(query, limit=max_sources)
+    limitations.extend(link_lims)
+
+    sources: list[dict[str, Any]] = []
+    for url in links[:max_sources]:
+        text, lims = fetch_text(url)
+        if text and len(text) >= _MIN_READABLE_CHARS:
+            sources.append({"source": _source_label(url), "url": url, "text": text})
+        else:
+            limitations.extend(lims)
+
+    # 결과 링크에서 본문을 한 건도 못 얻으면 네이버 SERP 추출 텍스트로 폴백한다.
+    if not sources:
+        serp_url = build_search_url(query, kind)
+        text, lims = fetch_text(serp_url)
+        if text:
+            sources.append({"source": "Naver Search", "url": serp_url, "text": text})
+        else:
+            limitations.extend(lims)
+
+    return sources, limitations
 
 
 # 질문 자체가 "일정/상태/결과의 시점"에 민감한지 판정하는 cue.
@@ -369,48 +490,69 @@ def _timeline_notes(status: str, is_sensitive: bool) -> list[str]:
 
 
 def lookup(payload: dict[str, Any]) -> dict[str, Any]:
-    """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다."""
+    """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
+
+    검색 품질을 위해 SERP chrome 한 덩어리 대신 결과 링크를 따라 여러 출처의 실제
+    본문을 회수하고, 각 출처를 개별 evidence로 노출해 최종 답변이 교차검증할 수
+    있게 한다. 본문 전체를 합쳐 timeline 검증과 confidence 산정에 쓴다.
+    """
     query = str(payload.get("query") or "").strip() or "실시간 정보"
     kind = classify_query(query)
-    url = build_search_url(query, kind)
-    text, limitations = fetch_text(url)
+    sources, limitations = gather_evidence(query, kind)
     limitations = list(limitations)
     now_utc = datetime.now(timezone.utc).isoformat()
     as_of_kst = payload.get("as_of_kst")
 
+    combined_text = "\n".join(source["text"] for source in sources)
+
     # BIZ-383: 일정/상태성 질문이면 출처 본문이 어느 이벤트까지 반영했는지 검증한다.
     is_sensitive = is_timeline_sensitive_query(query)
-    timeline_validation = validate_timeline(text, is_sensitive, as_of_kst)
+    timeline_validation = validate_timeline(combined_text, is_sensitive, as_of_kst)
     status = timeline_validation["status"]
 
-    confidence = "medium" if text and not limitations else "low"
     evidence = []
-    facts = []
-    if text:
+    for source in sources:
+        # 출처별로 시간 cue를 따로 분류해, 어떤 소스가 stale/partial인지 드러낸다.
+        source_signals = extract_time_signals(source["text"])
+        source_status = classify_timeline_status(source_signals, has_text=True)
         evidence.append(
             {
-                "source": "Naver Search",
-                "url": url,
+                "source": source["source"],
+                "url": source["url"],
                 "retrieved_at_utc": now_utc,
-                "snippet": text,
-                "timeline_status": status,
+                "snippet": source["text"],
+                "timeline_status": source_status,
             }
         )
+
+    facts = []
+    if sources:
         facts.append(
             {
-                "claim": "검색 결과에서 확인 가능한 최신 정보 스니펫을 확보했습니다.",
-                "source": "Naver Search",
+                "claim": f"{len(sources)}개 출처에서 최신 정보 본문을 확보했습니다.",
+                "source": ", ".join(source["source"] for source in sources),
             }
         )
+
+    # 멀티소스 + 한계 없음이면 교차검증이 가능하므로 high, 단일 출처면 medium,
+    # 회수 본문이 없으면 low. 이후 timeline 검증 결과로 한 번 더 보수 조정한다.
+    if not combined_text:
+        confidence = "low"
+    elif not limitations and len(sources) >= 2:
+        confidence = "high"
+    elif not limitations:
+        confidence = "medium"
+    else:
+        confidence = "low"
 
     # 일정/상태성 질문에서 출처가 미확정/부분 반영이면 confidence를 보수적으로 낮추고
     # 한계를 명시해 최종 답변이 stale 전망을 확정처럼 말하지 않도록 한다.
-    if is_sensitive and text:
+    if is_sensitive and combined_text:
         if status in ("stale_or_pre_event", "no_evidence", "unknown"):
             confidence = "low"
             limitations.append(timeline_validation["notes"][0])
         elif status in ("current_pending", "partial"):
-            confidence = "low" if confidence == "medium" else confidence
+            confidence = "low" if confidence in ("medium", "high") else confidence
             limitations.append(timeline_validation["notes"][0])
 
     return {
