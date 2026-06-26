@@ -28,8 +28,20 @@ config.yaml
 .coverage
 htmlcov/
 
-# graphify 산출물(코드 분석 캐시)
-graphify-out/
+# graphify 공유 산출물
+# - commit: GRAPH_REPORT.md / graph.json / manifest.json (개발·리뷰용 코드 지도)
+# - ignore: cache/cost/html/derived memory (재생성 가능하거나 커질 수 있는 로컬 산출물)
+graphify-out/*
+!graphify-out/
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/graph.json
+!graphify-out/manifest.json
+graphify-out/cache/
+graphify-out/cost.json
+graphify-out/*.html
+graphify-out/memory/
+graphify-out/reflections/
+graphify-out/.graphify_*
 
 # OS / IDE
 .DS_Store

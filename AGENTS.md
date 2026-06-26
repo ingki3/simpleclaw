@@ -702,11 +702,75 @@ SimpleClaw/
 1. **Multica 이슈 / 코멘트** — 작업의 직접 컨텍스트. 코멘트 히스토리는 본문보다 중요한 경우가 많다 (다른 에이전트의 직전 발견, 운영자의 추가 지시 등). `multica issue comment list <id> --output json` 으로 반드시 전체 조회.
 2. **`graphify-out/GRAPH_REPORT.md`** (있는 경우) — 모듈 의존 관계, God Nodes, Surprising Connections.
 3. **`graphify-out/graph.json`** (있는 경우) — 더 자세한 노드/엣지 데이터. 키워드 검색으로 관련 노드 발견.
-4. **`src/simpleclaw/<관련 모듈>/`** — 실제 코드. graphify 가 가리킨 파일 우선.
-5. **`specs/<NNN-name>/`** — 해당 기능의 명세 (있는 경우).
-6. **`tests/unit/test_<module>.py`** — 기존 테스트가 모듈의 사실상 사용 예제.
+4. **Graphify 질의 (필요 시)** — 변경 범위가 넓으면 `graphify query`, `graphify affected`, `graphify path` 로 주변 모듈을 먼저 좁힌다.
+5. **`src/simpleclaw/<관련 모듈>/`** — 실제 코드. graphify 가 가리킨 파일 우선.
+6. **`specs/<NNN-name>/`** — 해당 기능의 명세 (있는 경우).
+7. **`tests/unit/test_<module>.py`** — 기존 테스트가 모듈의 사실상 사용 예제.
 
-**커밋 후 그래프 갱신 (해당 도구를 가진 에이전트만):** 코드 변경 커밋 후, 보유 중인 코드 그래프 추출 도구로 `graphify-out/` 을 incremental 갱신한다. 도구가 없는 에이전트는 이 단계를 건너뛰어도 무방하나, 후속 작업자를 위해 사용자에게 "graphify 갱신 필요" 를 별도 코멘트로 알린다.
+### 8.1. Graphify 사용 범위와 타겟
+
+Graphify 는 **읽기 전용 개발/리뷰 보조 도구**다. CI 게이트, 리뷰 대체물, 실제 코드 확인의 대체물로 쓰지 않는다.
+
+- 기본 갱신 타겟: 저장소 루트 `.`
+  - 이유: `src/simpleclaw/` 런타임 코드뿐 아니라 `tests/unit/`, `scripts/`, `web/admin/`, `prompts/system/` 주변 코드/설정 연결까지 한 그래프에서 보기 위함.
+  - 리뷰/탐색의 1차 관심은 항상 `src/simpleclaw/` 와 관련 `tests/unit/` 이다.
+- 공유 산출물: `graphify-out/GRAPH_REPORT.md`, `graphify-out/graph.json`, `graphify-out/manifest.json`
+- 로컬 산출물: `graphify-out/cache/`, `cost.json`, HTML, memory/reflection 파일은 commit 하지 않는다.
+- `EXTRACTED` edge 는 코드에서 나온 탐색 근거지만, `INFERRED` edge 는 힌트다. 리뷰/설계 판단 전 반드시 실제 source/test 를 열어 확인한다.
+- community label 은 비용/외부 호출 방지를 위해 기본적으로 `--no-label` 을 사용한다.
+
+### 8.2. Graphify 갱신 절차
+
+Graphify CLI 설치:
+
+```bash
+uv tool install graphifyy
+```
+
+초기/전체 갱신:
+
+```bash
+scripts/dev/update_graphify.sh --mode full
+```
+
+일반 갱신:
+
+```bash
+scripts/dev/update_graphify.sh --mode update
+```
+
+유용한 질의 예시:
+
+```bash
+graphify query "what connects skill execution to env filtering?" --graph graphify-out/graph.json --budget 1800
+graphify affected "ConversationStore" --graph graphify-out/graph.json --depth 2
+graphify path "AgentOrchestrator" "ToolLoopRunner" --graph graphify-out/graph.json
+```
+
+### 8.3. Git hook 운용
+
+저장소에는 `.githooks/` 기반 hook 이 포함되어 있다. clone 별로 1회 활성화한다.
+
+```bash
+git config core.hooksPath .githooks
+```
+
+hook 은 기본적으로 **안내만 출력**한다. 커밋/체크아웃/머지 후 다음 경로가 바뀌면 Graphify 갱신 필요성을 알려준다.
+
+- `src/simpleclaw/`
+- `tests/unit/`
+- `scripts/`
+- `web/admin/`
+- `prompts/system/`
+- `AGENTS.md`, `.gitignore`, `.githooks/`, `scripts/dev/update_graphify.sh`
+
+자동 갱신을 원하는 로컬 환경에서만 다음을 설정한다.
+
+```bash
+export SIMPLECLAW_GRAPHIFY_AUTO=1
+```
+
+자동 갱신은 commit 이후 `graphify-out/` 를 수정할 수 있으므로, 결과를 확인하고 별도 커밋에 포함한다. Graphify 를 사용할 수 없는 에이전트는 이 단계를 건너뛰어도 되지만, PR/이슈 코멘트에 "graphify 갱신 필요" 를 남긴다.
 
 ---
 

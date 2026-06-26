@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if git rev-parse --verify -q ORIG_HEAD >/dev/null; then
+  "$(git rev-parse --show-toplevel)/.githooks/graphify-update-if-needed.sh" post-merge ORIG_HEAD HEAD
+else
+  "$(git rev-parse --show-toplevel)/.githooks/graphify-update-if-needed.sh" post-merge
+fi
