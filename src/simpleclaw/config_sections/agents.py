@@ -86,6 +86,15 @@ _AGENT_DEFAULTS: dict = {
         "judge_max_tokens": 768,
         "max_answer_chars_for_judge": 6000,
     },
+    "complex_fact_workflow": {
+        "enabled": False,
+        "route_threshold": 3,
+        "max_iterations": 4,
+        "max_sources_per_slot": 3,
+        "planner_backend": "simpleclaw",
+        "enable_claim_verifier": True,
+        "enable_progress_events": True,
+    },
 }
 
 
@@ -136,6 +145,16 @@ def _agent_with_defaults(agent: dict) -> dict:
         goal_loop = {}
     goal_defaults = _AGENT_DEFAULTS["goal_loop"]
 
+    complex_fact = agent.get("complex_fact_workflow", {})
+    if not isinstance(complex_fact, dict):
+        complex_fact = {}
+    complex_defaults = _AGENT_DEFAULTS["complex_fact_workflow"]
+    planner_backend = str(
+        complex_fact.get("planner_backend", complex_defaults["planner_backend"])
+    )
+    if planner_backend not in {"simpleclaw", "dspy"}:
+        planner_backend = complex_defaults["planner_backend"]
+
     return {
         "history_limit": agent.get(
             "history_limit", _AGENT_DEFAULTS["history_limit"]
@@ -185,6 +204,43 @@ def _agent_with_defaults(agent: dict) -> dict:
                 ),
                 goal_defaults["max_answer_chars_for_judge"],
                 minimum=1000,
+            ),
+        },
+        "complex_fact_workflow": {
+            "enabled": bool(complex_fact.get("enabled", complex_defaults["enabled"])),
+            "route_threshold": _coerce_int_config(
+                complex_fact.get(
+                    "route_threshold",
+                    complex_defaults["route_threshold"],
+                ),
+                complex_defaults["route_threshold"],
+                minimum=1,
+            ),
+            "max_iterations": _coerce_int_config(
+                complex_fact.get("max_iterations", complex_defaults["max_iterations"]),
+                complex_defaults["max_iterations"],
+                minimum=1,
+            ),
+            "max_sources_per_slot": _coerce_int_config(
+                complex_fact.get(
+                    "max_sources_per_slot",
+                    complex_defaults["max_sources_per_slot"],
+                ),
+                complex_defaults["max_sources_per_slot"],
+                minimum=1,
+            ),
+            "planner_backend": planner_backend,
+            "enable_claim_verifier": bool(
+                complex_fact.get(
+                    "enable_claim_verifier",
+                    complex_defaults["enable_claim_verifier"],
+                )
+            ),
+            "enable_progress_events": bool(
+                complex_fact.get(
+                    "enable_progress_events",
+                    complex_defaults["enable_progress_events"],
+                )
             ),
         },
     }
