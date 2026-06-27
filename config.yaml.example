@@ -50,6 +50,14 @@ agent:
     bypass_below_count: 8
     fallback_top_k: 12
     max_tokens: 512
+  # BIZ-384 — /goal foreground judge loop. Streaming text deltas are disabled inside
+  # goal rounds; progress events only are emitted. Active-run /subgoal controls are
+  # intentionally out of MVP scope.
+  goal_loop:
+    enabled: true
+    max_rounds: 3
+    judge_max_tokens: 768
+    max_answer_chars_for_judge: 6000
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``

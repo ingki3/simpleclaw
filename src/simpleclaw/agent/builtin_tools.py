@@ -476,6 +476,10 @@ async def handle_web_fetch(
 # ------------------------------------------------------------------
 
 _WEB_SEARCH_MAX_RESULTS = 10
+# snippet-only 결과만 주면 작은 모델이 수치를 환각하므로, 상위 결과는 실제 본문
+# 발췌까지 동봉한다. 지연·토큰 균형을 위해 상위 N개·발췌 길이를 보수적으로 제한.
+_WEB_SEARCH_ENRICH_COUNT = 2
+_WEB_SEARCH_BODY_MAX = 1500
 
 
 def _strip_search_html(value: str) -> str:
@@ -560,13 +564,18 @@ async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]
 
 
 def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
-    """검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다."""
+    """검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다.
+
+    상위 결과에 ``body`` 발췌가 채워져 있으면 함께 노출해, 작은 모델이 snippet만
+    보고 수치를 환각하는 대신 실제 본문에서 사실을 확인하도록 유도한다.
+    """
     if not results:
         return (
             f"WEB_SEARCH_RESULTS: {query!r} — no results found.\n"
             "Try a more specific query, or use web_fetch if you already know the URL."
         )
 
+    has_body = any(item.get("body", "").strip() for item in results)
     lines = [f"WEB_SEARCH_RESULTS: {query!r} ({len(results)} results)"]
     for index, item in enumerate(results, start=1):
         lines.append(f"{index}. {item.get('title', '').strip()}")
@@ -577,15 +586,57 @@ def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str
         source = item.get("source", "").strip()
         if source:
             lines.append(f"   Source: {source}")
-    lines.append(
-        "Detailed page content is not included. Call web_fetch with a selected URL "
-        "when you need the article/page body."
-    )
+        body = item.get("body", "").strip()
+        if body:
+            lines.append(f"   Body: {body}")
+    if has_body:
+        lines.append(
+            "Top results include an extracted Body excerpt above — prefer it for "
+            "facts/numbers over the short Snippet. For other results or full content, "
+            "call web_fetch with the URL. Do not state numbers not present in the evidence."
+        )
+    else:
+        lines.append(
+            "Detailed page content is not included. Call web_fetch with a selected URL "
+            "when you need the article/page body."
+        )
     return "\n".join(lines)
 
 
-async def handle_web_search(routing: dict, search_backend=None) -> str:
-    """질의어로 후보 URL을 검색하고 title/url/snippet 중심의 compact 결과를 반환한다."""
+async def _fetch_search_result_body(url: str) -> str:
+    """검색 상위 결과의 본문을 정적 fetch로 짧게 회수한다(실패/차단 시 빈 문자열).
+
+    web_search 보강 전용 경량 헬퍼. 지연을 줄이려 헤드리스 폴백 없이 정적 fetch만
+    쓰고, 차단 페이지/오류/빈 본문은 조용히 건너뛰어 snippet만 남긴다.
+    """
+    if not url or _INTERNAL_URL_RE.match(url):
+        return ""
+    try:
+        body = await _fetch_static(url)
+    except Exception:  # noqa: BLE001 — 보강 실패는 snippet-only로 graceful degrade
+        return ""
+    if not body or body.startswith("Error:") or _looks_like_block_page(body):
+        return ""
+    body = body.strip()
+    if len(body) > _WEB_SEARCH_BODY_MAX:
+        body = body[:_WEB_SEARCH_BODY_MAX] + " …[truncated]"
+    return body
+
+
+async def handle_web_search(
+    routing: dict,
+    search_backend=None,
+    *,
+    body_fetcher=None,
+    enrich_count: int = _WEB_SEARCH_ENRICH_COUNT,
+) -> str:
+    """질의어로 후보 URL을 검색하고 title/url/snippet(+상위 본문 발췌) 결과를 반환한다.
+
+    ``body_fetcher`` 가 주어지면 상위 ``enrich_count`` 개 결과의 본문을 회수해 동봉한다.
+    snippet-only 결과만 받은 작은 모델이 수치를 환각하던 문제를 줄이기 위함이며,
+    본문 회수 실패는 조용히 snippet-only 로 degrade 한다. 테스트/호환을 위해 기본값은
+    ``None`` (보강 비활성, 기존 동작)이고 운영 dispatch 에서 실제 fetcher 를 주입한다.
+    """
     query = str(routing.get("query", "")).strip()
     if not query:
         return "Error: 'query' field is required."
@@ -605,7 +656,20 @@ async def handle_web_search(routing: dict, search_backend=None) -> str:
             f"Error: web_search failed — {str(exc)[:200]}. "
             "Try a more specific query, or use web_fetch if you already have a URL."
         )
-    return _format_web_search_results(query, results[:limit])
+
+    results = results[:limit]
+    if body_fetcher is not None and enrich_count > 0:
+        for item in results[:enrich_count]:
+            url = item.get("url", "").strip()
+            if not url:
+                continue
+            try:
+                body = await body_fetcher(url)
+            except Exception:  # noqa: BLE001 — 개별 본문 회수 실패는 무시하고 진행
+                body = ""
+            if body:
+                item["body"] = body
+    return _format_web_search_results(query, results)
 
 
 # ------------------------------------------------------------------

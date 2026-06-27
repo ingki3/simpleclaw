@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
 from simpleclaw.recipes.loader import discover_recipes
@@ -22,6 +23,57 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+
+# ------------------------------------------------------------------
+# /goal commands
+# ------------------------------------------------------------------
+GoalAction = Literal["help", "start", "unsupported"]
+
+
+@dataclass(frozen=True)
+class GoalCommand:
+    """Parsed `/goal` slash command."""
+
+    action: GoalAction
+    objective: str = ""
+    message: str = ""
+
+
+_GOAL_USAGE = (
+    "🎯 /goal 사용법:\n"
+    "  /goal <목표> — 목표 달성 여부를 judge가 확인하며 최대 몇 round 반복합니다.\n"
+    "예: /goal 최근 SimpleClaw 에러 로그를 확인하고 원인과 조치안을 정리해줘\n\n"
+    "참고: 실행 중 /subgoal, /goal cancel, /goal status는 아직 지원하지 않습니다."
+)
+
+
+def parse_goal_command(text: str) -> GoalCommand | None:
+    """Parse MVP `/goal` command forms. Non-goal slash commands return None."""
+
+    stripped = text.strip()
+    if not stripped.startswith("/goal"):
+        return None
+
+    parts = stripped.split(None, 1)
+    if parts[0] != "/goal":
+        return None
+
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if not rest or rest.lower() == "help":
+        return GoalCommand(action="help", message=_GOAL_USAGE)
+
+    if rest.lower() in {"status", "cancel", "clear", "list"}:
+        return GoalCommand(
+            action="unsupported",
+            objective=rest,
+            message=(
+                f"`/goal {rest}` 는 아직 지원하지 않습니다. "
+                "현재 MVP는 `/goal <목표>` foreground 실행만 지원합니다."
+            ),
+        )
+
+    return GoalCommand(action="start", objective=rest)
 
 # ------------------------------------------------------------------
 # /cron commands

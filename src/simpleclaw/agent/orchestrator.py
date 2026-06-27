@@ -45,6 +45,7 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.models import (
     CHANNEL_CRON_ADMIN,
+    CHANNEL_GOAL_PREFIX,
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
     MessageRole,
@@ -85,7 +86,12 @@ from simpleclaw.agent.asset_selector import (
     normalize_selector_response,
 )
 from simpleclaw.agent.clarify import ClarifyRequest, clarify_chat_id_var
-from simpleclaw.agent.commands import try_cron_command, try_recipe_command
+from simpleclaw.agent.commands import (
+    parse_goal_command,
+    try_cron_command,
+    try_recipe_command,
+)
+from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
@@ -582,6 +588,7 @@ class AgentOrchestrator:
         daemon_config = load_daemon_config(config_path)
         recipes_config = load_recipes_config(config_path)
         self._asset_selection_config = load_asset_selection_config(config_path)
+        self._goal_loop_config = agent_config.get("goal_loop", {})
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
             self._config_path,
             persona_config=persona_config,
@@ -878,6 +885,63 @@ class AgentOrchestrator:
             # 자기 시그니처를 바꾸지 않고도 contextvar 로 chat_id 를 얻는다.
             clarify_token = clarify_chat_id_var.set(chat_id)
             try:
+                # /goal 명령어 확인 — recipe dispatch 보다 먼저 처리해 `/goal` 레시피 오인 방지.
+                goal_command = parse_goal_command(text)
+                if goal_command is not None:
+                    if goal_command.action in {"help", "unsupported"}:
+                        self._save_turn(
+                            text,
+                            goal_command.message,
+                            channel=f"{CHANNEL_GOAL_PREFIX}admin",
+                        )
+                        return goal_command.message
+                    if not self._goal_loop_config.get("enabled", True):
+                        disabled = "⚠️ /goal 기능이 현재 비활성화되어 있습니다."
+                        self._save_turn(
+                            text, disabled, channel=f"{CHANNEL_GOAL_PREFIX}disabled"
+                        )
+                        return disabled
+
+                    cfg = GoalLoopConfig(
+                        max_rounds=int(self._goal_loop_config.get("max_rounds", 3)),
+                        judge_max_tokens=int(
+                            self._goal_loop_config.get("judge_max_tokens", 768)
+                        ),
+                        max_answer_chars_for_judge=int(
+                            self._goal_loop_config.get(
+                                "max_answer_chars_for_judge", 6000
+                            )
+                        ),
+                    )
+
+                    async def run_goal_round(prompt: str, **kwargs):
+                        kwargs.pop("allow_cron_mutation", None)
+                        kwargs["on_text_delta"] = None
+                        return await self._run_tool_loop_result(
+                            prompt,
+                            isolated=False,
+                            attachments=attachments,
+                            operator_tools=operator_tools,
+                            allow_cron_mutation=False,
+                            **kwargs,
+                        )
+
+                    runner = GoalLoopRunner(
+                        run_round=run_goal_round,
+                        judge_send=self._router.send,
+                        config=cfg,
+                    )
+                    goal_result = await runner.run(
+                        goal_command.objective,
+                        on_progress=on_progress,
+                    )
+                    self._save_turn(
+                        text,
+                        goal_result.final_text,
+                        channel=f"{CHANNEL_GOAL_PREFIX}{goal_result.status}",
+                    )
+                    return goal_result.final_text
+
                 # /cron 명령어 확인
                 cron_result = try_cron_command(text, self._cron_scheduler)
                 if cron_result is not None:

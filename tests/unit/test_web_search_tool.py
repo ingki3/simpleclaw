@@ -6,9 +6,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from simpleclaw.agent import builtin_tools
 from simpleclaw.agent.builtin_tools import (
+    _fetch_search_result_body,
     _parse_duckduckgo_html,
     handle_web_search,
 )
@@ -86,6 +90,98 @@ async def test_handle_web_search_requires_query():
 
     assert "query" in result
     assert "required" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_web_search_enriches_top_results_with_body():
+    """body_fetcher가 주어지면 상위 결과에 본문 발췌가 동봉된다."""
+
+    async def backend(query: str, limit: int) -> list[dict[str, str]]:
+        return [
+            {"title": "T1", "url": "https://a.com/1", "snippet": "s1", "source": "m"},
+            {"title": "T2", "url": "https://b.com/2", "snippet": "s2", "source": "m"},
+            {"title": "T3", "url": "https://c.com/3", "snippet": "s3", "source": "m"},
+        ]
+
+    fetched: list[str] = []
+
+    async def body_fetcher(url: str) -> str:
+        fetched.append(url)
+        return f"BODY of {url} with the real number 0.286"
+
+    result = await handle_web_search(
+        {"query": "kbo stats", "limit": 5},
+        search_backend=backend,
+        body_fetcher=body_fetcher,
+        enrich_count=2,
+    )
+
+    # 상위 2개만 본문 회수 → 지연/토큰 제한.
+    assert fetched == ["https://a.com/1", "https://b.com/2"]
+    assert "Body: BODY of https://a.com/1 with the real number 0.286" in result
+    assert "Body: BODY of https://b.com/2" in result
+    # 3번째 결과는 본문 없이 snippet만.
+    assert "Body: BODY of https://c.com/3" not in result
+    assert "prefer it for facts/numbers" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_web_search_without_body_fetcher_is_snippet_only():
+    """body_fetcher가 없으면 기존 snippet-only 동작과 안내문을 유지한다."""
+
+    async def backend(query: str, limit: int) -> list[dict[str, str]]:
+        return [{"title": "T", "url": "https://a.com", "snippet": "s", "source": "m"}]
+
+    result = await handle_web_search({"query": "q"}, search_backend=backend)
+
+    assert "Body:" not in result
+    assert "Detailed page content is not included" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_web_search_body_fetch_failure_degrades_gracefully():
+    """개별 본문 회수가 실패/빈 문자열이어도 snippet 결과는 그대로 반환된다."""
+
+    async def backend(query: str, limit: int) -> list[dict[str, str]]:
+        return [{"title": "T", "url": "https://a.com", "snippet": "keep me", "source": "m"}]
+
+    async def body_fetcher(url: str) -> str:
+        raise RuntimeError("boom")
+
+    result = await handle_web_search(
+        {"query": "q"},
+        search_backend=backend,
+        body_fetcher=body_fetcher,
+    )
+
+    assert "Snippet: keep me" in result
+    assert "Body:" not in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_search_result_body_skips_block_and_error(monkeypatch):
+    """차단 페이지/오류 응답은 빈 문자열로 건너뛰고, 정상 본문만 길이 제한해 반환한다."""
+    # 차단 페이지(짧은 본문) → 빈 문자열
+    monkeypatch.setattr(builtin_tools, "_fetch_static", AsyncMock(return_value="짧음"))
+    assert await _fetch_search_result_body("https://x.com") == ""
+
+    # Error: 프리픽스 → 빈 문자열
+    monkeypatch.setattr(
+        builtin_tools, "_fetch_static", AsyncMock(return_value="Error: HTTP 500")
+    )
+    assert await _fetch_search_result_body("https://x.com") == ""
+
+    # 내부/로컬 URL → fetch 없이 빈 문자열
+    assert await _fetch_search_result_body("http://127.0.0.1/admin") == ""
+
+    # 정상 본문 → 길이 제한 적용
+    long_body = "팩트 " * 2000
+    monkeypatch.setattr(
+        builtin_tools, "_fetch_static", AsyncMock(return_value=long_body)
+    )
+    out = await _fetch_search_result_body("https://x.com")
+    assert out.endswith("…[truncated]")
+    assert len(out) <= builtin_tools._WEB_SEARCH_BODY_MAX + len(" …[truncated]")
 
 
 def test_parse_duckduckgo_html_decodes_title_url_and_snippet():
