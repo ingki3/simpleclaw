@@ -37,6 +37,7 @@ async def compose_fact_answer(
                         "source_time": item.source_time,
                         "coverage": item.coverage.value,
                         "confidence": item.confidence,
+                        "raw_excerpt": item.raw_excerpt[:1200],
                     }
                     for item in slot.evidence
                 ],

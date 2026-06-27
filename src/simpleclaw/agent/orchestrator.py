@@ -977,7 +977,12 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                route_decision = classify_response_route(text)
+                route_decision = classify_response_route(
+                    text,
+                    route_threshold=int(
+                        self._complex_fact_config.get("route_threshold", 3)
+                    ),
+                )
                 if (
                     self._complex_fact_config.get("enabled", False)
                     and route_decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
@@ -1059,6 +1064,11 @@ class AgentOrchestrator:
         )
 
         cfg = self._complex_fact_config or {}
+        if str(cfg.get("planner_backend", "simpleclaw")) != "simpleclaw":
+            logger.warning(
+                "Complex fact planner backend %s is not implemented; falling back to simpleclaw",
+                cfg.get("planner_backend"),
+            )
         retriever = EvidenceRetriever(
             max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3))
         )

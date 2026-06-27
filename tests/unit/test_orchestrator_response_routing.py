@@ -111,3 +111,41 @@ async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(
     result = await orch.process_message("오늘 서울 날씨 어때?", 1, 1)
 
     assert result == "근거 기반 현재 날씨"
+
+
+@pytest.mark.asyncio
+async def test_dspy_backend_setting_warns_and_falls_back(config_file, monkeypatch, caplog):
+    text = config_file.read_text(encoding="utf-8")
+    config_file.write_text(
+        text.replace(
+            "  complex_fact_workflow:\n    enabled: false",
+            "  complex_fact_workflow:\n    enabled: true\n    planner_backend: dspy",
+        ),
+        encoding="utf-8",
+    )
+    orch = AgentOrchestrator(config_file)
+
+    class FakeRetriever:
+        async def search_for_slot(self, slot_name, query):
+            from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem
+
+            return [EvidenceItem(
+                source_url="https://official.example",
+                source_type="official",
+                claim=f"{slot_name} evidence",
+                coverage=EvidenceCoverage.FINAL,
+                confidence="high",
+            )]
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.evidence_retrieval.EvidenceRetriever",
+        lambda **kwargs: FakeRetriever(),
+    )
+    orch._router = MagicMock()
+    orch._router.send = AsyncMock(return_value=LLMResponse(text="답변"))
+
+    with caplog.at_level("WARNING"):
+        result = await orch.process_message("한국이 아직 16강 갈 가능성 있어? 경우의 수 알려줘", 1, 1)
+
+    assert result == "답변"
+    assert "not implemented; falling back to simpleclaw" in caplog.text

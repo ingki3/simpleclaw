@@ -10,7 +10,7 @@ def test_complex_fact_workflow_defaults_disabled(tmp_path):
     cfg = agent["complex_fact_workflow"]
     assert cfg["enabled"] is False
     assert cfg["route_threshold"] == 3
-    assert cfg["max_iterations"] == 4
+    assert cfg["max_iterations"] == 6
     assert cfg["max_sources_per_slot"] == 3
     assert cfg["planner_backend"] == "simpleclaw"
     assert cfg["enable_claim_verifier"] is True

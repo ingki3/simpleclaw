@@ -64,8 +64,8 @@ class EvidenceRetriever:
     def _items_from_search_output(self, slot_name: str, raw: str) -> list[EvidenceItem]:
         items: list[EvidenceItem] = []
         current_title = ""
-        coverage = _infer_coverage(raw)
-        for line in raw.splitlines():
+        lines = raw.splitlines()
+        for index, line in enumerate(lines):
             title_match = _TITLE_RE.match(line)
             if title_match:
                 current_title = title_match.group("title")[:160]
@@ -74,10 +74,12 @@ class EvidenceRetriever:
                 continue
             url = match.group(0).rstrip(".,]")
             title = current_title or line[:160]
+            block = "\n".join(lines[max(0, index - 1): min(len(lines), index + 5)])
+            coverage = _infer_coverage(block)
             items.append(EvidenceItem(
                 source_url=url,
                 source_title=title,
-                source_type=_infer_source_type(f"{title}\n{line}", url),
+                source_type=_infer_source_type(f"{title}\n{block}", url),
                 claim=f"{slot_name}: {title}",
                 coverage=coverage,
                 confidence="medium" if coverage != EvidenceCoverage.UNKNOWN else "low",
@@ -91,7 +93,7 @@ class EvidenceRetriever:
                 source_title="web_search",
                 source_type="unknown",
                 claim=f"{slot_name}: {raw[:500]}",
-                coverage=coverage,
+                coverage=EvidenceCoverage.UNKNOWN,
                 confidence="low",
                 raw_excerpt=raw[:1200],
             ))

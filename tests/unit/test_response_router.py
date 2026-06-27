@@ -42,3 +42,11 @@ def test_policy_applicability_uses_complex_workflow():
     assert decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
     assert decision.needs_rules is True
     assert decision.needs_comparison_or_conditions is True
+
+
+def test_route_threshold_can_promote_medium_complexity_question():
+    decision = classify_response_route(
+        "이 정책 적용 조건을 비교해줘",
+        route_threshold=2,
+    )
+    assert decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW

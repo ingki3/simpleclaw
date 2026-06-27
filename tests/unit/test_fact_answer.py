@@ -16,6 +16,7 @@ async def test_compose_fact_answer_uses_evidence_only():
         source_type="official",
         claim="현재 상태는 X",
         coverage=EvidenceCoverage.FINAL,
+        raw_excerpt="본문 근거 발췌",
         confidence="high",
     ))
     plan = FactPlan(task_type="complex_fact", complexity_score=3, slots=[slot])
@@ -26,3 +27,4 @@ async def test_compose_fact_answer_uses_evidence_only():
     request = send.call_args.args[0]
     assert "Use only the verified evidence" in request.system_prompt
     assert "현재 상태는 X" in request.user_message
+    assert "본문 근거 발췌" in request.user_message

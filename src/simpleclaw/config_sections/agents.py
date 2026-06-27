@@ -89,7 +89,7 @@ _AGENT_DEFAULTS: dict = {
     "complex_fact_workflow": {
         "enabled": False,
         "route_threshold": 3,
-        "max_iterations": 4,
+        "max_iterations": 6,
         "max_sources_per_slot": 3,
         "planner_backend": "simpleclaw",
         "enable_claim_verifier": True,

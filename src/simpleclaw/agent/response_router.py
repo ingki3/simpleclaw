@@ -114,7 +114,12 @@ def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
     return any(needle.lower() in lowered for needle in needles)
 
 
-def classify_response_route(text: str, prior_context: str = "") -> RouteDecision:
+def classify_response_route(
+    text: str,
+    prior_context: str = "",
+    *,
+    route_threshold: int = 3,
+) -> RouteDecision:
     """Classify a turn into a cheap execution path.
 
     This is not intended to be perfect. It should avoid false positives for the
@@ -160,7 +165,8 @@ def classify_response_route(text: str, prior_context: str = "") -> RouteDecision
             score += 1
             reasons.append(reason)
 
-    complex_shape = score >= 3 or (
+    threshold = max(1, int(route_threshold))
+    complex_shape = score >= threshold or (
         needs_rules and (needs_remaining or needs_conditions) and not _is_single_current_fact(combined)
     )
     if complex_shape:
