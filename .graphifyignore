@@ -1,0 +1,27 @@
+# graphify 코드 그래프 스코프 제외 목록 (gitignore 문법)
+#
+# graphify는 .gitignore 를 따르지 않고 자체 _SKIP_DIRS + .graphifyignore 로만
+# 스캔 범위를 결정한다. _SKIP_DIRS 에는 .venv/node_modules/.worktrees 등은 있지만
+# 아래의 SimpleClaw 고유 에이전트 스캐폴딩/worktree 는 빠져 있어, full 리빌드 시
+# 코드 그래프가 수천 개의 무관 노드로 오염된다. 이를 영구 차단한다.
+#
+# 정책: 그래프는 SimpleClaw 프로젝트 소스(src/tests/web/scripts/docs + 루트 문서)만
+# 담는다. 런타임/도구가 생성하는 transient 산출물은 제외한다.
+
+# 멀티 에이전트 worktree (수천 파일, .gitignore 대상) — _SKIP_DIRS 의 .worktrees 와
+# 달리 graphify 가 인식하지 못함
+.multica_worktrees/
+
+# 에이전트 실행 컨텍스트: codex-home 캐시/세션, 주입된 외부 스킬 사본, 자격증명
+.agent_context/
+
+# Hermes 에이전트 런타임 산출물
+.hermes/
+
+# 도구 1회성 출력
+selector_results.json
+selector_results.md
+
+# 외부 CLI(Gemini/Multica) 가이드 — SimpleClaw 소스가 아님
+GEMINI.md
+MULTICA_CLI_GUIDE.md
