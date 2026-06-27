@@ -49,8 +49,10 @@ retry:
   - `kind`: `news` / `weather` / `market` / `sports` / `general`
   - `query`
   - `freshness`: `as_of_kst`, `retrieved_at_utc`, `timeline_status`
-  - `confidence`
-  - `evidence[]` (각 항목에 `timeline_status` 포함)
+  - `confidence`: `high`(여러 출처 본문 교차 확보) / `medium`(단일 출처) / `low`(본문 미확보·미확정)
+  - `evidence[]`: DuckDuckGo 결과 링크를 따라 회수한 출처별 실제 본문(멀티소스).
+    각 항목에 `source`/`url`/`snippet`/`timeline_status` 포함. SERP chrome 대신
+    기사 본문을 추출하며, 본문 회수 실패 시 검색 결과 페이지 텍스트로 폴백한다.
   - `facts[]`
   - `timeline_validation`: 일정/상태성 질문에서 출처 본문의 시점 반영 범위 검증 결과
     - `is_timeline_sensitive`: 질문이 일정/상태/결과 시점에 민감한지 여부
