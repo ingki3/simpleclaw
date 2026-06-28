@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-ProgressKind = Literal["tool", "skill", "command", "recipe", "goal"]
+ProgressKind = Literal["tool", "skill", "command", "recipe", "goal", "complex_fact"]
 ProgressStatus = Literal["start", "complete", "fail"]
 ProgressCallback = Callable[["ProgressEvent"], Awaitable[None] | None]
 
@@ -31,6 +31,7 @@ _KIND_ICONS = {
     "command": "💻",
     "recipe": "📋",
     "goal": "🎯",
+    "complex_fact": "🔎",
 }
 
 
