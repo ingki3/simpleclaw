@@ -97,6 +97,10 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalService,
 )
 from simpleclaw.agent.progress import ProgressCallback
+from simpleclaw.agent.response_router import (
+    ResponseRoute,
+    classify_response_route,
+)
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
@@ -589,6 +593,7 @@ class AgentOrchestrator:
         recipes_config = load_recipes_config(config_path)
         self._asset_selection_config = load_asset_selection_config(config_path)
         self._goal_loop_config = agent_config.get("goal_loop", {})
+        self._complex_fact_config = agent_config.get("complex_fact_workflow", {})
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
             self._config_path,
             persona_config=persona_config,
@@ -972,7 +977,23 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                if self._skill_learning_config.get("enabled", False):
+                route_decision = classify_response_route(
+                    text,
+                    route_threshold=int(
+                        self._complex_fact_config.get("route_threshold", 3)
+                    ),
+                )
+                if (
+                    self._complex_fact_config.get("enabled", False)
+                    and route_decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+                ):
+                    response_text = await self._run_complex_fact_workflow(
+                        text,
+                        route_decision,
+                        on_progress=on_progress,
+                    )
+                    tool_loop_result = ToolLoopResult(response_text)
+                elif self._skill_learning_config.get("enabled", False):
                     tool_loop_result = await self._run_tool_loop_result(
                         text,
                         attachments=attachments,
@@ -1026,6 +1047,47 @@ class AgentOrchestrator:
                 on_text_delta=on_text_delta,
                 operator_tools=True,
             )
+
+    async def _run_complex_fact_workflow(
+        self,
+        text: str,
+        route_decision,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> str:
+        """Feature-flagged complex fact/scenario workflow entrypoint."""
+        from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
+        from simpleclaw.agent.fact_answer import compose_fact_answer
+        from simpleclaw.agent.fact_workflow import (
+            ComplexFactWorkflow,
+            ComplexFactWorkflowConfig,
+        )
+
+        cfg = self._complex_fact_config or {}
+        if str(cfg.get("planner_backend", "simpleclaw")) != "simpleclaw":
+            logger.warning(
+                "Complex fact planner backend %s is not implemented; falling back to simpleclaw",
+                cfg.get("planner_backend"),
+            )
+        retriever = EvidenceRetriever(
+            max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3))
+        )
+
+        async def compose(question, plan):
+            return await compose_fact_answer(self._router.send, question, plan)
+
+        workflow = ComplexFactWorkflow(
+            retriever=retriever,
+            compose_answer=compose,
+            config=ComplexFactWorkflowConfig(
+                max_iterations=int(cfg.get("max_iterations", 4)),
+                max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3)),
+                enable_claim_verifier=bool(cfg.get("enable_claim_verifier", True)),
+                enable_progress_events=bool(cfg.get("enable_progress_events", True)),
+            ),
+        )
+        result = await workflow.run(text, route_decision, on_progress=on_progress)
+        return result.text
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
