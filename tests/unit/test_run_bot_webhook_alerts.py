@@ -75,6 +75,67 @@ def test_format_webhook_alert_burst_and_queue_summary():
 
 
 @pytest.mark.asyncio
+async def test_cron_telegram_notifier_sends_short_message_once(monkeypatch):
+    run_bot = _load_run_bot_module()
+    sent: list[dict] = []
+
+    class FakeBot:
+        def __init__(self, token: str) -> None:
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            sent.append({"chat_id": chat_id, "text": text})
+
+    fake_telegram = types.SimpleNamespace(Bot=FakeBot)
+    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
+
+    notifier = run_bot._create_telegram_notifier("fake-token", 123)
+    await notifier("cron-job", "short cron result")
+
+    assert sent == [{"chat_id": 123, "text": "short cron result"}]
+
+
+@pytest.mark.asyncio
+async def test_cron_telegram_notifier_splits_long_message_without_truncation(monkeypatch):
+    run_bot = _load_run_bot_module()
+    sent: list[dict] = []
+
+    class FakeBot:
+        def __init__(self, token: str) -> None:
+            self.token = token
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def send_message(self, chat_id: int, text: str) -> None:
+            sent.append({"chat_id": chat_id, "text": text})
+
+    fake_telegram = types.SimpleNamespace(Bot=FakeBot)
+    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
+
+    original = "x" * 8000
+    notifier = run_bot._create_telegram_notifier("fake-token", 123)
+    await notifier("krstock-close", original)
+
+    assert len(sent) == 2
+    assert all(call["chat_id"] == 123 for call in sent)
+    assert all(len(call["text"]) <= 4096 for call in sent)
+    assert sent[0]["text"].startswith("(1/2)\n")
+    assert sent[1]["text"].startswith("(2/2)\n")
+    delivered_body = "".join(call["text"].split("\n", 1)[1] for call in sent)
+    assert delivered_body == original
+
+
+@pytest.mark.asyncio
 async def test_webhook_alert_notifier_logs_telegram_dispatch_failure(monkeypatch):
     run_bot = _load_run_bot_module()
     calls: list[dict] = []
