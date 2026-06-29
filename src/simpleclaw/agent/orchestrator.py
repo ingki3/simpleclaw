@@ -146,6 +146,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "skill_validate",
     "restart_runtime",
     "skill_learning",
+    "study_status",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
