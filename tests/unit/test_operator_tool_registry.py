@@ -87,6 +87,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "skill_validate",
         "restart_runtime",
         "skill_learning",
+        "study_status",
     }
     assert runtime_names.isdisjoint(protected_names)
 

@@ -589,6 +589,43 @@ _RESTART_RUNTIME_TOOL = ToolDefinition(
 )
 
 
+_STUDY_STATUS_TOOL = ToolDefinition(
+    name="study_status",
+    description=(
+        "운영자 전용 Agent Study Wiki 조회/관리 도구. Agent 가 매일 공부해 쌓은 외부 "
+        "세계 배경지식(topic registry + daily study run + study item)을 운영자가 점검하고 "
+        "조작한다. action=status 는 최근 study run·active topic·stale topic·low-confidence "
+        "item 을 한 번에 보여 주고, topics 는 전체 topic 목록, show 는 단일 topic 과 "
+        "overview 페이지를 반환한다. refresh 는 다음 daily run 에서 재수집하도록 요청 "
+        "플래그를 걸고, archive 는 잘못 공부한 topic 을 비활성화한다. 일반 사용자에게는 "
+        "노출되지 않으며, 동기적으로 무거운 수집을 실행하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["status", "topics", "show", "refresh", "archive"],
+                "description": "수행할 동작. 생략하면 status.",
+            },
+            "topic_id": {
+                "type": "string",
+                "description": "show/refresh/archive 대상 topic id. 해당 action 에 필수.",
+            },
+            "include_archived": {
+                "type": "boolean",
+                "description": "action=topics 일 때 archived topic 도 포함할지 여부. 기본 false.",
+            },
+            "low_confidence_threshold": {
+                "type": "number",
+                "description": "low-confidence 판정 임계값 override (0~1). 생략하면 config 기본값.",
+            },
+        },
+        "required": [],
+    },
+)
+
+
 _SKILL_LEARNING_TOOL = ToolDefinition(
     name="skill_learning",
     description=(
@@ -673,6 +710,13 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
         _SKILL_LEARNING_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.HIGH,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        # refresh/archive 가 topics.yaml 을 변경하므로 MEDIUM risk.
+        _STUDY_STATUS_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.MEDIUM,
         operator_gate_required=True,
     ),
 )
