@@ -76,6 +76,35 @@ memory:
     top_k: 5                                  # 회상 후보 상위 K개
     similarity_threshold: 0.5                 # 코사인 유사도 임계값(노이즈 컷)
 
+# Agent Study Wiki — 사용자 기억(USER.md/MEMORY.md/insights)과 분리된 "외부 세계
+# 배경지식" 저장소. 자동 브리핑 주제가 사용자 관심사로 과대 일반화되거나 낡은 외부
+# 사실이 사용자 메모리처럼 영속되는 것을 막기 위한 경계다. 설계: docs/agent-study-wiki.md
+# 모든 기능은 opt-in이며, 아래는 권장 기본값(현재는 config skeleton만 동작).
+study:
+  enabled: false
+  wiki_dir: ~/.simpleclaw-agent/default/agent_wiki  # ~ 확장 후 Path로 정규화
+  daily:                          # 매일 정해진 시각에 주제를 공부하는 배치
+    enabled: false
+    hour_kst: 6                   # 실행 시각(KST)
+    max_topics_per_run: 8         # 1회 실행당 최대 주제 수
+    max_sources_per_topic: 5      # 주제당 최대 출처 수
+  retrieval:                      # 질문 응답 시 wiki를 맥락으로 주입
+    enabled: false
+    top_k: 4                      # 회상 후보 상위 K개
+    max_context_chars: 5000       # 주입 컨텍스트 최대 길이
+    freshness_hours:              # confidence별 신선도 허용치(시간)
+      high: 24
+      medium: 72
+      low: 168
+  topic_evolution:                # 주제 자동 생성/승격/소멸 정책
+    auto_create: true
+    min_interest_score: 0.55      # 주제 생성 최소 관심도
+    promote_threshold: 0.70       # 상시 주제로 승격 임계값
+    decay_after_days: 14          # 무관심 시 소멸까지의 일수
+  safety:                         # 사실성 가드
+    require_sources: true                     # 출처 없는 항목 금지
+    low_confidence_requires_disclaimer: true  # 저신뢰 항목은 면책 문구 필수
+
 security:
   # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일
   # 경로. 미지정 시 각각 ``~/.simpleclaw/secrets.enc`` / ``~/.simpleclaw/master.key``

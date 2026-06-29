@@ -13,6 +13,7 @@ from simpleclaw.agent.restart_runtime import handle_restart_runtime
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.skill_learning_tool import handle_skill_learning
+from simpleclaw.agent.study_status import handle_study_status
 from simpleclaw.agent.builtin_tools import (
     _fetch_search_result_body,
     handle_clarify,
@@ -133,6 +134,10 @@ async def dispatch_tool_call(
             config=orchestrator._skill_learning_config,
             skills_config=orchestrator._skills_config,
         )
+    if name == "study_status":
+        if not operator_tools:
+            return "Error: study_status is available only in operator context."
+        return handle_study_status(args, config_path=orchestrator._config_path)
     if name == "clarify":
         return handle_clarify(
             args,

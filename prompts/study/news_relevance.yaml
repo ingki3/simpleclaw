@@ -1,0 +1,56 @@
+# Agent Study Wiki — 일반 뉴스 후보 relevance 판정 프롬프트.
+#
+# 용도: source_planner 가 수집한 "일반 뉴스" 후보(사용자가 명시적으로 관심을
+#   보이지 않았지만 중요하거나 관심 가질 법한 뉴스)를 wiki 에 공부 자료로
+#   기록할 가치가 있는지 0.0~1.0 점수로 평가한다.
+# 적용 범위: source_planner.select_wiki_worthy 가 general_news kind 후보에만 적용.
+#   user_interest kind 는 사용자가 이미 관심을 표명했으므로 이 프롬프트를 거치지
+#   않고 통과한다.
+# 변경 사유: BIZ-391 — 뉴스/도구 기반 study source planner. noise 를 줄이기 위한
+#   relevance gate 의 기준을 코드 하드코딩 대신 YAML SoT 로 관리(프로젝트 규칙).
+#
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지. 실제 LLM 호출은 후속 issue 에서
+# scorer 구현이 이 spec 을 format() 하여 사용한다. 현 단계의 기본 scorer 는
+# 휴리스틱이며, 프롬프트는 향후 LLM scorer 가 그대로 쓸 수 있도록 미리 고정한다.
+
+version: 1
+description: 일반 뉴스 후보가 study wiki 에 기록할 가치가 있는지 relevance score 로 판정
+system_prompt: |-
+  You are a study-relevance analyst for a personal AI assistant. You decide
+  whether a general news item is worth studying and remembering for the user.
+  Respond with valid JSON only.
+user_prompt: |-
+  아래 뉴스 후보가 사용자를 위해 "공부"해서 wiki 에 기록할 가치가 있는지
+  판단하세요. 사용자가 명시적으로 요청하지 않은 일반 뉴스이므로, 다음 중
+  하나 이상에 해당할 때에만 높은 점수를 주세요.
+
+  높은 relevance 의 근거(아래 중 하나 이상):
+  - 사용자의 알려진 관심사/주제와 직접 연결된다.
+  - 사용자의 일/투자/일상에 실질적 영향을 줄 만큼 중요하다.
+  - 시의성이 크고(빠르게 변하는 상황) 놓치면 손해인 정보다.
+
+  낮은 relevance 로 처리할 것:
+  - 단순 가십, 광고성, 중복/재탕, 사용자와 무관한 지역/분야 뉴스.
+  - 사실 확인이 어렵거나 출처가 불명확한 내용(불확실하면 점수를 낮추세요).
+
+  ## 사용자 관심사
+  {user_interests}
+
+  ## 후보가 속한 topic
+  - label: {topic_label}
+  - category: {topic_category}
+
+  ## 뉴스 후보
+  - 제목: {news_title}
+  - 발행 시각: {published_at}
+  - 요약: {news_summary}
+
+  JSON 형식으로만 응답하세요:
+  {{"relevance_score": 0.0, "should_study": false, "reasons": ["근거1"]}}
+required_vars:
+  - user_interests
+  - topic_label
+  - topic_category
+  - news_title
+  - published_at
+  - news_summary
