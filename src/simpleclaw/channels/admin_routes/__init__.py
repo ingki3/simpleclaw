@@ -11,6 +11,7 @@ from simpleclaw.channels.admin_routes import (
     dreaming,
     insights,
     secrets,
+    study,
     suggestions,
     system,
 )
@@ -19,7 +20,7 @@ from simpleclaw.channels.admin_routes.common import (
     register_route_groups,
 )
 
-ROUTE_GROUPS = (config, secrets, system, insights, suggestions, dreaming)
+ROUTE_GROUPS = (config, secrets, system, insights, suggestions, dreaming, study)
 
 
 def register_admin_routes(app: web.Application, server: Any, prefix: str) -> None:
