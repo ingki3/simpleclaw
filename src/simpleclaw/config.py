@@ -53,6 +53,7 @@ from simpleclaw.config_sections.daemon import (
 from simpleclaw.config_sections.llm import _LLM_DEFAULTS, load_llm_config
 from simpleclaw.config_sections.memory import _MEMORY_DEFAULTS, load_memory_config
 from simpleclaw.config_sections.security import load_security_config
+from simpleclaw.config_sections.study import _STUDY_DEFAULTS, load_study_config
 
 __all__ = [
     "_ADMIN_API_DEFAULTS",
@@ -64,6 +65,7 @@ __all__ = [
     "_MEMORY_DEFAULTS",
     "_RECIPES_DEFAULTS",
     "_SKILL_LEARNING_DEFAULTS",
+    "_STUDY_DEFAULTS",
     "_SUB_AGENTS_DEFAULTS",
     "_TELEGRAM_DEFAULTS",
     "_TELEGRAM_STREAMING_DEFAULTS",
@@ -93,6 +95,7 @@ __all__ = [
     "load_recipes_config",
     "load_skills_learning_config",
     "load_security_config",
+    "load_study_config",
     "load_sub_agents_config",
     "load_telegram_config",
     "load_voice_config",

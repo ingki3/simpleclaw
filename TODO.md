@@ -95,6 +95,10 @@
 
 ## Done
 
+### 2026-06-29
+
+- [x] **BIZ-386: Agent Study Wiki 설계 문서 + config skeleton** — 사용자 메모리(USER.md/MEMORY.md/insights)와 외부 세계 배경지식을 분리하는 경계를 세웠다. `docs/agent-study-wiki.md`(목적/비목표, 메모리 vs Wiki 대비표, 데이터 모델, freshness/confidence·topic 진화 정책), `src/simpleclaw/config_sections/study.py`(`_STUDY_DEFAULTS` + 중첩 재귀 병합 `load_study_config()`, `wiki_dir` Path 정규화), `config.py` facade export, `config.yaml.example` `study:` 예시, `tests/unit/test_study_config.py`(5 케이스). study runner/wiki 생성/retrieval 연동은 후속 이슈(2/11~). 검증: `pytest tests/unit/test_study_config.py` 5 passed, config 회귀 126 passed, `ruff check` clean. (2026-06-29, BIZ-398로 전용 브랜치 분리·PR)
+
 ### 2026-06-17
 
 - [x] **BIZ-380: Cron one-shot 알림 메타데이터와 실행 컨텍스트 가드 추가** — cron native tool schema에 `run_once`/`max_runs`/`expires_at` metadata를 노출하고, `handle_cron_action()`이 one-shot metadata를 검증·정규화해 `CronScheduler.add_job()`으로 전달하도록 했다. `process_cron_message()` 경로는 구조적 context flag로 cron mutation(add/remove/enable/disable)을 차단하며 `list`는 유지한다. 회귀 테스트: `tests/unit/test_agent.py -k 'cron'`, `tests/unit/test_tool_schemas.py`, 전체 `tests/unit/` 통과. (2026-06-17)
