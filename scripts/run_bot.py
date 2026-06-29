@@ -26,7 +26,7 @@ from simpleclaw.channels.admin_api_setup import (
     AdminAPIBootError,
     build_admin_api_server,
 )
-from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.channels.telegram_bot import TelegramBot, split_for_telegram
 from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
@@ -90,12 +90,19 @@ def _kill_existing_bots():
 
 
 def _create_telegram_notifier(bot_token: str, chat_id: int):
-    """Create an async notifier that sends cron results to Telegram."""
+    """Create an async notifier that sends cron results to Telegram.
+
+    krstock/시장 브리핑류 cron 결과는 4,096자를 쉽게 넘는다. 단일 ``text[:4096]``
+    절단(BIZ-397 장애 원인)은 본문 뒷부분을 통째로 버리므로, 일반 대화 경로와 동일하게
+    ``split_for_telegram`` 으로 4,096자 한계에 맞춰 나눠 순차 전송한다.
+    """
     async def notifier(job_name: str, text: str) -> None:
         from telegram import Bot
+
         tg_bot = Bot(token=bot_token)
         async with tg_bot:
-            await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
+            for chunk in split_for_telegram(text):
+                await tg_bot.send_message(chat_id=chat_id, text=chunk)
 
     return notifier
 
