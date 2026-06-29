@@ -26,7 +26,7 @@ from simpleclaw.channels.admin_api_setup import (
     AdminAPIBootError,
     build_admin_api_server,
 )
-from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.channels.telegram_bot import TelegramBot, split_for_telegram
 from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
@@ -95,7 +95,8 @@ def _create_telegram_notifier(bot_token: str, chat_id: int):
         from telegram import Bot
         tg_bot = Bot(token=bot_token)
         async with tg_bot:
-            await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
+            for chunk in split_for_telegram(text):
+                await tg_bot.send_message(chat_id=chat_id, text=chunk)
 
     return notifier
 
