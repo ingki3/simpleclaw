@@ -76,6 +76,33 @@ memory:
     top_k: 5                                  # 회상 후보 상위 K개
     similarity_threshold: 0.5                 # 코사인 유사도 임계값(노이즈 컷)
 
+# Agent Study Wiki — 사용자 프로필/기억과 분리된 외부 세계 배경지식 저장소.
+# 설계 문서: docs/agent-study-wiki.md. 기본값은 모두 비활성(opt-in)이다.
+study:
+  enabled: false
+  wiki_dir: ~/.simpleclaw-agent/default/agent_wiki  # 사용자 메모리와 분리된 wiki 경로
+  daily:
+    enabled: false
+    hour_kst: 6                  # 매일 공부 실행 시각(KST)
+    max_topics_per_run: 8        # 1회 실행 최대 topic 수(비용 상한)
+    max_sources_per_topic: 5
+  retrieval:
+    enabled: false
+    top_k: 4                     # 질문 시 맥락으로 끌어올 wiki 엔트리 수
+    max_context_chars: 5000
+    freshness_hours:             # freshness 등급별 신선도 유지 시간(hour)
+      high: 24
+      medium: 72
+      low: 168
+  topic_evolution:
+    auto_create: true            # 관심도 충분 시 topic 자동 생성
+    min_interest_score: 0.55     # topic 후보 최소 관심도
+    promote_threshold: 0.70      # 정식 topic 승격 임계값
+    decay_after_days: 14         # 비활성 topic 감쇠까지의 일수
+  safety:
+    require_sources: true                    # 출처 없는 사실 기록 금지
+    low_confidence_requires_disclaimer: true  # 저신뢰 정보는 면책 문구 동반
+
 security:
   # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일
   # 경로. 미지정 시 각각 ``~/.simpleclaw/secrets.enc`` / ``~/.simpleclaw/master.key``

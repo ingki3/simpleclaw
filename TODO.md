@@ -95,6 +95,10 @@
 
 ## Done
 
+### 2026-06-29
+
+- [x] **BIZ-386: Agent Study Wiki 01 — 설계 문서와 config skeleton** — 사용자 프로필/기억과 외부 세계 배경지식을 분리하기 위한 Agent Study Wiki의 경계·데이터 모델·freshness/confidence·topic 진화 정책을 `docs/agent-study-wiki.md`에 정리했다. `config_sections/study.py`에 `load_study_config()`(기본값 병합 + `wiki_dir` Path 정규화)를 추가하고 `config.py`에 export/wiring, `config.yaml.example`에 `study:` 예시를 추가했다. 회귀 테스트 `tests/unit/test_study_config.py` 5개 통과, `ruff check src/ tests/unit/test_study_config.py` 통과. study runner/wiki 파일 생성/retrieval 연동은 후속 이슈(2/11~) 범위. (2026-06-29)
+
 ### 2026-06-17
 
 - [x] **BIZ-380: Cron one-shot 알림 메타데이터와 실행 컨텍스트 가드 추가** — cron native tool schema에 `run_once`/`max_runs`/`expires_at` metadata를 노출하고, `handle_cron_action()`이 one-shot metadata를 검증·정규화해 `CronScheduler.add_job()`으로 전달하도록 했다. `process_cron_message()` 경로는 구조적 context flag로 cron mutation(add/remove/enable/disable)을 차단하며 `list`는 유지한다. 회귀 테스트: `tests/unit/test_agent.py -k 'cron'`, `tests/unit/test_tool_schemas.py`, 전체 `tests/unit/` 통과. (2026-06-17)
