@@ -1,0 +1,51 @@
+# Agent Study Wiki — 데일리 학습 노트(요약) 프롬프트.
+#
+# 용도: study runner 가 하루치 학습 run 을 마친 뒤, "오늘 무엇을 공부했는지"만
+#   간결히 요약하는 데일리 노트(daily/YYYY-MM-DD.md)를 만든다. 상세 사실은 topic
+#   페이지/인덱스에 남으므로, 데일리 노트는 의도적으로 요약만 담는다.
+# 적용 범위: study.runner 의 데일리 노트 생성 단계(후속 issue 에서 LLM wiring).
+#   현 MVP runner 는 결정적 템플릿으로 노트를 쓰고, 이 spec 은 LLM 요약이 붙을 때
+#   그대로 format() 된다.
+# 변경 사유: BIZ-392 — Daily study runner 와 wiki updater. 데일리 노트의 범위
+#   ("오늘 공부한 것 요약만")를 프롬프트에서도 고정하기 위해 SoT 로 분리.
+#
+# 본 파일이 SoT — 수정은 직접 편집 + PR 머지.
+
+version: 1
+description: 하루치 study run 을 "오늘 무엇을 공부했는지" 요약 노트로 정리
+system_prompt: |-
+  You are a study journal writer for a personal AI assistant. You write a short
+  daily note summarizing ONLY what was studied today — not the detailed facts
+  themselves (those live on topic pages). Keep it scannable. Respond in Korean.
+user_prompt: |-
+  오늘 study run 의 결과를 바탕으로, "오늘 무엇을 공부했는지"만 간결히 요약하는
+  데일리 노트를 작성하세요. 개별 사실의 상세 내용은 topic 페이지에 있으므로 여기서는
+  반복하지 말고, 어떤 주제를 왜 공부했는지와 한계만 적습니다.
+
+  작성 원칙:
+  - 주제 목록과 한 줄 요약 위주로, 길지 않게.
+  - 수집이 비었거나 신뢰가 낮았던 주제는 그 사실을 명시(과장 금지).
+  - 사용자 메모리와 섞지 말 것(외부 배경지식의 학습 로그임).
+
+  ## 날짜
+  {date}
+
+  ## 이번 run 통계
+  - 검토한 주제: {topics_considered}개
+  - 갱신한 주제: {topics_updated}개
+  - 추가한 항목: {items_added}개
+
+  ## 갱신한 주제 목록
+  {updated_topics_block}
+
+  ## 한계 / 주의
+  {limitations_block}
+
+  Markdown 으로 데일리 노트 본문만 출력하세요(코드펜스 없이).
+required_vars:
+  - date
+  - topics_considered
+  - topics_updated
+  - items_added
+  - updated_topics_block
+  - limitations_block
