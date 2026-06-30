@@ -347,6 +347,65 @@ class TestPinning:
         # unpin 후엔 경과시간 기준으로 archived.
         assert reg.get("t").state == TopicState.ARCHIVED
 
+    def test_pinned_topic_remains_pinned_when_new_signal_recorded(self):
+        # BIZ-408 회귀: pinned topic 은 record() 경로의 새 신호로 자동 demote 되면 안 된다.
+        clock = Clock()
+        reg = _registry(clock)
+        # active 로 시작 → pin.
+        reg.record(_user_signal("t", interest=0.9, fresh=0.6))
+        assert reg.get("t").state == TopicState.ACTIVE
+        reg.pin("t")
+        assert reg.get("t").state == TopicState.PINNED
+
+        # 약한 user 신호: 자동 전이라면 candidate 로 demote 될 점수지만 PINNED 유지.
+        reg.record(_user_signal("t", interest=0.1, fresh=0.1))
+        assert reg.get("t").state == TopicState.PINNED
+
+        # Dreaming 신호도 마찬가지로 상태를 건드리지 않는다.
+        reg.record(
+            TopicSignal(
+                topic_id="t",
+                label="t",
+                source=SignalSource.DREAMING,
+                user_interest=0.2,
+            )
+        )
+        assert reg.get("t").state == TopicState.PINNED
+
+        # 일반 뉴스 신호도 PINNED 를 유지한다.
+        reg.record(
+            TopicSignal(
+                topic_id="t",
+                label="t",
+                source=SignalSource.NEWS,
+                global_importance=0.3,
+            )
+        )
+        assert reg.get("t").state == TopicState.PINNED
+
+    def test_pinned_topic_updates_score_without_demoting(self):
+        # BIZ-408 회귀: pinned 라도 누적 신호/점수/last_signal_at 갱신은 계속돼야 한다.
+        clock = Clock()
+        reg = _registry(clock)
+        reg.record(_user_signal("t", interest=0.4, fresh=0.4))
+        reg.pin("t")
+        before_score = reg.get("t").interest_score
+        before_mentions = reg.get("t").mention_count
+
+        clock.advance(hours=1)
+        reg.record(_user_signal("t", interest=0.95, fresh=0.9, global_importance=0.5))
+        topic = reg.get("t")
+        # 상태는 PINNED 로 고정.
+        assert topic.state == TopicState.PINNED
+        # 점수/언급/마지막 신호 시각은 갱신.
+        assert topic.mention_count == before_mentions + 1
+        assert topic.interest_score > before_score
+        assert topic.last_signal_at == clock.t
+
+        # unpin 하면 갱신된 강한 점수 기준으로 재계산되어 active 로 복귀.
+        reg.unpin("t")
+        assert reg.get("t").state == TopicState.ACTIVE
+
 
 class TestStudyTargetsAndSerialization:
     def test_study_targets_include_active_and_pinned_only(self):
