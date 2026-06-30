@@ -287,6 +287,13 @@ _LIVE_FACT_STOCK_TERMS = (
     "증시",
     "시장 마감",
     "티커",
+    # BIZ-394: 기업·시장 이벤트(상장/IPO/공모 등)도 웹 근거가 필요한 현재성 사실로
+    # 본다. "OpenAI 상장 영향" 류가 시간 cue 없이도 evidence 조회를 타게 한다.
+    "상장",
+    "ipo",
+    "공모",
+    "기업가치",
+    "시총",
 )
 _LIVE_FACT_WEATHER_TERMS = (
     "날씨",
@@ -996,11 +1003,16 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
+                # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면, 그
+                # 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least guarded)를
+                # 강제한다. 회수는 내부에서 실패를 삼키므로 라우팅을 막지 않는다.
+                study_context_for_routing = self._context_retrieval.study_context_for_routing(text)
                 route_decision = classify_response_route(
                     text,
                     route_threshold=int(
                         self._complex_fact_config.get("route_threshold", 3)
                     ),
+                    study_context=study_context_for_routing,
                 )
                 if (
                     self._complex_fact_config.get("enabled", False)

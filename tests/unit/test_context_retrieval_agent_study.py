@@ -9,11 +9,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
+    annotate_study_freshness,
 )
 
 
@@ -123,3 +126,91 @@ async def test_study_failure_is_isolated_from_conversation_flow():
     # 예외가 위로 전파되지 않아야 한다.
     context = await service.retrieve("OpenAI 상장 연기")
     assert context == ""
+
+
+# --------------------------------------------------------------------------
+# BIZ-394 — study context freshness/confidence gate
+# --------------------------------------------------------------------------
+
+_NOW = datetime(2026, 6, 30, tzinfo=timezone.utc)
+
+
+def test_annotate_study_freshness_flags_stale_block():
+    """마지막 갱신이 임계일을 넘긴 블록에는 stale 마커와 한계 강제 지시가 붙는다."""
+    block = (
+        "## Agent Study Context\n"
+        "- Topic: OpenAI\n"
+        "  Updated: 2026-05-01\n"
+        "  Confidence: 0.90"
+    )
+    annotated = annotate_study_freshness(block, now=_NOW, stale_after_days=14)
+    assert "Freshness: stale" in annotated
+    assert "한계" in annotated
+    assert block in annotated  # 원본 보존
+
+
+def test_annotate_study_freshness_flags_low_confidence_block():
+    """confidence 최솟값이 임계 미만이면 갱신이 최신이어도 경고가 붙는다."""
+    block = (
+        "## Agent Study Context\n"
+        "- Topic: OpenAI\n"
+        "  Updated: 2026-06-29\n"
+        "  Confidence: 0.30"
+    )
+    annotated = annotate_study_freshness(
+        block, now=_NOW, stale_after_days=14, min_confidence=0.5
+    )
+    assert "Freshness: stale" in annotated
+
+
+def test_annotate_study_freshness_keeps_fresh_block_untouched():
+    """최신 + 고신뢰 블록은 경고 없이 그대로 둔다."""
+    block = (
+        "## Agent Study Context\n"
+        "- Topic: OpenAI\n"
+        "  Updated: 2026-06-29\n"
+        "  Confidence: 0.95"
+    )
+    annotated = annotate_study_freshness(
+        block, now=_NOW, stale_after_days=14, min_confidence=0.5
+    )
+    assert annotated == block
+    assert "Freshness: stale" not in annotated
+
+
+def test_annotate_study_freshness_no_meta_is_untouched():
+    """Updated/Confidence 메타가 전혀 없으면 근거 없는 stale 판정을 하지 않는다."""
+    block = "## Agent Study Context\n- Topic: OpenAI\n  Relevant notes:\n  - 배경"
+    annotated = annotate_study_freshness(block, now=_NOW)
+    assert annotated == block
+
+
+class _DatedStudyRetriever:
+    """오래된 Updated/낮은 Confidence 블록을 돌려주는 테스트 retriever."""
+
+    enabled = True
+
+    def retrieve_context(self, user_text: str, *, historical: bool = False) -> str:
+        return (
+            "## Agent Study Context\n"
+            "- Topic: OpenAI\n"
+            "  Updated: 2026-04-01\n"
+            "  Confidence: 0.40"
+        )
+
+
+@pytest.mark.asyncio
+async def test_retrieve_injects_freshness_warning_for_stale_study():
+    """서비스 retrieve() 가 stale study 블록에 신선도 경고를 주입한다."""
+    service = ContextRetrievalService(
+        store=None,
+        embedding_service=None,
+        config=_config(),
+        structured_logger=None,
+        study_retriever=_DatedStudyRetriever(),
+        now_provider=lambda: _NOW,
+    )
+
+    context = await service.retrieve("OpenAI 지금 상황 어때?")
+    assert "Freshness: stale" in context
+    assert "실시간 조회" in context
