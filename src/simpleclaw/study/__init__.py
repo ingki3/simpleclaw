@@ -91,7 +91,24 @@ from .retriever import (
     StudyRetriever,
     StudyTopicMatch,
 )
-from .topic_registry import TopicRegistry, load_topics, save_topics
+from .scorer import (
+    DEFAULT_SCORE_WEIGHTS,
+    ScoreWeights,
+    compute_topic_score,
+    normalize_mentions,
+    recency_decay_factor,
+)
+from .topic_registry import (
+    EvolvingTopicRegistry,
+    SignalSource,
+    Topic,
+    TopicEvolutionPolicy,
+    TopicRegistry,
+    TopicSignal,
+    TopicState,
+    load_topics,
+    save_topics,
+)
 from .types import (
     StudyItemRecord,
     StudyItemStatus,
@@ -120,10 +137,23 @@ __all__ = [
     # markdown
     "render_study_page",
     "parse_study_page",
-    # topic registry
+    # topic registry (영속)
     "TopicRegistry",
     "load_topics",
     "save_topics",
+    # topic registry (진화형 생애주기)
+    "EvolvingTopicRegistry",
+    "Topic",
+    "TopicEvolutionPolicy",
+    "TopicSignal",
+    "TopicState",
+    "SignalSource",
+    # scorer
+    "DEFAULT_SCORE_WEIGHTS",
+    "ScoreWeights",
+    "compute_topic_score",
+    "normalize_mentions",
+    "recency_decay_factor",
     # collectors
     "CollectorRegistry",
     "PlaceholderCollector",
