@@ -84,19 +84,40 @@ def parse_args(args: list[str]) -> dict[str, Any]:
     return {"query": raw_query} if raw_query else {}
 
 
+# 도메인 분류 cue. BIZ-394: market 분류를 단순 주가/지수 키워드에서 "기업·시장
+# 이벤트(상장/IPO/공모/기업가치 등)"까지 넓혀, 영향·전망 질문이 general 로 새지
+# 않고 시장 도메인 검색 URL/본문 회수 경로를 타도록 구조적 cue 를 추가한다.
+_WEATHER_TERMS = ("날씨", "기온", "강수", "미세먼지", "예보")
+_MARKET_TERMS = (
+    "주가",
+    "주식",
+    "코스피",
+    "코스닥",
+    "나스닥",
+    "s&p",
+    "환율",
+    "증시",
+    "시장",
+    "상장",
+    "ipo",
+    "공모",
+    "기업가치",
+    "시총",
+)
+_SPORTS_TERMS = ("kbo", "프로야구", "야구", "축구", "스코어")
+_NEWS_TERMS = ("뉴스", "속보", "기사", "최신 소식")
+
+
 def classify_query(query: str) -> str:
     """질문 문자열을 조회 도메인으로 보수 분류한다."""
     lowered = query.lower()
-    if any(term in query for term in ("날씨", "기온", "강수", "미세먼지", "예보")):
+    if any(term in lowered for term in _WEATHER_TERMS):
         return "weather"
-    if any(
-        term in lowered
-        for term in ("주가", "주식", "코스피", "코스닥", "나스닥", "s&p", "환율")
-    ):
+    if any(term in lowered for term in _MARKET_TERMS):
         return "market"
-    if any(term in lowered for term in ("kbo", "프로야구", "야구", "축구", "스코어")):
+    if any(term in lowered for term in _SPORTS_TERMS):
         return "sports"
-    if any(term in query for term in ("뉴스", "속보", "기사", "최신 소식")):
+    if any(term in lowered for term in _NEWS_TERMS):
         return "news"
     return "general"
 

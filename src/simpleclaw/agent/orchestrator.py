@@ -31,6 +31,7 @@ from simpleclaw.config import (
     load_recipes_config,
     load_security_config,
     load_skills_learning_config,
+    load_study_config,
 )
 from simpleclaw.llm.models import (
     LLMRequest,
@@ -116,6 +117,7 @@ from simpleclaw.agent.tool_schemas import (
     validate_dispatch_tool_names,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -285,6 +287,13 @@ _LIVE_FACT_STOCK_TERMS = (
     "증시",
     "시장 마감",
     "티커",
+    # BIZ-394: 기업·시장 이벤트(상장/IPO/공모 등)도 웹 근거가 필요한 현재성 사실로
+    # 본다. "OpenAI 상장 영향" 류가 시간 cue 없이도 evidence 조회를 타게 한다.
+    "상장",
+    "ipo",
+    "공모",
+    "기업가치",
+    "시총",
 )
 _LIVE_FACT_WEATHER_TERMS = (
     "날씨",
@@ -678,10 +687,26 @@ class AgentOrchestrator:
             if self._rag_enabled
             else None
         )
+        # BIZ-393: Agent Study Wiki 회수기 — 질문 시 관련 배경지식 블록을 system
+        # prompt 에 주입한다. 대화 RAG/장기기억 회수와 독립적으로 실패 격리된다.
+        # 기능 플래그(study.enabled + study.retrieval.enabled)가 모두 켜져야 동작.
+        study_config = load_study_config(config_path)
+        study_retrieval_cfg = study_config.get("retrieval", {}) or {}
+        study_wiki_dir = study_config.get("wiki_dir") or "~/.simpleclaw-agent/default/agent_wiki"
+        self._study_retriever = StudyRetriever(
+            StudyRetrievalConfig(
+                enabled=bool(study_config.get("enabled"))
+                and bool(study_retrieval_cfg.get("enabled")),
+                wiki_dir=Path(str(study_wiki_dir)).expanduser(),
+                top_k=int(study_retrieval_cfg.get("top_k", 4)),
+                max_context_chars=int(study_retrieval_cfg.get("max_context_chars", 5000)),
+            )
+        )
         self._context_retrieval = ContextRetrievalService(
             store=self._store,
             embedding_service=self._embedding_service,
             structured_logger=self._structured_logger,
+            study_retriever=self._study_retriever,
             config=ContextRetrievalConfig(
                 rag_top_k=self._rag_top_k,
                 rag_threshold=self._rag_threshold,
@@ -978,11 +1003,16 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
+                # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면, 그
+                # 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least guarded)를
+                # 강제한다. 회수는 내부에서 실패를 삼키므로 라우팅을 막지 않는다.
+                study_context_for_routing = self._context_retrieval.study_context_for_routing(text)
                 route_decision = classify_response_route(
                     text,
                     route_threshold=int(
                         self._complex_fact_config.get("route_threshold", 3)
                     ),
+                    study_context=study_context_for_routing,
                 )
                 if (
                     self._complex_fact_config.get("enabled", False)

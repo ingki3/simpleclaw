@@ -1,6 +1,12 @@
-"""진화형 topic registry 의 생성·승격·감쇠·아카이브 생애주기 검증.
+"""Study Wiki 주제 레지스트리 단위 테스트.
 
-DoD:
+두 계층을 함께 검증한다.
+
+1. 영속화 계층(``TopicRegistry``/``load_topics``/``save_topics``): ``topics.yaml``
+   왕복, 위키 루트 초기화(멱등성), 손편집 관대성.
+2. 진화 계층(``TopicEvolutionRegistry``): 생성·승격·감쇠·아카이브 생애주기.
+
+진화 계층 DoD:
 - topic registry 가 candidate/active/pinned/cooling/archive lifecycle 을 지원한다.
 - Dreaming signal 기반 topic 생성이 가능하다.
 - 일회성 topic 은 시간이 지나면 cooling/archive 된다.
@@ -9,17 +15,141 @@ DoD:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from simpleclaw.study.paths import (
+    daily_dir,
+    init_wiki_root,
+    topic_page_path,
+    topics_dir,
+    topics_yaml_path,
+)
 from simpleclaw.study.source_planner import TopicKind, plan_fetch_requests
 from simpleclaw.study.topic_registry import (
-    InterestSignal,
     SignalSource,
     TopicEvolutionPolicy,
+    TopicEvolutionRegistry,
     TopicRegistry,
+    TopicSignal,
     TopicState,
+    load_topics,
+    save_topics,
 )
+from simpleclaw.study.types import StudyTopic
+
+
+# --------------------------------------------------------------------------- #
+# 영속화 계층 — ``topics.yaml`` ↔ ``StudyTopic``
+# --------------------------------------------------------------------------- #
+
+
+def test_init_wiki_root_creates_structure(tmp_path: Path):
+    root = init_wiki_root(tmp_path / "study")
+    assert root.is_dir()
+    assert topics_dir(tmp_path / "study").is_dir()
+    assert daily_dir(tmp_path / "study").is_dir()
+    topics_file = topics_yaml_path(tmp_path / "study")
+    assert topics_file.is_file()
+    # 시드된 빈 레지스트리는 빈 목록으로 로드되어야 한다.
+    assert load_topics(topics_file) == []
+
+
+def test_init_wiki_root_is_idempotent_and_preserves_topics(tmp_path: Path):
+    base = tmp_path / "study"
+    init_wiki_root(base)
+    save_topics([StudyTopic(id="t1", label="T1")], topics_yaml_path(base))
+    # 다시 초기화해도 기존 topics.yaml 을 덮어쓰지 않는다.
+    init_wiki_root(base)
+    loaded = load_topics(topics_yaml_path(base))
+    assert [t.id for t in loaded] == ["t1"]
+
+
+def test_topic_page_path_rejects_path_injection(tmp_path: Path):
+    base = tmp_path / "study"
+    assert topic_page_path("ai-openai", base).name == "ai-openai.md"
+    for bad in ["../escape", "a/b", "", ".."]:
+        try:
+            topic_page_path(bad, base)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+def test_save_and_load_topics_round_trip(tmp_path: Path):
+    path = tmp_path / "topics.yaml"
+    topics = [
+        StudyTopic(
+            id="ai-industry-openai",
+            label="OpenAI",
+            description="생성형 AI 대표 기업",
+            priority="high",
+            tags=["ai", "industry"],
+            interest_score=0.8,
+            importance_score=0.6,
+            metadata={"watch": True},
+        ),
+        StudyTopic(id="kr-economy", label="한국 경제"),
+    ]
+    save_topics(topics, path)
+    loaded = load_topics(path)
+
+    assert [t.id for t in loaded] == ["ai-industry-openai", "kr-economy"]
+    first = loaded[0]
+    assert first.priority == "high"
+    assert first.tags == ["ai", "industry"]
+    assert first.interest_score == 0.8
+    assert first.metadata == {"watch": True}
+
+
+def test_load_topics_missing_file_returns_empty(tmp_path: Path):
+    assert load_topics(tmp_path / "nope.yaml") == []
+
+
+def test_load_topics_tolerates_unknown_keys_and_missing_id(tmp_path: Path):
+    path = tmp_path / "topics.yaml"
+    path.write_text(
+        "topics:\n"
+        "  - id: valid\n"
+        "    label: Valid\n"
+        "    unexpected_key: 123\n"
+        "  - label: 'id 없는 항목'\n",  # id 누락 → 건너뜀
+        encoding="utf-8",
+    )
+    loaded = load_topics(path)
+    assert [t.id for t in loaded] == ["valid"]
+    assert loaded[0].label == "Valid"
+
+
+def test_topic_registry_crud(tmp_path: Path):
+    path = tmp_path / "topics.yaml"
+    reg = TopicRegistry(path=path)
+    assert len(reg) == 0
+
+    reg.upsert(StudyTopic(id="t1", label="T1"))
+    reg.upsert(StudyTopic(id="t2", label="T2"))
+    assert "t1" in reg
+    assert len(reg) == 2
+
+    # 같은 id 로 upsert 하면 교체.
+    reg.upsert(StudyTopic(id="t1", label="T1-updated"))
+    assert reg.get("t1").label == "T1-updated"
+    assert len(reg) == 2
+
+    reg.save()
+    reloaded = TopicRegistry.load(path)
+    assert [t.id for t in reloaded.list()] == ["t1", "t2"]
+
+    assert reg.remove("t1") is True
+    assert reg.remove("missing") is False
+    assert "t1" not in reg
+
+
+# --------------------------------------------------------------------------- #
+# 진화 계층 — 생성·승격·감쇠·아카이브 생애주기
+# --------------------------------------------------------------------------- #
 
 _T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -37,14 +167,14 @@ class Clock:
         self.t += timedelta(days=days, hours=hours)
 
 
-def _registry(clock: Clock, **policy_kwargs) -> TopicRegistry:
-    return TopicRegistry(
+def _registry(clock: Clock, **policy_kwargs) -> TopicEvolutionRegistry:
+    return TopicEvolutionRegistry(
         policy=TopicEvolutionPolicy(**policy_kwargs), now_fn=clock
     )
 
 
-def _user_signal(topic_id: str, *, interest: float, fresh: float = 0.5, **kw) -> InterestSignal:
-    return InterestSignal(
+def _user_signal(topic_id: str, *, interest: float, fresh: float = 0.5, **kw) -> TopicSignal:
+    return TopicSignal(
         topic_id=topic_id,
         label=kw.pop("label", topic_id),
         category=kw.pop("category", "ai-industry"),
@@ -94,7 +224,7 @@ class TestDreamingIngestion:
         clock = Clock()
         reg = _registry(clock)
         signals = [
-            InterestSignal(
+            TopicSignal(
                 topic_id="rust",
                 label="Rust async",
                 category="dev",
@@ -102,7 +232,7 @@ class TestDreamingIngestion:
                 user_interest=0.8,
                 freshness_need=0.6,
             ),
-            InterestSignal(
+            TopicSignal(
                 topic_id="kr-housing",
                 label="전세 시장",
                 category="markets",
@@ -121,7 +251,7 @@ class TestNewsKind:
         clock = Clock()
         reg = _registry(clock)
         reg.record(
-            InterestSignal(
+            TopicSignal(
                 topic_id="quake",
                 label="지진 속보",
                 category="general",
@@ -135,7 +265,7 @@ class TestNewsKind:
         clock = Clock()
         reg = _registry(clock)
         reg.record(
-            InterestSignal(
+            TopicSignal(
                 topic_id="ai",
                 label="AI 규제",
                 source=SignalSource.NEWS,
@@ -149,7 +279,7 @@ class TestNewsKind:
 
 
 class TestDecayAndArchive:
-    def _make_active_non_promoted(self, reg: TopicRegistry) -> None:
+    def _make_active_non_promoted(self, reg: TopicEvolutionRegistry) -> None:
         # peak_score 가 promote_threshold(0.70) 미만이면서 active 인 topic.
         topic = reg.record(_user_signal("t", interest=0.7, fresh=0.8))
         assert topic.state == TopicState.ACTIVE

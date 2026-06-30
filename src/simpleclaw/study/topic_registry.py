@@ -1,46 +1,229 @@
-"""진화형 study topic registry — 생성·승격·감쇠·아카이브 생애주기 관리.
+"""study topic 레지스트리 — ``topics.yaml`` 영속화 + 진화형 생애주기 관리.
 
-사용자의 관심사는 고정되지 않는다. 새 주제가 자동으로 감지되고(candidate), 반복적인
-관심을 받으면 매일 공부 대상이 되며(active), 운영자가 핵심 관심사로 고정할 수 있고
-(pinned), 한동안 신호가 끊기면 관심이 식고(cooling) 결국 검색 폴백 용도로만 남는다
-(archived). 이 모듈은 그 생애주기를 한 곳에서 관리한다.
+이 모듈은 study wiki 가 추적하는 주제를 다루는 두 계층을 한 곳에 둔다. 둘은
+서로 다른 책임을 가지며 이름이 겹치지 않도록 명시적으로 분리돼 있다.
 
-설계 결정:
-- **점수 단일화**: topic 의 모든 상태 전이는 :mod:`scorer` 가 만든 단일 점수에 의존한다.
-  user_interest / 반복 언급 / 신선도 필요 / 세상 중요도 / 최근성을 한 숫자로 합성하고,
-  ``min_interest_score`` (active 승격), ``promote_threshold`` (상시 추적 승격) 임계값과
-  비교한다.
-- **시간 기반 감쇠**: 마지막 신호 이후 경과 일수가 ``decay_after_days`` 를 넘으면 cooling,
-  그 두 배(또는 정책 배수)를 넘으면 archived 로 내려간다. "본 적 있음 ≠ 관심사" 원칙
-  (docs/agent-study-wiki.md §2)을 코드로 강제하는 1차 방어선이다.
-- **승격된 주제는 더 오래 추적**: ``peak_score`` 가 ``promote_threshold`` 를 넘은 적 있는
-  주제는 감쇠/아카이브 창을 늘려, 반복 관심을 보인 핵심 주제가 단기간 신호 공백으로
-  성급히 식지 않게 한다.
-- **운영자 pin 은 sticky**: ``pinned`` 상태는 자동 전이 대상에서 제외한다. 운영자가
-  명시적으로 unpin 하기 전까지 항상 daily study 대상으로 유지된다.
-- **시간 주입 가능**: ``now_fn`` 으로 현재 시각을 주입받아 테스트가 감쇠/아카이브를
-  결정적으로 재현할 수 있다.
+1. **영속화 계층** — ``load_topics``/``save_topics``/:class:`TopicRegistry`
+    위키가 추적하는 주제 목록을 사람이 읽고 고칠 수 있는 단일 YAML 파일
+    (``topics.yaml``)로 관리한다. ``StudyTopic`` (:mod:`~simpleclaw.study.types`)
+    항목을 디스크와 주고받는 source of truth 계층이며, retriever/운영 도구가
+    이 API 에 의존한다.
 
-source_planner 의 :class:`~simpleclaw.study.source_planner.StudyTopic` Protocol 을
-:class:`Topic` 이 그대로 만족하므로, registry 의 active topic 을 곧장
-``plan_fetch_requests`` 에 넘길 수 있다.
+    파일 포맷은 다음과 같다.
+
+        topics:
+          - id: ai-industry-openai
+            label: OpenAI
+            priority: high
+            tags: [ai, industry]
+            interest_score: 0.8
+            ...
+
+    설계 결정 — 관대한 로드, 정규화된 저장:
+        ``load_topics`` 는 사람이 손으로 편집하다 생긴 결손/잉여 키에 관대해야
+        한다(알 수 없는 키는 무시, 누락 키는 dataclass 기본값). 반대로
+        ``save_topics`` 는 항상 정규 스키마로 다시 써서 파일을 안정화한다.
+
+2. **진화 계층** — :class:`TopicEvolutionRegistry` 와 :class:`TopicSignal`/
+    :class:`Topic`/:class:`TopicState`/:class:`TopicEvolutionPolicy`
+    사용자의 관심사는 고정되지 않는다. 새 주제가 자동으로 감지되고(candidate),
+    반복적인 관심을 받으면 매일 공부 대상이 되며(active), 운영자가 핵심 관심사로
+    고정할 수 있고(pinned), 한동안 신호가 끊기면 관심이 식고(cooling) 결국 검색
+    폴백 용도로만 남는다(archived). 이 계층은 그 생애주기를 in-memory 로 관리한다.
+
+    설계 결정:
+    - **점수 단일화**: topic 의 모든 상태 전이는 :mod:`scorer` 가 만든 단일 점수에
+      의존한다. user_interest / 반복 언급 / 신선도 필요 / 세상 중요도 / 최근성을 한
+      숫자로 합성하고, ``min_interest_score`` (active 승격), ``promote_threshold``
+      (상시 추적 승격) 임계값과 비교한다.
+    - **시간 기반 감쇠**: 마지막 신호 이후 경과 일수가 ``decay_after_days`` 를
+      넘으면 cooling, 그 두 배(또는 정책 배수)를 넘으면 archived 로 내려간다.
+      "본 적 있음 ≠ 관심사" 원칙(docs/agent-study-wiki.md §2)을 코드로 강제하는
+      1차 방어선이다.
+    - **승격된 주제는 더 오래 추적**: ``peak_score`` 가 ``promote_threshold`` 를
+      넘은 적 있는 주제는 감쇠/아카이브 창을 늘려, 반복 관심을 보인 핵심 주제가
+      단기간 신호 공백으로 성급히 식지 않게 한다.
+    - **운영자 pin 은 sticky**: ``pinned`` 상태는 자동 전이 대상에서 제외한다.
+      운영자가 명시적으로 unpin 하기 전까지 항상 daily study 대상으로 유지된다.
+    - **시간 주입 가능**: ``now_fn`` 으로 현재 시각을 주입받아 테스트가 감쇠/
+      아카이브를 결정적으로 재현할 수 있다.
+
+    source_planner 의 :class:`~simpleclaw.study.source_planner.StudyTopic`
+    Protocol 을 :class:`Topic` 이 그대로 만족하므로, registry 의 active topic 을
+    곧장 ``plan_fetch_requests`` 에 넘길 수 있다.
+
+설계 결정 — 두 계층의 이름 분리:
+    영속화 계층의 :class:`TopicRegistry` 와 진화 계층의
+    :class:`TopicEvolutionRegistry` 는 책임이 다르다(디스크 source of truth vs
+    in-memory 생애주기). 또한 진화 계층의 관심 신호는 :class:`TopicSignal` 로,
+    Dreaming seed 신호인 :class:`~simpleclaw.study.interest_signals.InterestSignal`
+    과 이름을 분리해 같은 패키지에서 충돌 없이 공존하게 한다.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from enum import StrEnum
+from pathlib import Path
 from typing import Callable
 
-from simpleclaw.study.scorer import (
+import yaml
+
+from .paths import topics_yaml_path
+from .scorer import (
     ScoreWeights,
     compute_topic_score,
     normalize_mentions,
     recency_decay_factor,
 )
-from simpleclaw.study.source_planner import TopicKind
+from .source_planner import TopicKind
+from .types import StudyTopic
+
+# --------------------------------------------------------------------------- #
+# 영속화 계층 — ``topics.yaml`` ↔ ``StudyTopic``
+# --------------------------------------------------------------------------- #
+
+# StudyTopic 의 유효 필드 이름 집합 — 알 수 없는 YAML 키를 걸러내는 데 쓴다.
+_TOPIC_FIELDS = {f.name for f in fields(StudyTopic)}
+
+
+def _topic_from_dict(data: dict) -> StudyTopic | None:
+    """YAML dict 한 건을 ``StudyTopic`` 으로 변환한다(잘못된 항목은 ``None``).
+
+    ``id`` 가 없으면 식별 불가 항목이므로 건너뛴다. 알 수 없는 키는 버리고,
+    누락 키는 dataclass 기본값에 맡긴다.
+    """
+    if not isinstance(data, dict):
+        return None
+    topic_id = data.get("id")
+    if not isinstance(topic_id, str) or not topic_id.strip():
+        return None
+    kwargs = {k: v for k, v in data.items() if k in _TOPIC_FIELDS}
+    # label 이 없으면 식별자라도 보여주도록 id 로 채운다.
+    kwargs.setdefault("label", topic_id)
+    return StudyTopic(**kwargs)
+
+
+def _topic_to_dict(topic: StudyTopic) -> dict:
+    """``StudyTopic`` 을 YAML 직렬화용 dict 로 변환한다(필드 정의 순서 보존)."""
+    return {f.name: getattr(topic, f.name) for f in fields(StudyTopic)}
+
+
+def load_topics(path: str | Path | None = None) -> list[StudyTopic]:
+    """``topics.yaml`` 에서 주제 목록을 로드한다.
+
+    파일이 없거나 비었거나 형식이 깨졌으면 빈 목록을 반환한다(봇은 주제 0개로도
+    동작해야 한다).
+
+    Args:
+        path: ``topics.yaml`` 경로. ``None`` 이면 기본 위키 루트의 파일을 쓴다.
+
+    Returns:
+        ``StudyTopic`` 목록.
+    """
+    topics_path = topics_yaml_path() if path is None else Path(path)
+    if not topics_path.is_file():
+        return []
+    try:
+        data = yaml.safe_load(topics_path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("topics", [])
+    if not isinstance(raw, list):
+        return []
+    topics: list[StudyTopic] = []
+    for item in raw:
+        topic = _topic_from_dict(item)
+        if topic is not None:
+            topics.append(topic)
+    return topics
+
+
+def save_topics(topics: list[StudyTopic], path: str | Path | None = None) -> None:
+    """주제 목록을 ``topics.yaml`` 로 정규 스키마로 저장한다(원자적 쓰기).
+
+    부모 디렉터리가 없으면 만든다. 임시 파일에 먼저 쓰고 ``replace`` 로 교체해
+    중간에 끊겨도 기존 파일이 깨지지 않게 한다.
+
+    Args:
+        topics: 저장할 주제 목록.
+        path: ``topics.yaml`` 경로. ``None`` 이면 기본 위키 루트의 파일을 쓴다.
+    """
+    topics_path = topics_yaml_path() if path is None else Path(path)
+    topics_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"topics": [_topic_to_dict(t) for t in topics]}
+    text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    tmp = topics_path.with_suffix(topics_path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(topics_path)
+
+
+class TopicRegistry:
+    """``topics.yaml`` 을 메모리에서 다루는 얇은 레지스트리.
+
+    주제의 조회/추가/갱신을 ``id`` 기준으로 편하게 하기 위한 헬퍼이며, 자동
+    저장은 하지 않는다(:meth:`save` 를 명시 호출). 디스크가 source of truth 인
+    설계상, 호출자가 변경 시점을 통제하도록 한다.
+    """
+
+    def __init__(self, topics: list[StudyTopic] | None = None, path: str | Path | None = None):
+        """레지스트리를 초기화한다.
+
+        Args:
+            topics: 초기 주제 목록(생략 시 빈 목록).
+            path: 저장/로드 대상 ``topics.yaml`` 경로(생략 시 기본 위키 루트).
+        """
+        self._path = topics_yaml_path() if path is None else Path(path)
+        # id 순서를 보존하기 위해 dict(삽입 순서 보장) 로 보관한다.
+        self._topics: dict[str, StudyTopic] = {}
+        for topic in topics or []:
+            self._topics[topic.id] = topic
+
+    @classmethod
+    def load(cls, path: str | Path | None = None) -> "TopicRegistry":
+        """디스크의 ``topics.yaml`` 에서 레지스트리를 로드한다."""
+        resolved = topics_yaml_path() if path is None else Path(path)
+        return cls(load_topics(resolved), path=resolved)
+
+    @property
+    def path(self) -> Path:
+        """이 레지스트리가 읽고 쓰는 ``topics.yaml`` 경로."""
+        return self._path
+
+    def list(self) -> list[StudyTopic]:
+        """등록된 주제를 삽입 순서대로 반환한다."""
+        return list(self._topics.values())
+
+    def get(self, topic_id: str) -> StudyTopic | None:
+        """``id`` 로 주제를 조회한다(없으면 ``None``)."""
+        return self._topics.get(topic_id)
+
+    def __contains__(self, topic_id: object) -> bool:
+        return isinstance(topic_id, str) and topic_id in self._topics
+
+    def __len__(self) -> int:
+        return len(self._topics)
+
+    def upsert(self, topic: StudyTopic) -> None:
+        """주제를 추가하거나 같은 ``id`` 가 있으면 교체한다."""
+        self._topics[topic.id] = topic
+
+    def remove(self, topic_id: str) -> bool:
+        """``id`` 로 주제를 제거한다(있었으면 ``True``)."""
+        return self._topics.pop(topic_id, None) is not None
+
+    def save(self, path: str | Path | None = None) -> None:
+        """현재 주제 목록을 디스크에 저장한다."""
+        save_topics(self.list(), path=path or self._path)
+
+
+# --------------------------------------------------------------------------- #
+# 진화 계층 — 생성·승격·감쇠·아카이브 생애주기
+# --------------------------------------------------------------------------- #
 
 NowFn = Callable[[], datetime]
 
@@ -82,12 +265,17 @@ class SignalSource(StrEnum):
 
 
 @dataclass(frozen=True)
-class InterestSignal:
+class TopicSignal:
     """topic 에 관심을 부여하는 단일 신호.
 
     사용자 발화, Dreaming 파이프라인 결과, 일반 뉴스 등이 이 형태로 registry 에
     들어온다. 모든 점수 신호(0~1)는 선택적이며, 주어지지 않으면 0(또는 freshness 는
     중립 0.5)으로 둔다.
+
+    Dreaming seed 신호인 :class:`~simpleclaw.study.interest_signals.InterestSignal`
+    과는 책임이 다르다. 전자는 "무엇이 관심사 후보인가"를 추출(topic_hint/weight/
+    confidence)하고, 본 :class:`TopicSignal` 은 그 후보를 진화 registry 에 점수
+    신호(user_interest/global_importance/freshness_need)로 주입한다.
 
     Attributes:
         topic_id: topic 식별자(같은 주제는 같은 id 로 합쳐진다).
@@ -219,11 +407,12 @@ class TopicEvolutionPolicy:
         return max(1.0, self.decay_after_days * 24.0)
 
 
-class TopicRegistry:
+class TopicEvolutionRegistry:
     """topic 들의 생성·승격·감쇠·아카이브를 관리하는 in-memory 레지스트리.
 
-    영속화(topics.yaml 쓰기)는 후속 단계의 책임이고, 본 레지스트리는 record/evolve 로
-    상태를 진화시키고 :meth:`to_records` 로 직렬화 가능한 표현만 제공한다.
+    영속화(topics.yaml 쓰기)는 :class:`TopicRegistry`/:func:`save_topics` 의
+    책임이고, 본 레지스트리는 record/evolve 로 상태를 진화시키고 :meth:`to_records`
+    로 직렬화 가능한 표현만 제공한다.
     """
 
     def __init__(
@@ -263,7 +452,7 @@ class TopicRegistry:
 
     # -- 신호 수용 -----------------------------------------------------
 
-    def record(self, signal: InterestSignal) -> Topic | None:
+    def record(self, signal: TopicSignal) -> Topic | None:
         """관심 신호 하나를 반영해 topic 을 생성/갱신하고 상태를 재계산한다.
 
         기존 topic 이면 누적 신호(언급 수↑, 관심/중요도/신선도 max, 마지막 신호 시각)를
@@ -320,7 +509,7 @@ class TopicRegistry:
         return topic
 
     def ingest_dreaming_signals(
-        self, signals: Iterable[InterestSignal]
+        self, signals: Iterable[TopicSignal]
     ) -> list[Topic]:
         """Dreaming 파이프라인이 surface 한 신호들을 일괄 반영한다.
 
