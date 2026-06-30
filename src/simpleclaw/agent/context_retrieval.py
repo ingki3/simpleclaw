@@ -13,7 +13,9 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +31,104 @@ if TYPE_CHECKING:
     from simpleclaw.study.retriever import StudyRetriever
 
 logger = logging.getLogger(__name__)
+
+# BIZ-394 — Study context freshness/confidence gate 기본값.
+# study context 는 배경지식이므로, 마지막 갱신이 오래됐거나 출처 confidence 가 낮으면
+# 현재 사실로 단정해선 안 된다. 이 임계값을 넘기면 블록에 신선도 경고와 한계 명시
+# 강제 지시문을 심어, 답변이 반드시 한계를 밝히거나 실시간 재조회를 하도록 한다.
+STUDY_STALE_AFTER_DAYS = 14
+STUDY_MIN_CONFIDENCE = 0.5
+# 라우터(response_router)가 stale 여부를 파싱하는 마커. 자유 텍스트와 무관히 한 줄.
+_STUDY_FRESHNESS_STALE_MARKER = "Freshness: stale"
+# 블록에서 "Updated: <iso>" / "Confidence: <float>" 메타를 뽑는 정규식.
+_STUDY_UPDATED_RE = re.compile(r"updated\s*[:=]\s*([0-9T:\-+.Zz ]{8,40})", re.IGNORECASE)
+_STUDY_CONFIDENCE_RE = re.compile(r"confidence\s*[:=]\s*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+
+
+def _parse_iso_datetime(raw: str) -> datetime | None:
+    """블록의 Updated 값을 timezone-aware datetime 으로 보수적으로 파싱한다.
+
+    날짜만 있거나(``2026-06-01``) ``Z`` 표기여도 깨지지 않게 흡수하고, 파싱 불가면
+    ``None`` 을 돌려 신선도 판정에서 제외한다(근거 없는 stale 판정 방지).
+    """
+    value = (raw or "").strip().rstrip(".")
+    if not value:
+        return None
+    candidate = value.replace("Z", "+00:00").replace("z", "+00:00")
+    for text in (candidate, candidate[:10]):
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
+def annotate_study_freshness(
+    study_block: str,
+    *,
+    now: datetime,
+    stale_after_days: int = STUDY_STALE_AFTER_DAYS,
+    min_confidence: float = STUDY_MIN_CONFIDENCE,
+) -> str:
+    """stale/저신뢰 study context 에 신선도 경고 + 한계 명시 강제 지시문을 덧붙인다.
+
+    study context 의 ``Updated:`` 최신 시각이 ``stale_after_days`` 보다 오래됐거나,
+    출처 ``Confidence:`` 최솟값이 ``min_confidence`` 미만이면 블록 끝에 경고 섹션을
+    더한다. 경고 섹션은 (1) 라우터가 파싱할 ``Freshness: stale`` 마커와 (2) LLM 이
+    답변에서 반드시 한계를 밝히거나 실시간 재조회하도록 강제하는 지시문을 담는다.
+
+    Args:
+        study_block: ``StudyRetriever`` 가 만든 study context 블록(비어 있으면 그대로).
+        now: 신선도 비교 기준 시각(timezone-aware 권장).
+        stale_after_days: 이 일수보다 오래된 갱신이면 stale.
+        min_confidence: 이 값 미만 confidence 면 저신뢰.
+
+    Returns:
+        필요 시 경고 섹션이 덧붙은 블록(아니면 입력 그대로).
+    """
+    block = (study_block or "").rstrip()
+    if not block:
+        return study_block
+
+    now_aware = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+
+    updated_dts = [
+        dt for dt in (_parse_iso_datetime(m) for m in _STUDY_UPDATED_RE.findall(block)) if dt
+    ]
+    newest = max(updated_dts) if updated_dts else None
+    age_days = (now_aware - newest).total_seconds() / 86400.0 if newest else None
+    is_stale = age_days is not None and age_days > max(0, int(stale_after_days))
+
+    confidences = [float(m) for m in _STUDY_CONFIDENCE_RE.findall(block)]
+    min_conf = min(confidences) if confidences else None
+    is_low_conf = min_conf is not None and min_conf < float(min_confidence)
+
+    if not (is_stale or is_low_conf):
+        return study_block
+
+    reasons: list[str] = []
+    if is_stale and age_days is not None:
+        reasons.append(f"마지막 갱신이 약 {int(age_days)}일 전입니다")
+    if is_low_conf and min_conf is not None:
+        reasons.append(f"출처 confidence 가 낮습니다(min={min_conf:.2f})")
+    reason_text = "; ".join(reasons) or "신선도/신뢰도가 충분하지 않습니다"
+
+    warning = "\n".join(
+        [
+            "",
+            "## Agent Study Context — Freshness Warning",
+            # 라우터가 파싱하는 결정적 마커. stale 또는 저신뢰면 항상 stale 로 표기해
+            # 현재 사실 재조회(at-least guarded)를 강제하는 신호로 쓴다.
+            _STUDY_FRESHNESS_STALE_MARKER,
+            f"경고: 위 배경지식은 신뢰 근거로 쓰기에 한계가 있습니다 — {reason_text}.",
+            "배경지식만으로 현재 사실을 단정하지 마세요. 답변에 시점·불확실성 한계를 "
+            "명시하거나, 실시간 조회로 재확인한 뒤 답하세요.",
+        ]
+    )
+    return f"{block}\n{warning}"
 
 
 @dataclass(frozen=True)
@@ -59,17 +159,28 @@ class ContextRetrievalService:
         config: ContextRetrievalConfig,
         structured_logger: StructuredLogger | None = None,
         study_retriever: "StudyRetriever | None" = None,
+        now_provider: Callable[[], datetime] | None = None,
+        study_stale_after_days: int = STUDY_STALE_AFTER_DAYS,
+        study_min_confidence: float = STUDY_MIN_CONFIDENCE,
     ) -> None:
         """오케스트레이터에서 생성된 store/service와 retrieval 설정을 보관한다.
 
         ``study_retriever`` 는 Agent Study Wiki 회수기(BIZ-393)다. ``None`` 이거나
         비활성이면 study context 를 붙이지 않으며, 회수가 실패해도 대화 RAG/장기기억
         회수와 독립적으로 격리된다.
+
+        ``now_provider`` 는 study context 신선도 비교용 시계다(테스트 주입용). 기본은
+        UTC now. ``study_stale_after_days`` / ``study_min_confidence`` 는 BIZ-394
+        freshness/confidence gate 임계값으로, 초과 시 study 블록에 한계 명시 강제
+        지시문을 심는다.
         """
         self._store = store
         self._embedding_service = embedding_service
         self._structured_logger = structured_logger
         self._study_retriever = study_retriever
+        self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self._study_stale_after_days = study_stale_after_days
+        self._study_min_confidence = study_min_confidence
         self._rag_top_k = config.rag_top_k
         self._rag_threshold = config.rag_threshold
         self._long_term_enabled = config.long_term_enabled
@@ -105,15 +216,40 @@ class ContextRetrievalService:
 
         RAG/장기기억 회수와 완전히 분리된 실패 격리 지점이다. retriever 자체도
         내부에서 예외를 삼키지만, 여기서도 한 번 더 감싸 study 저장소 장애가 대화
-        응답 흐름으로 새지 않도록 이중으로 보호한다.
+        응답 흐름으로 새지 않도록 이중으로 보호한다. BIZ-394: 회수된 블록이 stale/
+        저신뢰면 신선도 경고 + 한계 명시 강제 지시문을 덧붙인다.
         """
         if self._study_retriever is None or not self._study_retriever.enabled:
             return ""
         try:
-            return self._study_retriever.retrieve_context(user_text)
+            block = self._study_retriever.retrieve_context(user_text)
         except Exception as exc:  # noqa: BLE001 — study 회수 장애는 대화 응답을 막지 않는다
             logger.warning("Study context retrieval failed: %s", exc)
             return ""
+        return self._annotate_study_freshness(block)
+
+    def _annotate_study_freshness(self, block: str) -> str:
+        """study 블록에 stale/저신뢰 경고를 덧붙인다(실패해도 원본 블록 유지)."""
+        if not block:
+            return block
+        try:
+            return annotate_study_freshness(
+                block,
+                now=self._now_provider(),
+                stale_after_days=self._study_stale_after_days,
+                min_confidence=self._study_min_confidence,
+            )
+        except Exception as exc:  # noqa: BLE001 — 신선도 주석 실패가 회수를 막아선 안 됨
+            logger.warning("Study freshness annotation failed: %s", exc)
+            return block
+
+    def study_context_for_routing(self, user_text: str) -> str:
+        """라우팅 단계에서 freshness gate 신호로 쓸 study 블록을 회수·주석한다.
+
+        오케스트레이터가 route 결정 전에 호출한다. 회수/주석 모두 내부에서 실패를
+        삼키므로, 장애 시 빈 문자열을 돌려 라우팅을 막지 않는다.
+        """
+        return self._retrieve_study_context(user_text)
 
     async def _retrieve_conversation_context(
         self,

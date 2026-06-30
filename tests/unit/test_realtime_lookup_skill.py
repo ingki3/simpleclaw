@@ -67,6 +67,41 @@ def test_main_with_raw_korean_args_does_not_error(monkeypatch, capsys):
 
 
 # ----------------------------------------------------------------------
+# domain classification (BIZ-394 구조적 market cue)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "OpenAI 상장 일정이 어떻게 돼?",
+        "엔비디아 IPO 공모가 전망",
+        "이번 인수로 기업가치가 얼마나 오를까",
+        "증시 영향 분석해줘",
+        "테슬라 시총 변화",
+    ],
+)
+def test_classify_query_market_domain_events(query):
+    """기업·시장 이벤트(상장/IPO/공모/기업가치/시총/증시)는 market 도메인으로 분류된다."""
+    assert realtime_lookup.classify_query(query) == "market"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("오늘 서울 날씨 어때?", "weather"),
+        ("코스피 지금 얼마야?", "market"),
+        ("어제 KBO 경기 스코어", "sports"),
+        ("최신 속보 알려줘", "news"),
+        ("파이썬 리스트가 뭐야?", "general"),
+    ],
+)
+def test_classify_query_domain_mapping(query, expected):
+    """주요 도메인 분류가 회귀하지 않는다."""
+    assert realtime_lookup.classify_query(query) == expected
+
+
+# ----------------------------------------------------------------------
 # timeline-sensitive query detector
 # ----------------------------------------------------------------------
 

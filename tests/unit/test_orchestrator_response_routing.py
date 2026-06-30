@@ -114,6 +114,61 @@ async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(
 
 
 @pytest.mark.asyncio
+async def test_world_cup_scenario_uses_complex_workflow_when_enabled(config_file, monkeypatch):
+    """BIZ-394: 월드컵 경우의 수(현재성+규칙+남은 변수) 질문은 complex workflow로 간다."""
+    text = config_file.read_text(encoding="utf-8")
+    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    orch = AgentOrchestrator(config_file)
+    orch._router = MagicMock()
+    orch._router.send = AsyncMock(return_value=LLMResponse(text="should not be direct loop"))
+
+    captured = {}
+
+    async def fake_complex(text, decision, *, on_progress=None):
+        captured["decision"] = decision
+        return "복합 워크플로우 답변"
+
+    monkeypatch.setattr(orch, "_run_complex_fact_workflow", fake_complex)
+
+    result = await orch.process_message("대한민국 월드컵 32강 진출 가능성이 어떻게 되지?", 1, 1)
+
+    assert result == "복합 워크플로우 답변"
+    decision = captured["decision"]
+    assert decision.route.value == "complex_fact_workflow"
+    assert decision.needs_current_facts is True
+
+
+@pytest.mark.asyncio
+async def test_market_impact_question_does_not_use_complex_but_not_standard(
+    config_file, monkeypatch
+):
+    """BIZ-394: 시장 영향 분석 질문은 complex까지는 아니어도 standard default로 안 떨어진다."""
+    text = config_file.read_text(encoding="utf-8")
+    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    orch = AgentOrchestrator(config_file)
+    orch._router = MagicMock()
+    orch._router.send = AsyncMock(return_value=LLMResponse(text="근거 기반 답변"))
+
+    async def fail_complex(*args, **kwargs):
+        raise AssertionError("market impact question should not use complex workflow")
+
+    monkeypatch.setattr(orch, "_run_complex_fact_workflow", fail_complex)
+
+    from simpleclaw.agent.response_router import ResponseRoute, classify_response_route
+
+    decision = classify_response_route(
+        "OpenAI 상장 연기가 증시에 끼치는 영향을 조사해줘", route_threshold=3
+    )
+    assert decision.route != ResponseRoute.STANDARD_TOOL_LOOP
+    assert decision.needs_impact_analysis is True
+
+    result = await orch.process_message(
+        "OpenAI 상장 연기가 증시에 끼치는 영향을 조사해줘", 1, 1
+    )
+    assert result == "근거 기반 답변"
+
+
+@pytest.mark.asyncio
 async def test_dspy_backend_setting_warns_and_falls_back(config_file, monkeypatch, caplog):
     text = config_file.read_text(encoding="utf-8")
     config_file.write_text(
