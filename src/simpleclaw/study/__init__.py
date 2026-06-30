@@ -22,6 +22,9 @@ source 계획/수집 계층(매일 학습할 topic 의 source 를 계획·수집
     - :mod:`~simpleclaw.study.source_planner` — topic 으로부터 collector 별 fetch
       요청을 생성하고, 일반 뉴스 후보를 relevance score 로 걸러 wiki 에 쓸 가치가
       있는 것만 남긴다.
+    - :mod:`~simpleclaw.study.interest_signals` — Dreaming 산출물/대화/사용자
+      질문에서 관심사 signal 을 추출해 topic 의 seed 를 만든다. 자동 산출물은 낮은
+      가중치로만 반영한다.
 
 설계 결정 — ``StudyTopic`` 두 갈래:
     패키지 레벨 ``StudyTopic`` 은 ``topics.yaml`` 항목을 표현하는 구체 dataclass
@@ -45,6 +48,20 @@ from .collectors import (
     StudyFetchResult,
 )
 from .index_store import StudyIndexStore
+from .interest_signals import (
+    AUTO_REPORT_MAX_WEIGHT,
+    INSIGHT_MIN_CONFIDENCE,
+    MEMORY_ITEM_WEIGHTS,
+    USER_MESSAGE_BASE_WEIGHT,
+    InterestSignal,
+    derive_topic_hint,
+    extract_keywords,
+    extract_topic_hints,
+    signals_from_auto_reports,
+    signals_from_insights,
+    signals_from_memory_items,
+    signals_from_user_messages,
+)
 from .markdown import parse_study_page, render_study_page
 from .paths import (
     daily_dir,
@@ -113,6 +130,19 @@ __all__ = [
     "StudyCollector",
     "StudyFetchRequest",
     "StudyFetchResult",
+    # interest_signals
+    "AUTO_REPORT_MAX_WEIGHT",
+    "INSIGHT_MIN_CONFIDENCE",
+    "MEMORY_ITEM_WEIGHTS",
+    "USER_MESSAGE_BASE_WEIGHT",
+    "InterestSignal",
+    "derive_topic_hint",
+    "extract_keywords",
+    "extract_topic_hints",
+    "signals_from_auto_reports",
+    "signals_from_insights",
+    "signals_from_memory_items",
+    "signals_from_user_messages",
     # source_planner
     "DEFAULT_RELEVANCE_THRESHOLD",
     "DEFAULT_SOURCE_POLICY",
