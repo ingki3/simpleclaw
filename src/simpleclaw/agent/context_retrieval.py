@@ -26,6 +26,7 @@ from simpleclaw.memory.supersession import is_expired_event_memory
 
 if TYPE_CHECKING:
     from simpleclaw.logging.structured_logger import StructuredLogger
+    from simpleclaw.study.retriever import StudyRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +58,18 @@ class ContextRetrievalService:
         embedding_service: EmbeddingService | None,
         config: ContextRetrievalConfig,
         structured_logger: StructuredLogger | None = None,
+        study_retriever: "StudyRetriever | None" = None,
     ) -> None:
-        """오케스트레이터에서 생성된 store/service와 retrieval 설정을 보관한다."""
+        """오케스트레이터에서 생성된 store/service와 retrieval 설정을 보관한다.
+
+        ``study_retriever`` 는 Agent Study Wiki 회수기(BIZ-393)다. ``None`` 이거나
+        비활성이면 study context 를 붙이지 않으며, 회수가 실패해도 대화 RAG/장기기억
+        회수와 독립적으로 격리된다.
+        """
         self._store = store
         self._embedding_service = embedding_service
         self._structured_logger = structured_logger
+        self._study_retriever = study_retriever
         self._rag_top_k = config.rag_top_k
         self._rag_threshold = config.rag_threshold
         self._long_term_enabled = config.long_term_enabled
@@ -79,6 +87,35 @@ class ContextRetrievalService:
         )
 
     async def retrieve(
+        self,
+        user_text: str,
+        exclude_contents: set[str] | None = None,
+    ) -> str:
+        """대화 RAG·장기기억 회수에 Agent Study Wiki 배경지식을 더해 포맷한다.
+
+        두 회수 경로는 서로 독립이다. study 회수는 임베딩(RAG) 활성 여부와 무관하게
+        동작하며(자체 lexical 매칭), 어느 한쪽이 실패해도 다른 쪽 결과는 유지된다.
+        """
+        rag_context = await self._retrieve_conversation_context(user_text, exclude_contents)
+        study_context = self._retrieve_study_context(user_text)
+        return "\n\n".join(part for part in (rag_context, study_context) if part)
+
+    def _retrieve_study_context(self, user_text: str) -> str:
+        """Agent Study Wiki 배경지식 블록을 회수한다(없거나 실패하면 빈 문자열).
+
+        RAG/장기기억 회수와 완전히 분리된 실패 격리 지점이다. retriever 자체도
+        내부에서 예외를 삼키지만, 여기서도 한 번 더 감싸 study 저장소 장애가 대화
+        응답 흐름으로 새지 않도록 이중으로 보호한다.
+        """
+        if self._study_retriever is None or not self._study_retriever.enabled:
+            return ""
+        try:
+            return self._study_retriever.retrieve_context(user_text)
+        except Exception as exc:  # noqa: BLE001 — study 회수 장애는 대화 응답을 막지 않는다
+            logger.warning("Study context retrieval failed: %s", exc)
+            return ""
+
+    async def _retrieve_conversation_context(
         self,
         user_text: str,
         exclude_contents: set[str] | None = None,
