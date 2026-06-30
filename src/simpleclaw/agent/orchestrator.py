@@ -31,6 +31,7 @@ from simpleclaw.config import (
     load_recipes_config,
     load_security_config,
     load_skills_learning_config,
+    load_study_config,
 )
 from simpleclaw.llm.models import (
     LLMRequest,
@@ -116,6 +117,7 @@ from simpleclaw.agent.tool_schemas import (
     validate_dispatch_tool_names,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -678,10 +680,26 @@ class AgentOrchestrator:
             if self._rag_enabled
             else None
         )
+        # BIZ-393: Agent Study Wiki 회수기 — 질문 시 관련 배경지식 블록을 system
+        # prompt 에 주입한다. 대화 RAG/장기기억 회수와 독립적으로 실패 격리된다.
+        # 기능 플래그(study.enabled + study.retrieval.enabled)가 모두 켜져야 동작.
+        study_config = load_study_config(config_path)
+        study_retrieval_cfg = study_config.get("retrieval", {}) or {}
+        study_wiki_dir = study_config.get("wiki_dir") or "~/.simpleclaw-agent/default/agent_wiki"
+        self._study_retriever = StudyRetriever(
+            StudyRetrievalConfig(
+                enabled=bool(study_config.get("enabled"))
+                and bool(study_retrieval_cfg.get("enabled")),
+                wiki_dir=Path(str(study_wiki_dir)).expanduser(),
+                top_k=int(study_retrieval_cfg.get("top_k", 4)),
+                max_context_chars=int(study_retrieval_cfg.get("max_context_chars", 5000)),
+            )
+        )
         self._context_retrieval = ContextRetrievalService(
             store=self._store,
             embedding_service=self._embedding_service,
             structured_logger=self._structured_logger,
+            study_retriever=self._study_retriever,
             config=ContextRetrievalConfig(
                 rag_top_k=self._rag_top_k,
                 rag_threshold=self._rag_threshold,

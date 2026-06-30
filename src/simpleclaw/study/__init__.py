@@ -67,6 +67,11 @@ from .source_planner import (
     plan_fetch_requests,
     select_wiki_worthy,
 )
+from .retriever import (
+    StudyRetrievalConfig,
+    StudyRetriever,
+    StudyTopicMatch,
+)
 from .topic_registry import TopicRegistry, load_topics, save_topics
 from .types import (
     StudyItemStatus,
@@ -114,4 +119,8 @@ __all__ = [
     "load_source_policy",
     "plan_fetch_requests",
     "select_wiki_worthy",
+    # retriever
+    "StudyRetrievalConfig",
+    "StudyRetriever",
+    "StudyTopicMatch",
 ]
