@@ -452,6 +452,11 @@ class EvolvingTopicRegistry:
         갱신하고, 없으면 ``auto_create`` 일 때만 candidate 로 새로 만든다. 갱신 후
         점수와 상태를 즉시 재계산한다.
 
+        단, 운영자가 ``pin()`` 한 topic 은 sticky 정책상 점수/메타데이터/last_signal_at
+        만 갱신하고 자동 상태 전이는 적용하지 않는다(PR #402: pinned 는 자동 전이 대상
+        제외). 따라서 새 user/Dreaming/news 신호가 들어와도 ``unpin()`` 전까지 PINNED
+        를 유지한다.
+
         Returns:
             반영된 topic. ``auto_create=False`` 이고 신규 주제면 ``None``.
         """
@@ -498,7 +503,11 @@ class EvolvingTopicRegistry:
             # 신호 시각은 가장 최신만 반영(과거 신호 재생 방어).
             topic.last_signal_at = max(topic.last_signal_at, signal_at)
 
-        self._refresh(topic, now)
+        if topic.state == TopicState.PINNED:
+            # pinned 는 sticky — 점수만 갱신하고 상태는 건드리지 않는다(evolve 와 동일).
+            self._refresh_score(topic, now)
+        else:
+            self._refresh(topic, now)
         return topic
 
     def ingest_dreaming_signals(
@@ -564,7 +573,7 @@ class EvolvingTopicRegistry:
         for topic in self._topics.values():
             if topic.state == TopicState.PINNED:
                 # pinned 는 점수만 갱신하고 상태는 건드리지 않는다(sticky).
-                topic.interest_score = self._score(topic, now)
+                self._refresh_score(topic, now)
                 continue
             before = topic.state
             self._refresh(topic, now)
@@ -601,13 +610,27 @@ class EvolvingTopicRegistry:
 
     # -- 내부: 점수/상태 계산 ------------------------------------------
 
-    def _refresh(self, topic: Topic, now: datetime) -> None:
-        """점수를 재계산하고, 그 점수와 경과시간으로 상태를 다시 정한다."""
+    def _refresh_score(self, topic: Topic, now: datetime) -> None:
+        """점수/peak/updated_at 만 갱신하고 상태 전이는 하지 않는다.
+
+        pinned sticky 정책상 record/evolve 가 pinned topic 의 신호·점수는 반영하되
+        자동 상태 전이(_next_state)는 적용하지 않아야 하므로, 점수 갱신과 상태 전이를
+        분리해 둔다.
+        """
         score = self._score(topic, now)
         topic.interest_score = score
         topic.peak_score = max(topic.peak_score, score)
-        topic.state = self._next_state(topic, now)
         topic.updated_at = now
+
+    def _refresh(self, topic: Topic, now: datetime) -> None:
+        """점수를 재계산하고, 그 점수와 경과시간으로 상태를 다시 정한다.
+
+        pinned 예외는 호출자가 책임진다(_next_state 는 pinned 를 모른다). pinned 를
+        넘기면 자동 전이로 demote 될 수 있으므로, pinned 인 topic 에는 대신
+        :meth:`_refresh_score` 를 쓴다(:meth:`unpin` 은 의도적으로 _refresh 를 호출해
+        경과시간 기준 상태로 되돌린다)."""
+        self._refresh_score(topic, now)
+        topic.state = self._next_state(topic, now)
 
     def _score(self, topic: Topic, now: datetime) -> float:
         """topic 의 누적 신호 + 경과시간으로 0~1 점수를 만든다."""
