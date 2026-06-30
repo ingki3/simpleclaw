@@ -98,6 +98,10 @@
 
 ## Done
 
+### 2026-06-30
+
+- [x] **BIZ-388: Agent Study Wiki — Study item SQLite index와 migrations** — Markdown 위키가 source of truth이지만 질문 시 빠른 retrieval/freshness filtering에는 구조화 index가 필요해, 사용자 메모리(`memory_items`)와 섞이지 않게 `study_topics`/`study_items` 테이블을 conversations.db에 additive로 추가했다. (1) migration `db/migrations_data/conversations/0005_agent_study_items.sql`(이슈 SQL draft 그대로 — topics PK·items AUTOINCREMENT·topic/retrieved_at/confidence 인덱스, FK). (2) `study/types.py`에 `StudyItemRecord`(SQLite read model) 추가 — 기존 `StudyItemStatus`(confirmed/reported/rumored/analysis/stale/unknown) 재사용. (3) `study/index_store.py` `StudyIndexStore` — 스키마 SoT를 migration SQL 파일 1곳으로 단일화해 `initialize_schema()`가 동일 SQL을 idempotent 재실행, `upsert_topic`/`add_item`, LIKE 토큰 매칭 `search_lexical`(와일드카드 이스케이프·topic scope), tz-safe `fresh_items`(freshness/valid_until/status/confidence gate). (4) `study/paths.py` `index_path()` 추가 — 운영자 조회(`StudyWikiStore`, BIZ-395)와 같은 `index.sqlite`를 가리키도록 위치 일원화. 단위 테스트 `test_study_index_store.py` 11개 + `test_db_migrations.py` study 테이블·버전 회귀 갱신. 검증: `tests/unit/` 1933 passed, ruff clean. (2026-06-30)
+
 ### 2026-06-29
 
 - [x] **BIZ-386: Agent Study Wiki 설계 문서 + config skeleton** — 사용자 메모리(USER.md/MEMORY.md/insights)와 외부 세계 배경지식을 분리하는 경계를 세웠다. `docs/agent-study-wiki.md`(목적/비목표, 메모리 vs Wiki 대비표, 데이터 모델, freshness/confidence·topic 진화 정책), `src/simpleclaw/config_sections/study.py`(`_STUDY_DEFAULTS` + 중첩 재귀 병합 `load_study_config()`, `wiki_dir` Path 정규화), `config.py` facade export, `config.yaml.example` `study:` 예시, `tests/unit/test_study_config.py`(5 케이스). study runner/wiki 생성/retrieval 연동은 후속 이슈(2/11~). 검증: `pytest tests/unit/test_study_config.py` 5 passed, config 회귀 126 passed, `ruff check` clean. (2026-06-29, BIZ-398로 전용 브랜치 분리·PR)

@@ -131,3 +131,47 @@ class StudyPage:
     open_questions: list[str] = field(default_factory=list)
     sources: list[StudySource] = field(default_factory=list)
     updated_at: str | None = None
+
+
+@dataclass(frozen=True)
+class StudyItemRecord:
+    """SQLite retrieval index(``study_items`` 한 행)의 메모리 표현.
+
+    Markdown ``StudyPage`` 가 사람이 읽는 source of truth 라면, 이 record 는 질문 시
+    빠른 retrieval/freshness filtering 을 위한 *구조화 index* 의 read model 이다
+    (:mod:`~simpleclaw.study.index_store`). 컬럼과 1:1 대응하며, ``metadata`` 는
+    ``metadata_json`` 을 역직렬화한 dict, ``embedding`` 은 BLOB raw bytes(없으면
+    ``None``)다. 신선도/신뢰도/출처 메타데이터를 보존해 응답 시 "외부 배경지식"임을
+    드러낼 수 있게 한다.
+
+    Attributes:
+        id: ``study_items.id`` (1 이상).
+        topic_id: 소속 ``StudyTopic.id``.
+        title: 항목 제목.
+        text: 항목 본문(요약/사실 한 건).
+        source_url: 출처 URL.
+        source_title: 출처 표시 이름.
+        status: :class:`StudyItemStatus` 값 문자열.
+        confidence: 0.0~1.0 신뢰도.
+        importance: 0.0~1.0 중요도.
+        published_at: 원문 발행 시각(ISO8601) 또는 ``None``.
+        retrieved_at: 수집 시각(ISO8601, freshness 기준).
+        valid_until: 명시적 만료 시각(ISO8601) 또는 ``None``.
+        metadata: 확장용 자유 형식 메타데이터.
+        embedding: semantic search 용 임베딩 BLOB(후속 단계) 또는 ``None``.
+    """
+
+    id: int
+    topic_id: str
+    title: str
+    text: str
+    source_url: str
+    source_title: str
+    status: str
+    confidence: float
+    importance: float
+    published_at: str | None
+    retrieved_at: str
+    valid_until: str | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    embedding: bytes | None = None

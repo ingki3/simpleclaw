@@ -26,6 +26,9 @@ DEFAULT_WIKI_ROOT = "~/.simpleclaw-agent/default/study"
 TOPICS_FILE = "topics.yaml"
 TOPICS_DIR = "topics"
 DAILY_DIR = "daily"
+# 구조화 retrieval index(SQLite) 파일명. 운영자 조회(StudyWikiStore, BIZ-395)와
+# 동일한 위치를 가리키도록 한 곳에 고정한다.
+INDEX_FILE = "index.sqlite"
 
 
 def wiki_root(base: str | Path | None = None) -> Path:
@@ -55,6 +58,15 @@ def topics_dir(base: str | Path | None = None) -> Path:
 def daily_dir(base: str | Path | None = None) -> Path:
     """일자별 스터디 로그 디렉터리(``daily/``) 경로를 반환한다."""
     return wiki_root(base) / DAILY_DIR
+
+
+def index_path(base: str | Path | None = None) -> Path:
+    """구조화 retrieval index(``index.sqlite``) 파일 경로를 반환한다.
+
+    :class:`~simpleclaw.study.index_store.StudyIndexStore` 와 운영자 조회
+    ``StudyWikiStore`` 가 같은 파일을 보도록 위치를 일원화한다.
+    """
+    return wiki_root(base) / INDEX_FILE
 
 
 def topic_page_path(topic_id: str, base: str | Path | None = None) -> Path:

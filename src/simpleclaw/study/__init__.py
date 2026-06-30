@@ -44,9 +44,11 @@ from .collectors import (
     StudyFetchRequest,
     StudyFetchResult,
 )
+from .index_store import StudyIndexStore
 from .markdown import parse_study_page, render_study_page
 from .paths import (
     daily_dir,
+    index_path,
     init_wiki_root,
     topic_page_path,
     topics_dir,
@@ -74,6 +76,7 @@ from .retriever import (
 )
 from .topic_registry import TopicRegistry, load_topics, save_topics
 from .types import (
+    StudyItemRecord,
     StudyItemStatus,
     StudyPage,
     StudySource,
@@ -82,6 +85,7 @@ from .types import (
 
 __all__ = [
     # types
+    "StudyItemRecord",
     "StudyItemStatus",
     "StudySource",
     "StudyTopic",
@@ -92,7 +96,10 @@ __all__ = [
     "daily_dir",
     "topics_dir",
     "topic_page_path",
+    "index_path",
     "init_wiki_root",
+    # index_store
+    "StudyIndexStore",
     # markdown
     "render_study_page",
     "parse_study_page",
