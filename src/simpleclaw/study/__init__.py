@@ -19,6 +19,13 @@ from simpleclaw.study.collectors import (
     StudyFetchRequest,
     StudyFetchResult,
 )
+from simpleclaw.study.scorer import (
+    DEFAULT_SCORE_WEIGHTS,
+    ScoreWeights,
+    compute_topic_score,
+    normalize_mentions,
+    recency_decay_factor,
+)
 from simpleclaw.study.source_planner import (
     DEFAULT_RELEVANCE_THRESHOLD,
     DEFAULT_SOURCE_POLICY,
@@ -34,6 +41,14 @@ from simpleclaw.study.source_planner import (
     plan_fetch_requests,
     select_wiki_worthy,
 )
+from simpleclaw.study.topic_registry import (
+    InterestSignal,
+    SignalSource,
+    Topic,
+    TopicEvolutionPolicy,
+    TopicRegistry,
+    TopicState,
+)
 
 __all__ = [
     # collectors
@@ -42,6 +57,12 @@ __all__ = [
     "StudyCollector",
     "StudyFetchRequest",
     "StudyFetchResult",
+    # scorer
+    "DEFAULT_SCORE_WEIGHTS",
+    "ScoreWeights",
+    "compute_topic_score",
+    "normalize_mentions",
+    "recency_decay_factor",
     # source_planner
     "DEFAULT_RELEVANCE_THRESHOLD",
     "DEFAULT_SOURCE_POLICY",
@@ -56,4 +77,11 @@ __all__ = [
     "load_source_policy",
     "plan_fetch_requests",
     "select_wiki_worthy",
+    # topic_registry
+    "InterestSignal",
+    "SignalSource",
+    "Topic",
+    "TopicEvolutionPolicy",
+    "TopicRegistry",
+    "TopicState",
 ]
