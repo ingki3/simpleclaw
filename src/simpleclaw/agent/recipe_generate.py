@@ -22,8 +22,11 @@ from typing import Any
 
 import yaml
 
+from simpleclaw.agent.recipe_render import (
+    render_instructions_preview,
+    substitute_step_variables,
+)
 from simpleclaw.config import load_recipes_config
-from simpleclaw.recipes.executor import _substitute_variables, render_instructions
 from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import RecipeDefinition, RecipeParseError
 
@@ -259,10 +262,10 @@ def _render_recipe(recipe: RecipeDefinition, params: dict[str, str]) -> dict[str
     variables.update(params)
     try:
         if recipe.instructions:
-            rendered = render_instructions(recipe.instructions, variables=variables)
+            rendered = render_instructions_preview(recipe.instructions, variables=variables)
         else:
             rendered = "\n".join(
-                _substitute_variables(str(step.content), variables)
+                substitute_step_variables(str(step.content), variables)
                 for step in recipe.steps
             )
         return {"ok": True, "length": len(rendered), "preview": rendered[:_PREVIEW_LIMIT]}

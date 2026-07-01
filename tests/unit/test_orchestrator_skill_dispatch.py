@@ -777,3 +777,73 @@ def test_tool_usage_instruction_excludes_fetch_blocked_tool_manual():
 
     assert "FETCH_BLOCKED" not in _TOOL_USAGE_INSTRUCTION
     assert "Do NOT retry" not in _TOOL_USAGE_INSTRUCTION
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "mkdir -p {recipes}/kbo-live",
+        "cat << 'EOF' > {recipes}/kbo-live/recipe.yaml\nname: kbo-live\nEOF",
+        "printf 'name: x' | tee {recipes}/x/recipe.yaml",
+        "cp /tmp/recipe.yaml {recipes}/x/recipe.yaml",
+        "mv /tmp/recipe.yaml {recipes}/x/recipe.yaml",
+        "install /tmp/recipe.yaml {recipes}/x/recipe.yaml",
+    ],
+)
+async def test_execute_command_blocks_runtime_recipe_dir_writes(
+    config_file,
+    tmp_path,
+    monkeypatch,
+    command,
+):
+    """BIZ-410 — 일반 runtime cli는 live recipes.dir 직접 쓰기 우회를 할 수 없다."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+    recipes_dir = tmp_path / "recipes"
+    orch._recipes_dir = str(recipes_dir)
+
+    async def fail_if_subprocess_called(*args, **kwargs):
+        raise AssertionError("recipes.dir write must be blocked before subprocess")
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fail_if_subprocess_called)
+
+    result = await orch._execute_command(
+        "cli",
+        command.format(recipes=recipes_dir),
+    )
+
+    assert "cannot write to the configured recipes directory" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_command_allows_runtime_recipe_dir_reads(
+    config_file,
+    tmp_path,
+    monkeypatch,
+):
+    """BIZ-410 — recipes.dir 조회 명령까지 막지는 않는다."""
+    from simpleclaw.agent import AgentOrchestrator
+
+    orch = AgentOrchestrator(config_file)
+    recipes_dir = tmp_path / "recipes"
+    orch._recipes_dir = str(recipes_dir)
+    seen_commands: list[str] = []
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"recipe.yaml", b""
+
+    async def fake_create(command, *args, **kwargs):
+        seen_commands.append(command)
+        return _FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fake_create)
+
+    result = await orch._execute_command("cli", f"ls -la {recipes_dir}")
+
+    assert result == "recipe.yaml"
+    assert seen_commands == [f"ls -la {recipes_dir}"]
