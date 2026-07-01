@@ -8,6 +8,7 @@ from simpleclaw.agent.asset_inventory import handle_asset_inventory
 from simpleclaw.agent.config_inspect import handle_config_inspect
 from simpleclaw.agent.deploy_status import handle_deploy_status
 from simpleclaw.agent.log_debug import handle_log_debug
+from simpleclaw.agent.recipe_generate import handle_recipe_generate
 from simpleclaw.agent.recipe_validate import handle_recipe_validate
 from simpleclaw.agent.restart_runtime import handle_restart_runtime
 from simpleclaw.agent.runtime_status import handle_runtime_status
@@ -110,6 +111,14 @@ async def dispatch_tool_call(
         if not operator_tools:
             return "Error: recipe_validate is available only in operator context."
         return handle_recipe_validate(args, config_path=orchestrator._config_path)
+    if name == "recipe_generate":
+        if not operator_tools:
+            return "Error: recipe_generate is available only in operator context."
+        return handle_recipe_generate(
+            args,
+            config_path=orchestrator._config_path,
+            workspace_dir=orchestrator._workspace_dir,
+        )
     if name == "skill_validate":
         if not operator_tools:
             return "Error: skill_validate is available only in operator context."
