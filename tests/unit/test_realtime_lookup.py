@@ -188,6 +188,38 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
+async def test_market_impact_question_triggers_realtime_lookup(
+    config_file,
+    tmp_path,
+):
+    """BIZ-394: 기업·시장 이벤트 영향 질문은 시간 cue 없이도 evidence 조회를 탄다.
+
+    "OpenAI 상장 ... 증시 영향 조사" 류는 standard default 로 떨어지지 않고 실시간
+    evidence 스킬을 거쳐 근거 블록이 주입돼야 한다(구조적 도메인 cue).
+    """
+    orchestrator = AgentOrchestrator(config_file)
+    _register_realtime_skill(orchestrator, tmp_path)
+    orchestrator._execute_skill = AsyncMock(
+        return_value='{"kind":"market","facts":[{"claim":"증시 영향 근거"}]}'
+    )
+    orchestrator._router = MagicMock()
+    orchestrator._router.send = AsyncMock(return_value=_text_response("근거 기반 답변"))
+
+    result = await orchestrator.process_message(
+        "OpenAI 상장 연기가 증시에 끼치는 영향을 조사해줘", 1, 1
+    )
+
+    assert result == "근거 기반 답변"
+    orchestrator._execute_skill.assert_awaited_once()
+    skill_name, _payload = orchestrator._execute_skill.await_args.args
+    assert skill_name == "realtime-lookup-skill"
+    request = orchestrator._router.send.call_args_list[0][0][0]
+    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
+    assert "증시 영향 근거" in request.system_prompt
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
 async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
     config_file,
 ):
