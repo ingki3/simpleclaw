@@ -613,11 +613,10 @@ class AgentOrchestrator:
             recipes_config=recipes_config,
         )
 
-        # BIZ-202/BIZ-313: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
-        # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은
-        # ``~/.simpleclaw-agent/default/recipes`` — 봇 워크스페이스
-        # (`~/.simpleclaw-agent/default/workspace`) 의 sandbox-write 허용 트리 안에
-        # 들어가야 봇 `cli`/`file_write` 도구가 직접 쓸 수 있다.
+        # BIZ-202/BIZ-313: 봇과 데몬이 같은 configured recipe directory를 보도록
+        # config 한 곳에서 결정한다. 기본은 ``~/.simpleclaw-agent/default/recipes``.
+        # BIZ-410: 일반 runtime ``cli``/``file_write``가 이 디렉터리에 직접 쓰는
+        # 경로는 막고, 설치는 operator-gated ``recipe_generate``만 담당한다.
         self._recipes_dir = str(
             Path(recipes_config["dir"]).expanduser()
         )

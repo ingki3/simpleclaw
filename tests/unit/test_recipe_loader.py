@@ -1,6 +1,9 @@
 """Tests for recipe loader."""
 
 from pathlib import Path
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -11,6 +14,26 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "recipes"
 
 
 class TestRecipeLoader:
+    def test_loader_import_does_not_trigger_operator_tool_circular_import(self):
+        """BIZ-410 — recipes.loader import 순서가 operator tool circular import로 깨지지 않는다."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from simpleclaw.recipes.loader import load_recipe; print('ok')",
+            ],
+            check=False,
+            capture_output=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(Path(__file__).parents[2] / "src"),
+            },
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "ok"
+
     def test_load_valid_recipe(self):
         recipe = load_recipe(FIXTURES / "daily-report" / "recipe.yaml")
         assert recipe.name == "daily-report"

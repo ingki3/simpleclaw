@@ -12,8 +12,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from simpleclaw.agent.recipe_render import (
+    render_instructions_preview,
+    substitute_step_variables,
+)
 from simpleclaw.config import load_recipes_config
-from simpleclaw.recipes.executor import _substitute_variables, render_instructions
 from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import RecipeDefinition, RecipeParseError
 
@@ -144,10 +147,10 @@ def _render_recipe(recipe: RecipeDefinition, params: dict[str, str]) -> dict[str
     variables = _variables_with_defaults(recipe, params)
     try:
         if recipe.instructions:
-            rendered = render_instructions(recipe.instructions, variables=variables)
+            rendered = render_instructions_preview(recipe.instructions, variables=variables)
             return _render_ok(rendered)
         rendered_steps = [
-            _substitute_variables(str(step.content), variables)
+            substitute_step_variables(str(step.content), variables)
             for step in recipe.steps
         ]
         return _render_ok("\n".join(rendered_steps))
