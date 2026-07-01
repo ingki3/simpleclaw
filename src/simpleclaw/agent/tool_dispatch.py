@@ -8,8 +8,6 @@ from simpleclaw.agent.asset_inventory import handle_asset_inventory
 from simpleclaw.agent.config_inspect import handle_config_inspect
 from simpleclaw.agent.deploy_status import handle_deploy_status
 from simpleclaw.agent.log_debug import handle_log_debug
-from simpleclaw.agent.recipe_generate import handle_recipe_generate
-from simpleclaw.agent.recipe_validate import handle_recipe_validate
 from simpleclaw.agent.restart_runtime import handle_restart_runtime
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
@@ -28,6 +26,24 @@ from simpleclaw.agent.builtin_tools import (
 )
 from simpleclaw.agent.clarify import clarify_chat_id_var
 from simpleclaw.llm.models import ToolCall
+
+
+def handle_recipe_validate(*args: Any, **kwargs: Any) -> str:
+    """recipe_validate handler를 지연 import한다.
+
+    ``simpleclaw.recipes`` import 중 ``agent.tool_dispatch``가 로드되는 순환 경로에서
+    operator tool이 recipes package를 다시 import하지 않도록 한다.
+    """
+    from simpleclaw.agent.recipe_validate import handle_recipe_validate as _handler
+
+    return _handler(*args, **kwargs)
+
+
+def handle_recipe_generate(*args: Any, **kwargs: Any) -> str:
+    """recipe_generate handler를 지연 import한다."""
+    from simpleclaw.agent.recipe_generate import handle_recipe_generate as _handler
+
+    return _handler(*args, **kwargs)
 
 
 async def dispatch_tool_call(
