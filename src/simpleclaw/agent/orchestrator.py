@@ -145,6 +145,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "asset_inventory",
     "deploy_status",
     "recipe_validate",
+    "recipe_generate",
     "skill_validate",
     "restart_runtime",
     "skill_learning",
