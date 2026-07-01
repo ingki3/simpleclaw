@@ -529,6 +529,69 @@ _RECIPE_VALIDATE_TOOL = ToolDefinition(
 )
 
 
+_RECIPE_GENERATE_TOOL = ToolDefinition(
+    name="recipe_generate",
+    description=(
+        "운영자/개발 전용 recipe 생성/설치 도구. action=draft는 workspace의 "
+        "recipe_drafts/<name>/recipe.yaml에 초안을 쓰고, action=install은 confirm=true일 때만 "
+        "configured recipes.dir/<name>/recipe.yaml에 백업+검증+atomic write로 설치한다. "
+        "일반 file_write 샌드박스를 넓히지 않으며, v1은 instructions 기반 recipe만 지원한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["draft", "install"],
+                "description": "draft=workspace 초안 생성, install=confirm 후 recipes.dir 설치",
+            },
+            "name": {
+                "type": "string",
+                "description": "recipe 디렉터리/recipe name. kebab-case 권장; path separator는 금지.",
+            },
+            "description": {"type": "string"},
+            "trigger": {"type": "string"},
+            "instructions": {
+                "type": "string",
+                "description": "recipe.yaml instructions 본문. v1에서는 non-empty 필수.",
+            },
+            "skills": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "recipe가 사용할 runtime skill 이름 목록. 선택.",
+            },
+            "parameters": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "required": {"type": "boolean"},
+                        "default": {"type": "string"},
+                    },
+                    "required": ["name"],
+                },
+            },
+            "render_params": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "검증 render smoke에 사용할 선택 파라미터.",
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": "install side effect 승인. action=install에서 true 필수.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "기존 recipe.yaml이 있을 때 백업 후 덮어쓸지 여부. 기본 false.",
+            },
+        },
+        "required": ["action", "name", "instructions"],
+    },
+)
+
+
 _SKILL_VALIDATE_TOOL = ToolDefinition(
     name="skill_validate",
     description=(
@@ -692,6 +755,12 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
         _RECIPE_VALIDATE_TOOL,
         scope=ToolScope.DEVELOPMENT,
         risk=ToolRisk.LOW,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        _RECIPE_GENERATE_TOOL,
+        scope=ToolScope.DEVELOPMENT,
+        risk=ToolRisk.HIGH,
         operator_gate_required=True,
     ),
     NativeToolSpec(
