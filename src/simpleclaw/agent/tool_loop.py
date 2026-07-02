@@ -207,7 +207,19 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
     if not tool_results:
         return _EMPTY_DIRECT_RESPONSE_MESSAGE
 
-    name, content = tool_results[-1]
+    # 한 turn 안에서 모델이 유효한 검색/조회 결과를 받은 뒤 추가 재검색을 하다가
+    # transient 오류(예: DuckDuckGo HTTP 202)로 끝나는 경우가 있다. 빈 final fallback이
+    # 무조건 마지막 tool result만 보면 이미 확인한 사실을 버리고 오류만 노출한다.
+    # 그래서 뒤에서부터 보되, 명시적 오류가 아닌 가장 최근 observation을 우선 사용한다.
+    # 모든 observation이 오류일 때만 기존처럼 마지막 오류를 보고한다.
+    name, content = next(
+        (
+            (candidate_name, candidate_content)
+            for candidate_name, candidate_content in reversed(tool_results)
+            if not _tool_result_looks_like_explicit_error(candidate_content)
+        ),
+        tool_results[-1],
+    )
     stripped = content.strip()
     if not stripped:
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
