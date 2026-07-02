@@ -553,11 +553,135 @@ async def test_empty_final_prefers_prior_success_over_trailing_web_search_error(
         "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
     )
 
-    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "확인한 근거는 있지만" in result
     assert "web_search: WEB_SEARCH_RESULTS" in result
     assert "마녀 - 드라마 정보" in result
     assert "확인 중 오류" not in result
     assert "DuckDuckGo returned HTTP 202" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_only_no_output_tool_result_asks_for_more_direction(
+    config_file, monkeypatch,
+):
+    """무의미한 성공 결과만 있으면 확인 결과 요약 대신 추가 단서/방향을 요청한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "[Command completed with no output]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
+    )
+
+    assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
+    assert "추가로 어떤 기준으로 좁혀볼까요" in result
+    assert "배우 기준" in result
+    assert "줄거리/설정 기준" in result
+    assert "[Command completed with no output]" not in result
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_prefers_prior_success_over_trailing_no_output_cli(
+    config_file, monkeypatch,
+):
+    """유효 검색 결과 뒤 no-output CLI가 와도 검색 결과를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '강풀 마녀 드라마 노정의' (1 results)\n"
+            "1. 마녀 - 채널A 드라마\n"
+            "   URL: https://example.com/witch\n"
+            "   Snippet: 강풀 웹툰 원작, 노정의 주연."
+        ),
+        "[Command completed with no output]",
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "강풀 마녀 드라마 노정의"}),
+        _tool_response("c2", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("마녀 별명 드라마 제목 찾아줘")
+
+    assert "확인한 근거는 있지만" in result
+    assert "web_search: WEB_SEARCH_RESULTS" in result
+    assert "마녀 - 채널A 드라마" in result
+    assert "Command completed with no output" not in result
+    assert "추가로 어떤 기준" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_no_evidence_creates_pending_clarify_in_chat(
+    config_file, monkeypatch,
+):
+    """대화형 채널에서는 근거 부족 fallback이 인라인 clarify 질문으로 전환된다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "[Command completed with no output]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_message(
+        "제목 찾아봐",
+        user_id=6233568410,
+        chat_id=6233568410,
+    )
+
+    assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
+    assert "1. 배우 기준으로 다시 찾아줘" in result
+    pending = orch.pop_pending_clarify(6233568410)
+    assert pending is not None
+    assert "어떤 기준으로 좁혀볼까요" in pending.question
+    assert [opt.label for opt in pending.options] == [
+        "배우 기준",
+        "원작/작가 기준",
+        "줄거리/설정 기준",
+        "시기/플랫폼 기준",
+    ]
 
 
 @pytest.mark.asyncio
@@ -595,7 +719,7 @@ async def test_empty_final_after_transcript_with_error_words_reports_generic_res
 
     result = await orch.process_cron_message("https://youtu.be/example")
 
-    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "확인한 근거는 있지만" in result
     assert "execute_skill: Transcript:" in result
     assert "확인 중 오류" not in result
     assert "한 번 더 말씀" not in result
