@@ -45,25 +45,25 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE = (
 _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE = (
     "확인한 근거는 있지만 답을 확정하는 데 필요한 설명을 마무리하지 못했습니다.\n"
     "우선 확인된 단서는 다음과 같습니다: {detail}\n"
-    "이 단서가 맞는 방향이면 이어서 더 좁혀보겠습니다. "
-    "다른 조건(배우, 줄거리, 방영 시기, 플랫폼)이 있으면 알려주세요."
+    "확정 답변에 필요한 조건이 남아 있다면 "
+    "키워드, 출처, 시간·장소, 확인할 URL 같은 단서를 더 알려주세요."
 )
 _EMPTY_FINAL_RECOVERY_QUESTION = (
     "확인한 범위만으로는 답을 확정하기 어렵습니다. "
-    "추가로 어떤 기준으로 좁혀볼까요?"
+    "추가로 어떤 방향으로 확인할까요?"
 )
 _EMPTY_FINAL_RECOVERY_OPTIONS = [
-    {"label": "배우 기준", "body": "배우 기준으로 다시 찾아줘"},
-    {"label": "원작/작가 기준", "body": "원작/작가 기준으로 다시 찾아줘"},
-    {"label": "줄거리/설정 기준", "body": "줄거리/설정 기준으로 다시 찾아줘"},
-    {"label": "시기/플랫폼 기준", "body": "방영 시기/플랫폼 기준으로 다시 찾아줘"},
+    {"label": "다른 키워드", "body": "다른 키워드로 다시 확인해줘"},
+    {"label": "다른 출처", "body": "다른 출처에서 다시 확인해줘"},
+    {"label": "조건 추가", "body": "시간·장소·대상 조건을 추가해서 확인해줘"},
+    {"label": "URL로 확인", "body": "내가 주는 URL 기준으로 확인해줘"},
 ]
 _TOOL_RESULT_EMPTY_FINAL_NEEDS_CLARIFICATION_MESSAGE = (
     _EMPTY_FINAL_RECOVERY_QUESTION
-    + "\n\n1. 배우 기준으로 다시 찾아줘"
-    + "\n2. 원작/작가 기준으로 다시 찾아줘"
-    + "\n3. 줄거리/설정 기준으로 다시 찾아줘"
-    + "\n4. 방영 시기/플랫폼 기준으로 다시 찾아줘"
+    + "\n\n1. 다른 키워드로 다시 확인해줘"
+    + "\n2. 다른 출처에서 다시 확인해줘"
+    + "\n3. 시간·장소·대상 조건을 추가해서 확인해줘"
+    + "\n4. 내가 주는 URL 기준으로 확인해줘"
 )
 
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
@@ -94,6 +94,13 @@ _TOOL_RESULT_EMPTY_FINAL_NO_EVIDENCE_MARKERS = (
     "[no output]",
     "no output from command",
 )
+_TOOL_RESULT_EMPTY_FINAL_META_RESULT_MARKERS = (
+    "[skill documentation for",
+    "skill documentation for",
+    "browser automation for interactive website tasks",
+    "use this skill when",
+)
+_TOOL_RESULT_EMPTY_FINAL_META_TOOL_NAMES = frozenset({"skill_docs"})
 _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
 _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "응답이 지연되어 처리를 종료했습니다. 죄송하지만 한 번 더 말씀해 주세요. "
@@ -240,10 +247,22 @@ def _tool_result_looks_like_no_evidence(content: str) -> bool:
     )
 
 
-def _tool_result_is_useful_for_empty_final(content: str) -> bool:
+def _tool_result_looks_like_meta_result(name: str, content: str) -> bool:
+    """도구 사용법/문서처럼 사용자 질문의 답 근거가 아닌 observation인지 판정한다."""
+    tool_name = (name or "").strip().lower()
+    if tool_name in _TOOL_RESULT_EMPTY_FINAL_META_TOOL_NAMES:
+        return True
+    lowered = content.strip().lower()
+    return any(
+        marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_META_RESULT_MARKERS
+    )
+
+
+def _tool_result_is_useful_for_empty_final(name: str, content: str) -> bool:
     """빈 final fallback에서 사용자에게 보존할 만한 observation인지 판정한다."""
     return not (
-        _tool_result_looks_like_explicit_error(content)
+        _tool_result_looks_like_meta_result(name, content)
+        or _tool_result_looks_like_explicit_error(content)
         or _tool_result_looks_like_no_evidence(content)
         or _tool_result_looks_like_not_found(content)
     )
@@ -286,7 +305,10 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
         (
             (candidate_name, candidate_content)
             for candidate_name, candidate_content in reversed(tool_results)
-            if _tool_result_is_useful_for_empty_final(candidate_content)
+            if _tool_result_is_useful_for_empty_final(
+                candidate_name,
+                candidate_content,
+            )
         ),
         None,
     )
