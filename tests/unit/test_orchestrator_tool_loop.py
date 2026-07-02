@@ -589,11 +589,76 @@ async def test_empty_final_after_only_no_output_tool_result_asks_for_more_direct
     )
 
     assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
-    assert "추가로 어떤 기준으로 좁혀볼까요" in result
-    assert "배우 기준" in result
-    assert "줄거리/설정 기준" in result
+    assert "추가로 어떤 방향으로 확인할까요" in result
+    assert "다른 키워드" in result
+    assert "다른 출처" in result
+    assert "조건을 추가" in result
+    assert "URL 기준" in result
+    assert "배우 기준" not in result
+    assert "줄거리/설정 기준" not in result
+    assert "방영 시기" not in result
     assert "[Command completed with no output]" not in result
     assert "확인은 했지만 답변을 마무리하지 못했습니다" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_skips_meta_tool_docs_and_keeps_kbo_evidence(
+    config_file, monkeypatch,
+):
+    """도구 문서/검색 오류가 뒤따라도 사용자 질문의 실제 근거를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 4
+
+    dispatch_results = [
+        (
+            "(via headless render; force_headless=True)\n\n"
+            "KBO 스코어보드 2026.07.02(목) "
+            "롯데 0 4회말 0 두산 0-0 2out 잠실 18:30"
+        ),
+        (
+            "[Skill documentation for agent-browser]: Browser automation for "
+            "interactive website tasks. Use this skill when navigating pages."
+        ),
+        (
+            "Error: web_search failed — DuckDuckGo returned HTTP 202 — Accepted. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "web_fetch",
+            {"url": "https://www.koreabaseball.com/Schedule/ScoreBoard.aspx"},
+        ),
+        _tool_response("c2", "skill_docs", {"name": "agent-browser"}),
+        _tool_response("c3", "web_search", {"query": "롯데 두산 우천 중단"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("비 온다고 했던 거 같은데?")
+
+    assert "확인한 근거는 있지만" in result
+    assert "web_fetch:" in result
+    assert "KBO 스코어보드" in result
+    assert "롯데 0 4회말 0 두산" in result
+    assert "agent-browser" not in result
+    assert "Skill documentation" not in result
+    assert "DuckDuckGo returned HTTP 202" not in result
+    assert "배우" not in result
+    assert "방영" not in result
 
 
 @pytest.mark.asyncio
@@ -672,15 +737,15 @@ async def test_empty_final_no_evidence_creates_pending_clarify_in_chat(
     )
 
     assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
-    assert "1. 배우 기준으로 다시 찾아줘" in result
+    assert "다른 키워드로 다시 확인해줘" in result
     pending = orch.pop_pending_clarify(6233568410)
     assert pending is not None
-    assert "어떤 기준으로 좁혀볼까요" in pending.question
+    assert "어떤 방향으로 확인할까요" in pending.question
     assert [opt.label for opt in pending.options] == [
-        "배우 기준",
-        "원작/작가 기준",
-        "줄거리/설정 기준",
-        "시기/플랫폼 기준",
+        "다른 키워드",
+        "다른 출처",
+        "조건 추가",
+        "URL로 확인",
     ]
 
 
