@@ -14,7 +14,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from simpleclaw.agent.clarify import clarify_chat_id_var
+from simpleclaw.agent.clarify import (
+    ClarifyRequest,
+    clarify_chat_id_var,
+    normalize_options,
+)
 from simpleclaw.agent.file_mutation_tracker import format_footer
 from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
@@ -39,7 +43,27 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE = (
     "확인 중 오류가 발생해 답변을 마무리하지 못했습니다: {detail}"
 )
 _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE = (
-    "확인은 했지만 답변을 마무리하지 못했습니다. 확인한 결과: {detail}"
+    "확인한 근거는 있지만 답을 확정하는 데 필요한 설명을 마무리하지 못했습니다.\n"
+    "우선 확인된 단서는 다음과 같습니다: {detail}\n"
+    "이 단서가 맞는 방향이면 이어서 더 좁혀보겠습니다. "
+    "다른 조건(배우, 줄거리, 방영 시기, 플랫폼)이 있으면 알려주세요."
+)
+_EMPTY_FINAL_RECOVERY_QUESTION = (
+    "확인한 범위만으로는 답을 확정하기 어렵습니다. "
+    "추가로 어떤 기준으로 좁혀볼까요?"
+)
+_EMPTY_FINAL_RECOVERY_OPTIONS = [
+    {"label": "배우 기준", "body": "배우 기준으로 다시 찾아줘"},
+    {"label": "원작/작가 기준", "body": "원작/작가 기준으로 다시 찾아줘"},
+    {"label": "줄거리/설정 기준", "body": "줄거리/설정 기준으로 다시 찾아줘"},
+    {"label": "시기/플랫폼 기준", "body": "방영 시기/플랫폼 기준으로 다시 찾아줘"},
+]
+_TOOL_RESULT_EMPTY_FINAL_NEEDS_CLARIFICATION_MESSAGE = (
+    _EMPTY_FINAL_RECOVERY_QUESTION
+    + "\n\n1. 배우 기준으로 다시 찾아줘"
+    + "\n2. 원작/작가 기준으로 다시 찾아줘"
+    + "\n3. 줄거리/설정 기준으로 다시 찾아줘"
+    + "\n4. 방영 시기/플랫폼 기준으로 다시 찾아줘"
 )
 
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
@@ -63,6 +87,12 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
     "command failed",
     "skill failed",
     "도구 실행 실패",
+)
+_TOOL_RESULT_EMPTY_FINAL_NO_EVIDENCE_MARKERS = (
+    "[command completed with no output]",
+    "command completed with no output",
+    "[no output]",
+    "no output from command",
 )
 _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
 _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
@@ -187,6 +217,46 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
     return False
 
 
+def _tool_result_looks_like_not_found(content: str) -> bool:
+    """도구 결과가 명시적인 empty/not-found 결과인지 판정한다."""
+    stripped = content.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    return any(
+        marker in lowered or marker in stripped
+        for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS
+    )
+
+
+def _tool_result_looks_like_no_evidence(content: str) -> bool:
+    """성공처럼 끝났지만 답변 근거가 전혀 없는 observation인지 판정한다."""
+    stripped = content.strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    return any(
+        marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NO_EVIDENCE_MARKERS
+    )
+
+
+def _tool_result_is_useful_for_empty_final(content: str) -> bool:
+    """빈 final fallback에서 사용자에게 보존할 만한 observation인지 판정한다."""
+    return not (
+        _tool_result_looks_like_explicit_error(content)
+        or _tool_result_looks_like_no_evidence(content)
+        or _tool_result_looks_like_not_found(content)
+    )
+
+
+def build_empty_final_recovery_clarify_request() -> ClarifyRequest:
+    """근거 부족 fallback에서 사용자에게 다음 탐색 방향을 묻는 요청을 만든다."""
+    return ClarifyRequest(
+        question=_EMPTY_FINAL_RECOVERY_QUESTION,
+        options=normalize_options(_EMPTY_FINAL_RECOVERY_OPTIONS),
+    )
+
+
 def _redacted_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     """trace snapshot에 저장할 tool arguments에서 secret-like 값을 마스킹한다."""
     redacted: dict[str, Any] = {}
@@ -208,31 +278,45 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
         return _EMPTY_DIRECT_RESPONSE_MESSAGE
 
     # 한 turn 안에서 모델이 유효한 검색/조회 결과를 받은 뒤 추가 재검색을 하다가
-    # transient 오류(예: DuckDuckGo HTTP 202)로 끝나는 경우가 있다. 빈 final fallback이
-    # 무조건 마지막 tool result만 보면 이미 확인한 사실을 버리고 오류만 노출한다.
-    # 그래서 뒤에서부터 보되, 명시적 오류가 아닌 가장 최근 observation을 우선 사용한다.
-    # 모든 observation이 오류일 때만 기존처럼 마지막 오류를 보고한다.
-    name, content = next(
+    # transient 오류나 no-output 명령으로 끝나는 경우가 있다. 빈 final fallback이
+    # 무조건 마지막 tool result만 보면 이미 확인한 사실을 버리고 오류/무근거만 노출한다.
+    # 그래서 뒤에서부터 보되, 명시적 오류·빈 결과·무근거가 아닌 가장 최근 observation을
+    # 우선 사용한다. 모든 observation이 유용하지 않을 때만 오류/못 찾음/추가질문으로 분기한다.
+    useful = next(
         (
             (candidate_name, candidate_content)
             for candidate_name, candidate_content in reversed(tool_results)
-            if not _tool_result_looks_like_explicit_error(candidate_content)
+            if _tool_result_is_useful_for_empty_final(candidate_content)
         ),
-        tool_results[-1],
+        None,
     )
+
+    if useful is None:
+        error_result = next(
+            (
+                candidate_content
+                for _, candidate_content in reversed(tool_results)
+                if _tool_result_looks_like_explicit_error(candidate_content)
+            ),
+            None,
+        )
+        if error_result is not None:
+            detail = error_result.strip().splitlines()[0][:240]
+            return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
+        if any(_tool_result_looks_like_no_evidence(content) for _, content in tool_results):
+            return _TOOL_RESULT_EMPTY_FINAL_NEEDS_CLARIFICATION_MESSAGE
+        return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
+
+    name, content = useful
     stripped = content.strip()
     if not stripped:
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
-    lowered = stripped.lower()
     if _tool_result_looks_like_explicit_error(stripped):
         detail = stripped.splitlines()[0][:240]
         return _TOOL_RESULT_EMPTY_FINAL_ERROR_MESSAGE.format(detail=detail)
 
-    if any(
-        marker in lowered or marker in stripped
-        for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS
-    ):
+    if _tool_result_looks_like_not_found(stripped):
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
     detail = stripped.replace("\n", " ")[:240]
@@ -245,6 +329,18 @@ class ToolLoopRunner:
     def __init__(self, orchestrator: Any) -> None:
         """오케스트레이터의 dispatch/router 상태를 재사용하기 위해 참조를 보관한다."""
         self._orchestrator = orchestrator
+
+    def _maybe_set_empty_final_recovery_clarify(self, fallback_text: str) -> str:
+        """대화형 채널이면 근거 부족 fallback을 pending clarify로 전환한다."""
+        if fallback_text != _TOOL_RESULT_EMPTY_FINAL_NEEDS_CLARIFICATION_MESSAGE:
+            return fallback_text
+        chat_id = clarify_chat_id_var.get()
+        if chat_id is None:
+            return fallback_text
+        self._orchestrator._pending_clarify[chat_id] = (
+            build_empty_final_recovery_clarify_request()
+        )
+        return ""
 
     async def run(self, state: ToolLoopState) -> ToolLoopResult:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
@@ -300,8 +396,11 @@ class ToolLoopRunner:
                         "returning synthesized fallback",
                         i + 1,
                     )
+                    fallback_text = fallback_for_empty_final_after_tools(
+                        tool_results_for_empty_final,
+                    )
                     return ToolLoopResult(
-                        fallback_for_empty_final_after_tools(tool_results_for_empty_final),
+                        self._maybe_set_empty_final_recovery_clarify(fallback_text),
                         trace=trace,
                         iterations=i + 1,
                     )
