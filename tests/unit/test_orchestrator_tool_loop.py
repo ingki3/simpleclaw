@@ -511,6 +511,56 @@ async def test_empty_final_after_tool_error_reports_checked_but_failed(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_prefers_prior_success_over_trailing_web_search_error(
+    config_file, monkeypatch,
+):
+    """유효한 검색 결과 뒤 transient 검색 오류가 와도 fallback은 확인 결과를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '노정의 마녀 드라마' (1 results)\n"
+            "1. 마녀 - 드라마 정보\n"
+            "   URL: https://example.com/witch\n"
+            "   Snippet: 강풀 원작 드라마 마녀 출연진 정보."
+        ),
+        (
+            "Error: web_search failed — DuckDuckGo returned HTTP 202 — Accepted. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "노정의 마녀 드라마"}),
+        _tool_response("c2", "web_search", {"query": "신은수 강풀 드라마"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
+    )
+
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "web_search: WEB_SEARCH_RESULTS" in result
+    assert "마녀 - 드라마 정보" in result
+    assert "확인 중 오류" not in result
+    assert "DuckDuckGo returned HTTP 202" not in result
+
+
+@pytest.mark.asyncio
 async def test_empty_final_after_transcript_with_error_words_reports_generic_result(
     config_file, monkeypatch,
 ):
