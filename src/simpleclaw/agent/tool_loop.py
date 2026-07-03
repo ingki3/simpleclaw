@@ -484,9 +484,11 @@ class ToolLoopRunner:
 
             if not response.tool_calls:
                 logger.info(
-                    "Tool loop [%d] final answer: %d chars",
+                    "Tool loop [%d] final answer: %d chars finish_reason=%s usage=%s",
                     i + 1,
                     len(response.text),
+                    response.finish_reason,
+                    response.usage,
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
@@ -494,8 +496,10 @@ class ToolLoopRunner:
                 if tool_results_for_empty_final:
                     logger.warning(
                         "Tool loop [%d] empty final answer after tool results; "
-                        "returning synthesized fallback",
+                        "returning synthesized fallback finish_reason=%s diagnostics=%s",
                         i + 1,
+                        response.finish_reason,
+                        response.diagnostics,
                     )
                     fallback_text = fallback_for_empty_final_after_tools(
                         tool_results_for_empty_final,
