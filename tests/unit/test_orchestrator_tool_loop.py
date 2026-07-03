@@ -554,8 +554,10 @@ async def test_empty_final_prefers_prior_success_over_trailing_web_search_error(
     )
 
     assert "확인한 근거는 있지만" in result
-    assert "web_search: WEB_SEARCH_RESULTS" in result
+    assert "web_search에서 확인된 후보" in result
     assert "마녀 - 드라마 정보" in result
+    assert "https://example.com/witch" in result
+    assert "WEB_SEARCH_RESULTS" not in result
     assert "확인 중 오류" not in result
     assert "DuckDuckGo returned HTTP 202" not in result
 
@@ -700,8 +702,10 @@ async def test_empty_final_prefers_prior_success_over_trailing_no_output_cli(
     result = await orch.process_cron_message("마녀 별명 드라마 제목 찾아줘")
 
     assert "확인한 근거는 있지만" in result
-    assert "web_search: WEB_SEARCH_RESULTS" in result
+    assert "web_search에서 확인된 후보" in result
     assert "마녀 - 채널A 드라마" in result
+    assert "https://example.com/witch" in result
+    assert "WEB_SEARCH_RESULTS" not in result
     assert "Command completed with no output" not in result
     assert "추가로 어떤 기준" not in result
 
@@ -788,6 +792,99 @@ async def test_empty_final_after_transcript_with_error_words_reports_generic_res
     assert "execute_skill: Transcript:" in result
     assert "확인 중 오류" not in result
     assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_web_search_preserves_titles_and_urls(
+    config_file, monkeypatch,
+):
+    """web_search 성공 뒤 빈 final이면 검색 후보 title/URL을 버리지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "WEB_SEARCH_RESULTS: '2026년 7월 뮤지컬 추천 서울' (2 results)\n"
+            "1. 2026 뮤지컬 라인업 총정리｜상반기·하반기 국내 공연 일정\n"
+            "   URL: https://example.com/musical-lineup\n"
+            "2. 7월 서울에서 볼 만한 뮤지컬 추천\n"
+            "   URL: https://example.com/seoul-july-musical\n"
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "2026년 7월 뮤지컬 추천 서울"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 재미있는 뮤지컬 있나 찾아봐")
+
+    assert "web_search에서 확인된 후보" in result
+    assert "2026 뮤지컬 라인업 총정리" in result
+    assert "https://example.com/musical-lineup" in result
+    assert "7월 서울에서 볼 만한 뮤지컬 추천" in result
+    assert "WEB_SEARCH_RESULTS" not in result
+    assert "확인 중 오류" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_multiple_web_searches_dedupes_candidates(
+    config_file, monkeypatch,
+):
+    """여러 web_search observation이 있으면 마지막 raw blob이 아니라 후보 목록을 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+    results = [
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 추천' (2 results)\n"
+            "1. 인기 뮤지컬 A\n"
+            "   URL: https://example.com/a\n"
+            "2. 인기 뮤지컬 B\n"
+            "   URL: https://example.com/b\n"
+        ),
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 예매 순위' (2 results)\n"
+            "1. 인기 뮤지컬 A 재노출\n"
+            "   URL: https://example.com/a\n"
+            "2. 예매 순위 C\n"
+            "   URL: https://example.com/c\n"
+        ),
+    ]
+    dispatch_idx = {"i": 0}
+
+    async def fake_dispatch(tc):
+        i = dispatch_idx["i"]
+        dispatch_idx["i"] += 1
+        return results[i]
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "뮤지컬 추천"}),
+        _tool_response("c2", "web_search", {"query": "뮤지컬 예매 순위"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 재미있는 뮤지컬 있나 찾아봐")
+
+    assert "인기 뮤지컬 A" in result
+    assert "인기 뮤지컬 B" in result
+    assert "예매 순위 C" in result
+    assert result.count("https://example.com/a") == 1
 
 
 @pytest.mark.asyncio

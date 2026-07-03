@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -101,6 +102,8 @@ _TOOL_RESULT_EMPTY_FINAL_META_RESULT_MARKERS = (
     "use this skill when",
 )
 _TOOL_RESULT_EMPTY_FINAL_META_TOOL_NAMES = frozenset({"skill_docs"})
+_WEB_SEARCH_RESULT_ITEM_RE = re.compile(r"^\s*\d+\.\s+(?P<title>.+?)\s*$")
+_WEB_SEARCH_RESULT_URL_RE = re.compile(r"^\s*URL:\s*(?P<url>\S+)\s*$", re.IGNORECASE)
 _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
 _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "응답이 지연되어 처리를 종료했습니다. 죄송하지만 한 번 더 말씀해 주세요. "
@@ -268,6 +271,65 @@ def _tool_result_is_useful_for_empty_final(name: str, content: str) -> bool:
     )
 
 
+def _extract_web_search_candidates(content: str) -> list[tuple[str, str]]:
+    """``WEB_SEARCH_RESULTS`` 텍스트에서 title/URL 후보를 보수적으로 추출한다.
+
+    빈 final fallback은 LLM이 더 이상 요약을 못 하는 장애 경로라서, 여기서는
+    새로운 사실을 만들지 않고 검색 도구가 이미 반환한 제목과 URL만 보존한다.
+    """
+    candidates: list[tuple[str, str]] = []
+    pending_title = ""
+    seen: set[tuple[str, str]] = set()
+
+    for raw_line in content.splitlines():
+        item_match = _WEB_SEARCH_RESULT_ITEM_RE.match(raw_line)
+        if item_match:
+            pending_title = item_match.group("title").strip()
+            continue
+
+        url_match = _WEB_SEARCH_RESULT_URL_RE.match(raw_line)
+        if url_match and pending_title:
+            url = url_match.group("url").strip()
+            key = (pending_title, url)
+            if key not in seen:
+                candidates.append(key)
+                seen.add(key)
+            pending_title = ""
+
+    return candidates
+
+
+def _format_web_search_detail(tool_results: list[tuple[str, str]]) -> str:
+    """여러 ``web_search`` observation의 검색 후보를 dedupe해 fallback용으로 만든다."""
+    candidates: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for name, content in tool_results:
+        if (name or "").strip().lower() != "web_search":
+            continue
+        for title, url in _extract_web_search_candidates(content):
+            if url in seen_urls:
+                continue
+            candidates.append((title, url))
+            seen_urls.add(url)
+            if len(candidates) >= 5:
+                break
+        if len(candidates) >= 5:
+            break
+
+    if not candidates:
+        return ""
+
+    bullets = [f"- {title} — {url}" for title, url in candidates]
+    return "web_search에서 확인된 후보:\n" + "\n".join(bullets)
+
+
+def _format_generic_empty_final_detail(name: str, content: str) -> str:
+    """일반 도구 observation을 fallback에 안전하게 넣을 preview로 축약한다."""
+    detail = content.strip().replace("\n", " ")[:700]
+    return f"{name}: {detail}"
+
+
 def build_empty_final_recovery_clarify_request() -> ClarifyRequest:
     """근거 부족 fallback에서 사용자에게 다음 탐색 방향을 묻는 요청을 만든다."""
     return ClarifyRequest(
@@ -299,19 +361,24 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
     # 한 turn 안에서 모델이 유효한 검색/조회 결과를 받은 뒤 추가 재검색을 하다가
     # transient 오류나 no-output 명령으로 끝나는 경우가 있다. 빈 final fallback이
     # 무조건 마지막 tool result만 보면 이미 확인한 사실을 버리고 오류/무근거만 노출한다.
-    # 그래서 뒤에서부터 보되, 명시적 오류·빈 결과·무근거가 아닌 가장 최근 observation을
-    # 우선 사용한다. 모든 observation이 유용하지 않을 때만 오류/못 찾음/추가질문으로 분기한다.
-    useful = next(
-        (
-            (candidate_name, candidate_content)
-            for candidate_name, candidate_content in reversed(tool_results)
-            if _tool_result_is_useful_for_empty_final(
-                candidate_name,
-                candidate_content,
-            )
-        ),
-        None,
-    )
+    # 그래서 유용한 observation들을 먼저 선별하고, web_search처럼 구조가 있는 결과는
+    # title/URL만 추출해 사용자가 바로 확인 가능한 최소 근거로 보존한다.
+    useful_results = [
+        (candidate_name, candidate_content)
+        for candidate_name, candidate_content in tool_results
+        if _tool_result_is_useful_for_empty_final(
+            candidate_name,
+            candidate_content,
+        )
+    ]
+
+    web_search_detail = _format_web_search_detail(useful_results)
+    if web_search_detail:
+        return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(
+            detail=web_search_detail,
+        )
+
+    useful = next(reversed(useful_results), None) if useful_results else None
 
     if useful is None:
         error_result = next(
@@ -341,8 +408,9 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
     if _tool_result_looks_like_not_found(stripped):
         return _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE
 
-    detail = stripped.replace("\n", " ")[:240]
-    return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(detail=f"{name}: {detail}")
+    return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(
+        detail=_format_generic_empty_final_detail(name, stripped),
+    )
 
 
 class ToolLoopRunner:
