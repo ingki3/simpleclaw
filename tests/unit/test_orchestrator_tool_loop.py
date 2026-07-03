@@ -553,11 +553,113 @@ async def test_empty_final_prefers_prior_success_over_trailing_web_search_error(
         "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
     )
 
-    assert "확인한 근거는 있지만" in result
-    assert "web_search: WEB_SEARCH_RESULTS" in result
+    # BIZ-414: 유효한 web_search 뒤 transient 오류가 와도 확인된 title/URL 근거를 보존한다.
+    assert "검색은 마쳤지만" in result
     assert "마녀 - 드라마 정보" in result
+    assert "https://example.com/witch" in result
+    # 240자 truncation 으로 raw 페이로드를 뭉개던 generic 경로는 더 이상 타지 않는다.
+    assert "web_search: WEB_SEARCH_RESULTS" not in result
     assert "확인 중 오류" not in result
     assert "DuckDuckGo returned HTTP 202" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_web_search_preserves_title_and_url(
+    config_file, monkeypatch,
+):
+    """web_search 성공 후 빈 final이면 결과 제목/URL을 fallback 근거로 보존한다 (BIZ-414)."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "WEB_SEARCH_RESULTS: '요즘 재미있는 뮤지컬' (3 results)\n"
+            "1. 뮤지컬 '오페라의 유령' 서울 공연\n"
+            "   URL: https://example.com/phantom\n"
+            "   Snippet: 2026 상반기 화제작.\n"
+            "2. 뮤지컬 '레미제라블' 앙코르\n"
+            "   URL: https://example.com/lesmis\n"
+            "   Snippet: 오리지널 내한.\n"
+            "3. 뮤지컬 '데스노트'\n"
+            "   URL: https://example.com/deathnote\n"
+            "   Snippet: 재연 확정."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "요즘 재미있는 뮤지컬"}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 재미있는 뮤지컬 있나 찾아봐")
+
+    assert result.strip()
+    # 최소 하나 이상의 title/URL 근거가 사용자에게 보존되어야 한다.
+    assert "뮤지컬 '오페라의 유령' 서울 공연" in result
+    assert "https://example.com/phantom" in result
+    assert "뮤지컬 '레미제라블' 앙코르" in result
+    assert "https://example.com/lesmis" in result
+    # 일반 빈-응답/못 찾음 fallback으로 새지 않아야 한다.
+    assert "응답을 생성하지 못했습니다" not in result
+    assert "찾지 못했습니다" not in result
+    assert call_idx["i"] == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_final_preserves_evidence_from_earlier_web_search_not_just_last(
+    config_file, monkeypatch,
+):
+    """마지막 결과만이 아니라 이전 유용한 web_search 결과도 fallback에 보존한다 (BIZ-414)."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 신작' (1 results)\n"
+            "1. 신작 뮤지컬 A 개막\n"
+            "   URL: https://example.com/new-a\n"
+            "   Snippet: 3월 개막."
+        ),
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 앙코르' (1 results)\n"
+            "1. 앙코르 뮤지컬 B\n"
+            "   URL: https://example.com/encore-b\n"
+            "   Snippet: 재연."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "뮤지컬 신작"}),
+        _tool_response("c2", "web_search", {"query": "뮤지컬 앙코르"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 볼만한 뮤지컬 신작이랑 앙코르 공연 찾아줘")
+
+    # 두 web_search 모두의 근거가 fallback에 남아야 한다 (마지막 것만 아님).
+    assert "신작 뮤지컬 A 개막" in result
+    assert "https://example.com/new-a" in result
+    assert "앙코르 뮤지컬 B" in result
+    assert "https://example.com/encore-b" in result
 
 
 @pytest.mark.asyncio
@@ -699,9 +801,11 @@ async def test_empty_final_prefers_prior_success_over_trailing_no_output_cli(
 
     result = await orch.process_cron_message("마녀 별명 드라마 제목 찾아줘")
 
-    assert "확인한 근거는 있지만" in result
-    assert "web_search: WEB_SEARCH_RESULTS" in result
+    # BIZ-414: no-output CLI 가 뒤에 와도 앞선 web_search title/URL 근거를 보존한다.
+    assert "검색은 마쳤지만" in result
     assert "마녀 - 채널A 드라마" in result
+    assert "https://example.com/witch" in result
+    assert "web_search: WEB_SEARCH_RESULTS" not in result
     assert "Command completed with no output" not in result
     assert "추가로 어떤 기준" not in result
 
