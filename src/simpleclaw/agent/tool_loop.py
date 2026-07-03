@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -101,6 +102,17 @@ _TOOL_RESULT_EMPTY_FINAL_META_RESULT_MARKERS = (
     "use this skill when",
 )
 _TOOL_RESULT_EMPTY_FINAL_META_TOOL_NAMES = frozenset({"skill_docs"})
+# web_search observation 은 ``WEB_SEARCH_RESULTS:`` 헤더로 시작하고,
+# 각 결과가 ``N. Title`` + ``URL: ...`` 줄로 렌더된다(builtin_tools._format_web_search_results).
+# 빈 final fallback 이 이 근거를 240자 truncation 으로 뭉개지 않도록 별도 파서를 둔다.
+_WEB_SEARCH_RESULTS_MARKER = "WEB_SEARCH_RESULTS:"
+_WEB_SEARCH_ENTRY_TITLE_RE = re.compile(r"^\d+\.\s+(.*)$")
+_WEB_SEARCH_EVIDENCE_MAX_ENTRIES = 5
+_TOOL_RESULT_EMPTY_FINAL_WEB_EVIDENCE_MESSAGE = (
+    "검색은 마쳤지만 답변을 매끄럽게 정리하지 못했습니다.\n"
+    "확인한 검색 결과는 다음과 같으니 참고해 주세요:\n{evidence}\n"
+    "원하시면 특정 결과를 더 자세히 확인하거나, 조건을 좁혀 다시 찾아드리겠습니다."
+)
 _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS = 30.0
 _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "응답이 지연되어 처리를 종료했습니다. 죄송하지만 한 번 더 말씀해 주세요. "
@@ -268,6 +280,67 @@ def _tool_result_is_useful_for_empty_final(name: str, content: str) -> bool:
     )
 
 
+def _is_web_search_results_payload(content: str) -> bool:
+    """observation 이 web_search 결과 렌더링(WEB_SEARCH_RESULTS)인지 판정한다."""
+    return content.strip().startswith(_WEB_SEARCH_RESULTS_MARKER)
+
+
+def _extract_web_search_entries(content: str) -> list[tuple[str, str]]:
+    """WEB_SEARCH_RESULTS 페이로드에서 (title, url) 쌍을 등장 순서대로 뽑는다.
+
+    ``N. Title`` 줄로 제목을 잡고 바로 이어지는 ``URL:`` 줄에서 링크를 회수한다.
+    title 이 비어 있으면 URL 자체를 라벨로 쓰도록 caller 가 처리한다.
+    """
+    entries: list[tuple[str, str]] = []
+    pending_title: str | None = None
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        title_match = _WEB_SEARCH_ENTRY_TITLE_RE.match(line)
+        if title_match is not None:
+            pending_title = title_match.group(1).strip()
+            continue
+        if pending_title is not None and line.lower().startswith("url:"):
+            url = line[len("url:"):].strip()
+            if url:
+                entries.append((pending_title, url))
+            pending_title = None
+    return entries
+
+
+def _collect_web_search_evidence(
+    tool_results: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """유용한 web_search observation 전체에서 title/url 근거를 dedup 하여 모은다.
+
+    마지막 한 건이 아니라 이번 turn 에서 확인된 모든 검색 결과를 보존하려는 목적이다.
+    오류/무결과/메타 문서 성격의 web_search observation 은 사용자 근거에서 제외한다.
+    """
+    evidence: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for name, content in tool_results:
+        if not _is_web_search_results_payload(content):
+            continue
+        if not _tool_result_is_useful_for_empty_final(name, content):
+            continue
+        for title, url in _extract_web_search_entries(content):
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            evidence.append((title or url, url))
+    return evidence
+
+
+def _format_web_search_evidence(evidence: list[tuple[str, str]]) -> str:
+    """확인된 title/url 근거를 사용자에게 바로 쓸 수 있는 목록 메시지로 만든다."""
+    lines = [
+        f"- {title}\n  {url}"
+        for title, url in evidence[:_WEB_SEARCH_EVIDENCE_MAX_ENTRIES]
+    ]
+    return _TOOL_RESULT_EMPTY_FINAL_WEB_EVIDENCE_MESSAGE.format(
+        evidence="\n".join(lines),
+    )
+
+
 def build_empty_final_recovery_clarify_request() -> ClarifyRequest:
     """근거 부족 fallback에서 사용자에게 다음 탐색 방향을 묻는 요청을 만든다."""
     return ClarifyRequest(
@@ -295,6 +368,12 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
     """도구 실행 후 LLM final 텍스트가 비었을 때 사용자 가시 fallback을 만든다."""
     if not tool_results:
         return _EMPTY_DIRECT_RESPONSE_MESSAGE
+
+    # web_search 근거가 있으면 마지막 observation 하나를 240자로 자르는 generic 경로 대신,
+    # 이번 turn 에서 확인된 title/URL 목록을 그대로 보존해 사용자에게 확인 근거를 넘긴다.
+    web_evidence = _collect_web_search_evidence(tool_results)
+    if web_evidence:
+        return _format_web_search_evidence(web_evidence)
 
     # 한 turn 안에서 모델이 유효한 검색/조회 결과를 받은 뒤 추가 재검색을 하다가
     # transient 오류나 no-output 명령으로 끝나는 경우가 있다. 빈 final fallback이
