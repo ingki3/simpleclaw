@@ -72,6 +72,65 @@ class GeminiProvider(LLMProvider):
         self._name = name
 
     @staticmethod
+    def _safe_attr(obj: object, name: str) -> object | None:
+        """SDK 객체의 선택 속성을 안전하게 읽고 테스트 mock 기본값은 무시한다."""
+        try:
+            value = getattr(obj, name)
+        except Exception:  # noqa: BLE001
+            return None
+        if value is None:
+            return None
+        if value.__class__.__module__.startswith("unittest.mock"):
+            return None
+        return value
+
+    @classmethod
+    def _stringify_diagnostic_value(cls, value: object | None) -> str | None:
+        """Gemini enum/SDK 값을 로그 친화적인 문자열로 정규화한다."""
+        if value is None:
+            return None
+        enum_name = cls._safe_attr(value, "name")
+        if isinstance(enum_name, str):
+            return enum_name
+        text = str(value)
+        if not text or text == "None":
+            return None
+        return text
+
+    @classmethod
+    def _extract_finish_diagnostics(
+        cls,
+        *,
+        response: object | None,
+        candidate: object | None,
+        usage_metadata: object | None,
+    ) -> tuple[str | None, dict | None]:
+        """Gemini 종료 사유와 빈 출력 진단값을 provider-neutral dict로 추출한다."""
+        finish_reason = cls._stringify_diagnostic_value(
+            cls._safe_attr(candidate, "finish_reason")
+            or cls._safe_attr(candidate, "finishReason")
+        )
+        prompt_feedback = cls._safe_attr(response, "prompt_feedback") if response else None
+        block_reason = cls._stringify_diagnostic_value(
+            cls._safe_attr(prompt_feedback, "block_reason")
+            or cls._safe_attr(prompt_feedback, "blockReason")
+        )
+        diagnostics: dict[str, object] = {}
+        if finish_reason:
+            diagnostics["finish_reason"] = finish_reason
+        if block_reason:
+            diagnostics["block_reason"] = block_reason
+        if usage_metadata is not None:
+            prompt_tokens = cls._safe_attr(usage_metadata, "prompt_token_count")
+            output_tokens = cls._safe_attr(usage_metadata, "candidates_token_count")
+            if isinstance(prompt_tokens, int):
+                diagnostics["prompt_token_count"] = prompt_tokens
+            if isinstance(output_tokens, int):
+                diagnostics["candidates_token_count"] = output_tokens
+                diagnostics["empty_output_tokens"] = output_tokens == 0
+        return finish_reason, diagnostics or None
+
+    @staticmethod
     def _convert_tools(
         tools: list[ToolDefinition],
     ) -> list[types.Tool]:
@@ -260,6 +319,7 @@ class GeminiProvider(LLMProvider):
         text = ""
         tool_calls: list[ToolCall] | None = None
         raw_content = None  # thought_signature 보존용 원본 Content
+        candidate = None
 
         if response and response.candidates:
             candidate = response.candidates[0]
@@ -290,11 +350,17 @@ class GeminiProvider(LLMProvider):
                     text = "\n".join(text_parts)
 
         usage = None
-        if response and response.usage_metadata:
+        usage_metadata = response.usage_metadata if response and response.usage_metadata else None
+        if usage_metadata:
             usage = {
-                "input_tokens": response.usage_metadata.prompt_token_count or 0,
-                "output_tokens": response.usage_metadata.candidates_token_count or 0,
+                "input_tokens": usage_metadata.prompt_token_count or 0,
+                "output_tokens": usage_metadata.candidates_token_count or 0,
             }
+        finish_reason, diagnostics = self._extract_finish_diagnostics(
+            response=response,
+            candidate=candidate,
+            usage_metadata=usage_metadata,
+        )
 
         return LLMResponse(
             text=text,
@@ -303,6 +369,8 @@ class GeminiProvider(LLMProvider):
             usage=usage,
             tool_calls=tool_calls,
             raw_assistant_message=raw_content,
+            finish_reason=finish_reason,
+            diagnostics=diagnostics,
         )
 
     async def stream(
@@ -348,6 +416,8 @@ class GeminiProvider(LLMProvider):
         fc_parts: list[object] = []  # 누적된 raw FunctionCall (마지막 청크까지)
         last_content = None  # raw_assistant_message 보존용 (thought_signature)
         usage_metadata = None  # 종료 청크의 usage_metadata
+        last_candidate = None  # 종료 사유/진단값 추출용 마지막 candidate
+        last_chunk = None  # prompt_feedback 등 응답 단위 진단값 추출용
 
         try:
             stream_iter = await self._client.aio.models.generate_content_stream(
@@ -356,8 +426,10 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
             async for chunk in stream_iter:
+                last_chunk = chunk
                 if chunk.candidates:
                     candidate = chunk.candidates[0]
+                    last_candidate = candidate
                     if candidate.content is not None:
                         # 매 청크의 content 를 갱신 — 마지막 청크가 최종 raw.
                         last_content = candidate.content
@@ -416,6 +488,11 @@ class GeminiProvider(LLMProvider):
                 "input_tokens": usage_metadata.prompt_token_count or 0,
                 "output_tokens": usage_metadata.candidates_token_count or 0,
             }
+        finish_reason, diagnostics = self._extract_finish_diagnostics(
+            response=last_chunk,
+            candidate=last_candidate,
+            usage_metadata=usage_metadata,
+        )
 
         return LLMResponse(
             text=text,
@@ -424,4 +501,6 @@ class GeminiProvider(LLMProvider):
             usage=usage,
             tool_calls=tool_calls,
             raw_assistant_message=raw_content,
+            finish_reason=finish_reason,
+            diagnostics=diagnostics,
         )
