@@ -120,6 +120,9 @@ class LLMResponse:
     tool_calls가 있으면 LLM이 도구 호출을 요청한 것이고,
     없으면 text가 최종 응답이다.
     usage는 프로바이더가 토큰 사용량을 지원할 경우 input_tokens/output_tokens 딕셔너리로 채워진다.
+    finish_reason/diagnostics는 provider별 종료 사유와 디버깅 메타데이터를 선택적으로
+    보존한다. 기존 호출자는 무시해도 되는 부가 정보로, 빈 응답/차단/토큰 0 같은
+    운영 진단을 사용자가 보낸 원본 payload 없이도 로그에 남기기 위한 필드다.
     """
     text: str = ""
     backend_name: str = ""
@@ -129,6 +132,8 @@ class LLMResponse:
     # provider-specific 원본 데이터 (예: Gemini의 Content 객체).
     # 다음 호출 시 thought_signature 등을 보존하기 위해 사용한다.
     raw_assistant_message: object | None = None
+    finish_reason: str | None = None
+    diagnostics: dict | None = None
 
 
 # ---------------------------------------------------------------------------
