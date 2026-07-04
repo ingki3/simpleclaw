@@ -70,6 +70,18 @@ _AGENT_DEFAULTS: dict = {
     "web_fetch": {
         "headless_binary": None,
     },
+    "browser_handoff": {
+        "enabled": False,
+        "chrome_app": "Google Chrome",
+        "store_dir": "~/.simpleclaw-agent/default/browser-handoff",
+        "request_ttl_seconds": 600,
+        "open_wait_seconds": 90,
+        "max_extracted_chars": 50000,
+        "native_host_name": "com.simpleclaw.browser_handoff",
+        "extension_id": None,
+        "sensitive_domain_policy": "block",
+        "allow_auto_extract": False,
+    },
     "asset_selection": {
         "enabled": False,
         "backend": "gemini",
@@ -79,6 +91,21 @@ _AGENT_DEFAULTS: dict = {
         "bypass_below_count": 8,
         "fallback_top_k": 12,
         "max_tokens": 512,
+    },
+    "goal_loop": {
+        "enabled": True,
+        "max_rounds": 3,
+        "judge_max_tokens": 768,
+        "max_answer_chars_for_judge": 6000,
+    },
+    "complex_fact_workflow": {
+        "enabled": False,
+        "route_threshold": 3,
+        "max_iterations": 6,
+        "max_sources_per_slot": 3,
+        "planner_backend": "simpleclaw",
+        "enable_claim_verifier": True,
+        "enable_progress_events": True,
     },
 }
 
@@ -120,10 +147,41 @@ def _agent_with_defaults(agent: dict) -> dict:
     if isinstance(headless_binary, str) and not headless_binary.strip():
         headless_binary = None
 
+    browser_handoff = agent.get("browser_handoff", {})
+    if not isinstance(browser_handoff, dict):
+        browser_handoff = {}
+    browser_defaults = _AGENT_DEFAULTS["browser_handoff"]
+    extension_id = browser_handoff.get("extension_id", browser_defaults["extension_id"])
+    if isinstance(extension_id, str) and not extension_id.strip():
+        extension_id = None
+    sensitive_policy = str(
+        browser_handoff.get(
+            "sensitive_domain_policy",
+            browser_defaults["sensitive_domain_policy"],
+        )
+    )
+    if sensitive_policy not in {"block", "ask"}:
+        sensitive_policy = browser_defaults["sensitive_domain_policy"]
+
     asset_selection = agent.get("asset_selection", {})
     if not isinstance(asset_selection, dict):
         asset_selection = {}
     asset_defaults = _AGENT_DEFAULTS["asset_selection"]
+
+    goal_loop = agent.get("goal_loop", {})
+    if not isinstance(goal_loop, dict):
+        goal_loop = {}
+    goal_defaults = _AGENT_DEFAULTS["goal_loop"]
+
+    complex_fact = agent.get("complex_fact_workflow", {})
+    if not isinstance(complex_fact, dict):
+        complex_fact = {}
+    complex_defaults = _AGENT_DEFAULTS["complex_fact_workflow"]
+    planner_backend = str(
+        complex_fact.get("planner_backend", complex_defaults["planner_backend"])
+    )
+    if planner_backend not in {"simpleclaw", "dspy"}:
+        planner_backend = complex_defaults["planner_backend"]
 
     return {
         "history_limit": agent.get(
@@ -138,6 +196,51 @@ def _agent_with_defaults(agent: dict) -> dict:
         ),
         "web_fetch": {
             "headless_binary": headless_binary,
+        },
+        "browser_handoff": {
+            "enabled": bool(
+                browser_handoff.get("enabled", browser_defaults["enabled"])
+            ),
+            "chrome_app": browser_handoff.get(
+                "chrome_app", browser_defaults["chrome_app"]
+            ),
+            "store_dir": browser_handoff.get(
+                "store_dir", browser_defaults["store_dir"]
+            ),
+            "request_ttl_seconds": _coerce_int_config(
+                browser_handoff.get(
+                    "request_ttl_seconds",
+                    browser_defaults["request_ttl_seconds"],
+                ),
+                browser_defaults["request_ttl_seconds"],
+                minimum=1,
+            ),
+            "open_wait_seconds": _coerce_int_config(
+                browser_handoff.get(
+                    "open_wait_seconds",
+                    browser_defaults["open_wait_seconds"],
+                ),
+                browser_defaults["open_wait_seconds"],
+                minimum=0,
+            ),
+            "max_extracted_chars": _coerce_int_config(
+                browser_handoff.get(
+                    "max_extracted_chars",
+                    browser_defaults["max_extracted_chars"],
+                ),
+                browser_defaults["max_extracted_chars"],
+                minimum=1000,
+            ),
+            "native_host_name": browser_handoff.get(
+                "native_host_name", browser_defaults["native_host_name"]
+            ),
+            "extension_id": extension_id,
+            "sensitive_domain_policy": sensitive_policy,
+            "allow_auto_extract": bool(
+                browser_handoff.get(
+                    "allow_auto_extract", browser_defaults["allow_auto_extract"]
+                )
+            ),
         },
         "asset_selection": {
             "enabled": bool(asset_selection.get("enabled", asset_defaults["enabled"])),
@@ -155,6 +258,64 @@ def _agent_with_defaults(agent: dict) -> dict:
             ),
             "max_tokens": asset_selection.get("max_tokens", asset_defaults["max_tokens"]),
         },
+        "goal_loop": {
+            "enabled": bool(goal_loop.get("enabled", goal_defaults["enabled"])),
+            "max_rounds": _coerce_int_config(
+                goal_loop.get("max_rounds", goal_defaults["max_rounds"]),
+                goal_defaults["max_rounds"],
+                minimum=1,
+            ),
+            "judge_max_tokens": _coerce_int_config(
+                goal_loop.get("judge_max_tokens", goal_defaults["judge_max_tokens"]),
+                goal_defaults["judge_max_tokens"],
+                minimum=200,
+            ),
+            "max_answer_chars_for_judge": _coerce_int_config(
+                goal_loop.get(
+                    "max_answer_chars_for_judge",
+                    goal_defaults["max_answer_chars_for_judge"],
+                ),
+                goal_defaults["max_answer_chars_for_judge"],
+                minimum=1000,
+            ),
+        },
+        "complex_fact_workflow": {
+            "enabled": bool(complex_fact.get("enabled", complex_defaults["enabled"])),
+            "route_threshold": _coerce_int_config(
+                complex_fact.get(
+                    "route_threshold",
+                    complex_defaults["route_threshold"],
+                ),
+                complex_defaults["route_threshold"],
+                minimum=1,
+            ),
+            "max_iterations": _coerce_int_config(
+                complex_fact.get("max_iterations", complex_defaults["max_iterations"]),
+                complex_defaults["max_iterations"],
+                minimum=1,
+            ),
+            "max_sources_per_slot": _coerce_int_config(
+                complex_fact.get(
+                    "max_sources_per_slot",
+                    complex_defaults["max_sources_per_slot"],
+                ),
+                complex_defaults["max_sources_per_slot"],
+                minimum=1,
+            ),
+            "planner_backend": planner_backend,
+            "enable_claim_verifier": bool(
+                complex_fact.get(
+                    "enable_claim_verifier",
+                    complex_defaults["enable_claim_verifier"],
+                )
+            ),
+            "enable_progress_events": bool(
+                complex_fact.get(
+                    "enable_progress_events",
+                    complex_defaults["enable_progress_events"],
+                )
+            ),
+        },
     }
 
 
@@ -165,6 +326,17 @@ def _agent_with_defaults(agent: dict) -> dict:
 # 아래로 모은다. 레거시 `.agent/recipes/` 는 로더의 한 번 fallback 으로 살아 있다.
 _RECIPES_DEFAULTS: dict = {
     "dir": "~/.simpleclaw-agent/default/recipes",
+}
+
+_SKILL_LEARNING_DEFAULTS: dict = {
+    "enabled": False,
+    "min_tool_calls": 2,
+    "min_distinct_tools": 2,
+    "min_final_chars": 500,
+    "suggestions_file": "~/.simpleclaw-agent/default/skill_suggestions.jsonl",
+    "target_dir": None,
+    "require_operator_accept": True,
+    "max_trace_observation_chars": 1200,
 }
 
 
@@ -194,6 +366,36 @@ def load_recipes_config(config_path: str | Path) -> dict:
 
     return {
         "dir": recipes.get("dir", _RECIPES_DEFAULTS["dir"]),
+    }
+
+
+def load_skills_learning_config(config_path: str | Path) -> dict:
+    """config.yaml의 ``skills.learning`` 블록을 안전한 기본값으로 보강해 로드한다."""
+    config_path = Path(config_path)
+    raw: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            skills = data.get("skills", {}) if isinstance(data, dict) else {}
+            raw = skills.get("learning", {}) if isinstance(skills, dict) else {}
+        except (yaml.YAMLError, OSError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _SKILL_LEARNING_DEFAULTS
+    target_dir = raw.get("target_dir", defaults["target_dir"])
+    if isinstance(target_dir, str) and not target_dir.strip():
+        target_dir = None
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "min_tool_calls": _coerce_int_config(raw.get("min_tool_calls", defaults["min_tool_calls"]), defaults["min_tool_calls"], minimum=1),
+        "min_distinct_tools": _coerce_int_config(raw.get("min_distinct_tools", defaults["min_distinct_tools"]), defaults["min_distinct_tools"], minimum=1),
+        "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
+        "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
+        "target_dir": target_dir,
+        "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
+        "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
     }
 
 

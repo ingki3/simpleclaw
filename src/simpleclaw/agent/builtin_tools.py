@@ -5,6 +5,7 @@ AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
 
 제공 도구:
 - web-fetch: URL에서 웹 페이지 내용 가져오기
+- web-search: 일반 질의어로 후보 URL 검색
 - file-read: 파일 텍스트 읽기 (프로젝트 내)
 - file-write: 파일 쓰기 (워크스페이스 내)
 - file-manage: 파일/디렉토리 관리 (list, mkdir, delete, info)
@@ -20,6 +21,8 @@ import logging
 import os
 import re
 import shutil
+import urllib.parse
+from html import unescape
 import stat as _stat
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +30,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
+
+from simpleclaw.agent.tool_schemas import native_tool_names
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +53,10 @@ _AGENT_BROWSER_GLOB_CANDIDATES: tuple[str, ...] = (
     "/opt/homebrew/bin/agent-browser",
 )
 
-# 오케스트레이터의 _dispatch_builtin에서 인식하는 내장 도구 이름 목록.
-# BIZ-260: ``clarify`` 추가 — LLM 이 사용자에게 다지선다 질문을 던질 때 인라인
-# 키보드로 렌더하는 채널 브리지.
-BUILTIN_TOOL_NAMES = frozenset({
-    "cron", "cli", "web-fetch", "file-read", "file-write", "file-manage",
-    "skill-docs", "clarify",
-})
+# 오케스트레이터의 native dispatch에서 인식하는 내장 도구 이름 목록.
+# BIZ-370: 이름의 단일 출처를 tool_schemas registry로 옮겨 하이픈 alias와
+# function-call 이름(언더스코어)이 어긋나는 사고를 방지한다.
+BUILTIN_TOOL_NAMES = native_tool_names(cron_available=True)
 
 
 # ------------------------------------------------------------------
@@ -175,6 +177,8 @@ _BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
     "trouble accessing google search",
     "automated traffic",
     "redirects prevent normal search result rendering",
+    "몇 초 안에 이동하지 않는 경우",
+    "google 검색 결과로 이동",
 )
 
 # 본문이 이 길이 미만이면 (시그니처가 안 잡혀도) 차단된 것으로 간주. 정적/헤드리스
@@ -204,7 +208,13 @@ def _looks_like_block_page(body: str) -> bool:
     return _contains_block_page_signature(stripped)
 
 
-def _format_block_page_response(url: str, body: str, *, via: str) -> str:
+def _format_block_page_response(
+    url: str,
+    body: str,
+    *,
+    via: str,
+    static_error: str | None = None,
+) -> str:
     """차단 페이지로 판정된 응답을 LLM 이 재시도하지 않도록 합성 메시지로 포맷한다.
 
     BIZ-190: 응답 첫 줄에 ``FETCH_BLOCKED: <url>`` 마커를 박아 system prompt
@@ -212,15 +222,29 @@ def _format_block_page_response(url: str, body: str, *, via: str) -> str:
     진단용으로 첫 400자까지 동봉.
     """
     snippet = body.strip()[:400]
+    static_error_line = f"Static fetch error: {static_error}\n" if static_error else ""
     return (
         f"FETCH_BLOCKED: {url}\n"
+        f"{static_error_line}"
         f"This site appears to block automated fetching (detected via {via}). "
         "Both static fetch and the headless browser fallback returned a short "
         "or anti-bot body. Do NOT retry the same URL with agent-browser, cli, "
-        "or another skill — reply to the user that the page cannot be "
-        "retrieved automatically and offer a graceful alternative.\n"
+        "or another skill. If interactive browser_handoff is available, use it "
+        "to open local Chrome and wait for extension-approved page text. Do not "
+        "ask the user to copy/paste page text. If browser_handoff is unavailable, "
+        "explain that local browser handoff is required.\n"
         f"--- diagnostic body ({len(body.strip())} chars) ---\n{snippet}"
     )
+
+
+def _is_headless_retryable_static_error(static_text: str) -> bool:
+    """정적 fetch 오류 중 headless 브라우저 재시도가 의미 있는 케이스를 판별한다.
+
+    403 Forbidden은 서버가 일반 HTTP 클라이언트를 차단했지만 실제 브라우저
+    렌더링에서는 본문을 열 수 있는 대표 케이스다. 404 같은 존재하지 않는 URL은
+    headless 재시도 비용만 늘리므로 기존처럼 즉시 반환한다.
+    """
+    return static_text.lower().startswith("error: http 403")
 
 
 async def _fetch_static(url: str) -> str:
@@ -400,8 +424,9 @@ async def handle_web_fetch(
 ) -> str:
     """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
 
-    기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이면
-    `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA 대응).
+    기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이거나
+    정적 fetch 가 브라우저 재시도 가능한 차단 오류(현재 HTTP 403)를 반환하면
+    `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA/차단 대응).
     ``force_headless=True`` 이면 정적 단계 skip.
 
     ``headless_binary`` 는 운영자가 config 로 지정한 ``agent-browser`` 절대 경로
@@ -434,7 +459,37 @@ async def handle_web_fetch(
 
     static_text = await _fetch_static(url)
     if static_text.startswith("Error:"):
-        return static_text
+        if not _is_headless_retryable_static_error(static_text):
+            return static_text
+
+        logger.info(
+            "web_fetch static returned retryable error for %s (%s), "
+            "falling back to headless",
+            url,
+            static_text[:120],
+        )
+        body = await _fetch_headless(url, headless_binary=headless_binary)
+        if body.startswith("Error:"):
+            return _format_block_page_response(
+                url,
+                body,
+                via="static error→headless fallback failed",
+                static_error=static_text,
+            )
+        if _looks_like_block_page(body):
+            logger.info(
+                "web_fetch static retryable error+headless block page for %s "
+                "(headless %d chars)",
+                url,
+                len(body.strip()),
+            )
+            return _format_block_page_response(
+                url,
+                body,
+                via="static error→headless fallback",
+                static_error=static_text,
+            )
+        return f"(via headless render; static fetch returned {static_text})\n\n{body}"
 
     static_len = len(static_text.strip())
     if _contains_block_page_signature(static_text):
@@ -482,6 +537,207 @@ async def handle_web_fetch(
         return f"(via headless render; static fetch returned {static_len} chars)\n\n{body}"
 
     return static_text
+
+
+# ------------------------------------------------------------------
+# web-search — query 기반 후보 URL 검색
+# ------------------------------------------------------------------
+
+_WEB_SEARCH_MAX_RESULTS = 10
+# snippet-only 결과만 주면 작은 모델이 수치를 환각하므로, 상위 결과는 실제 본문
+# 발췌까지 동봉한다. 지연·토큰 균형을 위해 상위 N개·발췌 길이를 보수적으로 제한.
+_WEB_SEARCH_ENRICH_COUNT = 2
+_WEB_SEARCH_BODY_MAX = 1500
+
+
+def _strip_search_html(value: str) -> str:
+    """검색 결과 HTML 조각을 LLM 에 안전한 짧은 텍스트로 정규화한다."""
+    without_tags = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unescape(without_tags)).strip()
+
+
+def _decode_duckduckgo_href(href: str) -> str:
+    """DuckDuckGo redirect URL 에서 실제 목적지 URL을 복원한다."""
+    href = unescape(href)
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urllib.parse.urlparse(href)
+    query = urllib.parse.parse_qs(parsed.query)
+    if "uddg" in query and query["uddg"]:
+        return query["uddg"][0]
+    return href
+
+
+def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
+    """DuckDuckGo HTML 결과 페이지에서 title/url/snippet 목록을 추출한다."""
+    results: list[dict[str, str]] = []
+    blocks = re.split(
+        r'<div[^>]+class="(?:result(?:\s|")|[^"]*\sresult(?:\s|"))[^>]*>',
+        html,
+        flags=re.I,
+    )
+    for block in blocks[1:]:
+        link_match = re.search(
+            r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+            block,
+            flags=re.I | re.S,
+        )
+        if not link_match:
+            continue
+        url = _decode_duckduckgo_href(link_match.group(1))
+        title = _strip_search_html(link_match.group(2))
+        snippet_match = re.search(
+            r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|'
+            r'<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>',
+            block,
+            flags=re.I | re.S,
+        )
+        snippet = ""
+        if snippet_match:
+            snippet = _strip_search_html(snippet_match.group(1) or snippet_match.group(2) or "")
+        if title and url:
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "source": "duckduckgo-html",
+            })
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]:
+    """API key 없이 DuckDuckGo HTML endpoint에서 compact 검색 결과를 가져온다."""
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        )
+    }
+    params = {"q": query}
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+        async with session.get(
+            "https://html.duckduckgo.com/html/",
+            params=params,
+            allow_redirects=True,
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"DuckDuckGo returned HTTP {resp.status} — {resp.reason}")
+            body = await resp.text(errors="replace")
+    return _parse_duckduckgo_html(body, limit)
+
+
+def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
+    """검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다.
+
+    상위 결과에 ``body`` 발췌가 채워져 있으면 함께 노출해, 작은 모델이 snippet만
+    보고 수치를 환각하는 대신 실제 본문에서 사실을 확인하도록 유도한다.
+    """
+    if not results:
+        return (
+            f"WEB_SEARCH_RESULTS: {query!r} — no results found.\n"
+            "Try a more specific query, or use web_fetch if you already know the URL."
+        )
+
+    has_body = any(item.get("body", "").strip() for item in results)
+    lines = [f"WEB_SEARCH_RESULTS: {query!r} ({len(results)} results)"]
+    for index, item in enumerate(results, start=1):
+        lines.append(f"{index}. {item.get('title', '').strip()}")
+        lines.append(f"   URL: {item.get('url', '').strip()}")
+        snippet = item.get("snippet", "").strip()
+        if snippet:
+            lines.append(f"   Snippet: {snippet}")
+        source = item.get("source", "").strip()
+        if source:
+            lines.append(f"   Source: {source}")
+        body = item.get("body", "").strip()
+        if body:
+            lines.append(f"   Body: {body}")
+    if has_body:
+        lines.append(
+            "Top results include an extracted Body excerpt above — prefer it for "
+            "facts/numbers over the short Snippet. For other results or full content, "
+            "call web_fetch with the URL. Do not state numbers not present in the evidence."
+        )
+    else:
+        lines.append(
+            "Detailed page content is not included. Call web_fetch with a selected URL "
+            "when you need the article/page body."
+        )
+    return "\n".join(lines)
+
+
+async def _fetch_search_result_body(url: str) -> str:
+    """검색 상위 결과의 본문을 정적 fetch로 짧게 회수한다(실패/차단 시 빈 문자열).
+
+    web_search 보강 전용 경량 헬퍼. 지연을 줄이려 헤드리스 폴백 없이 정적 fetch만
+    쓰고, 차단 페이지/오류/빈 본문은 조용히 건너뛰어 snippet만 남긴다.
+    """
+    if not url or _INTERNAL_URL_RE.match(url):
+        return ""
+    try:
+        body = await _fetch_static(url)
+    except Exception:  # noqa: BLE001 — 보강 실패는 snippet-only로 graceful degrade
+        return ""
+    if not body or body.startswith("Error:") or _looks_like_block_page(body):
+        return ""
+    body = body.strip()
+    if len(body) > _WEB_SEARCH_BODY_MAX:
+        body = body[:_WEB_SEARCH_BODY_MAX] + " …[truncated]"
+    return body
+
+
+async def handle_web_search(
+    routing: dict,
+    search_backend=None,
+    *,
+    body_fetcher=None,
+    enrich_count: int = _WEB_SEARCH_ENRICH_COUNT,
+) -> str:
+    """질의어로 후보 URL을 검색하고 title/url/snippet(+상위 본문 발췌) 결과를 반환한다.
+
+    ``body_fetcher`` 가 주어지면 상위 ``enrich_count`` 개 결과의 본문을 회수해 동봉한다.
+    snippet-only 결과만 받은 작은 모델이 수치를 환각하던 문제를 줄이기 위함이며,
+    본문 회수 실패는 조용히 snippet-only 로 degrade 한다. 테스트/호환을 위해 기본값은
+    ``None`` (보강 비활성, 기존 동작)이고 운영 dispatch 에서 실제 fetcher 를 주입한다.
+    """
+    query = str(routing.get("query", "")).strip()
+    if not query:
+        return "Error: 'query' field is required."
+
+    raw_limit = routing.get("limit", 5)
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 5
+    limit = max(1, min(_WEB_SEARCH_MAX_RESULTS, limit))
+
+    backend = search_backend or _web_search_duckduckgo
+    try:
+        results = await backend(query, limit)
+    except Exception as exc:
+        return (
+            f"Error: web_search failed — {str(exc)[:200]}. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        )
+
+    results = results[:limit]
+    if body_fetcher is not None and enrich_count > 0:
+        for item in results[:enrich_count]:
+            url = item.get("url", "").strip()
+            if not url:
+                continue
+            try:
+                body = await body_fetcher(url)
+            except Exception:  # noqa: BLE001 — 개별 본문 회수 실패는 무시하고 진행
+                body = ""
+            if body:
+                item["body"] = body
+    return _format_web_search_results(query, results)
 
 
 # ------------------------------------------------------------------
@@ -760,6 +1016,8 @@ def handle_skill_docs(routing: dict, skills_by_name: dict) -> str:
 def handle_cron_action(
     routing: dict,
     cron_scheduler: CronScheduler | None,
+    *,
+    allow_mutation: bool = True,
 ) -> str:
     """ReAct 루프에서 발생한 cron 액션을 처리한다.
 
@@ -773,6 +1031,12 @@ def handle_cron_action(
     if cron_action == "list":
         return _cron_list(cron_scheduler)
 
+    if not allow_mutation and cron_action in {"add", "remove", "enable", "disable"}:
+        return (
+            "Error: cron mutation is not allowed in cron execution context. "
+            "Nested scheduled jobs must not add, remove, enable, or disable cron jobs."
+        )
+
     if cron_action == "add":
         from simpleclaw.daemon.models import ActionType
 
@@ -783,6 +1047,55 @@ def handle_cron_action(
 
         if not name or not cron_expr or not action_ref:
             return "Error: name, cron_expression, action_reference are required."
+
+        metadata: dict[str, object] = {}
+        run_once_raw = routing.get("run_once")
+        if isinstance(run_once_raw, str):
+            normalized_run_once = run_once_raw.strip().lower()
+            if normalized_run_once in {"true", "1", "yes"}:
+                run_once_raw = True
+            elif normalized_run_once in {"false", "0", "no"}:
+                run_once_raw = False
+            else:
+                return "Error: run_once must be a boolean."
+        elif run_once_raw is not None and not isinstance(run_once_raw, bool):
+            return "Error: run_once must be a boolean."
+        run_once = None if run_once_raw is None else bool(run_once_raw)
+        if run_once is not None:
+            metadata["run_once"] = run_once
+
+        max_runs_raw = routing.get("max_runs")
+        max_runs: int | None = None
+        if max_runs_raw is not None:
+            try:
+                max_runs = int(max_runs_raw)
+            except (TypeError, ValueError):
+                return "Error: max_runs must be an integer."
+            if max_runs < 1:
+                return "Error: max_runs must be >= 1."
+
+        if run_once is True:
+            if max_runs is None:
+                max_runs = 1
+            elif max_runs != 1:
+                return "Error: run_once=True requires max_runs=1."
+        if max_runs is not None:
+            metadata["max_runs"] = max_runs
+
+        expires_at_raw = routing.get("expires_at")
+        if expires_at_raw:
+            if not isinstance(expires_at_raw, str):
+                return "Error: expires_at must be an ISO datetime string."
+            try:
+                expires_at = datetime.fromisoformat(
+                    expires_at_raw.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return "Error: expires_at must be a valid ISO datetime string."
+            now = datetime.now(expires_at.tzinfo) if expires_at.tzinfo else datetime.now()
+            if expires_at <= now:
+                return "Error: expires_at must be in the future."
+            metadata["expires_at"] = expires_at
 
         action_type = (
             ActionType.RECIPE if action_type_str == "recipe"
@@ -798,6 +1111,7 @@ def handle_cron_action(
                 cron_expression=cron_expr,
                 action_type=action_type,
                 action_reference=action_ref,
+                **metadata,
             )
             return (
                 f"Success: cron job created.\n"

@@ -1,0 +1,20 @@
+name: runtime_paths
+version: 1
+description: Runtime path summary injected into the main system prompt.
+required_vars:
+  - deploy_repo
+  - persona_dir
+  - conversation_db
+  - daemon_db
+  - recipes_dir
+  - workspace_dir
+prompt: |-
+  ## Runtime Paths
+  - Deploy repo/config: `{deploy_repo}`
+  - Runtime state root: `{persona_dir}`
+  - Persona files: `{persona_dir}/AGENT.md`, `{persona_dir}/USER.md`, `{persona_dir}/MEMORY.md`
+  - Conversations DB: `{conversation_db}`
+  - Daemon DB: `{daemon_db}`
+  - Recipes directory: `{recipes_dir}`
+  - Workspace directory: `{workspace_dir}`
+  - Treat the deploy repo as code/config only; read and write live state under the runtime state root unless config explicitly says otherwise.

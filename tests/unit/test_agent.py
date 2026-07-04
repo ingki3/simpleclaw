@@ -1,5 +1,6 @@
 """Tests for the agent orchestrator."""
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +16,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_web_fetch,
     resolve_safe_path,
 )
-from simpleclaw.llm.models import ToolCall
+from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
 @pytest.fixture
@@ -507,6 +508,118 @@ class TestCronToolIntegration:
         assert "daily-news" in result
         mock_scheduler.add_job.assert_called_once()
 
+    def test_handle_cron_action_add_passes_one_shot_metadata(self):
+        from simpleclaw.daemon.models import ActionType, CronJob
+
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        mock_scheduler.add_job.return_value = CronJob(
+            name="one-shot-reminder",
+            cron_expression="0 20 17 6 *",
+            action_type=ActionType.PROMPT,
+            action_reference="문서 확인 알림을 보내라",
+            enabled=True,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            run_once=True,
+            max_runs=1,
+            expires_at=expires_at,
+        )
+
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "one-shot-reminder",
+            "cron_expression": "0 20 17 6 *",
+            "action_type": "prompt",
+            "action_reference": "문서 확인 알림을 보내라",
+            "run_once": True,
+            "max_runs": 1,
+            "expires_at": expires_at.isoformat(),
+        }, mock_scheduler)
+
+        assert "Success" in result
+        mock_scheduler.add_job.assert_called_once_with(
+            name="one-shot-reminder",
+            cron_expression="0 20 17 6 *",
+            action_type=ActionType.PROMPT,
+            action_reference="문서 확인 알림을 보내라",
+            run_once=True,
+            max_runs=1,
+            expires_at=expires_at,
+        )
+
+    def test_handle_cron_action_rejects_conflicting_one_shot_metadata(self):
+        mock_scheduler = MagicMock()
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "bad-one-shot",
+            "cron_expression": "0 20 17 6 *",
+            "action_type": "prompt",
+            "action_reference": "알림을 보내라",
+            "run_once": True,
+            "max_runs": 2,
+        }, mock_scheduler)
+
+        assert "max_runs" in result
+        mock_scheduler.add_job.assert_not_called()
+
+    def test_handle_cron_action_rejects_mutating_actions_in_cron_context(self):
+        mock_scheduler = MagicMock()
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "nested-reminder",
+            "cron_expression": "0 20 * * *",
+            "action_type": "prompt",
+            "action_reference": "알림을 등록해줘",
+        }, mock_scheduler, allow_mutation=False)
+
+        assert "not allowed" in result
+        mock_scheduler.add_job.assert_not_called()
+
+        mock_scheduler.list_jobs.return_value = []
+        list_result = handle_cron_action(
+            {"skill_name": "cron", "cron_action": "list"},
+            mock_scheduler,
+            allow_mutation=False,
+        )
+        assert "없습니다" in list_result
+
+    def test_handle_cron_action_recurring_without_metadata_still_supported(self):
+        from simpleclaw.daemon.models import ActionType, CronJob
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        mock_scheduler.add_job.return_value = CronJob(
+            name="daily-news",
+            cron_expression="15 20 * * *",
+            action_type=ActionType.PROMPT,
+            action_reference="뉴스 정리",
+            enabled=True,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        result = handle_cron_action({
+            "skill_name": "cron",
+            "cron_action": "add",
+            "name": "daily-news",
+            "cron_expression": "15 20 * * *",
+            "action_type": "prompt",
+            "action_reference": "뉴스 정리",
+        }, mock_scheduler)
+
+        assert "Success" in result
+        mock_scheduler.add_job.assert_called_once_with(
+            name="daily-news",
+            cron_expression="15 20 * * *",
+            action_type=ActionType.PROMPT,
+            action_reference="뉴스 정리",
+        )
+
     def test_handle_cron_action_list(self):
         mock_scheduler = MagicMock()
         mock_scheduler.list_jobs.return_value = []
@@ -550,6 +663,44 @@ class TestCronToolIntegration:
         tc = ToolCall(id="call_1", name="cron", arguments={"cron_action": "list"})
         result = await orchestrator._dispatch_tool_call(tc)
         assert "없습니다" in result
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    @pytest.mark.asyncio
+    async def test_process_cron_message_disables_cron_mutations(self, config_file):
+        """cron 실행 진입점은 프롬프트 문구와 무관하게 cron mutation을 막는다."""
+        orchestrator = AgentOrchestrator(config_file)
+        mock_scheduler = MagicMock()
+        mock_scheduler.get_job.return_value = None
+        orchestrator.set_cron_scheduler(mock_scheduler)
+
+        tool_response = LLMResponse(
+            text="",
+            backend_name="test",
+            model="test",
+            tool_calls=[ToolCall(
+                id="call_1",
+                name="cron",
+                arguments={
+                    "cron_action": "add",
+                    "name": "nested-reminder",
+                    "cron_expression": "0 20 * * *",
+                    "action_type": "prompt",
+                    "action_reference": "알림을 설정해줘",
+                },
+            )],
+        )
+        final_response = LLMResponse(text="차단했습니다.", backend_name="test", model="test")
+        orchestrator._router = MagicMock()
+        orchestrator._router.send = AsyncMock(side_effect=[tool_response, final_response])
+
+        result = await orchestrator.process_cron_message("예약 작업 실행")
+
+        assert result == "차단했습니다."
+        mock_scheduler.add_job.assert_not_called()
+        second_request = orchestrator._router.send.call_args_list[1][0][0]
+        tool_messages = [m for m in second_request.messages if m.get("role") == "tool"]
+        assert tool_messages
+        assert "not allowed" in tool_messages[-1]["content"]
 
     def test_handle_cron_action_recipe_type(self):
         from simpleclaw.daemon.models import ActionType, CronJob
@@ -685,8 +836,8 @@ class TestBuiltinWebFetch:
         assert "FETCH_BLOCKED" not in result
 
     @pytest.mark.asyncio
-    async def test_web_fetch_static_error_does_not_fall_back(self):
-        """정적 fetch 가 HTTP 오류를 반환하면 headless 폴백을 시도하지 않는다."""
+    async def test_web_fetch_static_404_does_not_fall_back(self):
+        """정적 fetch 가 404 오류를 반환하면 headless 폴백을 시도하지 않는다."""
         from simpleclaw.agent import builtin_tools
 
         static_mock = AsyncMock(return_value="Error: HTTP 404 — Not Found")
@@ -701,6 +852,52 @@ class TestBuiltinWebFetch:
         static_mock.assert_awaited_once()
         headless_mock.assert_not_awaited()
         assert "Error: HTTP 404" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_http_403_falls_back_to_headless(self):
+        """정적 fetch 가 403이면 headless 브라우저 경로로 재시도한다."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="Error: HTTP 403 — Forbidden")
+        rendered_body = "Rendered Medium article body. " * 30
+        headless_mock = AsyncMock(return_value=rendered_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://medium.com/example/article"}
+            )
+
+        static_mock.assert_awaited_once_with("https://medium.com/example/article")
+        headless_mock.assert_awaited_once_with(
+            "https://medium.com/example/article", headless_binary=None
+        )
+        assert "via headless render" in result
+        assert "HTTP 403" in result
+        assert "Rendered Medium article body." in result
+        assert "FETCH_BLOCKED" not in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_http_403_headless_block_returns_fetch_blocked(self):
+        """403 이후 headless도 차단 페이지면 FETCH_BLOCKED로 합성한다."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="Error: HTTP 403 — Forbidden")
+        headless_mock = AsyncMock(return_value="Forbidden")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://medium.com/example/article"}
+            )
+
+        headless_mock.assert_awaited_once_with(
+            "https://medium.com/example/article", headless_binary=None
+        )
+        assert result.startswith("FETCH_BLOCKED: https://medium.com/example/article")
+        assert "HTTP 403" in result
+        assert "browser_handoff" in result
+        assert "copy/paste" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_headless_failure_returns_static_body(self):
@@ -758,6 +955,32 @@ class TestBuiltinWebFetch:
         assert "agent-browser" in result, (
             "응답에 agent-browser 우회 금지 안내가 들어 있어야 한다"
         )
+        assert "browser_handoff" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_google_search_redirect_returns_marker(self):
+        """BIZ-363 — Google Search redirect/차단성 본문은 factual evidence가 아니다."""
+        from simpleclaw.agent import builtin_tools
+
+        google_redirect_body = (
+            "Google Search\n"
+            "2026 World Cup South Korea match schedule\n"
+            "몇 초 안에 이동하지 않는 경우 여기를 클릭하세요. "
+            "Google 검색 결과로 이동하는 중입니다. " * 30
+        )
+        static_mock = AsyncMock(return_value="short")
+        headless_mock = AsyncMock(return_value=google_redirect_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://www.google.com/search?q=2026+World+Cup+South+Korea+match+schedule"}
+            )
+
+        assert result.startswith("FETCH_BLOCKED: https://www.google.com/search"), (
+            "Google redirect shell 은 일정 근거가 아니므로 FETCH_BLOCKED 여야 한다"
+        )
+        assert "Do NOT retry" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_force_headless_short_body_returns_marker(self):
@@ -1538,10 +1761,10 @@ class TestToolLoop:
         )
 
     def test_tool_usage_instruction_contains_failed_skill_guard(self):
-        """BIZ-164 #3 — system prompt 가드가 ``_TOOL_USAGE_INSTRUCTION`` 에 박혀 있어야 한다."""
+        """BIZ-164 #3 — prior-turn 실패 trace를 stale context로 취급하는 가드."""
         from simpleclaw.agent.orchestrator import _TOOL_USAGE_INSTRUCTION
 
-        assert "fail in a prior turn" in _TOOL_USAGE_INSTRUCTION, (
+        assert "failed tool/skill traces from prior unrelated turns" in _TOOL_USAGE_INSTRUCTION, (
             "BIZ-164 prompt guard missing — 과거 실패 도구 재시도 가드 한 줄이 누락됨"
         )
 

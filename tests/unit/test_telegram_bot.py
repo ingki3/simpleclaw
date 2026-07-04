@@ -29,11 +29,12 @@ class _FakeBot:
     뒤 정상화 — flood-wait / parse-error 시나리오를 흉내.
     """
 
-    def __init__(self, edit_failures: int = 0, send_failures: int = 0):
+    def __init__(self, edit_failures: int = 0, send_failures: int = 0, reject_duplicate_edit: bool = False):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
         self._edit_failures = edit_failures
         self._send_failures = send_failures
+        self._reject_duplicate_edit = reject_duplicate_edit
         self._next_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -49,8 +50,15 @@ class _FakeBot:
         if self._edit_failures > 0:
             self._edit_failures -= 1
             raise RuntimeError("simulated edit failure")
+        if self._reject_duplicate_edit and self.edits and self.edits[-1]["text"] == text:
+            raise RuntimeError("Message is not modified")
         self.edits.append(
-            {"chat_id": chat_id, "message_id": message_id, "text": text}
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "kwargs": kwargs,
+            }
         )
 
 
@@ -152,7 +160,10 @@ class TestTelegramBot:
         api_bot.get_file.assert_awaited_once_with("large")
         assert attachments == [
             MultimodalAttachment(
-                data=b"largest", mime_type="image/jpeg", name="telegram-photo-large"
+                data=b"largest",
+                mime_type="image/jpeg",
+                name="telegram-photo-large",
+                size_bytes=7,
             )
         ]
 
@@ -173,7 +184,10 @@ class TestTelegramBot:
         api_bot.get_file.assert_awaited_once_with("doc-1")
         assert attachments == [
             MultimodalAttachment(
-                data=b"png", mime_type="image/png", name="diagram.png"
+                data=b"png",
+                mime_type="image/png",
+                name="diagram.png",
+                size_bytes=3,
             )
         ]
 
@@ -203,6 +217,7 @@ class TestTelegramBot:
                 mime_type="application/pdf",
                 name="paper.pdf",
                 path=str(tmp_path / "paper.pdf"),
+                size_bytes=8,
             )
         ]
         assert (tmp_path / "paper.pdf").read_bytes() == b"%PDF-1.7"
@@ -295,8 +310,20 @@ class TestTelegramBot:
             data=b"%PDF", mime_type="application/pdf", name="paper.pdf"
         )
 
+        prompt = TelegramBot._default_message_text_for_attachments([attachment])
+
+        assert "첨부 문서" in prompt
+        assert "paper.pdf" in prompt
+        assert "application/pdf" in prompt
+        assert "분석" in prompt
+
+    def test_image_only_prompt_preserves_image_analysis_intent(self):
+        attachment = MultimodalAttachment(
+            data=b"jpg", mime_type="image/jpeg", name="photo.jpg"
+        )
+
         assert TelegramBot._default_message_text_for_attachments([attachment]) == (
-            "첨부 파일을 분석해 주세요."
+            "이미지를 분석해 주세요."
         )
 
 
@@ -621,6 +648,22 @@ class TestTelegramStreamSink:
         assert fake.edits[0]["text"] == "1234567890ab"[:11] or fake.edits[0]["text"] == "123456789ab"
 
     @pytest.mark.asyncio
+    async def test_finalize_renders_common_markdown_bold_with_telegram_html(self):
+        """최종 답변의 **굵게** 마크다운은 Telegram 에서 실제 bold 로 보이게 변환한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=13, min_interval_ms=10000, min_delta_chars=1000,
+        )
+        await sink.start()
+
+        sent = await sink.finalize("**기술주 매도세**: 엔비디아 <테스트> & 반도체")
+
+        assert sent == ["**기술주 매도세**: 엔비디아 <테스트> & 반도체"]
+        assert fake.edits[-1]["text"] == "<b>기술주 매도세</b>: 엔비디아 &lt;테스트&gt; &amp; 반도체"
+        assert fake.edits[-1]["kwargs"]["parse_mode"] == "HTML"
+        assert len(fake.sent) == 1  # placeholder only
+
+    @pytest.mark.asyncio
     async def test_finalize_short_text_edits_placeholder_once(self):
         fake = _FakeBot()
         sink = TelegramStreamSink(
@@ -653,6 +696,78 @@ class TestTelegramStreamSink:
         assert len(fake.sent) == 2  # placeholder + 두 번째 청크
         for chunk in sent:
             assert len(chunk) <= TELEGRAM_MESSAGE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_finalize_all_chunks_success_keeps_existing_contract(self):
+        """continuation 이 모두 성공하면 첫 청크 edit + 후속 send 계약을 유지한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert len(sent) == 2
+        assert [edit["text"] for edit in fake.edits] == [sent[0]]
+        assert [item["text"] for item in fake.sent] == ["…", sent[1]]
+
+    @pytest.mark.asyncio
+    async def test_finalize_first_edit_failure_still_falls_back_to_send(self):
+        """첫 edit 실패는 기존처럼 첫 청크 fresh send 로 회복한다."""
+        fake = _FakeBot(edit_failures=1)
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+
+        sent = await sink.finalize("final answer")
+
+        assert sent == ["final answer"]
+        assert [item["text"] for item in fake.sent] == ["…", "final answer"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_partial_tail_fallback_does_not_duplicate_prefix(self):
+        """후속 청크 실패 시 이미 edit 된 prefix 없이 남은 tail 만 재시도한다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+        chunks = split_for_telegram("x" * 8000)
+        fake._send_failures = 1
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert sent == chunks
+        assert [edit["text"] for edit in fake.edits] == [chunks[0]]
+        assert [item["text"] for item in fake.sent] == ["…", chunks[1]]
+
+    @pytest.mark.asyncio
+    async def test_finalize_reports_or_recovers_partial_chunk_failure(self, caplog):
+        """tail 재전송도 실패하면 안내 메시지와 delivered/total 로그를 남긴다."""
+        fake = _FakeBot()
+        sink = TelegramStreamSink(bot=fake, chat_id=5)
+        await sink.start()
+        chunks = split_for_telegram("x" * 8000)
+        fake._send_failures = 2
+
+        sent = await sink.finalize("x" * 8000)
+
+        assert sent == [chunks[0]]
+        assert any("일부 응답이 전송되지 않았습니다" in item["text"] for item in fake.sent)
+        assert "delivered_chunks=1 total_chunks=2" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_finalize_skips_duplicate_edit_after_stream_already_committed_final_text(self):
+        """스트리밍 중 이미 최종 본문이 edit 됐으면 finalize 가 새 메시지 fallback 을 만들지 않는다."""
+        fake = _FakeBot(reject_duplicate_edit=True)
+        sink = TelegramStreamSink(
+            bot=fake, chat_id=9, min_interval_ms=0, min_delta_chars=1,
+        )
+        await sink.start()
+        await sink.on_text_delta("answer")
+
+        sent = await sink.finalize("answer")
+
+        assert sent == ["answer"]
+        assert len(fake.edits) == 1
+        assert fake.edits[0]["text"] == "answer"
+        assert len(fake.sent) == 1  # placeholder only; no duplicate fallback send
 
     @pytest.mark.asyncio
     async def test_finalize_idempotent(self):

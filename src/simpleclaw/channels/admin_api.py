@@ -260,6 +260,7 @@ class AdminAPIServer:
         suggestion_writer: Callable[[str], None] | None = None,
         dreaming_run_store: DreamingRunStore | None = None,
         dreaming_status_provider: Callable[[], dict] | None = None,
+        study_status_service: object | None = None,
         secret_rotation_callback: SecretRotationCallback | None = None,
         dashboard_registrar: DashboardRouteRegistrar | None = None,
         dashboard_metrics: object | None = None,
@@ -319,6 +320,11 @@ class AdminAPIServer:
         #   미주입 시 status 응답에 None 으로 비워둔다(엔드포인트 자체는 동작).
         self._dreaming_run_store = dreaming_run_store
         self._dreaming_status_provider = dreaming_status_provider
+
+        # BIZ-395 — Agent Study Wiki 관찰성. 명시 주입하지 않으면 study 라우트가
+        # ``config.yaml`` 의 study.wiki_dir 로 store 를 지연 구성한다(부팅 경로에
+        # study 의존성을 강제로 엮지 않기 위함). 미구성 wiki 는 configured=false 로 응답.
+        self._study_status_service = study_status_service
 
         # BIZ-245 — 시크릿 회전 후 외부 동기화 후크 (예: ``web/admin/.env.local`` 의
         # ``ADMIN_API_TOKEN`` 갱신). vault 만 회전되고 Next 프록시가 옛 토큰으로 forward

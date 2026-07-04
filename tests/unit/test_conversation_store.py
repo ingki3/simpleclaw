@@ -80,3 +80,55 @@ class TestConversationStore:
     def test_empty_store(self, store):
         assert store.get_recent() == []
         assert store.count() == 0
+
+    def test_hide_recent_user_turn_excludes_user_assistant_pair_from_context(self, store):
+        store.add_message(ConversationMessage(role=MessageRole.USER, content="u1"))
+        store.add_message(ConversationMessage(role=MessageRole.ASSISTANT, content="a1"))
+        hidden_user_turns = store.hide_recent_user_turns(1)
+
+        assert hidden_user_turns == 1
+        assert store.get_recent(limit=10) == []
+
+        audit_messages = store.get_recent(limit=10, include_deleted=True)
+        assert [msg.content for msg in audit_messages] == ["u1", "a1"]
+        assert store.count() == 2
+
+    def test_hide_recent_two_user_turns_preserves_older_context(self, store):
+        for content, role in [
+            ("u1", MessageRole.USER),
+            ("a1", MessageRole.ASSISTANT),
+            ("u2", MessageRole.USER),
+            ("a2", MessageRole.ASSISTANT),
+            ("u3", MessageRole.USER),
+            ("a3", MessageRole.ASSISTANT),
+        ]:
+            store.add_message(ConversationMessage(role=role, content=content))
+
+        hidden_user_turns = store.hide_recent_user_turns(2)
+
+        assert hidden_user_turns == 2
+        assert [msg.content for msg in store.get_recent(limit=10)] == ["u1", "a1"]
+        assert [msg.content for msg in store.get_recent(limit=10, include_deleted=True)] == [
+            "u1", "a1", "u2", "a2", "u3", "a3",
+        ]
+
+    def test_get_since_and_ids_exclude_hidden_by_default_but_allow_audit(self, store):
+        since = datetime.now() - timedelta(minutes=1)
+        user_id = store.add_message(ConversationMessage(role=MessageRole.USER, content="u1"))
+        asst_id = store.add_message(ConversationMessage(role=MessageRole.ASSISTANT, content="a1"))
+
+        assert store.hide_recent_user_turns(1) == 1
+
+        assert store.get_since(since) == []
+        assert store.get_since_with_ids(since) == []
+        assert store.get_messages_by_ids([user_id, asst_id], include_deleted=False) == []
+        assert [
+            msg.content
+            for _, msg in store.get_messages_by_ids([user_id, asst_id])
+        ] == ["u1", "a1"]
+
+    def test_hide_recent_user_turns_returns_zero_without_user_messages(self, store):
+        store.add_message(ConversationMessage(role=MessageRole.ASSISTANT, content="a1"))
+
+        assert store.hide_recent_user_turns(1) == 0
+        assert [msg.content for msg in store.get_recent(limit=10)] == ["a1"]

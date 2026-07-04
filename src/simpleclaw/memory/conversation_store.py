@@ -4,6 +4,7 @@
 1. ConversationStore 인스턴스 생성 시 SQLite DB 파일 경로를 받아 스키마를 자동 생성·마이그레이션한다.
 2. add_message()로 대화 메시지를 순차 저장하며, INSERT된 행 id를 반환한다.
 3. get_recent() / get_since()로 최근 또는 특정 시점 이후 대화를 시간순으로 조회한다.
+   /undo로 soft-delete된 메시지는 기본 컨텍스트 조회에서 제외한다.
 4. add_embedding() / search_similar()로 메시지 단위 임베딩을 저장·검색한다(시맨틱 메모리, spec 005).
 5. create_cluster() / list_clusters() / assign_cluster() 등으로 시맨틱 클러스터 그래프를 관리한다(Phase 3).
 6. create_memory_item() 계열 CRUD로 DB-backed 장기기억 read model을 관리한다(BIZ-307).
@@ -147,10 +148,26 @@ class ConversationStore:
             if "cluster_id" not in cols:
                 conn.execute("ALTER TABLE messages ADD COLUMN cluster_id INTEGER")
                 logger.info("Legacy normalize: added cluster_id column to messages")
-            # BIZ-77 — channel 컬럼은 마이그레이션 0002 가 추가한다.
-            # 여기서 보충하면 0002 의 ALTER 가 duplicate 로 실패하므로, 정규화는
+            # BIZ-77/BIZ-366 — channel/deleted_at 컬럼은 각각 마이그레이션이 추가한다.
+            # 여기서 보충하면 해당 ALTER 가 duplicate 로 실패하므로, 정규화는
             # baseline (embedding/cluster_id) 까지만 처리하고 이후 컬럼은 마이그레이션
             # 러너에 위임한다.
+
+    @staticmethod
+    def _message_from_row(row: tuple) -> ConversationMessage:
+        """messages SELECT row를 ConversationMessage로 변환한다.
+
+        soft-delete 메타(deleted_at)는 컨텍스트 노출 여부만 제어하므로 도메인 메시지
+        객체에는 싣지 않는다. 감사 조회는 row id를 함께 반환하는 API가 담당한다.
+        """
+        role, content, ts, tokens, channel = row
+        return ConversationMessage(
+            role=MessageRole(role),
+            content=content,
+            timestamp=datetime.fromisoformat(ts),
+            token_count=tokens,
+            channel=channel,
+        )
 
     def add_message(self, message: ConversationMessage) -> int:
         """새 대화 메시지를 DB에 저장하고 INSERT된 행 id를 반환한다.
@@ -182,35 +199,35 @@ class ConversationStore:
             )
             return int(cursor.lastrowid)
 
-    def get_recent(self, limit: int = 20) -> list[ConversationMessage]:
+    def get_recent(
+        self, limit: int = 20, *, include_deleted: bool = False
+    ) -> list[ConversationMessage]:
         """최근 메시지를 시간순으로 반환한다.
 
         Args:
             limit: 가져올 최대 메시지 수. 기본값 20.
+            include_deleted: True이면 /undo로 숨겨진 메시지도 감사용으로 포함한다.
 
         Returns:
             시간순(오래된 것 먼저)으로 정렬된 ConversationMessage 리스트.
         """
+        visibility_clause = "" if include_deleted else "WHERE deleted_at IS NULL "
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content, timestamp, token_count, channel FROM messages "
-                "ORDER BY id DESC LIMIT ?",
+                f"{visibility_clause}ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
 
         messages = []
         # DB에서 역순(최신 먼저)으로 가져온 뒤 다시 뒤집어 시간순으로 만든다
-        for role, content, ts, tokens, channel in reversed(rows):
-            messages.append(ConversationMessage(
-                role=MessageRole(role),
-                content=content,
-                timestamp=datetime.fromisoformat(ts),
-                token_count=tokens,
-                channel=channel,
-            ))
+        for row in reversed(rows):
+            messages.append(self._message_from_row(row))
         return messages
 
-    def get_since(self, since: datetime) -> list[ConversationMessage]:
+    def get_since(
+        self, since: datetime, *, include_deleted: bool = False
+    ) -> list[ConversationMessage]:
         """지정된 시점 이후의 메시지를 시간순으로 반환한다.
 
         Args:
@@ -219,88 +236,70 @@ class ConversationStore:
         Returns:
             시간순으로 정렬된 ConversationMessage 리스트.
         """
+        deleted_clause = "" if include_deleted else "AND deleted_at IS NULL "
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT role, content, timestamp, token_count, channel FROM messages "
-                "WHERE timestamp >= ? ORDER BY id",
+                f"WHERE timestamp >= ? {deleted_clause}ORDER BY id",
                 (since.isoformat(),),
             ).fetchall()
 
-        return [
-            ConversationMessage(
-                role=MessageRole(role),
-                content=content,
-                timestamp=datetime.fromisoformat(ts),
-                token_count=tokens,
-                channel=channel,
-            )
-            for role, content, ts, tokens, channel in rows
-        ]
+        return [self._message_from_row(row) for row in rows]
 
     # ------------------------------------------------------------------
     # ID-bearing fetch (BIZ-77) — 인사이트 source 역추적을 위한 헬퍼
     # ------------------------------------------------------------------
 
     def get_recent_with_ids(
-        self, limit: int = 20
+        self, limit: int = 20, *, include_deleted: bool = False
     ) -> list[tuple[int, ConversationMessage]]:
         """최근 메시지를 ``(id, message)`` 쌍으로 시간순 반환.
 
         ``get_recent`` 와 동일하지만 message rowid 를 함께 노출한다 — 드리밍이
         인사이트 메타에 ``source_msg_ids`` 로 적재해야 하므로 BIZ-77 에서 추가됨.
         """
+        visibility_clause = "" if include_deleted else "WHERE deleted_at IS NULL "
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, role, content, timestamp, token_count, channel "
-                "FROM messages ORDER BY id DESC LIMIT ?",
+                f"FROM messages {visibility_clause}ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
 
         results: list[tuple[int, ConversationMessage]] = []
         # DB에서 역순(최신 먼저)으로 가져온 뒤 다시 뒤집어 시간순으로 만든다.
         for mid, role, content, ts, tokens, channel in reversed(rows):
-            msg = ConversationMessage(
-                role=MessageRole(role),
-                content=content,
-                timestamp=datetime.fromisoformat(ts),
-                token_count=tokens,
-                channel=channel,
-            )
+            msg = self._message_from_row((role, content, ts, tokens, channel))
             results.append((int(mid), msg))
         return results
 
     def get_since_with_ids(
-        self, since: datetime
+        self, since: datetime, *, include_deleted: bool = False
     ) -> list[tuple[int, ConversationMessage]]:
         """지정 시점 이후 메시지를 ``(id, message)`` 쌍으로 시간순 반환."""
+        deleted_clause = "" if include_deleted else "AND deleted_at IS NULL "
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, role, content, timestamp, token_count, channel "
-                "FROM messages WHERE timestamp >= ? ORDER BY id",
+                f"FROM messages WHERE timestamp >= ? {deleted_clause}ORDER BY id",
                 (since.isoformat(),),
             ).fetchall()
 
         return [
             (
                 int(mid),
-                ConversationMessage(
-                    role=MessageRole(role),
-                    content=content,
-                    timestamp=datetime.fromisoformat(ts),
-                    token_count=tokens,
-                    channel=channel,
-                ),
+                self._message_from_row((role, content, ts, tokens, channel)),
             )
             for mid, role, content, ts, tokens, channel in rows
         ]
 
     def get_messages_by_ids(
-        self, ids: list[int]
+        self, ids: list[int], *, include_deleted: bool = True
     ) -> list[tuple[int, ConversationMessage]]:
         """주어진 rowid 들을 시간순으로 조회한다.
 
-        존재하지 않는 id 는 결과에서 그냥 빠진다(에러 없음). Admin API 가
-        인사이트의 ``source_msg_ids`` 를 사람이 읽을 메시지로 풀어내기 위해 사용.
+        존재하지 않는 id 는 결과에서 그냥 빠진다(에러 없음). 기본적으로 /undo로
+        숨긴 메시지도 포함해 Admin/API 감사 경로가 물리 보존된 원문을 확인할 수 있게 한다.
 
         Args:
             ids: messages.id 리스트 (중복/빈 리스트 허용).
@@ -315,26 +314,60 @@ class ConversationStore:
         if not unique_ids:
             return []
         placeholders = ",".join("?" * len(unique_ids))
+        deleted_clause = "" if include_deleted else "AND deleted_at IS NULL "
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT id, role, content, timestamp, token_count, channel "
-                f"FROM messages WHERE id IN ({placeholders}) ORDER BY id",
+                f"FROM messages WHERE id IN ({placeholders}) {deleted_clause}ORDER BY id",
                 unique_ids,
             ).fetchall()
 
         return [
             (
                 int(mid),
-                ConversationMessage(
-                    role=MessageRole(role),
-                    content=content,
-                    timestamp=datetime.fromisoformat(ts),
-                    token_count=tokens,
-                    channel=channel,
-                ),
+                self._message_from_row((role, content, ts, tokens, channel)),
             )
             for mid, role, content, ts, tokens, channel in rows
         ]
+
+    def hide_recent_user_turns(self, turns: int) -> int:
+        """최근 user turn N개와 그 이후 assistant 메시지를 soft-delete한다.
+
+        물리 삭제 없이 ``deleted_at``만 채워 이후 ``get_recent``/``get_since`` 기본
+        컨텍스트에서 제외한다. 최신 메시지부터 거꾸로 훑어 user 메시지 N개를 만날
+        때까지 지나친 assistant/system/tool 성격의 행까지 같은 되돌림 범위로 묶는다.
+
+        Args:
+            turns: 숨길 최근 user turn 수. 1 이상의 정수여야 한다.
+
+        Returns:
+            실제 숨겨진 user turn 수. 숨길 user 메시지가 없으면 0.
+        """
+        if turns < 1:
+            raise ValueError("turns must be >= 1")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, role FROM messages WHERE deleted_at IS NULL ORDER BY id DESC"
+            ).fetchall()
+            ids_to_hide: list[int] = []
+            user_turns = 0
+            for mid, role in rows:
+                ids_to_hide.append(int(mid))
+                if role == MessageRole.USER.value:
+                    user_turns += 1
+                    if user_turns >= turns:
+                        break
+
+            if user_turns == 0:
+                return 0
+
+            placeholders = ",".join("?" * len(ids_to_hide))
+            conn.execute(
+                f"UPDATE messages SET deleted_at = ? WHERE id IN ({placeholders})",
+                [datetime.now().isoformat(), *ids_to_hide],
+            )
+            return user_turns
 
     def count(self) -> int:
         """저장된 전체 메시지 수를 반환한다."""

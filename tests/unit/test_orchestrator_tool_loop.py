@@ -16,7 +16,7 @@ import pytest
 
 from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
-from simpleclaw.llm.models import LLMResponse, ToolCall
+from simpleclaw.llm.models import LLMResponse, MultimodalAttachment, ToolCall
 
 
 @pytest.fixture
@@ -192,6 +192,145 @@ async def test_normal_text_response_unaffected(config_file):
     assert result == "정상 답변입니다."
     assert "한도" not in result
     assert "tool loop" not in result
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_note_is_in_current_user_message_not_saved(
+    config_file,
+):
+    """문서 첨부 메타 note는 provider 요청에만 붙고 대화 DB 저장 텍스트에는 남지 않는다."""
+    orch = AgentOrchestrator(config_file)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return _text_response("첨부를 확인했습니다.")
+
+    orch._router.send = fake_send
+    attachment = MultimodalAttachment(
+        data=b"%PDF-1.7",
+        mime_type="application/pdf",
+        name="paper.pdf",
+        path="/tmp/simpleclaw-attachments/paper.pdf",
+        size_bytes=8,
+    )
+
+    result = await orch.process_message(
+        "요약해줘",
+        user_id=1,
+        chat_id=1,
+        attachments=[attachment],
+    )
+
+    assert result == "첨부를 확인했습니다."
+    assert len(seen_requests) == 1
+    current_message = seen_requests[0].messages[-1]
+    assert current_message["attachments"] == [attachment]
+    content = current_message["content"]
+    assert "Attachment context" in content
+    assert "paper.pdf" in content
+    assert "application/pdf" in content
+    assert "/tmp/simpleclaw-attachments/paper.pdf" in content
+    assert "8 bytes" in content
+    assert "직접 분석" in content
+    assert "불가능하면" in content
+
+    saved = orch._store.get_recent(limit=2)
+    assert saved[0].content == "요약해줘"
+    assert "Attachment context" not in saved[0].content
+    assert "%PDF" not in saved[0].content
+    assert "/tmp/simpleclaw-attachments/paper.pdf" not in saved[0].content
+
+
+@pytest.mark.asyncio
+async def test_attachment_context_note_includes_attachment_without_path(config_file):
+    orch = AgentOrchestrator(config_file)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return _text_response("이미지 확인")
+
+    orch._router.send = fake_send
+    attachment = MultimodalAttachment(
+        data=b"jpg", mime_type="image/jpeg", name="photo.jpg"
+    )
+
+    await orch.process_message("이미지를 분석해 주세요.", 1, 1, attachments=[attachment])
+
+    content = seen_requests[0].messages[-1]["content"]
+    assert "photo.jpg" in content
+    assert "image/jpeg" in content
+    assert "Sandbox path" not in content
+
+
+@pytest.mark.asyncio
+async def test_live_fact_final_without_evidence_is_accepted_by_tool_loop(config_file):
+    """실시간 사실 final text는 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_send(_request):
+        return _text_response("대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다.")
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다."
+
+
+@pytest.mark.asyncio
+async def test_live_fact_fetch_blocked_final_is_not_post_filtered(
+    config_file, monkeypatch,
+):
+    """FETCH_BLOCKED 이후 final text도 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "FETCH_BLOCKED: https://www.google.com/search?q=2026+World+Cup\n"
+            "This site appears to block automated fetching."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "web_fetch",
+            {"url": "https://www.google.com/search?q=2026+World+Cup"},
+        ),
+        _text_response("대한민국 vs 미국: 6월 23일 22시에 중계됩니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
+        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "대한민국 vs 미국: 6월 23일 22시에 중계됩니다."
 
 
 @pytest.mark.asyncio
@@ -374,6 +513,349 @@ async def test_empty_final_after_tool_error_reports_checked_but_failed(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_prefers_prior_success_over_trailing_web_search_error(
+    config_file, monkeypatch,
+):
+    """유효한 검색 결과 뒤 transient 검색 오류가 와도 fallback은 확인 결과를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '노정의 마녀 드라마' (1 results)\n"
+            "1. 마녀 - 드라마 정보\n"
+            "   URL: https://example.com/witch\n"
+            "   Snippet: 강풀 원작 드라마 마녀 출연진 정보."
+        ),
+        (
+            "Error: web_search failed — DuckDuckGo returned HTTP 202 — Accepted. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "노정의 마녀 드라마"}),
+        _tool_response("c2", "web_search", {"query": "신은수 강풀 드라마"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
+    )
+
+    # BIZ-414: 유효한 web_search 뒤 transient 오류가 와도 확인된 title/URL 근거를 보존한다.
+    assert "검색은 마쳤지만" in result
+    assert "마녀 - 드라마 정보" in result
+    assert "https://example.com/witch" in result
+    # 240자 truncation 으로 raw 페이로드를 뭉개던 generic 경로는 더 이상 타지 않는다.
+    assert "web_search: WEB_SEARCH_RESULTS" not in result
+    assert "확인 중 오류" not in result
+    assert "DuckDuckGo returned HTTP 202" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_web_search_preserves_title_and_url(
+    config_file, monkeypatch,
+):
+    """web_search 성공 후 빈 final이면 결과 제목/URL을 fallback 근거로 보존한다 (BIZ-414)."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "WEB_SEARCH_RESULTS: '요즘 재미있는 뮤지컬' (3 results)\n"
+            "1. 뮤지컬 '오페라의 유령' 서울 공연\n"
+            "   URL: https://example.com/phantom\n"
+            "   Snippet: 2026 상반기 화제작.\n"
+            "2. 뮤지컬 '레미제라블' 앙코르\n"
+            "   URL: https://example.com/lesmis\n"
+            "   Snippet: 오리지널 내한.\n"
+            "3. 뮤지컬 '데스노트'\n"
+            "   URL: https://example.com/deathnote\n"
+            "   Snippet: 재연 확정."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "요즘 재미있는 뮤지컬"}),
+        _text_response("   "),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 재미있는 뮤지컬 있나 찾아봐")
+
+    assert result.strip()
+    # 최소 하나 이상의 title/URL 근거가 사용자에게 보존되어야 한다.
+    assert "뮤지컬 '오페라의 유령' 서울 공연" in result
+    assert "https://example.com/phantom" in result
+    assert "뮤지컬 '레미제라블' 앙코르" in result
+    assert "https://example.com/lesmis" in result
+    # 일반 빈-응답/못 찾음 fallback으로 새지 않아야 한다.
+    assert "응답을 생성하지 못했습니다" not in result
+    assert "찾지 못했습니다" not in result
+    assert call_idx["i"] == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_final_preserves_evidence_from_earlier_web_search_not_just_last(
+    config_file, monkeypatch,
+):
+    """마지막 결과만이 아니라 이전 유용한 web_search 결과도 fallback에 보존한다 (BIZ-414)."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 신작' (1 results)\n"
+            "1. 신작 뮤지컬 A 개막\n"
+            "   URL: https://example.com/new-a\n"
+            "   Snippet: 3월 개막."
+        ),
+        (
+            "WEB_SEARCH_RESULTS: '뮤지컬 앙코르' (1 results)\n"
+            "1. 앙코르 뮤지컬 B\n"
+            "   URL: https://example.com/encore-b\n"
+            "   Snippet: 재연."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "뮤지컬 신작"}),
+        _tool_response("c2", "web_search", {"query": "뮤지컬 앙코르"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("요즘 볼만한 뮤지컬 신작이랑 앙코르 공연 찾아줘")
+
+    # 두 web_search 모두의 근거가 fallback에 남아야 한다 (마지막 것만 아님).
+    assert "신작 뮤지컬 A 개막" in result
+    assert "https://example.com/new-a" in result
+    assert "앙코르 뮤지컬 B" in result
+    assert "https://example.com/encore-b" in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_only_no_output_tool_result_asks_for_more_direction(
+    config_file, monkeypatch,
+):
+    """무의미한 성공 결과만 있으면 확인 결과 요약 대신 추가 단서/방향을 요청한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "[Command completed with no output]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message(
+        "노정의 신은수 배우가 나온 강풀 원작 드라마 찾아줘"
+    )
+
+    assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
+    assert "추가로 어떤 방향으로 확인할까요" in result
+    assert "다른 키워드" in result
+    assert "다른 출처" in result
+    assert "조건을 추가" in result
+    assert "URL 기준" in result
+    assert "배우 기준" not in result
+    assert "줄거리/설정 기준" not in result
+    assert "방영 시기" not in result
+    assert "[Command completed with no output]" not in result
+    assert "확인은 했지만 답변을 마무리하지 못했습니다" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_skips_meta_tool_docs_and_keeps_kbo_evidence(
+    config_file, monkeypatch,
+):
+    """도구 문서/검색 오류가 뒤따라도 사용자 질문의 실제 근거를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 4
+
+    dispatch_results = [
+        (
+            "(via headless render; force_headless=True)\n\n"
+            "KBO 스코어보드 2026.07.02(목) "
+            "롯데 0 4회말 0 두산 0-0 2out 잠실 18:30"
+        ),
+        (
+            "[Skill documentation for agent-browser]: Browser automation for "
+            "interactive website tasks. Use this skill when navigating pages."
+        ),
+        (
+            "Error: web_search failed — DuckDuckGo returned HTTP 202 — Accepted. "
+            "Try a more specific query, or use web_fetch if you already have a URL."
+        ),
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "web_fetch",
+            {"url": "https://www.koreabaseball.com/Schedule/ScoreBoard.aspx"},
+        ),
+        _tool_response("c2", "skill_docs", {"name": "agent-browser"}),
+        _tool_response("c3", "web_search", {"query": "롯데 두산 우천 중단"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("비 온다고 했던 거 같은데?")
+
+    assert "확인한 근거는 있지만" in result
+    assert "web_fetch:" in result
+    assert "KBO 스코어보드" in result
+    assert "롯데 0 4회말 0 두산" in result
+    assert "agent-browser" not in result
+    assert "Skill documentation" not in result
+    assert "DuckDuckGo returned HTTP 202" not in result
+    assert "배우" not in result
+    assert "방영" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_prefers_prior_success_over_trailing_no_output_cli(
+    config_file, monkeypatch,
+):
+    """유효 검색 결과 뒤 no-output CLI가 와도 검색 결과를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_results = [
+        (
+            "WEB_SEARCH_RESULTS: '강풀 마녀 드라마 노정의' (1 results)\n"
+            "1. 마녀 - 채널A 드라마\n"
+            "   URL: https://example.com/witch\n"
+            "   Snippet: 강풀 웹툰 원작, 노정의 주연."
+        ),
+        "[Command completed with no output]",
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_results.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "web_search", {"query": "강풀 마녀 드라마 노정의"}),
+        _tool_response("c2", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("마녀 별명 드라마 제목 찾아줘")
+
+    # BIZ-414: no-output CLI 가 뒤에 와도 앞선 web_search title/URL 근거를 보존한다.
+    assert "검색은 마쳤지만" in result
+    assert "마녀 - 채널A 드라마" in result
+    assert "https://example.com/witch" in result
+    assert "web_search: WEB_SEARCH_RESULTS" not in result
+    assert "Command completed with no output" not in result
+    assert "추가로 어떤 기준" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_no_evidence_creates_pending_clarify_in_chat(
+    config_file, monkeypatch,
+):
+    """대화형 채널에서는 근거 부족 fallback이 인라인 clarify 질문으로 전환된다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "[Command completed with no output]"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "cli", {"command": "curl ... | grep ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_message(
+        "제목 찾아봐",
+        user_id=6233568410,
+        chat_id=6233568410,
+    )
+
+    assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
+    assert "다른 키워드로 다시 확인해줘" in result
+    pending = orch.pop_pending_clarify(6233568410)
+    assert pending is not None
+    assert "어떤 방향으로 확인할까요" in pending.question
+    assert [opt.label for opt in pending.options] == [
+        "다른 키워드",
+        "다른 출처",
+        "조건 추가",
+        "URL로 확인",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_empty_final_after_transcript_with_error_words_reports_generic_result(
     config_file, monkeypatch,
 ):
@@ -408,7 +890,7 @@ async def test_empty_final_after_transcript_with_error_words_reports_generic_res
 
     result = await orch.process_cron_message("https://youtu.be/example")
 
-    assert "확인은 했지만 답변을 마무리하지 못했습니다" in result
+    assert "확인한 근거는 있지만" in result
     assert "execute_skill: Transcript:" in result
     assert "확인 중 오류" not in result
     assert "한 번 더 말씀" not in result

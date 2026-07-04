@@ -32,6 +32,9 @@ import numpy as np
 # - ``CHANNEL_CRON_ADMIN`` (``"cron-admin"``): 사용자가 ``/cron list``,
 #   ``/cron add`` 같은 cron 관리 명령을 칠 때의 응답. 사용자가 직접 친 명령이지만
 #   본인의 관심·취향 신호가 아니므로 dreaming 자동 트리거 필터에 함께 묶인다.
+# - ``CHANNEL_GOAL_PREFIX`` (``"goal:"``): 사용자가 명시적으로 ``/goal`` 을
+#   실행해 생성된 multi-round 산출물. 수동 명령이지만 긴 자동 실행 결과라
+#   관심·취향 신호로 과대 반영하지 않도록 auto-trigger 로 분류한다.
 #
 # ``None`` 채널은 (a) 마이그레이션 0002 이전 데이터, (b) producer 가 명시하지
 # 않은 경우의 두 가지를 모두 의미한다. 안전한 기본값은 "organic 사용자 발화"
@@ -41,6 +44,7 @@ import numpy as np
 CHANNEL_RECIPE_PREFIX = "recipe:"
 CHANNEL_CRON_PREFIX = "cron:"
 CHANNEL_CRON_ADMIN = "cron-admin"
+CHANNEL_GOAL_PREFIX = "goal:"
 
 
 def is_auto_trigger_channel(channel: str | None) -> bool:
@@ -51,6 +55,7 @@ def is_auto_trigger_channel(channel: str | None) -> bool:
     - ``recipe:<name>`` (예: ``recipe:ai-report``) — 사용자가 친 슬래시 레시피 호출.
     - ``cron:<name>`` — 예약된 cron 잡 산출물(현재 store 비저장이지만 예약 prefix).
     - ``cron-admin`` — ``/cron list`` 같은 cron 관리 명령의 응답.
+    - ``goal:<status>`` — 명시적 ``/goal`` loop 산출물.
 
     ``None`` 이나 그 외 채널(예: ``telegram``)은 organic 사용자 발화로 간주해
     ``False`` 를 반환한다 — 채널이 명시되지 않은 마이그레이션 이전 데이터를
@@ -63,6 +68,8 @@ def is_auto_trigger_channel(channel: str | None) -> bool:
     if channel.startswith(CHANNEL_RECIPE_PREFIX):
         return True
     if channel.startswith(CHANNEL_CRON_PREFIX):
+        return True
+    if channel.startswith(CHANNEL_GOAL_PREFIX):
         return True
     return False
 
