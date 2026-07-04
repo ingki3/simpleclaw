@@ -198,7 +198,13 @@ def _looks_like_block_page(body: str) -> bool:
     return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
 
 
-def _format_block_page_response(url: str, body: str, *, via: str) -> str:
+def _format_block_page_response(
+    url: str,
+    body: str,
+    *,
+    via: str,
+    static_error: str | None = None,
+) -> str:
     """차단 페이지로 판정된 응답을 LLM 이 재시도하지 않도록 합성 메시지로 포맷한다.
 
     BIZ-190: 응답 첫 줄에 ``FETCH_BLOCKED: <url>`` 마커를 박아 system prompt
@@ -206,8 +212,10 @@ def _format_block_page_response(url: str, body: str, *, via: str) -> str:
     진단용으로 첫 400자까지 동봉.
     """
     snippet = body.strip()[:400]
+    static_error_line = f"Static fetch error: {static_error}\n" if static_error else ""
     return (
         f"FETCH_BLOCKED: {url}\n"
+        f"{static_error_line}"
         f"This site appears to block automated fetching (detected via {via}). "
         "Both static fetch and the headless browser fallback returned a short "
         "or anti-bot body. Do NOT retry the same URL with agent-browser, cli, "
@@ -215,6 +223,16 @@ def _format_block_page_response(url: str, body: str, *, via: str) -> str:
         "retrieved automatically and offer a graceful alternative.\n"
         f"--- diagnostic body ({len(body.strip())} chars) ---\n{snippet}"
     )
+
+
+def _is_headless_retryable_static_error(static_text: str) -> bool:
+    """정적 fetch 오류 중 headless 브라우저 재시도가 의미 있는 케이스를 판별한다.
+
+    403 Forbidden은 서버가 일반 HTTP 클라이언트를 차단했지만 실제 브라우저
+    렌더링에서는 본문을 열 수 있는 대표 케이스다. 404 같은 존재하지 않는 URL은
+    headless 재시도 비용만 늘리므로 기존처럼 즉시 반환한다.
+    """
+    return static_text.lower().startswith("error: http 403")
 
 
 async def _fetch_static(url: str) -> str:
@@ -394,8 +412,9 @@ async def handle_web_fetch(
 ) -> str:
     """URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.
 
-    기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이면
-    `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA 대응).
+    기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLBACK_THRESHOLD`` 미만이거나
+    정적 fetch 가 브라우저 재시도 가능한 차단 오류(현재 HTTP 403)를 반환하면
+    `agent-browser` 헤드리스 경로로 자동 폴백 (JS 렌더링 SPA/차단 대응).
     ``force_headless=True`` 이면 정적 단계 skip.
 
     ``headless_binary`` 는 운영자가 config 로 지정한 ``agent-browser`` 절대 경로
@@ -428,7 +447,37 @@ async def handle_web_fetch(
 
     static_text = await _fetch_static(url)
     if static_text.startswith("Error:"):
-        return static_text
+        if not _is_headless_retryable_static_error(static_text):
+            return static_text
+
+        logger.info(
+            "web_fetch static returned retryable error for %s (%s), "
+            "falling back to headless",
+            url,
+            static_text[:120],
+        )
+        body = await _fetch_headless(url, headless_binary=headless_binary)
+        if body.startswith("Error:"):
+            return _format_block_page_response(
+                url,
+                body,
+                via="static error→headless fallback failed",
+                static_error=static_text,
+            )
+        if _looks_like_block_page(body):
+            logger.info(
+                "web_fetch static retryable error+headless block page for %s "
+                "(headless %d chars)",
+                url,
+                len(body.strip()),
+            )
+            return _format_block_page_response(
+                url,
+                body,
+                via="static error→headless fallback",
+                static_error=static_text,
+            )
+        return f"(via headless render; static fetch returned {static_text})\n\n{body}"
 
     static_len = len(static_text.strip())
     if static_len < STATIC_FALLBACK_THRESHOLD:

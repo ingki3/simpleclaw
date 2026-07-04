@@ -78,7 +78,7 @@ _WEB_FETCH_TOOL = ToolDefinition(
     name="web_fetch",
     description="URL에서 웹 페이지 내용을 가져온다. 뉴스 기사, API 응답, 문서 등을 읽을 수 있다. "
                 "HTTP GET 요청만 지원하며, 내부 네트워크(localhost, 10.x 등)는 차단된다. "
-                "정적 HTML 본문이 짧으면 자동으로 헤드리스 브라우저(agent-browser)로 폴백한다. "
+                "정적 HTML 본문이 짧거나 HTTP 403으로 차단되면 자동으로 헤드리스 브라우저(agent-browser)로 폴백한다. "
                 "JS 렌더링이 필요한 SPA/동적 페이지임을 미리 알면 force_headless=True 로 즉시 헤드리스 경로 사용.",
     parameters={
         "type": "object",
