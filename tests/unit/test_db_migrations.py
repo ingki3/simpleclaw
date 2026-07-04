@@ -338,6 +338,8 @@ class TestPackagedHelpers:
                 ).fetchall()
             }
         assert {"messages", "semantic_clusters", "schema_version"}.issubset(tables)
+        # BIZ-388: study index 테이블도 conversations migration 으로 생성된다.
+        assert {"study_topics", "study_items"}.issubset(tables)
 
     def test_run_daemon_migrations_creates_expected_tables(
         self, tmp_path: Path
@@ -388,29 +390,34 @@ class TestPackagedHelpers:
 
         applied = run_conversations_migrations(db)
         # 베이스라인(0001) 은 흡수되어 SQL 실행 없이 기록만 되고, 그 위에 도입된
-        # 0002(BIZ-77 channel 컬럼 추가) 와 0003(BIZ-307 memory_items) 는
+        # 0002(BIZ-77 channel 컬럼 추가), 0003(BIZ-307 memory_items),
+        # 0004(BIZ-366 /undo soft-delete deleted_at 컬럼),
+        # 0005(BIZ-388 study_topics/study_items)는
         # 실제로 additive migration 으로 실행된다.
-        assert applied == [2, 3]
+        assert applied == [2, 3, 4, 5]
 
         with sqlite3.connect(db) as conn:
             row = conn.execute(
                 "SELECT content FROM messages WHERE role='user'"
             ).fetchone()
             assert row[0] == "legacy hello"
-            # channel 컬럼이 0002 로 추가되어야 한다 — 흡수 직후 보강 누락 방지.
+            # channel/deleted_at 컬럼이 additive migration 으로 추가되어야 한다 —
+            # 흡수 직후 보강 누락 방지.
             cols = {
                 r[1] for r in conn.execute(
                     "PRAGMA table_info(messages)"
                 ).fetchall()
             }
             assert "channel" in cols
+            assert "deleted_at" in cols
             tables = {
                 r[0] for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()
             }
             assert "memory_items" in tables
+            assert {"study_topics", "study_items"}.issubset(tables)
             ver = conn.execute(
                 "SELECT MAX(version) FROM schema_version"
             ).fetchone()[0]
-            assert ver == 3
+            assert ver == 5

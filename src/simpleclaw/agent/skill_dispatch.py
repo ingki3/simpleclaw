@@ -12,6 +12,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.skills.executor import execute_skill as run_skill
 from simpleclaw.skills.models import SkillDefinition
 
@@ -22,17 +23,7 @@ def format_skills_for_prompt(skills: list[SkillDefinition]) -> str:
     """시스템 프롬프트용 스킬 개요 목록을 생성한다."""
     if not skills:
         return ""
-    lines = [
-        "## Available Skills",
-        "",
-        (
-            "Invoke each skill via `execute_skill` with `skill_name` + `args`. "
-            "Do NOT compose your own bare command — the runtime resolves the "
-            "venv path for you. NEVER prefix the skill name with `uvx` or "
-            "`pipx run`; these skills are NOT on PyPI."
-        ),
-        "",
-    ]
+    lines = [*load_system_prompt("skill_listing").prompt.splitlines(), ""]
     for skill in skills:
         lines.append(f"- **{skill.name}**: {skill.description}")
         script_path = Path(skill.script_path) if skill.script_path else None
@@ -151,11 +142,16 @@ def find_venv_python(script_path: Path) -> Path | None:
 
 async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
     """execute_skill 도구 호출을 처리한다."""
-    skill_name = args.get("skill_name", "")
-    command = args.get("command", "")
+    skill_name = str(args.get("skill_name", "") or "").strip()
+    command = str(args.get("command", "") or "").strip()
+    skill_args = str(args.get("args", "") or "")
+    if skill_name and orchestrator._resolve_skill_name(skill_name) is not None:
+        if not skill_args and command:
+            skill_args = _extract_registered_skill_args_from_command(skill_name, command)
+        result = await execute_registered_skill(orchestrator, skill_name, skill_args)
+        return result or "[no output]"
     if command:
         return await orchestrator._execute_command(skill_name, command)
-    skill_args = args.get("args", "")
     result = await execute_registered_skill(orchestrator, skill_name, skill_args)
     return result or "[no output]"
 
@@ -172,6 +168,32 @@ def _parse_skill_args(args_str: str) -> list[str] | None:
         return shlex.split(args_str)
     except ValueError:
         return args_str.split()
+
+
+def _extract_registered_skill_args_from_command(skill_name: str, command: str) -> str:
+    """legacy ``command`` 필드에서 등록 skill 뒤의 인자만 추출한다.
+
+    모델이 ``skill_name``과 함께 ``command='skill-name "query"'``를 보내도
+    등록 skill executor로 normalize하기 위해 shell runner 접두부만 걷어낸다.
+    """
+    stripped = command.strip()
+    if not stripped:
+        return ""
+    first = stripped.split(None, 1)
+    if first[0] == skill_name:
+        return first[1] if len(first) > 1 else ""
+    uvx_parts = stripped.split(None, 2)
+    if uvx_parts[0] == "uvx" and len(uvx_parts) >= 2 and uvx_parts[1] == skill_name:
+        return uvx_parts[2] if len(uvx_parts) > 2 else ""
+    pipx_parts = stripped.split(None, 3)
+    if (
+        pipx_parts[0] == "pipx"
+        and len(pipx_parts) >= 3
+        and pipx_parts[1] == "run"
+        and pipx_parts[2] == skill_name
+    ):
+        return pipx_parts[3] if len(pipx_parts) > 3 else ""
+    return stripped
 
 
 async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str: str) -> str | None:
@@ -195,6 +217,7 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
             args=args,
             timeout=orchestrator._skill_timeout,
             metrics=orchestrator._metrics,
+            env_passthrough=orchestrator._env_passthrough,
         )
         logger.info("Skill '%s' executed: success=%s", skill_name, result.success)
         return result.output

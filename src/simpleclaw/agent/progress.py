@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-ProgressKind = Literal["tool", "skill", "command", "recipe"]
+ProgressKind = Literal["tool", "skill", "command", "recipe", "goal", "complex_fact"]
 ProgressStatus = Literal["start", "complete", "fail"]
 ProgressCallback = Callable[["ProgressEvent"], Awaitable[None] | None]
 
@@ -25,7 +25,14 @@ _SECRET_KEY_RE = re.compile(
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[^\s,'\"]+")
 _LONG_SECRETISH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_\-]{24,}(?![A-Za-z0-9])")
 _STATUS_LABELS = {"start": "시작", "complete": "완료", "fail": "실패"}
-_KIND_ICONS = {"tool": "🛠️", "skill": "🧩", "command": "💻", "recipe": "📋"}
+_KIND_ICONS = {
+    "tool": "🛠️",
+    "skill": "🧩",
+    "command": "💻",
+    "recipe": "📋",
+    "goal": "🎯",
+    "complex_fact": "🔎",
+}
 
 
 @dataclass(frozen=True)

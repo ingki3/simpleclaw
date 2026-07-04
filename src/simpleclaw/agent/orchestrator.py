@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,8 @@ from simpleclaw.config import (
     load_persona_config,
     load_recipes_config,
     load_security_config,
+    load_skills_learning_config,
+    load_study_config,
 )
 from simpleclaw.llm.models import (
     LLMRequest,
@@ -43,6 +46,7 @@ from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.models import (
     CHANNEL_CRON_ADMIN,
+    CHANNEL_GOAL_PREFIX,
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
     MessageRole,
@@ -52,10 +56,20 @@ from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security import CommandGuard
+from simpleclaw.security.secrets import default_manager
 from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills.learning import (
+    SkillSuggestion,
+    SkillSuggestionStore,
+    build_skill_candidate_prompt,
+    is_complex_successful_trace,
+    snapshots_from_trace,
+    suggestion_from_candidate_payload,
+    trace_fingerprint,
+)
 from simpleclaw.skills.models import SkillDefinition
 
 from simpleclaw.agent import (
@@ -73,18 +87,37 @@ from simpleclaw.agent.asset_selector import (
     normalize_selector_response,
 )
 from simpleclaw.agent.clarify import ClarifyRequest, clarify_chat_id_var
-from simpleclaw.agent.commands import try_cron_command, try_recipe_command
+from simpleclaw.agent.commands import (
+    parse_goal_command,
+    try_cron_command,
+    try_recipe_command,
+)
+from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
 from simpleclaw.agent.progress import ProgressCallback
-from simpleclaw.agent.tool_loop import ToolLoopRunner, ToolLoopState
+from simpleclaw.agent.response_router import (
+    ResponseRoute,
+    classify_response_route,
+)
+from simpleclaw.agent.tool_loop import (
+    ToolLoopResult,
+    ToolLoopRunner,
+    ToolLoopState,
+)
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
-from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.tool_schemas import (
+    ToolScope,
+    build_tool_definitions,
+    validate_dispatch_tool_names,
+)
+from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -93,136 +126,68 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# 시스템 프롬프트에 추가할 도구 사용 안내 (ReAct 형식 대신 간결한 지시).
+_ATTACHMENT_CONTEXT_HEADER = "Attachment context"
+
+_NATIVE_DISPATCH_TOOL_NAMES = frozenset({
+    "cli",
+    "web_fetch",
+    "web_search",
+    "browser_handoff",
+    "file_read",
+    "file_write",
+    "file_manage",
+    "skill_docs",
+    "search_memory",
+    "clarify",
+    "cron",
+    "runtime_status",
+    "config_inspect",
+    "log_debug",
+    "asset_inventory",
+    "deploy_status",
+    "recipe_validate",
+    "recipe_generate",
+    "skill_validate",
+    "restart_runtime",
+    "skill_learning",
+    "study_status",
+})
+validate_dispatch_tool_names(
+    _NATIVE_DISPATCH_TOOL_NAMES,
+    scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
+    operator_gate=True,
+    browser_handoff_available=True,
+)
+
+
+def _inject_env_secret_refs(env_secret_refs: object) -> None:
+    """config의 시크릿 참조를 스킬 실행용 환경변수로 주입한다.
+
+    런타임 스킬은 기존 CLI 생태계와 호환되도록 API 키를 환경변수로 읽는 경우가
+    많다. 평문 config/LaunchAgent 대신 암호화 vault에는 ``file:<name>`` 참조를
+    저장하고, 봇 프로세스 시작 시 필요한 키만 ``os.environ``에 복원한다.
+    실제 자식 프로세스 전달 여부는 ``security.env_passthrough``가 별도로 제어한다.
+    """
+    if not isinstance(env_secret_refs, dict):
+        return
+
+    manager = default_manager()
+    for env_name, ref in env_secret_refs.items():
+        if not isinstance(env_name, str) or not env_name:
+            continue
+        if not isinstance(ref, str) or not ref:
+            continue
+        value = manager.resolve(ref)
+        if not value:
+            logger.warning("Configured env secret could not be resolved: %s", env_name)
+            continue
+        os.environ[env_name] = value
+
+# 시스템 프롬프트에 추가할 도구 사용 안내.
 #
-# BIZ-171 — 각 가드는 별도 const 로 선언하고 ``"\n".join`` 으로 합친다.
-# 새 가드를 추가할 때는 ``_GUARD_X`` 상수 한 줄 + 아래 join 리스트 한 줄만
-# 수정한다. 이전에는 트리플-쿼트 한 줄 옆으로 두 PR 이 동시에 끼어들어 git
-# 자동 머지가 실패했음 (2026-05-12: BIZ-164 #151 ↔ BIZ-166 #152, 별도 릴리스
-# release/2026-05-12e #155 강제).
-_BASE_INSTRUCTION = (
-    "Priority for tool use:\n"
-    "1. MUST use tools for real-time facts, system state, file contents, git state, "
-    "external service state, calculations, and any action that changes state.\n"
-    "2. Use tools when verification materially improves correctness. Do NOT fabricate "
-    "information that a tool can verify.\n"
-    "3. For small talk, greetings, thanks, capability/self-state questions, or purely "
-    "conversational replies that do not depend on live/system/file/external state, "
-    "do not use tools; answer directly and briefly.\n"
-    "Only for complex tasks, summarize your understanding first before proceeding; "
-    "do not prepend an understanding summary to simple conversational replies."
-)
-
-_GUARD_SKILL_DOCS_FIRST = (
-    "Before using a user-installed skill for the first time, "
-    "call skill_docs to read its usage."
-)
-
-# BIZ-166 — 사용자 설치 스킬을 ``uvx``/``pipx run`` 으로 호출하려다 실패하는
-# 패턴 차단. 라우팅 자체는 executor 가 막지만, 이 한 줄은 모델이 첫 시도부터
-# ``execute_skill`` 을 고르도록 유도한다.
-_GUARD_SKILL_DISPATCH = (
-    "User-installed skills run from local venvs, NOT from a package registry. "
-    "Never call them with `uvx <skill-name>` or `pipx run <skill-name>` — those forms "
-    "always fail. Use `execute_skill(skill_name=..., args=...)` and let the runtime "
-    "resolve the venv path for you."
-)
-
-# BIZ-164 — 작은 모델이 과거 대화에 남은 실패 도구 호출(예: 5/10 의
-# ``link-git-summarizer``) 흔적을 보고 새 사용자 메시지에서도 같은 도구를
-# 다시 시도하는 패턴(2026-05-12 17:46 "오늘 롯데 선발투수" 사고)을 줄이기 위한
-# 프롬프트 가드. 도구 라우팅 자체는 ``_tool_loop`` 의 history 필터(#2)가 끊고,
-# 이 한 줄은 그 필터를 빠져나가는 텍스트 흔적까지 모델이 무시하게 보강한다.
-_GUARD_PRIOR_TURN_FAILURE = (
-    "Do not re-run a skill that you saw fail in a prior turn — "
-    "those traces belong to a previous, unrelated request."
-)
-
-_GUARD_LANGUAGE = "Respond in the same language as the user."
-
-_GUARD_OPEN_COMMAND = (
-    "NEVER use the `open` command. This agent runs in a headless environment."
-)
-
-# BIZ-167 — 모델이 페이지 본문 회수에 ``execute_skill agent-browser open ... &&
-# agent-browser wait --load networkidle && agent-browser text`` composite 명령을
-# 첫 시도로 골라 ``networkidle`` 이 settle 하지 않는 SPA(wikidocs.net 등)에서
-# 60초 skill timeout 을 통째로 소진하는 사고 다발(2026-05-12). 같은 일을 하는
-# 내장 ``web_fetch`` 는 정적 fetch + 헤드리스 자동 폴백을 8초 ``load`` wait 로
-# 묶고 부분 결과라도 반환하므로, 본문 읽기는 무조건 ``web_fetch`` 가 정답.
-# ``agent-browser`` 는 클릭/폼/스크린샷처럼 상호작용이 필요한 경우에만.
-#
-# BIZ-187 follow-up — agent-browser 가 정말 필요할 때조차도 ``open && wait && text``
-# 를 한 줄 composite 로 묶어 보내면 SPA 에서 단일 호출이 60s 를 넘기고 (max 180s
-# 로 늘렸어도) 모델이 한 turn 안에 결과를 못 보고 또 같은 chain 으로 재시도하면서
-# tool loop 가 죽는다. 단계별로 turn 을 분리하면 각 단일 명령은 안정 구간 안에
-# 끝난다 — 이 가이드를 명시적으로 박아 둠.
-_GUARD_WEB_FETCH_PREFERRED = (
-    "To read page text (articles, blogs, search results, docs), use the "
-    "`web_fetch` tool — it auto-falls back to a headless browser when needed. "
-    "Do NOT compose `execute_skill agent-browser open ... && wait ... && text` "
-    "commands for plain text retrieval; reserve `agent-browser` for interactive "
-    "tasks (clicks, form fills, screenshots). When you do call agent-browser, "
-    "use `wait --load load` — `networkidle` rarely settles on modern SPAs and "
-    "wastes the entire skill timeout. Also issue each agent-browser step as its "
-    "own tool call (open → wait → text/snapshot in separate turns) instead of "
-    "chaining them with `&&`; chained chains amplify single-step timeouts and "
-    "exhaust the tool loop on SPA sites. "
-    # BIZ-190 — wikidocs.net / npmjs.com 같이 Cloudflare/anti-bot 가드를 띄우는
-    # 사이트에서 web_fetch 가 짧은 본문(예: 27자, 202자) 이나 ``FETCH_BLOCKED:``
-    # 마커를 돌려주면, 같은 URL 을 agent-browser/cli/skill 로 재시도하지 말 것.
-    # web_fetch 는 이미 정적 + 헤드리스 두 경로를 시도한 결과이므로 추가 우회는
-    # 무의미하고 tool loop 만 소진한다. 사용자에게 "사이트가 자동 회수를 차단함"
-    # 으로 보고하고 종료한다.
-    "If `web_fetch` returns a short body or a `FETCH_BLOCKED:` marker for a URL, "
-    "the site is blocking automated fetching — `web_fetch` has already tried "
-    "both static and headless paths. Do NOT retry the same URL via "
-    "`agent-browser`, `cli`, or any other skill; reply to the user that the "
-    "page cannot be retrieved automatically and offer a graceful alternative "
-    "(ask for the text directly, summarize from prior knowledge, etc.)."
-)
-
-# BIZ-260 — clarify 다지선다 도구 사용 가이드. 사용자가 명확하지 않은 의도
-# (예: 후보가 여러 개인 메일/캘린더/파일/주식 종목 선택) 를 보일 때 LLM 이
-# clarify 도구를 잡도록 유도. 자유형 질문(이름·주제 등) 에는 평문 응답이 더
-# 자연스럽다.
-_GUARD_CLARIFY_TOOL = (
-    "When the user's request has multiple short, enumerable candidate answers "
-    "(which email/event/file/ticker to act on), call `clarify(question, options)` "
-    "instead of asking in plain text. On channels that support it, the options "
-    "render as tap buttons. Calling clarify ends the turn — do NOT also send a "
-    "text response in the same turn."
-)
-
-_GUARD_ACTIVE_MEMORY = (
-    "When the answer depends on older user preferences, project history, prior "
-    "decisions, or memories that are not present in the current prompt, call "
-    "`search_memory(query=...)` with a focused natural-language query. Do not use "
-    "it for real-time facts, file contents, system state, or web lookup."
-)
-
-_GUARD_LIVE_FACT_WEB_EVIDENCE = (
-    "For live facts — current games/scores, stock or market prices, weather, and "
-    "news — use `realtime-lookup-skill` via `execute_skill` when it is available. "
-    "If that skill is not available, use `web_fetch` yourself. Never answer these "
-    "from memory or guesswork, and base the final answer only on the returned "
-    "evidence/sources."
-)
-
-_TOOL_USAGE_INSTRUCTION = "\n".join(
-    [
-        _BASE_INSTRUCTION,
-        _GUARD_SKILL_DOCS_FIRST,
-        _GUARD_SKILL_DISPATCH,
-        _GUARD_PRIOR_TURN_FAILURE,
-        _GUARD_LANGUAGE,
-        _GUARD_OPEN_COMMAND,
-        _GUARD_WEB_FETCH_PREFERRED,
-        _GUARD_CLARIFY_TOOL,
-        _GUARD_ACTIVE_MEMORY,
-        _GUARD_LIVE_FACT_WEB_EVIDENCE,
-    ]
-)
+# 운영 지침에 따라 하드코딩 대신 ``prompts/system/tool_usage.yaml`` 을
+# 단일 Source of Truth 로 사용한다.
+_TOOL_USAGE_INSTRUCTION = load_system_prompt("tool_usage").prompt
 
 # BIZ-160 — tool 루프가 max_tool_iterations 를 다 쓰고도 LLM 이 빈 텍스트를 돌려준
 # 사고(2026-05-08)에서 사용자에게 아무 메시지도 가지 않아 봇이 죽은 것처럼 보였음.
@@ -238,6 +203,12 @@ _BUDGET_EXHAUSTED_HINT_SUFFIX = (
 )
 _EMPTY_DIRECT_RESPONSE_MESSAGE = (
     "빈 응답으로 인해 응답을 생성하지 못했습니다. 죄송하지만 한 번 더 말씀해 주세요."
+)
+_UNDO_USAGE_MESSAGE = "사용법: /undo 또는 /undo N (N은 1 이상의 정수)"
+_UNDO_NO_TURNS_MESSAGE = "되돌릴 대화 턴이 없습니다."
+_UNDO_SUCCESS_MESSAGE = (
+    "최근 {turns}턴을 다음 응답부터 제외했습니다. "
+    "원본 메시지는 감사용으로 DB에 남겨 두며, 이 /undo 명령 자체는 대화 이력에 저장하지 않습니다."
 )
 _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MESSAGE = (
     "확인해 봤지만 관련 기록을 찾지 못했습니다."
@@ -319,6 +290,13 @@ _LIVE_FACT_STOCK_TERMS = (
     "증시",
     "시장 마감",
     "티커",
+    # BIZ-394: 기업·시장 이벤트(상장/IPO/공모 등)도 웹 근거가 필요한 현재성 사실로
+    # 본다. "OpenAI 상장 영향" 류가 시간 cue 없이도 evidence 조회를 타게 한다.
+    "상장",
+    "ipo",
+    "공모",
+    "기업가치",
+    "시총",
 )
 _LIVE_FACT_WEATHER_TERMS = (
     "날씨",
@@ -367,6 +345,29 @@ def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
     return False
 
 
+def _parse_undo_command(text: str) -> tuple[bool, int | None]:
+    """/undo 명령 여부와 요청 turn 수를 파싱한다.
+
+    Telegram은 slash command를 일반 텍스트로 전달하므로 LLM/tool loop에 넣기 전
+    오케스트레이터에서 선처리한다. ``/undo``의 기본값은 1이고, ``/undo N``만
+    허용한다. 그 외 토큰/음수/0은 사용법 안내로 돌린다.
+    """
+    parts = text.strip().split()
+    if not parts or parts[0] != "/undo":
+        return False, None
+    if len(parts) == 1:
+        return True, 1
+    if len(parts) != 2:
+        return True, None
+    try:
+        turns = int(parts[1])
+    except ValueError:
+        return True, None
+    if turns < 1:
+        return True, None
+    return True, turns
+
+
 def _realtime_lookup_skill_payload(
     text: str,
     now_kst: object,
@@ -403,9 +404,48 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             "Use only the evidence below for live/current facts. "
             "Do not invent numbers, dates, sources, winners, prices, or news not present here. "
             "If the evidence says it is limited, say so explicitly.",
+            # BIZ-383: 일정/상태성 질문은 timeline_validation 으로 출처의 시점 반영
+            # 범위를 검증한다. status 를 그대로 신뢰해 stale 전망을 확정처럼 말하지 말 것.
+            "If the evidence contains a `timeline_validation` object, respect its `status`: "
+            "`stale_or_pre_event` means the source only describes a future/scheduled event — "
+            "answer as a forecast, never as a confirmed result; "
+            "`current_pending` means some events finished while others remain — separate the "
+            "confirmed part from the pending part; "
+            "`partial` means results may be only partially reflected — flag the partiality; "
+            "`final` means a confirmed result — still state the as-of/source time; "
+            "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly.",
             evidence.strip() or "{}",
         ]
     )
+
+
+def _format_attachment_context_note(
+    attachments: list[MultimodalAttachment] | None,
+) -> str:
+    """현재 turn 첨부 메타데이터와 분석 지시를 provider 입력용 note로 만든다."""
+    if not attachments:
+        return ""
+
+    lines = [
+        f"## {_ATTACHMENT_CONTEXT_HEADER}",
+        "첨부 내용을 직접 분석해 주세요. 불가능하면 이유와 필요한 조치를 설명해 주세요.",
+    ]
+    for index, attachment in enumerate(attachments, start=1):
+        name = attachment.name or f"attachment-{index}"
+        size_bytes = attachment.size_bytes
+        if size_bytes is None:
+            size_bytes = len(attachment.data) if attachment.data is not None else None
+        parts = [
+            f"- Attachment {index}",
+            f"File name: {name}",
+            f"MIME: {attachment.mime_type}",
+        ]
+        if size_bytes is not None:
+            parts.append(f"Size: {size_bytes} bytes")
+        if attachment.path:
+            parts.append(f"Sandbox path: {attachment.path}")
+        lines.append("; ".join(parts))
+    return "\n".join(lines)
 
 
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
@@ -565,6 +605,9 @@ class AgentOrchestrator:
         daemon_config = load_daemon_config(config_path)
         recipes_config = load_recipes_config(config_path)
         self._asset_selection_config = load_asset_selection_config(config_path)
+        self._browser_handoff_config = agent_config.get("browser_handoff", {})
+        self._goal_loop_config = agent_config.get("goal_loop", {})
+        self._complex_fact_config = agent_config.get("complex_fact_workflow", {})
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
             self._config_path,
             persona_config=persona_config,
@@ -573,11 +616,10 @@ class AgentOrchestrator:
             recipes_config=recipes_config,
         )
 
-        # BIZ-202/BIZ-313: 봇이 채팅에서 만든 레시피와 데몬이 cron 으로 로드하는 레시피가
-        # 같은 절대 경로를 보도록 config 한 곳에서 결정. 기본은
-        # ``~/.simpleclaw-agent/default/recipes`` — 봇 워크스페이스
-        # (`~/.simpleclaw-agent/default/workspace`) 의 sandbox-write 허용 트리 안에
-        # 들어가야 봇 `cli`/`file_write` 도구가 직접 쓸 수 있다.
+        # BIZ-202/BIZ-313: 봇과 데몬이 같은 configured recipe directory를 보도록
+        # config 한 곳에서 결정한다. 기본은 ``~/.simpleclaw-agent/default/recipes``.
+        # BIZ-410: 일반 runtime ``cli``/``file_write``가 이 디렉터리에 직접 쓰는
+        # 경로는 막고, 설치는 operator-gated ``recipe_generate``만 담당한다.
         self._recipes_dir = str(
             Path(recipes_config["dir"]).expanduser()
         )
@@ -591,6 +633,7 @@ class AgentOrchestrator:
         self._persona_config = persona_config
         skills_config = self._load_skills_config()
         self._skills_config = skills_config
+        self._skill_learning_config = load_skills_learning_config(config_path)
 
         # Cron scheduler — build_tool_definitions에서 참조하므로 리로드 전에 초기화
         self._cron_scheduler: CronScheduler | None = None
@@ -647,10 +690,26 @@ class AgentOrchestrator:
             if self._rag_enabled
             else None
         )
+        # BIZ-393: Agent Study Wiki 회수기 — 질문 시 관련 배경지식 블록을 system
+        # prompt 에 주입한다. 대화 RAG/장기기억 회수와 독립적으로 실패 격리된다.
+        # 기능 플래그(study.enabled + study.retrieval.enabled)가 모두 켜져야 동작.
+        study_config = load_study_config(config_path)
+        study_retrieval_cfg = study_config.get("retrieval", {}) or {}
+        study_wiki_dir = study_config.get("wiki_dir") or "~/.simpleclaw-agent/default/agent_wiki"
+        self._study_retriever = StudyRetriever(
+            StudyRetrievalConfig(
+                enabled=bool(study_config.get("enabled"))
+                and bool(study_retrieval_cfg.get("enabled")),
+                wiki_dir=Path(str(study_wiki_dir)).expanduser(),
+                top_k=int(study_retrieval_cfg.get("top_k", 4)),
+                max_context_chars=int(study_retrieval_cfg.get("max_context_chars", 5000)),
+            )
+        )
         self._context_retrieval = ContextRetrievalService(
             store=self._store,
             embedding_service=self._embedding_service,
             structured_logger=self._structured_logger,
+            study_retriever=self._study_retriever,
             config=ContextRetrievalConfig(
                 rag_top_k=self._rag_top_k,
                 rag_threshold=self._rag_threshold,
@@ -679,6 +738,7 @@ class AgentOrchestrator:
             enabled=guard_config.get("enabled", True),
         )
         self._env_passthrough = security_config.get("env_passthrough", [])
+        _inject_env_secret_refs(security_config.get("env_secret_refs", {}))
 
         # Multi-turn tool execution budget
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)
@@ -775,9 +835,12 @@ class AgentOrchestrator:
             global_dir=self._skills_config.get("global_dir", "~/.agents/skills"),
         )
         # 이름 기반 조회용 딕셔너리 (fuzzy match에서도 사용)
+        # BIZ-383: realtime-lookup-skill 은 오케스트레이터가 LLM 루프 밖에서 직접
+        # 실행하는 내부 evidence 스킬이다. _resolve_skill_name 으로 내부 실행은 가능해야
+        # 하므로 by-name 매핑에는 남기되, LLM callable 목록/프롬프트에서는 제외한다.
         self._skills_by_name = {s.name: s for s in self._skills}
-        # 시스템 프롬프트용 스킬 목록
-        self._skills_prompt = self._format_skills_for_prompt(self._skills)
+        # 시스템 프롬프트용 스킬 목록 (내부 evidence 스킬 제외)
+        self._skills_prompt = self._format_skills_for_prompt(self._exposable_skills())
 
         # --- 레시피 리로드 (~/.simpleclaw-agent/default/recipes) ---
         # selector manifest와 선택 레시피 컨텍스트가 운영 recipe 디렉터리 변경을
@@ -807,7 +870,11 @@ class AgentOrchestrator:
         with trace_scope() as trace_id:
             logger.info("Cron message received: trace_id=%s", trace_id)
             self._reload_dynamic_files()
-            return await self._tool_loop(text, isolated=True)
+            return await self._tool_loop(
+                text,
+                isolated=True,
+                allow_cron_mutation=False,
+            )
 
     async def process_message(
         self,
@@ -818,6 +885,7 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
     ) -> str:
         """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
@@ -837,11 +905,77 @@ class AgentOrchestrator:
             )
             self._reload_dynamic_files()
 
+            undo_command, undo_turns = _parse_undo_command(text)
+            if undo_command:
+                if undo_turns is None:
+                    return _UNDO_USAGE_MESSAGE
+                hidden_turns = self._store.hide_recent_user_turns(undo_turns)
+                if hidden_turns == 0:
+                    return _UNDO_NO_TURNS_MESSAGE
+                return _UNDO_SUCCESS_MESSAGE.format(turns=hidden_turns)
+
             # BIZ-260 — clarify 도구가 발생시킬 ClarifyRequest 를 chat_id 키로
             # 적재할 수 있도록 contextvar 에 chat_id 를 매단다. tool 핸들러는
             # 자기 시그니처를 바꾸지 않고도 contextvar 로 chat_id 를 얻는다.
             clarify_token = clarify_chat_id_var.set(chat_id)
             try:
+                # /goal 명령어 확인 — recipe dispatch 보다 먼저 처리해 `/goal` 레시피 오인 방지.
+                goal_command = parse_goal_command(text)
+                if goal_command is not None:
+                    if goal_command.action in {"help", "unsupported"}:
+                        self._save_turn(
+                            text,
+                            goal_command.message,
+                            channel=f"{CHANNEL_GOAL_PREFIX}admin",
+                        )
+                        return goal_command.message
+                    if not self._goal_loop_config.get("enabled", True):
+                        disabled = "⚠️ /goal 기능이 현재 비활성화되어 있습니다."
+                        self._save_turn(
+                            text, disabled, channel=f"{CHANNEL_GOAL_PREFIX}disabled"
+                        )
+                        return disabled
+
+                    cfg = GoalLoopConfig(
+                        max_rounds=int(self._goal_loop_config.get("max_rounds", 3)),
+                        judge_max_tokens=int(
+                            self._goal_loop_config.get("judge_max_tokens", 768)
+                        ),
+                        max_answer_chars_for_judge=int(
+                            self._goal_loop_config.get(
+                                "max_answer_chars_for_judge", 6000
+                            )
+                        ),
+                    )
+
+                    async def run_goal_round(prompt: str, **kwargs):
+                        kwargs.pop("allow_cron_mutation", None)
+                        kwargs["on_text_delta"] = None
+                        return await self._run_tool_loop_result(
+                            prompt,
+                            isolated=False,
+                            attachments=attachments,
+                            operator_tools=operator_tools,
+                            allow_cron_mutation=False,
+                            **kwargs,
+                        )
+
+                    runner = GoalLoopRunner(
+                        run_round=run_goal_round,
+                        judge_send=self._router.send,
+                        config=cfg,
+                    )
+                    goal_result = await runner.run(
+                        goal_command.objective,
+                        on_progress=on_progress,
+                    )
+                    self._save_turn(
+                        text,
+                        goal_result.final_text,
+                        channel=f"{CHANNEL_GOAL_PREFIX}{goal_result.status}",
+                    )
+                    return goal_result.final_text
+
                 # /cron 명령어 확인
                 cron_result = try_cron_command(text, self._cron_scheduler)
                 if cron_result is not None:
@@ -872,12 +1006,43 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                response_text = await self._tool_loop(
+                # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면, 그
+                # 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least guarded)를
+                # 강제한다. 회수는 내부에서 실패를 삼키므로 라우팅을 막지 않는다.
+                study_context_for_routing = self._context_retrieval.study_context_for_routing(text)
+                route_decision = classify_response_route(
                     text,
-                    attachments=attachments,
-                    on_text_delta=on_text_delta,
-                    on_progress=on_progress,
+                    route_threshold=int(
+                        self._complex_fact_config.get("route_threshold", 3)
+                    ),
+                    study_context=study_context_for_routing,
                 )
+                if (
+                    self._complex_fact_config.get("enabled", False)
+                    and route_decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+                ):
+                    response_text = await self._run_complex_fact_workflow(
+                        text,
+                        route_decision,
+                        on_progress=on_progress,
+                    )
+                    tool_loop_result = ToolLoopResult(response_text)
+                elif self._skill_learning_config.get("enabled", False):
+                    tool_loop_result = await self._run_tool_loop_result(
+                        text,
+                        attachments=attachments,
+                        on_text_delta=on_text_delta,
+                        on_progress=on_progress,
+                    )
+                    response_text = tool_loop_result.text
+                else:
+                    response_text = await self._tool_loop(
+                        text,
+                        attachments=attachments,
+                        on_text_delta=on_text_delta,
+                        on_progress=on_progress,
+                    )
+                    tool_loop_result = ToolLoopResult(response_text)
 
                 # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
                 # 종결했을 수 있다. 대화 이력 저장은 항상 "질문 + 번호 옵션"
@@ -893,9 +1058,70 @@ class AgentOrchestrator:
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
                 )
+                await self._capture_skill_learning_candidate(
+                    text, response_text, tool_loop_result, list(msg_ids)
+                )
                 return response_text
             finally:
                 clarify_chat_id_var.reset(clarify_token)
+
+    async def process_operator_message(
+        self,
+        text: str,
+        *,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> str:
+        """운영자 context에서만 operator scope native tool을 노출해 메시지를 처리한다."""
+        with trace_scope() as trace_id:
+            logger.info("Operator message received: trace_id=%s", trace_id)
+            self._reload_dynamic_files()
+            return await self._tool_loop(
+                text,
+                isolated=True,
+                on_text_delta=on_text_delta,
+                operator_tools=True,
+            )
+
+    async def _run_complex_fact_workflow(
+        self,
+        text: str,
+        route_decision,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> str:
+        """Feature-flagged complex fact/scenario workflow entrypoint."""
+        from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
+        from simpleclaw.agent.fact_answer import compose_fact_answer
+        from simpleclaw.agent.fact_workflow import (
+            ComplexFactWorkflow,
+            ComplexFactWorkflowConfig,
+        )
+
+        cfg = self._complex_fact_config or {}
+        if str(cfg.get("planner_backend", "simpleclaw")) != "simpleclaw":
+            logger.warning(
+                "Complex fact planner backend %s is not implemented; falling back to simpleclaw",
+                cfg.get("planner_backend"),
+            )
+        retriever = EvidenceRetriever(
+            max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3))
+        )
+
+        async def compose(question, plan):
+            return await compose_fact_answer(self._router.send, question, plan)
+
+        workflow = ComplexFactWorkflow(
+            retriever=retriever,
+            compose_answer=compose,
+            config=ComplexFactWorkflowConfig(
+                max_iterations=int(cfg.get("max_iterations", 4)),
+                max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3)),
+                enable_claim_verifier=bool(cfg.get("enable_claim_verifier", True)),
+                enable_progress_events=bool(cfg.get("enable_progress_events", True)),
+            ),
+        )
+        result = await workflow.run(text, route_decision, on_progress=on_progress)
+        return result.text
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
@@ -944,6 +1170,67 @@ class AgentOrchestrator:
             )
         except Exception:  # noqa: BLE001 — proactive 후보 실패가 사용자 응답을 깨면 안 된다.
             logger.exception("Conversation-end proactive hook failed")
+
+    async def _capture_skill_learning_candidate(
+        self,
+        user_text: str,
+        assistant_text: str,
+        result: ToolLoopResult,
+        source_msg_ids: list[int],
+    ) -> None:
+        """성공한 복잡 tool trace를 best-effort pending skill 후보로 적재한다."""
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+        try:
+            trace = list(result.trace or [])
+            if not result.success or not is_complex_successful_trace(
+                trace,
+                assistant_text,
+                min_tool_calls=int(cfg.get("min_tool_calls", 2)),
+                min_distinct_tools=int(cfg.get("min_distinct_tools", 2)),
+                min_final_chars=int(cfg.get("min_final_chars", 500)),
+            ):
+                return
+            snapshots = snapshots_from_trace(
+                trace,
+                max_observation_chars=int(cfg.get("max_trace_observation_chars", 1200)),
+            )
+            suggestion = await self._draft_skill_suggestion(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                snapshots=snapshots,
+                source_msg_ids=source_msg_ids,
+            )
+            SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+            logger.exception("Skill-learning candidate hook failed")
+
+    async def _draft_skill_suggestion(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        snapshots: list,
+        source_msg_ids: list[int],
+    ) -> SkillSuggestion:
+        """LLM으로 skill package 후보 JSON을 생성한다."""
+        fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
+        prompt = build_skill_candidate_prompt(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            trace=snapshots,
+        )
+        response = await self._router.send(LLMRequest(user_message=prompt, max_tokens=2048))
+        payload = json.loads((response.text or "{}").strip())
+        if not isinstance(payload, dict):
+            raise ValueError("Skill candidate response must be a JSON object")
+        return suggestion_from_candidate_payload(
+            payload,
+            trace_fingerprint_value=fp,
+            source_msg_ids=source_msg_ids,
+            trace=snapshots,
+        )
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.
@@ -996,6 +1283,8 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None,
         on_text_delta: TextDeltaCallback | None,
         on_progress: ProgressCallback | None,
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -1010,6 +1299,9 @@ class AgentOrchestrator:
             "[현재 시각: %Y-%m-%d %H:%M (%A) KST]"
         )
         user_content = f"{datetime_context}\n{text}"
+        attachment_note = _format_attachment_context_note(attachments)
+        if attachment_note:
+            user_content = f"{user_content}\n\n{attachment_note}"
         current_user_message: dict = {"role": "user", "content": user_content}
         if attachments:
             # 이미지 bytes는 현재 turn에만 첨부한다. 영속 대화 저장소에는 대용량
@@ -1052,7 +1344,8 @@ class AgentOrchestrator:
                 text, exclude_contents=recent_contents,
             )
 
-        active_skills = self._skills
+        # BIZ-383: 내부 evidence 스킬을 LLM callable 후보(asset 선택/프롬프트)에서 제외.
+        active_skills = self._exposable_skills()
         active_recipes = getattr(self, "_recipes", [])
         active_skills_prompt = self._skills_prompt
         active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
@@ -1131,26 +1424,34 @@ class AgentOrchestrator:
             recipes_before_skills=active_recipes_before_skills,
         )
         system_prompt = self._flatten_system_blocks(system_blocks)
+        scopes = (
+            (ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT)
+            if operator_tools
+            else (ToolScope.RUNTIME,)
+        )
         tools = build_tool_definitions(
             active_skills,
             cron_available=self._cron_scheduler is not None,
+            scopes=scopes,
+            operator_gate=operator_tools,
+            browser_handoff_available=bool(
+                self._browser_handoff_config.get("enabled", False)
+            ),
         )
-        live_evidence_seen = bool(realtime_lookup_context)
-
         return ToolLoopState(
             user_content=user_content,
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
             system_blocks=system_blocks,
-            live_evidence_seen=live_evidence_seen,
-            live_fact_requires_evidence=realtime_lookup_payload is not None,
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=on_text_delta,
             on_progress=on_progress,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
         )
 
-    async def _tool_loop(
+    async def _run_tool_loop_result(
         self,
         text: str,
         isolated: bool = False,
@@ -1158,8 +1459,10 @@ class AgentOrchestrator:
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
-    ) -> str:
-        """Native Function Calling 루프를 실행한다.
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
+    ) -> ToolLoopResult:
+        """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
         LLM에 도구 정의(tools)와 함께 메시지를 전송하고,
         tool_calls가 반환되면 실행 후 결과를 메시지에 추가하여 재호출한다.
@@ -1181,8 +1484,33 @@ class AgentOrchestrator:
             attachments=attachments,
             on_text_delta=on_text_delta,
             on_progress=on_progress,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
         )
         result = await ToolLoopRunner(self).run(state)
+        return result
+
+    async def _tool_loop(
+        self,
+        text: str,
+        isolated: bool = False,
+        *,
+        attachments: list[MultimodalAttachment] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
+    ) -> str:
+        """기존 호출자를 위한 문자열 compatibility wrapper."""
+        result = await self._run_tool_loop_result(
+            text,
+            isolated,
+            attachments=attachments,
+            on_text_delta=on_text_delta,
+            on_progress=on_progress,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
+        )
         return result.text
 
     # ------------------------------------------------------------------
@@ -1224,10 +1552,7 @@ class AgentOrchestrator:
         try:
             response = await self._router.send(
                 LLMRequest(
-                    system_prompt=(
-                        "You are a conservative asset candidate reducer. "
-                        "Always call select_assets; never answer the user."
-                    ),
+                    system_prompt=load_system_prompt("asset_selector").system_prompt,
                     user_message=prompt,
                     backend_name=str(cfg["backend"]),
                     tools=[build_selector_tool_definition()],
@@ -1271,9 +1596,20 @@ class AgentOrchestrator:
     # Tool dispatch
     # ------------------------------------------------------------------
 
-    async def _dispatch_tool_call(self, tool_call: ToolCall) -> str:
+    async def _dispatch_tool_call(
+        self,
+        tool_call: ToolCall,
+        *,
+        operator_tools: bool = False,
+        allow_cron_mutation: bool = True,
+    ) -> str:
         """ToolCall 라우팅을 전용 모듈에 위임한다."""
-        return await tool_dispatch.dispatch_tool_call(self, tool_call)
+        return await tool_dispatch.dispatch_tool_call(
+            self,
+            tool_call,
+            operator_tools=operator_tools,
+            allow_cron_mutation=allow_cron_mutation,
+        )
 
 
     @staticmethod
@@ -1339,20 +1675,13 @@ class AgentOrchestrator:
         recipes_dir = Path(str(recipes_config["dir"])).expanduser()
         conversation_db = Path(str(agent_config["db_path"])).expanduser()
         daemon_db = Path(str(daemon_config["db_path"])).expanduser()
-        return "\n".join(
-            [
-                "## Runtime Paths",
-                f"- Deploy repo/config: `{deploy_repo}`",
-                f"- Runtime state root: `{persona_dir}`",
-                f"- Persona files: `{persona_dir}/AGENT.md`, "
-                f"`{persona_dir}/USER.md`, `{persona_dir}/MEMORY.md`",
-                f"- Conversations DB: `{conversation_db}`",
-                f"- Daemon DB: `{daemon_db}`",
-                f"- Recipes directory: `{recipes_dir}`",
-                f"- Workspace directory: `{workspace_dir}`",
-                "- Treat the deploy repo as code/config only; read and write live state "
-                "under the runtime state root unless config explicitly says otherwise.",
-            ]
+        return load_system_prompt("runtime_paths").format_field(
+            deploy_repo=deploy_repo,
+            persona_dir=persona_dir,
+            conversation_db=conversation_db,
+            daemon_db=daemon_db,
+            recipes_dir=recipes_dir,
+            workspace_dir=workspace_dir,
         )
 
     def _build_system_blocks(
@@ -1430,6 +1759,17 @@ class AgentOrchestrator:
     # Skill execution
     # ------------------------------------------------------------------
 
+    def _exposable_skills(self) -> list[SkillDefinition]:
+        """LLM에 callable로 노출 가능한 스킬만 추린다.
+
+        BIZ-383: ``realtime-lookup-skill`` 은 오케스트레이터가 LLM 루프 밖에서 직접
+        실행해 evidence 만 주입하는 내부 스킬이다. LLM이 이를 일반 ``execute_skill``
+        대상으로 다시 호출하면 의도와 다른 raw 호출/중복 실행이 생기므로, 프롬프트
+        목록과 asset 선택 후보에서 제외한다. 내부 실행은 ``_skills_by_name`` 을 쓰는
+        ``_resolve_skill_name`` 으로 그대로 가능하다.
+        """
+        return [s for s in self._skills if s.name != _REALTIME_LOOKUP_SKILL_NAME]
+
     def _resolve_skill_name(self, name: str) -> SkillDefinition | None:
         """LLM이 반환한 스킬 이름을 등록된 스킬과 fuzzy-match한다."""
         if name in self._skills_by_name:
@@ -1499,16 +1839,7 @@ class AgentOrchestrator:
         """
         if not recipes:
             return ""
-        lines = [
-            "## Available Recipes",
-            "",
-            (
-                "Recipes are pre-defined workflows. Do not treat this list as an "
-                "execution decision; use it only as context when the user explicitly "
-                "asks to run or discuss a recipe-like report/workflow."
-            ),
-            "",
-        ]
+        lines = [*load_system_prompt("recipe_listing").prompt.splitlines(), ""]
         for recipe in recipes:
             desc = recipe.description or recipe.instructions[:160]
             lines.append(f"- **{recipe.name}**: {desc}")

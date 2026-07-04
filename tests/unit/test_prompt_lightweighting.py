@@ -283,3 +283,5 @@ def test_tool_usage_instruction_prioritizes_tools_and_smalltalk_policy() -> None
     assert "do not use tools" in prompt
     assert "Only for complex tasks" in prompt
     assert "summarize your understanding first" in prompt
+    assert "context clues" in prompt
+    assert "concise conclusion first" in prompt

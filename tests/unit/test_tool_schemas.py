@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import pytest
 
-from simpleclaw.agent.tool_schemas import build_tool_definitions
+from simpleclaw.agent.tool_schemas import (
+    ToolScope,
+    build_native_tool_registry,
+    build_tool_definitions,
+)
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
 
@@ -44,16 +48,16 @@ class TestToolCount:
     def test_without_cron_returns_8_tools(self):
         """cron 비활성 시 기본 내장 도구 8개만 반환되어야 한다.
 
-        기본 내장 도구: cli, web_fetch, file_read, file_write, file_manage,
-        skill_docs, search_memory (BIZ-325), clarify (BIZ-260).
+        기본 내장 도구: cli, web_fetch, web_search, file_read, file_write,
+        file_manage, skill_docs, search_memory (BIZ-325), clarify (BIZ-365/BIZ-260).
         """
         tools = build_tool_definitions(skills=[], cron_available=False)
-        assert len(tools) == 8
-
-    def test_with_cron_returns_9_tools(self):
-        """cron 활성 시 기본 8개 + cron 1개 = 9개가 반환되어야 한다."""
-        tools = build_tool_definitions(skills=[], cron_available=True)
         assert len(tools) == 9
+
+    def test_with_cron_returns_10_tools(self):
+        """cron 활성 시 기본 9개 + cron 1개 = 10개가 반환되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        assert len(tools) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +81,57 @@ class TestExecuteSkill:
         assert "execute_skill" not in tool_names
 
     def test_with_skills_total_count(self):
-        """스킬이 있으면 기본 8 + execute_skill 1 = 9 (BIZ-325/BIZ-260)."""
+        """스킬이 있으면 기본 9 + execute_skill 1 = 10 (BIZ-365/BIZ-325/BIZ-260)."""
         skills = [_make_skill()]
         tools = build_tool_definitions(skills=skills, cron_available=False)
-        assert len(tools) == 9
-
-    def test_with_skills_and_cron_total_count(self):
-        """스킬 + cron이면 기본 8 + cron 1 + execute_skill 1 = 10."""
-        skills = [_make_skill()]
-        tools = build_tool_definitions(skills=skills, cron_available=True)
         assert len(tools) == 10
 
+    def test_with_skills_and_cron_total_count(self):
+        """스킬 + cron이면 기본 9 + cron 1 + execute_skill 1 = 11."""
+        skills = [_make_skill()]
+        tools = build_tool_definitions(skills=skills, cron_available=True)
+        assert len(tools) == 11
+
+class TestBrowserHandoffSchema:
+    """BIZ-417 — browser_handoff 도구 스키마를 검증한다."""
+
+    def test_browser_handoff_not_exposed_by_default(self):
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        assert "browser_handoff" not in [tool.name for tool in tools]
+
+    def test_browser_handoff_exposed_when_enabled(self):
+        tools = build_tool_definitions(
+            skills=[], cron_available=False, browser_handoff_available=True
+        )
+        tool = next(tool for tool in tools if tool.name == "browser_handoff")
+
+        assert tool.parameters["properties"]["action"]["enum"] == [
+            "open_and_wait",
+            "status",
+            "read",
+            "read_latest",
+        ]
+        assert "copy/paste" in tool.description
+
+
+class TestWebSearchSchema:
+    """BIZ-365 — query 기반 web_search 도구 스키마를 검증한다."""
+
+    def test_web_search_is_exposed(self):
+        """기본 도구 목록에 web_search가 포함되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        assert "web_search" in [tool.name for tool in tools]
+
+    def test_web_search_limit_is_bounded(self):
+        """limit 파라미터는 1~10 범위로 스키마에 명시되어야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        web_search = next(tool for tool in tools if tool.name == "web_search")
+        limit_schema = web_search.parameters["properties"]["limit"]
+
+        assert limit_schema["type"] == "integer"
+        assert limit_schema["minimum"] == 1
+        assert limit_schema["maximum"] == 10
+        assert web_search.parameters["required"] == ["query"]
 
 # ---------------------------------------------------------------------------
 # 4. 내장 도구 필수 필드 검증
@@ -182,6 +226,19 @@ class TestCronExclusion:
         tool_names = [t.name for t in tools]
         assert "cron" in tool_names
 
+    def test_cron_schema_exposes_one_shot_metadata(self):
+        """cron 도구는 one-shot/temporary metadata 필드를 LLM에 노출해야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        cron_tool = next(tool for tool in tools if tool.name == "cron")
+        props = cron_tool.parameters["properties"]
+
+        assert props["run_once"]["type"] == "boolean"
+        assert props["max_runs"]["type"] == "integer"
+        assert props["max_runs"]["minimum"] == 1
+        assert props["expires_at"]["type"] == "string"
+        assert "metadata" in cron_tool.description
+        assert "mutation" in cron_tool.description
+
 
 # ---------------------------------------------------------------------------
 # 7. 도구 이름이 언더스코어 사용 (하이픈 미사용)
@@ -199,3 +256,43 @@ class TestToolNamingConvention:
             assert "-" not in tool.name, (
                 f"Tool name '{tool.name}' contains hyphen; use underscores for API compatibility"
             )
+
+
+class TestToolScopeFiltering:
+    """Native tool registry의 scope gate가 기본 사용자 context를 보호하는지 검증한다."""
+
+    def test_default_build_exposes_only_runtime_scoped_tools(self):
+        """기본 build는 operator/development 도구를 노출하지 않아야 한다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        runtime_names = {
+            spec.definition.name
+            for spec in build_native_tool_registry(cron_available=True)
+            if spec.scope is ToolScope.RUNTIME
+        }
+
+        assert {tool.name for tool in tools} == runtime_names
+
+    def test_operator_and_development_scopes_are_explicit_opt_in(self):
+        """비-runtime scope는 scopes 인자를 명시해야만 build 대상이 된다."""
+        registry = build_native_tool_registry(cron_available=True)
+        protected_names = {
+            spec.definition.name
+            for spec in registry
+            if spec.scope in {ToolScope.OPERATOR, ToolScope.DEVELOPMENT}
+        }
+
+        default_names = {
+            tool.name for tool in build_tool_definitions(skills=[], cron_available=True)
+        }
+        assert default_names.isdisjoint(protected_names)
+
+        expanded_names = {
+            tool.name
+            for tool in build_tool_definitions(
+                skills=[],
+                cron_available=True,
+                scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
+                operator_gate=True,
+            )
+        }
+        assert protected_names <= expanded_names

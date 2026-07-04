@@ -39,6 +39,20 @@ agent:
     # 가 죽는 패턴 봉합. 다른 명령은 기존 60s 가 유지된다. ``skills.execution_timeout``
     # 이상으로 두면 활성화, 이하면 자동으로 기본 타임아웃 유지.
     agent_browser_command_timeout: 180
+  # BIZ-417 — web_fetch/headless가 Cloudflare/403으로 막힌 interactive URL 요청에서
+  # 로컬 Chrome + Chrome Extension + Native Messaging으로 현재 탭 본문을 회수하는
+  # handoff 기능. 기본은 disabled이며 cron/background에서는 Chrome을 열지 않는다.
+  browser_handoff:
+    enabled: false
+    chrome_app: "Google Chrome"
+    store_dir: "~/.simpleclaw-agent/default/browser-handoff"
+    request_ttl_seconds: 600
+    open_wait_seconds: 90
+    max_extracted_chars: 50000
+    native_host_name: "com.simpleclaw.browser_handoff"
+    extension_id: null
+    sensitive_domain_policy: "block"
+    allow_auto_extract: false
   # BIZ-314 — 전체 skill/recipe 목록을 매 turn 시스템 프롬프트에 넣지 않고
   # selector top-k 또는 fallback cap만 노출해 prompt bloat와 잡담 도구 남용을 줄인다.
   asset_selection:
@@ -50,6 +64,14 @@ agent:
     bypass_below_count: 8
     fallback_top_k: 12
     max_tokens: 512
+  # BIZ-384 — /goal foreground judge loop. Streaming text deltas are disabled inside
+  # goal rounds; progress events only are emitted. Active-run /subgoal controls are
+  # intentionally out of MVP scope.
+  goal_loop:
+    enabled: true
+    max_rounds: 3
+    judge_max_tokens: 768
+    max_answer_chars_for_judge: 6000
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``
@@ -67,6 +89,35 @@ memory:
     model: "intfloat/multilingual-e5-small"  # 한/영 동시 지원, 384dim, CPU 50ms
     top_k: 5                                  # 회상 후보 상위 K개
     similarity_threshold: 0.5                 # 코사인 유사도 임계값(노이즈 컷)
+
+# Agent Study Wiki — 사용자 기억(USER.md/MEMORY.md/insights)과 분리된 "외부 세계
+# 배경지식" 저장소. 자동 브리핑 주제가 사용자 관심사로 과대 일반화되거나 낡은 외부
+# 사실이 사용자 메모리처럼 영속되는 것을 막기 위한 경계다. 설계: docs/agent-study-wiki.md
+# 모든 기능은 opt-in이며, 아래는 권장 기본값(현재는 config skeleton만 동작).
+study:
+  enabled: false
+  wiki_dir: ~/.simpleclaw-agent/default/agent_wiki  # ~ 확장 후 Path로 정규화
+  daily:                          # 매일 정해진 시각에 주제를 공부하는 배치
+    enabled: false
+    hour_kst: 6                   # 실행 시각(KST)
+    max_topics_per_run: 8         # 1회 실행당 최대 주제 수
+    max_sources_per_topic: 5      # 주제당 최대 출처 수
+  retrieval:                      # 질문 응답 시 wiki를 맥락으로 주입
+    enabled: false
+    top_k: 4                      # 회상 후보 상위 K개
+    max_context_chars: 5000       # 주입 컨텍스트 최대 길이
+    freshness_hours:              # confidence별 신선도 허용치(시간)
+      high: 24
+      medium: 72
+      low: 168
+  topic_evolution:                # 주제 자동 생성/승격/소멸 정책
+    auto_create: true
+    min_interest_score: 0.55      # 주제 생성 최소 관심도
+    promote_threshold: 0.70       # 상시 주제로 승격 임계값
+    decay_after_days: 14          # 무관심 시 소멸까지의 일수
+  safety:                         # 사실성 가드
+    require_sources: true                     # 출처 없는 항목 금지
+    low_confidence_requires_disclaimer: true  # 저신뢰 항목은 면책 문구 필수
 
 security:
   # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일

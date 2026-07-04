@@ -54,6 +54,7 @@ def build_admin_api_server(
     suggestion_writer: Callable[[str], None] | None = None,
     dreaming_run_store: DreamingRunStore | None = None,
     dreaming_status_provider: Callable[[], dict] | None = None,
+    study_status_service: object | None = None,
     secret_rotation_callback: SecretRotationCallback | None = None,
     dashboard_registrar: Callable[[object], object] | None = None,
     dashboard_metrics: object | None = None,
@@ -139,6 +140,8 @@ def build_admin_api_server(
         # run_store 미주입 시 /memory/dreaming/runs 가 503, /status 는 metrics_enabled=False.
         dreaming_run_store=dreaming_run_store,
         dreaming_status_provider=dreaming_status_provider,
+        # BIZ-395 — 미주입 시 study 라우트가 config.yaml 의 wiki_dir 로 지연 구성.
+        study_status_service=study_status_service,
         dashboard_registrar=dashboard_registrar,
         dashboard_metrics=dashboard_metrics,
         dashboard_structured_logger=dashboard_structured_logger,

@@ -29,6 +29,10 @@ retry:
 
 실시간성 질문(오늘/현재/최신 뉴스, 날씨, 주가/시장, 경기 결과 등)에 대해 최종 답변 전 근거 JSON을 생성합니다.
 
+> **Internal evidence skill.** 이 스킬은 오케스트레이터가 LLM 루프 밖에서 직접 실행해
+> system evidence 로만 주입하는 내부 스킬입니다. 일반 `execute_skill` 대상의 LLM callable
+> skill/tool 목록에는 노출되지 않으므로 모델이 직접 호출하지 않습니다.
+
 ## When to use
 
 - 현재/최신/오늘/방금 같은 시간 cue가 있는 뉴스·날씨·시장·스포츠 질문
@@ -37,14 +41,24 @@ retry:
 
 ## Contract
 
-- 입력: 오케스트레이터가 전달하는 URL-safe base64 JSON 단일 토큰
+- 입력:
+  - 1순위: 오케스트레이터가 전달하는 URL-safe base64 JSON 단일 토큰
+  - fallback: base64 토큰이 아니면 위치 인자 전체를 평문 query 로 처리(한국어 raw query
+    직접 호출도 Unicode/base64 오류 없이 동작)
 - 출력: 아래 필드를 갖는 JSON
   - `kind`: `news` / `weather` / `market` / `sports` / `general`
   - `query`
-  - `freshness`
-  - `confidence`
-  - `evidence[]`
+  - `freshness`: `as_of_kst`, `retrieved_at_utc`, `timeline_status`
+  - `confidence`: `high`(여러 출처 본문 교차 확보) / `medium`(단일 출처) / `low`(본문 미확보·미확정)
+  - `evidence[]`: DuckDuckGo 결과 링크를 따라 회수한 출처별 실제 본문(멀티소스).
+    각 항목에 `source`/`url`/`snippet`/`timeline_status` 포함. SERP chrome 대신
+    기사 본문을 추출하며, 본문 회수 실패 시 검색 결과 페이지 텍스트로 폴백한다.
   - `facts[]`
+  - `timeline_validation`: 일정/상태성 질문에서 출처 본문의 시점 반영 범위 검증 결과
+    - `is_timeline_sensitive`: 질문이 일정/상태/결과 시점에 민감한지 여부
+    - `status`: `final` / `current_pending` / `partial` / `stale_or_pre_event` /
+      `no_evidence` / `unknown`
+    - `as_of_kst`, `signals`(future/past/in_progress cue, dates), `notes`
   - `limitations[]`
 
 ## Script

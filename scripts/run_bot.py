@@ -26,7 +26,8 @@ from simpleclaw.channels.admin_api_setup import (
     AdminAPIBootError,
     build_admin_api_server,
 )
-from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.channels.telegram_bot import TelegramBot, split_for_telegram
+from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
@@ -34,6 +35,7 @@ from simpleclaw.config import (
     load_recipes_config,
     load_security_config,
     load_telegram_config,
+    load_webhook_config,
 )
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
@@ -93,7 +95,98 @@ def _create_telegram_notifier(bot_token: str, chat_id: int):
         from telegram import Bot
         tg_bot = Bot(token=bot_token)
         async with tg_bot:
-            await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
+            for chunk in split_for_telegram(text):
+                await tg_bot.send_message(chat_id=chat_id, text=chunk)
+
+    return notifier
+
+
+def _select_webhook_alert_chat_id(whitelist: dict) -> int | None:
+    """웹훅 운영 알림 대상 chat_id를 결정한다.
+
+    그룹/토픽 운영 채널이 별도로 있으면 ``chat_ids``를 우선 사용하고, 없으면 현재
+    단일 운영자 DM으로 동작하는 ``user_ids`` 첫 항목을 fallback으로 삼는다. 별도
+    config 키를 도입하지 않아도 기존 Telegram whitelist만으로 BIZ-34 알림을 켤 수
+    있게 하기 위한 보수적 정책이다.
+    """
+    chat_ids = whitelist.get("chat_ids") or []
+    if chat_ids:
+        return int(chat_ids[0])
+    user_ids = whitelist.get("user_ids") or []
+    if user_ids:
+        return int(user_ids[0])
+    return None
+
+
+def _format_webhook_alert(alert_type: str, details: dict) -> str:
+    """WebhookServer의 alert payload를 운영자가 읽기 쉬운 한국어로 변환한다."""
+    remote = details.get("remote", "unknown")
+    count = details.get("count")
+    threshold = details.get("threshold")
+    window_seconds = details.get("window_seconds")
+
+    if alert_type == "consecutive_blocks":
+        title = "웹훅 이상 트래픽 감지: 연속 차단"
+        summary = f"동일 원격 주소에서 차단 이벤트가 {count}회 연속 발생했습니다."
+    elif alert_type == "burst":
+        title = "웹훅 이상 트래픽 감지: 단일 IP 폭주"
+        summary = f"{window_seconds}초 윈도우 안에서 요청 {count}건이 감지됐습니다."
+    elif alert_type in {"queue_full", "queue_saturated"}:
+        title = "웹훅 처리 큐 포화 감지"
+        summary = "웹훅 동시 처리 한도를 초과해 요청이 거절됐습니다."
+    elif alert_type == "rate_limited":
+        title = "웹훅 rate limit 감지"
+        summary = "웹훅 요청이 설정된 rate limit을 초과했습니다."
+    else:
+        title = f"웹훅 이상 알림: {alert_type}"
+        summary = "웹훅 서버가 운영자 확인이 필요한 이벤트를 감지했습니다."
+
+    lines = [
+        f"⚠️ {title}",
+        summary,
+        "",
+        f"- remote: {remote}",
+        f"- alert_type: {alert_type}",
+    ]
+    if count is not None:
+        lines.append(f"- count: {count}")
+    if threshold is not None:
+        lines.append(f"- threshold: {threshold}")
+    if window_seconds is not None:
+        lines.append(f"- window_seconds: {window_seconds}")
+    lines.append("- action: 차단/제한 이벤트는 서버에서 이미 처리됐습니다.")
+    return "\n".join(lines)
+
+
+def _create_webhook_alert_notifier(
+    bot_token: str,
+    chat_id: int,
+    structured_logger: StructuredLogger,
+):
+    """Create an async webhook alert callback that dispatches to Telegram.
+
+    Telegram API 실패는 구조화 로그로 남기되 예외를 흡수한다. WebhookServer는 이
+    콜백을 background task로 실행하므로, 실패가 HTTP 응답 경로를 막지 않는다.
+    """
+    async def notifier(alert_type: str, details: dict) -> None:
+        text = _format_webhook_alert(alert_type, details)
+        try:
+            from telegram import Bot
+            tg_bot = Bot(token=bot_token)
+            async with tg_bot:
+                await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
+        except Exception as exc:  # noqa: BLE001 — 운영 알림 실패는 본 요청을 막지 않는다.
+            logger.exception("Webhook alert Telegram dispatch failed")
+            structured_logger.log(
+                action_type="webhook_alert_dispatch_failed",
+                input_summary=str(details.get("remote", "")),
+                output_summary=str(exc),
+                status="failed",
+                level="ERROR",
+                alert_type=alert_type,
+                remote=details.get("remote"),
+                error_type=type(exc).__name__,
+            )
 
     return notifier
 
@@ -166,6 +259,60 @@ async def main():
             tg_config["bot_token"], notify_chat_id
         )
         logger.info("Cron → Telegram notification enabled (chat_id=%d)", notify_chat_id)
+
+    # BIZ-34 — WebhookServer의 이상 트래픽 alert_callback을 Telegram 운영자
+    # 알림으로 실제 배선한다. 기존 whitelist만으로 발신 대상을 결정해 config schema
+    # 변경 없이 live 운영 알림을 켤 수 있게 한다.
+    webhook_server = None
+    webhook_config = load_webhook_config(CONFIG_PATH)
+    if bool(webhook_config.get("enabled", False)):
+        webhook_alert_chat_id = _select_webhook_alert_chat_id(whitelist)
+        webhook_alert_callback = None
+        if webhook_alert_chat_id is None:
+            logger.warning(
+                "Webhook alert disabled: telegram whitelist has no chat/user target"
+            )
+        else:
+            webhook_alert_callback = _create_webhook_alert_notifier(
+                tg_config["bot_token"],
+                webhook_alert_chat_id,
+                structured_logger,
+            )
+            logger.info(
+                "Webhook → Telegram alert enabled (chat_id=%d)",
+                webhook_alert_chat_id,
+            )
+
+        webhook_server = WebhookServer(
+            host=webhook_config["host"],
+            port=webhook_config["port"],
+            auth_token=webhook_config["auth_token"],
+            max_body_size=webhook_config["max_body_size"],
+            rate_limit=webhook_config["rate_limit"],
+            rate_limit_window=webhook_config["rate_limit_window"],
+            max_concurrent_connections=webhook_config[
+                "max_concurrent_connections"
+            ],
+            queue_size=webhook_config["queue_size"],
+            alert_callback=webhook_alert_callback,
+            alert_cooldown=webhook_config["alert_cooldown"],
+            structured_logger=structured_logger,
+        )
+        try:
+            await webhook_server.start()
+        except Exception as exc:  # noqa: BLE001 — 부팅 단계에서 명시적으로 중단.
+            print(f"ERROR: Webhook 서버 바인딩 실패 — {exc}")
+            structured_logger.log(
+                action_type="webhook_start_failed",
+                input_summary=(
+                    f"{webhook_config['host']}:{webhook_config['port']}"
+                ),
+                output_summary=str(exc),
+                status="failed",
+                level="ERROR",
+                error_type=type(exc).__name__,
+            )
+            return
 
     # BIZ-202: 봇이 채팅에서 작성한 레시피와 데몬이 cron 으로 로드하는 레시피가 같은
     # 절대 경로(`~/.simpleclaw/recipes/`)를 보도록 한다 — 데몬 CWD/봇 워크스페이스
@@ -566,6 +713,10 @@ async def main():
             return {
                 "daemon": {
                     "telegram_running": bool(getattr(bot, "is_running", False)),
+                    "webhook_running": bool(
+                        webhook_server is not None
+                        and getattr(webhook_server, "is_running", False)
+                    ),
                     "dashboard_running": bool(
                         admin_api is not None
                         and admin_api.dashboard_routes_registered
@@ -648,6 +799,11 @@ async def main():
             await admin_api.stop()
         except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
             logger.exception("Admin API stop failed")
+    if webhook_server is not None:
+        try:
+            await webhook_server.stop()
+        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
+            logger.exception("Webhook server stop failed")
     await bot.stop()
     print("Done.")
 

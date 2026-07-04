@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from pathlib import Path
 from typing import Any
 
 from simpleclaw.llm.models import ToolCall
@@ -32,6 +34,18 @@ _AGENT_BROWSER_COMPOSITE_BLOCKED_MESSAGE = (
     "the same URL via agent-browser. Reply to the user that the page cannot be "
     "retrieved instead."
 )
+
+_RECIPE_DIR_WRITE_BLOCKED_MESSAGE = (
+    "Error: runtime cli/skill commands cannot write to the configured recipes "
+    "directory. Use the operator-only recipe_generate tool with confirm=true "
+    "for recipe installation."
+)
+
+_RECIPE_WRITE_VERB_RE = re.compile(
+    r"(?:^|[;&|]\s*)(?:mkdir|touch|rm|rmdir|cp|mv|install|tee)\b",
+    re.I,
+)
+_SHELL_REDIRECT_RE = re.compile(r"(?:^|\s)(?:>>?|<<)\s*", re.I)
 
 
 def resolve_command_timeout(orchestrator: Any, command: str) -> int:
@@ -92,8 +106,38 @@ def agent_browser_npx_fallback_command(command: str, stderr: str) -> str | None:
     return None
 
 
+def command_writes_to_recipes_dir(command: str, recipes_dir: str | Path | None) -> bool:
+    """runtime shell command가 configured live recipes.dir에 쓰려는지 감지한다."""
+    if not recipes_dir:
+        return False
+    try:
+        recipes_path = Path(recipes_dir).expanduser().resolve()
+    except OSError:
+        recipes_path = Path(recipes_dir).expanduser()
+
+    normalized = command.replace("\\\n", " ")
+    path_markers = {
+        str(recipes_path),
+        str(Path(recipes_dir).expanduser()),
+        str(recipes_dir),
+    }
+    if not any(marker and marker in normalized for marker in path_markers):
+        return False
+    if _RECIPE_WRITE_VERB_RE.search(normalized):
+        return True
+    return bool(_SHELL_REDIRECT_RE.search(normalized))
+
+
 async def execute_command(orchestrator: Any, skill_name: str, command: str) -> str:
     """셸 명령을 실행하고 출력/오류를 tool-safe 문자열로 반환한다."""
+    if command_writes_to_recipes_dir(command, getattr(orchestrator, "_recipes_dir", None)):
+        logger.warning(
+            "BIZ-410: runtime command blocked from writing recipes dir for skill '%s': %s",
+            skill_name,
+            command[:200],
+        )
+        return _RECIPE_DIR_WRITE_BLOCKED_MESSAGE
+
     try:
         orchestrator._command_guard.check(command)
     except DangerousCommandError as exc:

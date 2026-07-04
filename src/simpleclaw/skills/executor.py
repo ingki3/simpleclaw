@@ -48,6 +48,7 @@ async def execute_skill(
     timeout: int = 60,
     *,
     metrics: MetricsCollector | None = None,
+    env_passthrough: list[str] | None = None,
 ) -> SkillResult:
     """스킬의 대상 스크립트를 비동기 서브프로세스로 실행한다.
 
@@ -61,6 +62,8 @@ async def execute_skill(
         timeout: 최대 실행 시간 (초)
         metrics: 타임아웃 시 ``kill_process_group`` 결과와 재시도 카운터를 누적할
             메트릭 수집기. None이면 기록되지 않으며 기존 동작과 호환된다.
+        env_passthrough: 보안 필터의 민감 키 차단에도 스킬 자식 프로세스에
+            전달할 환경변수 이름 목록.
 
     Returns:
         출력, 종료 코드, 에러 정보, 시도 횟수를 포함하는 SkillResult
@@ -89,7 +92,14 @@ async def execute_skill(
     while True:
         attempt += 1
         try:
-            result = await _run_once(skill, script, args, timeout, metrics=metrics)
+            result = await _run_once(
+                skill,
+                script,
+                args,
+                timeout,
+                metrics=metrics,
+                env_passthrough=env_passthrough,
+            )
         except SkillExecutionError as exc:
             last_error = exc
             if not _should_retry(policy, attempt, max_retries, timeout=False):
@@ -174,6 +184,7 @@ async def _run_once(
     timeout: int,
     *,
     metrics: MetricsCollector | None,
+    env_passthrough: list[str] | None,
 ) -> SkillResult:
     """스킬을 한 번 실행한다 (재시도 루프 단위).
 
@@ -185,10 +196,9 @@ async def _run_once(
     if args:
         cmd.extend(args)
 
-    # filter_env()가 민감 키를 제거한 뒤 trace_id를 주입한다 — 분산 트레이싱
-    # 식별자는 비밀이 아니므로 차단 패턴 대상이 아니지만, 명시적으로 마지막에
-    # 추가하여 환경변수 차단 패턴 변경에도 영향을 받지 않도록 한다.
-    env = inject_trace_id_env(filter_env())
+    # filter_env()가 민감 키를 제거한 뒤, 설정에서 허용한 스킬용 API 키만
+    # 다시 통과시킨다. trace_id는 비밀이 아니므로 마지막에 주입한다.
+    env = inject_trace_id_env(filter_env(passthrough=env_passthrough))
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -239,7 +249,9 @@ async def _run_once(
 def _build_command(script: Path) -> list[str]:
     """파일 확장자에 따라 적절한 실행 명령을 구성한다.
 
-    .py -> python, .sh -> bash, .js -> node, 그 외 -> 직접 실행
+    .py 스킬은 script-local venv가 있으면 그 Python을 우선 사용한다. 런타임
+    Python으로 실행하면 개별 스킬이 자체 venv에 설치한 의존성(yfinance 등)을
+    찾지 못하기 때문이다. .sh/.js/직접 실행 동작은 기존과 동일하다.
 
     Args:
         script: 실행할 스크립트 파일 경로
@@ -249,7 +261,8 @@ def _build_command(script: Path) -> list[str]:
     """
     suffix = script.suffix.lower()
     if suffix == ".py":
-        python = _find_venv_python(script) or Path(sys.executable)
+        venv_python = _find_adjacent_venv_python(script)
+        python = venv_python if venv_python is not None else Path(sys.executable)
         return [str(python), str(script)]
     elif suffix == ".sh":
         return ["bash", str(script)]
@@ -260,11 +273,12 @@ def _build_command(script: Path) -> list[str]:
         return [str(script)]
 
 
-def _find_venv_python(script: Path) -> Path | None:
-    """스크립트 인근 venv 의 Python 을 찾아 등록 스킬 의존성을 우선 사용한다.
+def _find_adjacent_venv_python(script: Path) -> Path | None:
+    """스킬 스크립트 주변의 venv Python을 찾는다.
 
-    SimpleClaw 런타임 venv 와 스킬-local venv 는 의존성이 다를 수 있으므로,
-    ``scripts/venv`` 와 skill root ``venv`` 를 런타임 인터프리터보다 먼저 본다.
+    런타임 스킬 패키지는 보통 ``scripts/<tool>.py``와 ``scripts/venv`` 또는
+    패키지 루트 ``venv``를 함께 둔다. 둘 다 지원해 기존 skill 문서의 venv 실행
+    예시와 등록 스킬 실행 경로를 일치시킨다.
     """
     for venv_dir in (
         script.parent / "venv",
@@ -272,7 +286,7 @@ def _find_venv_python(script: Path) -> Path | None:
         script.parent / ".venv",
         script.parent.parent / ".venv",
     ):
-        python = venv_dir / "bin" / "python"
-        if python.is_file():
-            return python
+        venv_python = venv_dir / "bin" / "python"
+        if venv_python.is_file():
+            return venv_python
     return None

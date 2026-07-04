@@ -122,6 +122,11 @@ def test_repeated_market_summary_requests_create_cron_opportunity() -> None:
     assert opportunity.type == OpportunityType.REPEATED_REQUEST
     assert opportunity.cooldown_key == "dreaming:repeated:market_summary"
     assert opportunity.suggested_action.kind == "create_cron"
+    payload = opportunity.suggested_action.payload
+    assert payload["name"] == "dreaming-repeated-market-summary-08"
+    assert payload["cron_expression"] == "0 8 * * *"
+    assert payload["action_type"] == "prompt"
+    assert payload["action_reference"] == "오늘 아침 시장 요약해줘"
     assert opportunity.confidence >= 0.8
     assert set(opportunity.source_msg_ids) == {100, 102, 105, 108, 111}
     assert any("count=5" in item for item in opportunity.evidence)
