@@ -896,6 +896,8 @@ class TestBuiltinWebFetch:
         )
         assert result.startswith("FETCH_BLOCKED: https://medium.com/example/article")
         assert "HTTP 403" in result
+        assert "browser_handoff" in result
+        assert "copy/paste" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_headless_failure_returns_static_body(self):
@@ -953,6 +955,7 @@ class TestBuiltinWebFetch:
         assert "agent-browser" in result, (
             "응답에 agent-browser 우회 금지 안내가 들어 있어야 한다"
         )
+        assert "browser_handoff" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_google_search_redirect_returns_marker(self):

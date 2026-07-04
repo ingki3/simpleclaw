@@ -219,8 +219,10 @@ def _format_block_page_response(
         f"This site appears to block automated fetching (detected via {via}). "
         "Both static fetch and the headless browser fallback returned a short "
         "or anti-bot body. Do NOT retry the same URL with agent-browser, cli, "
-        "or another skill — reply to the user that the page cannot be "
-        "retrieved automatically and offer a graceful alternative.\n"
+        "or another skill. If interactive browser_handoff is available, use it "
+        "to open local Chrome and wait for extension-approved page text. Do not "
+        "ask the user to copy/paste page text. If browser_handoff is unavailable, "
+        "explain that local browser handoff is required.\n"
         f"--- diagnostic body ({len(body.strip())} chars) ---\n{snippet}"
     )
 

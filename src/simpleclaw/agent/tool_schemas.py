@@ -231,6 +231,35 @@ _SEARCH_MEMORY_TOOL = ToolDefinition(
         "required": ["query"],
     },
 )
+_BROWSER_HANDOFF_TOOL = ToolDefinition(
+    name="browser_handoff",
+    description=(
+        "자동 web_fetch/headless 브라우저가 403, Cloudflare, human verification 등으로 막힌 "
+        "interactive URL 요청에서만 사용한다. 로컬 Chrome을 열고 SimpleClaw Chrome Extension이 "
+        "사용자 승인 후 현재 페이지 텍스트를 Native Messaging으로 전달할 때까지 기다리거나, "
+        "이미 전달된 페이지 텍스트를 읽는다. cron/background에서는 사용하지 않는다. "
+        "사용자에게 본문 copy/paste를 요구하지 않는다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["open_and_wait", "status", "read", "read_latest"],
+                "description": "브라우저 handoff 작업 종류",
+            },
+            "url": {"type": "string", "description": "열거나 매칭할 URL"},
+            "request_id": {"type": "string", "description": "기존 handoff 요청 ID"},
+            "wait_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 180,
+                "description": "open_and_wait에서 콘텐츠 도착을 기다릴 최대 시간",
+            },
+        },
+        "required": ["action"],
+    },
+)
 
 # BIZ-260 — clarify 다지선다 도구. 텔레그램 등 인라인 키보드를 지원하는 채널은
 # ``options`` 를 버튼으로 렌더한다. 호출 즉시 ReAct 루프가 종결되어 LLM 의 다음
@@ -714,6 +743,7 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
     NativeToolSpec(_WEB_SEARCH_TOOL),
+    NativeToolSpec(_BROWSER_HANDOFF_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_FILE_READ_TOOL),
     NativeToolSpec(_FILE_WRITE_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_FILE_MANAGE_TOOL, risk=ToolRisk.MEDIUM),
@@ -801,6 +831,7 @@ def build_native_tool_registry(
     cron_available: bool = False,
     scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
     operator_gate: bool = False,
+    browser_handoff_available: bool = False,
     extra_specs: Iterable[NativeToolSpec] = (),
 ) -> tuple[NativeToolSpec, ...]:
     """현재 context에 노출 가능한 native tool registry 항목을 반환한다.
@@ -819,6 +850,8 @@ def build_native_tool_registry(
     for spec in (*_NATIVE_TOOL_SPECS, *tuple(extra_specs)):
         if spec.definition.name == "cron" and not cron_available:
             continue
+        if spec.definition.name == "browser_handoff" and not browser_handoff_available:
+            continue
         if spec.scope not in allowed_scopes:
             continue
         if spec.operator_gate_required and not operator_gate:
@@ -832,6 +865,7 @@ def native_tool_names(
     cron_available: bool = False,
     scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
     operator_gate: bool = False,
+    browser_handoff_available: bool = False,
     extra_specs: Iterable[NativeToolSpec] = (),
 ) -> frozenset[str]:
     """registry 조건을 통과한 native tool function-call 이름 집합을 반환한다."""
@@ -841,6 +875,7 @@ def native_tool_names(
             cron_available=cron_available,
             scopes=scopes,
             operator_gate=operator_gate,
+            browser_handoff_available=browser_handoff_available,
             extra_specs=extra_specs,
         )
     )
@@ -851,6 +886,7 @@ def validate_dispatch_tool_names(
     *,
     scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
     operator_gate: bool = False,
+    browser_handoff_available: bool = False,
 ) -> None:
     """dispatch mapping이 native registry와 일치하는지 검증한다.
 
@@ -862,6 +898,7 @@ def validate_dispatch_tool_names(
         cron_available=True,
         scopes=scopes,
         operator_gate=operator_gate,
+        browser_handoff_available=browser_handoff_available,
     )
     actual = frozenset(dispatch_names)
     missing = expected - actual
@@ -882,6 +919,7 @@ def build_tool_definitions(
     cron_available: bool = False,
     scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
     operator_gate: bool = False,
+    browser_handoff_available: bool = False,
 ) -> list[ToolDefinition]:
     """현재 상태에 맞는 ToolDefinition 목록을 조립한다.
 
@@ -900,6 +938,7 @@ def build_tool_definitions(
             cron_available=cron_available,
             scopes=scopes,
             operator_gate=operator_gate,
+            browser_handoff_available=browser_handoff_available,
         )
     ]
 
