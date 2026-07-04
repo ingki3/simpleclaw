@@ -260,6 +260,11 @@ _LIVE_FACT_TIME_CUES = (
     "예보",
     "마감",
     "장마감",
+    # BIZ-363: 경기 일정/중계 편성은 사전지식으로 답하면 쉽게 stale 해진다.
+    "일정",
+    "중계",
+    "방송",
+    "편성",
 )
 _LIVE_FACT_CORRECTION_CUES = (
     "틀렸",
@@ -275,6 +280,8 @@ _LIVE_FACT_SPORTS_TERMS = (
     "축구",
     "농구",
     "배구",
+    "월드컵",
+    "경기",
     "경기 결과",
     "스코어",
 )
@@ -1438,12 +1445,19 @@ class AgentOrchestrator:
                 self._browser_handoff_config.get("enabled", False)
             ),
         )
+        # BIZ-363: realtime-lookup-skill 이 이미 근거를 실어 준 경우 그 자체를
+        # 최신 근거로 인정하고, live-fact 질의로 판정됐는데 근거가 없으면 tool
+        # loop 이 근거 없는 final answer 를 차단하도록 상태를 전달한다.
+        live_evidence_seen = bool(realtime_lookup_context)
+
         return ToolLoopState(
             user_content=user_content,
             messages=messages,
             system_prompt=system_prompt,
             tools=tools,
             system_blocks=system_blocks,
+            live_evidence_seen=live_evidence_seen,
+            live_fact_requires_evidence=realtime_lookup_payload is not None,
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=on_text_delta,
             on_progress=on_progress,

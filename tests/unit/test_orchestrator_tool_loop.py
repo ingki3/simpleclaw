@@ -265,8 +265,8 @@ async def test_attachment_context_note_includes_attachment_without_path(config_f
 
 
 @pytest.mark.asyncio
-async def test_live_fact_final_without_evidence_is_accepted_by_tool_loop(config_file):
-    """실시간 사실 final text는 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+async def test_live_fact_final_without_evidence_is_blocked_by_tool_loop(config_file):
+    """BIZ-363: 최신 근거 없는 실시간 사실 final text는 tool loop가 fallback으로 차단한다."""
     orch = AgentOrchestrator(config_file)
 
     async def fake_send(_request):
@@ -285,14 +285,15 @@ async def test_live_fact_final_without_evidence_is_accepted_by_tool_loop(config_
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert result.text == "대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다."
+    assert "확인하지 못" in result.text
+    assert "6월 19일 10시" not in result.text
 
 
 @pytest.mark.asyncio
-async def test_live_fact_fetch_blocked_final_is_not_post_filtered(
+async def test_live_fact_fetch_blocked_final_is_blocked(
     config_file, monkeypatch,
 ):
-    """FETCH_BLOCKED 이후 final text도 tool loop가 사후 evidence 판정으로 차단하지 않는다."""
+    """BIZ-363: FETCH_BLOCKED는 usable evidence가 아니므로 이후 final text도 fallback으로 차단한다."""
     orch = AgentOrchestrator(config_file)
 
     async def fake_dispatch(tc):
@@ -330,7 +331,8 @@ async def test_live_fact_fetch_blocked_final_is_not_post_filtered(
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert result.text == "대한민국 vs 미국: 6월 23일 22시에 중계됩니다."
+    assert "확인하지 못" in result.text
+    assert "6월 23일 22시" not in result.text
 
 
 @pytest.mark.asyncio
@@ -357,7 +359,8 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert result == "LG가 두산을 7:4로 이겼습니다."
+    assert "확인하지 못" in result
+    assert "7:4" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
@@ -394,7 +397,8 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert result == "조회 없이 만든 답변"
+    assert "확인하지 못" in result
+    assert "조회 없이 만든 답변" not in result
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 

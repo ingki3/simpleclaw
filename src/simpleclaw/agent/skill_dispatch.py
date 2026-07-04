@@ -141,7 +141,12 @@ def find_venv_python(script_path: Path) -> Path | None:
 
 
 async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
-    """execute_skill 도구 호출을 처리한다."""
+    """execute_skill 도구 호출을 처리한다.
+
+    BIZ-363: ``skill_name`` 이 등록 스킬을 가리키면 raw ``command`` 보다
+    registry dispatch 를 우선한다. 모델이 ``command`` 에도 같은 스킬명을 넣은
+    경우 shell command-not-found 로 빠지면 실시간 근거 수집이 실패한다.
+    """
     skill_name = str(args.get("skill_name", "") or "").strip()
     command = str(args.get("command", "") or "").strip()
     skill_args = str(args.get("args", "") or "")
@@ -151,6 +156,15 @@ async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
         result = await execute_registered_skill(orchestrator, skill_name, skill_args)
         return result or "[no output]"
     if command:
+        try:
+            command_parts = shlex.split(command)
+        except ValueError:
+            command_parts = command.split()
+        command_skill_name = command_parts[0] if command_parts else ""
+        if command_skill_name and orchestrator._resolve_skill_name(command_skill_name) is not None:
+            command_args = " ".join(shlex.quote(part) for part in command_parts[1:])
+            result = await execute_registered_skill(orchestrator, command_skill_name, command_args)
+            return result or "[no output]"
         return await orchestrator._execute_command(skill_name, command)
     result = await execute_registered_skill(orchestrator, skill_name, skill_args)
     return result or "[no output]"

@@ -119,6 +119,10 @@ _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "(debug: final-answer LLM 호출이 {timeout:.0f}초 안에 응답하지 않음)"
 )
 _AGENT_BROWSER_PER_TURN_CALL_CAP = 2
+_LIVE_FACT_EVIDENCE_REQUIRED_MESSAGE = (
+    "검증 가능한 최신 근거를 확인하지 못해 실시간 일정/중계 정보를 단정할 수 없습니다. "
+    "공식 경기 일정이나 방송사 공지처럼 최신 출처를 확인한 뒤 다시 알려 주세요."
+)
 _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE = (
     "Error: `agent-browser` has already been attempted {count} times in this "
     "turn and is being rate-limited to avoid exhausting the tool loop. If the "
@@ -212,6 +216,42 @@ def _legacy_observation_text(tool_call: ToolCall, sanitized_result: str) -> str:
     """ReAct 호환 fixture가 기대하는 user_message Observation 문자열을 만든다."""
     skill_name = str(tool_call.arguments.get("skill_name") or "unknown-skill")
     return f"Observation: execute_skill({skill_name}) result:\n{sanitized_result[:3000]}"
+
+
+def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
+    """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
+    if tool_call.name == "web_fetch":
+        return True
+    if tool_call.name == "execute_skill":
+        skill_name = str(tool_call.arguments.get("skill_name") or "")
+        return skill_name == "realtime-lookup-skill"
+    return False
+
+
+def _tool_result_provides_usable_live_evidence(content: str) -> bool:
+    """BIZ-363: 차단/오류/빈 결과는 live fact final answer 근거로 인정하지 않는다."""
+    stripped = content.strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    blocked_markers = (
+        "fetch_blocked:",
+        "automated fetching",
+        "automated traffic",
+        "access denied",
+        "verify you are human",
+        "checking your browser",
+        "realtime-lookup-skill failed",
+        '"facts": []',
+        '"facts":[]',
+    )
+    if any(marker in lowered for marker in blocked_markers):
+        return False
+    if _tool_result_looks_like_explicit_error(stripped):
+        return False
+    if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS):
+        return False
+    return True
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -493,6 +533,15 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
+                    if state.live_fact_requires_evidence and not state.live_evidence_seen:
+                        logger.warning(
+                            "BIZ-363: blocking live-fact final answer without usable fresh evidence",
+                        )
+                        return ToolLoopResult(
+                            _LIVE_FACT_EVIDENCE_REQUIRED_MESSAGE,
+                            trace=trace,
+                            iterations=i + 1,
+                        )
                     return ToolLoopResult(final_text, trace=trace, iterations=i + 1)
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -599,6 +648,11 @@ class ToolLoopRunner:
                     ProgressEvent(progress_kind, progress_name, "complete", result),
                 )
                 sanitized = sanitize_tool_output(result)
+                if (
+                    _tool_call_provides_live_evidence(tc)
+                    or self._orchestrator._call_invokes_agent_browser(tc)
+                ) and _tool_result_provides_usable_live_evidence(sanitized):
+                    state.live_evidence_seen = True
                 trace.append(
                     ToolTraceStep(
                         tool_name=tc.name,
@@ -712,6 +766,11 @@ class ToolLoopRunner:
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
         final_text = (final_response.text or "").strip()
+        if final_text and state.live_fact_requires_evidence and not state.live_evidence_seen:
+            logger.warning(
+                "BIZ-363: blocking forced live-fact final answer without usable fresh evidence",
+            )
+            return _LIVE_FACT_EVIDENCE_REQUIRED_MESSAGE
         if not final_text:
             return _BUDGET_EXHAUSTED_EMPTY_MESSAGE.format(
                 iterations=self._orchestrator._max_tool_iterations,
