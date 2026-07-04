@@ -123,8 +123,9 @@ _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE = (
     "Error: `agent-browser` has already been attempted {count} times in this "
     "turn and is being rate-limited to avoid exhausting the tool loop. If the "
     "page text could not be retrieved by `web_fetch` (which already includes a "
-    "headless fallback), the site is blocking automated fetching. Reply to the "
-    "user that the page cannot be retrieved rather than retrying with "
+    "headless fallback), the site is blocking automated fetching. If available, "
+    "use `browser_handoff` to open local Chrome and wait for extension-approved "
+    "page text. Do not ask the user to copy/paste the page text or retry with "
     "agent-browser, cli, or another skill."
 )
 _FILE_MUTATING_TOOLS = frozenset({"file_write", "file_manage", "execute_skill", "cli"})

@@ -132,6 +132,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "cli",
     "web_fetch",
     "web_search",
+    "browser_handoff",
     "file_read",
     "file_write",
     "file_manage",
@@ -155,6 +156,7 @@ validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
     scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR, ToolScope.DEVELOPMENT),
     operator_gate=True,
+    browser_handoff_available=True,
 )
 
 
@@ -603,6 +605,7 @@ class AgentOrchestrator:
         daemon_config = load_daemon_config(config_path)
         recipes_config = load_recipes_config(config_path)
         self._asset_selection_config = load_asset_selection_config(config_path)
+        self._browser_handoff_config = agent_config.get("browser_handoff", {})
         self._goal_loop_config = agent_config.get("goal_loop", {})
         self._complex_fact_config = agent_config.get("complex_fact_workflow", {})
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
@@ -1431,6 +1434,9 @@ class AgentOrchestrator:
             cron_available=self._cron_scheduler is not None,
             scopes=scopes,
             operator_gate=operator_tools,
+            browser_handoff_available=bool(
+                self._browser_handoff_config.get("enabled", False)
+            ),
         )
         return ToolLoopState(
             user_content=user_content,

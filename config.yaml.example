@@ -39,6 +39,20 @@ agent:
     # 가 죽는 패턴 봉합. 다른 명령은 기존 60s 가 유지된다. ``skills.execution_timeout``
     # 이상으로 두면 활성화, 이하면 자동으로 기본 타임아웃 유지.
     agent_browser_command_timeout: 180
+  # BIZ-417 — web_fetch/headless가 Cloudflare/403으로 막힌 interactive URL 요청에서
+  # 로컬 Chrome + Chrome Extension + Native Messaging으로 현재 탭 본문을 회수하는
+  # handoff 기능. 기본은 disabled이며 cron/background에서는 Chrome을 열지 않는다.
+  browser_handoff:
+    enabled: false
+    chrome_app: "Google Chrome"
+    store_dir: "~/.simpleclaw-agent/default/browser-handoff"
+    request_ttl_seconds: 600
+    open_wait_seconds: 90
+    max_extracted_chars: 50000
+    native_host_name: "com.simpleclaw.browser_handoff"
+    extension_id: null
+    sensitive_domain_policy: "block"
+    allow_auto_extract: false
   # BIZ-314 — 전체 skill/recipe 목록을 매 turn 시스템 프롬프트에 넣지 않고
   # selector top-k 또는 fallback cap만 노출해 prompt bloat와 잡담 도구 남용을 줄인다.
   asset_selection:

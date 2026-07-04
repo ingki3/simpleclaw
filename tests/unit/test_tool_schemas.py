@@ -92,6 +92,28 @@ class TestExecuteSkill:
         tools = build_tool_definitions(skills=skills, cron_available=True)
         assert len(tools) == 11
 
+class TestBrowserHandoffSchema:
+    """BIZ-417 — browser_handoff 도구 스키마를 검증한다."""
+
+    def test_browser_handoff_not_exposed_by_default(self):
+        tools = build_tool_definitions(skills=[], cron_available=False)
+        assert "browser_handoff" not in [tool.name for tool in tools]
+
+    def test_browser_handoff_exposed_when_enabled(self):
+        tools = build_tool_definitions(
+            skills=[], cron_available=False, browser_handoff_available=True
+        )
+        tool = next(tool for tool in tools if tool.name == "browser_handoff")
+
+        assert tool.parameters["properties"]["action"]["enum"] == [
+            "open_and_wait",
+            "status",
+            "read",
+            "read_latest",
+        ]
+        assert "copy/paste" in tool.description
+
+
 class TestWebSearchSchema:
     """BIZ-365 — query 기반 web_search 도구 스키마를 검증한다."""
 

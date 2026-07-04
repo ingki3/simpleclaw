@@ -70,6 +70,18 @@ _AGENT_DEFAULTS: dict = {
     "web_fetch": {
         "headless_binary": None,
     },
+    "browser_handoff": {
+        "enabled": False,
+        "chrome_app": "Google Chrome",
+        "store_dir": "~/.simpleclaw-agent/default/browser-handoff",
+        "request_ttl_seconds": 600,
+        "open_wait_seconds": 90,
+        "max_extracted_chars": 50000,
+        "native_host_name": "com.simpleclaw.browser_handoff",
+        "extension_id": None,
+        "sensitive_domain_policy": "block",
+        "allow_auto_extract": False,
+    },
     "asset_selection": {
         "enabled": False,
         "backend": "gemini",
@@ -135,6 +147,22 @@ def _agent_with_defaults(agent: dict) -> dict:
     if isinstance(headless_binary, str) and not headless_binary.strip():
         headless_binary = None
 
+    browser_handoff = agent.get("browser_handoff", {})
+    if not isinstance(browser_handoff, dict):
+        browser_handoff = {}
+    browser_defaults = _AGENT_DEFAULTS["browser_handoff"]
+    extension_id = browser_handoff.get("extension_id", browser_defaults["extension_id"])
+    if isinstance(extension_id, str) and not extension_id.strip():
+        extension_id = None
+    sensitive_policy = str(
+        browser_handoff.get(
+            "sensitive_domain_policy",
+            browser_defaults["sensitive_domain_policy"],
+        )
+    )
+    if sensitive_policy not in {"block", "ask"}:
+        sensitive_policy = browser_defaults["sensitive_domain_policy"]
+
     asset_selection = agent.get("asset_selection", {})
     if not isinstance(asset_selection, dict):
         asset_selection = {}
@@ -168,6 +196,51 @@ def _agent_with_defaults(agent: dict) -> dict:
         ),
         "web_fetch": {
             "headless_binary": headless_binary,
+        },
+        "browser_handoff": {
+            "enabled": bool(
+                browser_handoff.get("enabled", browser_defaults["enabled"])
+            ),
+            "chrome_app": browser_handoff.get(
+                "chrome_app", browser_defaults["chrome_app"]
+            ),
+            "store_dir": browser_handoff.get(
+                "store_dir", browser_defaults["store_dir"]
+            ),
+            "request_ttl_seconds": _coerce_int_config(
+                browser_handoff.get(
+                    "request_ttl_seconds",
+                    browser_defaults["request_ttl_seconds"],
+                ),
+                browser_defaults["request_ttl_seconds"],
+                minimum=1,
+            ),
+            "open_wait_seconds": _coerce_int_config(
+                browser_handoff.get(
+                    "open_wait_seconds",
+                    browser_defaults["open_wait_seconds"],
+                ),
+                browser_defaults["open_wait_seconds"],
+                minimum=0,
+            ),
+            "max_extracted_chars": _coerce_int_config(
+                browser_handoff.get(
+                    "max_extracted_chars",
+                    browser_defaults["max_extracted_chars"],
+                ),
+                browser_defaults["max_extracted_chars"],
+                minimum=1000,
+            ),
+            "native_host_name": browser_handoff.get(
+                "native_host_name", browser_defaults["native_host_name"]
+            ),
+            "extension_id": extension_id,
+            "sensitive_domain_policy": sensitive_policy,
+            "allow_auto_extract": bool(
+                browser_handoff.get(
+                    "allow_auto_extract", browser_defaults["allow_auto_extract"]
+                )
+            ),
         },
         "asset_selection": {
             "enabled": bool(asset_selection.get("enabled", asset_defaults["enabled"])),
