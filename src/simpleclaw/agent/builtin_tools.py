@@ -5,7 +5,7 @@ AgentOrchestrator를 경량으로 유지하고 테스트를 용이하게 한다.
 
 제공 도구:
 - web-fetch: URL에서 웹 페이지 내용 가져오기
-- web-search: 일반 질의어로 후보 URL 검색
+- web-search: 일반 질의어로 후보 URL 검색 (Google Search 그라운딩 기본, BIZ-418)
 - file-read: 파일 텍스트 읽기 (프로젝트 내)
 - file-write: 파일 쓰기 (워크스페이스 내)
 - file-manage: 파일/디렉토리 관리 (list, mkdir, delete, info)
@@ -608,7 +608,11 @@ def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
 
 
 async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]:
-    """API key 없이 DuckDuckGo HTML endpoint에서 compact 검색 결과를 가져온다."""
+    """API key 없이 DuckDuckGo HTML endpoint에서 compact 검색 결과를 가져온다.
+
+    BIZ-418 이후 기본 backend 는 Google Search 그라운딩(``_web_search_google``)이며,
+    이 함수와 ``_parse_duckduckgo_html`` 은 호환/테스트 목적으로만 남겨둔다.
+    """
     import aiohttp
 
     timeout = aiohttp.ClientTimeout(total=20)
@@ -631,13 +635,170 @@ async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]
     return _parse_duckduckgo_html(body, limit)
 
 
-def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str:
+# ------------------------------------------------------------------
+# Google Search 그라운딩 backend (BIZ-418 기본값)
+# ------------------------------------------------------------------
+# DuckDuckGo HTML 스크레이핑은 차단·구조 변경에 취약해 기본 검색 backend 를
+# Gemini 의 Google Search 그라운딩으로 교체한다. 그라운딩 응답의 요약 텍스트와
+# grounding_chunks(출처 URL)를 기존 WEB_SEARCH_RESULTS 렌더링으로 변환한다.
+# 모델 ID는 WEB_SEARCH_GEMINI_MODEL 또는 config.yaml의 gemini provider 모델을 따른다.
+_WEB_SEARCH_GOOGLE_MODEL_DEFAULT = "gemini-3.5-flash"
+
+
+def _candidate_google_search_config_paths() -> list[Path]:
+    """Google Search 그라운딩 API key 조회에 사용할 config.yaml 후보를 반환한다."""
+    paths: list[Path] = []
+    explicit = os.getenv("SIMPLECLAW_CONFIG")
+    if explicit:
+        paths.append(Path(explicit).expanduser())
+    paths.append(Path("config.yaml"))
+    # launchd live bot은 ``HOME=/Users/simplist`` + cwd ``~/.simpleclaw`` 로 뜨지만,
+    # 테스트/수동 실행에서 cwd가 다르면 live config를 못 찾을 수 있어 표준 위치도 본다.
+    paths.append(Path.home() / ".simpleclaw" / "config.yaml")
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path.expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _resolve_google_search_model() -> str:
+    """Google Search 그라운딩에 사용할 Gemini 모델 ID를 해석한다."""
+    override = os.getenv("WEB_SEARCH_GEMINI_MODEL")
+    if override:
+        return override
+    for config_path in _candidate_google_search_config_paths():
+        if not config_path.is_file():
+            continue
+        try:
+            from simpleclaw.config import load_llm_config
+
+            gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
+        except Exception:  # noqa: BLE001 — 검색 도구는 설정 로드 실패 시 기본 모델로 degrade
+            logger.exception("web_search Google grounding model config load failed")
+            continue
+        model = str(gemini.get("model", "") or "").strip()
+        if model:
+            return model
+    return _WEB_SEARCH_GOOGLE_MODEL_DEFAULT
+
+
+def _resolve_google_search_api_key() -> str:
+    """Google Search 그라운딩용 API key 를 환경변수/LLM config에서 해석한다.
+
+    ``GOOGLE_API_KEY`` 를 우선 사용하고 없으면 ``GEMINI_API_KEY`` 로 폴백한다.
+    둘 다 없으면 live ``config.yaml``의 ``llm.providers.gemini.api_key``를
+    시크릿 매니저로 해소한다. 이는 SimpleClaw 운영 환경이 API key를 환경변수 대신
+    config secret reference/레거시 평문으로 보관하는 경우를 지원하기 위함이다.
+    """
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if api_key:
+        return api_key
+
+    for config_path in _candidate_google_search_config_paths():
+        if not config_path.is_file():
+            continue
+        try:
+            from simpleclaw.config import load_llm_config
+
+            gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
+        except Exception:  # noqa: BLE001 — 다음 후보로 폴백
+            logger.exception("web_search Google grounding API key config load failed")
+            continue
+        api_key = str(gemini.get("api_key", "") or "").strip()
+        if api_key:
+            return api_key
+
+    raise RuntimeError(
+        "web_search requires a Google API key — set GOOGLE_API_KEY/GEMINI_API_KEY "
+        "or configure llm.providers.gemini.api_key in config.yaml."
+    )
+
+
+def _build_genai_client(api_key: str):
+    """genai 클라이언트를 생성한다(테스트에서 monkeypatch 로 대체하기 위한 seam)."""
+    from google import genai
+
+    return genai.Client(api_key=api_key)
+
+
+def _grounding_chunk_entries(response, limit: int) -> list[dict[str, str]]:
+    """Gemini 그라운딩 응답의 web 청크를 title/url/source 엔트리로 변환한다.
+
+    grounding_metadata 가 없거나 web 청크가 비어 있으면 빈 목록을 반환한다.
+    동일 URL 은 한 번만 노출하고, ``limit`` 만큼만 취한다.
+    """
+    entries: list[dict[str, str]] = []
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return entries
+    metadata = getattr(candidates[0], "grounding_metadata", None)
+    if not metadata:
+        return entries
+    chunks = getattr(metadata, "grounding_chunks", None) or []
+
+    seen: set[str] = set()
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        if not web:
+            continue
+        uri = (getattr(web, "uri", "") or "").strip()
+        if not uri or uri in seen:
+            continue
+        seen.add(uri)
+        title = (getattr(web, "title", "") or "").strip()
+        entries.append({
+            "title": title or uri,
+            "url": uri,
+            "snippet": "",
+            "source": "google-grounding",
+        })
+        if len(entries) >= limit:
+            break
+    return entries
+
+
+async def _web_search_google(query: str, limit: int) -> dict:
+    """Google Search 그라운딩으로 검색하고 요약 + 출처 엔트리를 반환한다.
+
+    반환값은 ``{"summary": <그라운딩 요약>, "results": [<출처 엔트리>...]}`` 형태로,
+    ``handle_web_search`` 가 요약과 출처를 함께 WEB_SEARCH_RESULTS 로 렌더한다.
+    API key 부재 등 설정 오류는 명확한 예외로 전달해 상위에서 LLM-readable 오류로
+    변환되게 한다.
+    """
+    from google.genai import types
+
+    api_key = _resolve_google_search_api_key()
+    client = _build_genai_client(api_key)
+    grounding_tool = types.Tool(google_search=types.GoogleSearch())
+    config = types.GenerateContentConfig(tools=[grounding_tool])
+    response = await client.aio.models.generate_content(
+        model=_resolve_google_search_model(),
+        contents=query,
+        config=config,
+    )
+    summary = (getattr(response, "text", "") or "").strip()
+    results = _grounding_chunk_entries(response, limit)
+    return {"summary": summary, "results": results}
+
+
+def _format_web_search_results(
+    query: str, results: list[dict[str, str]], *, summary: str = ""
+) -> str:
     """검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다.
 
     상위 결과에 ``body`` 발췌가 채워져 있으면 함께 노출해, 작은 모델이 snippet만
     보고 수치를 환각하는 대신 실제 본문에서 사실을 확인하도록 유도한다.
+    Google 그라운딩 backend 는 ``summary`` 로 그라운딩 요약을 전달하며, 있으면
+    출처 목록 앞에 함께 노출한다(BIZ-418).
     """
-    if not results:
+    summary = (summary or "").strip()
+    if not results and not summary:
         return (
             f"WEB_SEARCH_RESULTS: {query!r} — no results found.\n"
             "Try a more specific query, or use web_fetch if you already know the URL."
@@ -645,6 +806,8 @@ def _format_web_search_results(query: str, results: list[dict[str, str]]) -> str
 
     has_body = any(item.get("body", "").strip() for item in results)
     lines = [f"WEB_SEARCH_RESULTS: {query!r} ({len(results)} results)"]
+    if summary:
+        lines.append(f"Grounded summary: {summary}")
     for index, item in enumerate(results, start=1):
         lines.append(f"{index}. {item.get('title', '').strip()}")
         lines.append(f"   URL: {item.get('url', '').strip()}")
@@ -716,14 +879,24 @@ async def handle_web_search(
         limit = 5
     limit = max(1, min(_WEB_SEARCH_MAX_RESULTS, limit))
 
-    backend = search_backend or _web_search_duckduckgo
+    # BIZ-418 — 기본 backend 는 Google Search 그라운딩. 커스텀 backend 주입 시에는
+    # 기존 계약(list[dict] 반환)을 그대로 유지하고, 기본 backend 는 그라운딩 요약을
+    # 함께 담은 dict 를 반환하므로 아래에서 두 형태를 모두 정규화한다.
+    backend = search_backend or _web_search_google
     try:
-        results = await backend(query, limit)
+        raw = await backend(query, limit)
     except Exception as exc:
         return (
             f"Error: web_search failed — {str(exc)[:200]}. "
             "Try a more specific query, or use web_fetch if you already have a URL."
         )
+
+    if isinstance(raw, dict):
+        summary = str(raw.get("summary", "") or "")
+        results = raw.get("results", []) or []
+    else:
+        summary = ""
+        results = raw
 
     results = results[:limit]
     if body_fetcher is not None and enrich_count > 0:
@@ -737,7 +910,7 @@ async def handle_web_search(
                 body = ""
             if body:
                 item["body"] = body
-    return _format_web_search_results(query, results)
+    return _format_web_search_results(query, results, summary=summary)
 
 
 # ------------------------------------------------------------------
