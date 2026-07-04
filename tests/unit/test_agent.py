@@ -836,8 +836,8 @@ class TestBuiltinWebFetch:
         assert "FETCH_BLOCKED" not in result
 
     @pytest.mark.asyncio
-    async def test_web_fetch_static_error_does_not_fall_back(self):
-        """정적 fetch 가 HTTP 오류를 반환하면 headless 폴백을 시도하지 않는다."""
+    async def test_web_fetch_static_404_does_not_fall_back(self):
+        """정적 fetch 가 404 오류를 반환하면 headless 폴백을 시도하지 않는다."""
         from simpleclaw.agent import builtin_tools
 
         static_mock = AsyncMock(return_value="Error: HTTP 404 — Not Found")
@@ -852,6 +852,50 @@ class TestBuiltinWebFetch:
         static_mock.assert_awaited_once()
         headless_mock.assert_not_awaited()
         assert "Error: HTTP 404" in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_http_403_falls_back_to_headless(self):
+        """정적 fetch 가 403이면 headless 브라우저 경로로 재시도한다."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="Error: HTTP 403 — Forbidden")
+        rendered_body = "Rendered Medium article body. " * 30
+        headless_mock = AsyncMock(return_value=rendered_body)
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://medium.com/example/article"}
+            )
+
+        static_mock.assert_awaited_once_with("https://medium.com/example/article")
+        headless_mock.assert_awaited_once_with(
+            "https://medium.com/example/article", headless_binary=None
+        )
+        assert "via headless render" in result
+        assert "HTTP 403" in result
+        assert "Rendered Medium article body." in result
+        assert "FETCH_BLOCKED" not in result
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_http_403_headless_block_returns_fetch_blocked(self):
+        """403 이후 headless도 차단 페이지면 FETCH_BLOCKED로 합성한다."""
+        from simpleclaw.agent import builtin_tools
+
+        static_mock = AsyncMock(return_value="Error: HTTP 403 — Forbidden")
+        headless_mock = AsyncMock(return_value="Forbidden")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch(
+                {"url": "https://medium.com/example/article"}
+            )
+
+        headless_mock.assert_awaited_once_with(
+            "https://medium.com/example/article", headless_binary=None
+        )
+        assert result.startswith("FETCH_BLOCKED: https://medium.com/example/article")
+        assert "HTTP 403" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_headless_failure_returns_static_body(self):
