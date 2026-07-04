@@ -13,6 +13,7 @@ from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.skill_learning_tool import handle_skill_learning
 from simpleclaw.agent.study_status import handle_study_status
+from simpleclaw.agent.browser_handoff_tool import handle_browser_handoff
 from simpleclaw.agent.builtin_tools import (
     _fetch_search_result_body,
     handle_clarify,
@@ -69,6 +70,12 @@ async def dispatch_tool_call(
     if name == "web_search":
         # 상위 결과 본문을 보강해 snippet-only 환각을 줄인다(BIZ-383 검색 품질).
         return await handle_web_search(args, body_fetcher=_fetch_search_result_body)
+    if name == "browser_handoff":
+        return await handle_browser_handoff(
+            args,
+            config=orchestrator._browser_handoff_config,
+            interactive=allow_cron_mutation,
+        )
     if name == "file_read":
         return handle_file_read(
             args,

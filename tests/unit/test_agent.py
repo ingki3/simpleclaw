@@ -896,6 +896,8 @@ class TestBuiltinWebFetch:
         )
         assert result.startswith("FETCH_BLOCKED: https://medium.com/example/article")
         assert "HTTP 403" in result
+        assert "browser_handoff" in result
+        assert "copy/paste" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_headless_failure_returns_static_body(self):
@@ -953,6 +955,7 @@ class TestBuiltinWebFetch:
         assert "agent-browser" in result, (
             "응답에 agent-browser 우회 금지 안내가 들어 있어야 한다"
         )
+        assert "browser_handoff" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_google_search_redirect_returns_marker(self):
@@ -998,6 +1001,29 @@ class TestBuiltinWebFetch:
         static_mock.assert_not_awaited()
         assert result.startswith("FETCH_BLOCKED: https://wikidocs.net/")
         assert "force_headless" in result
+
+
+    @pytest.mark.asyncio
+    async def test_web_fetch_google_redirect_short_search_body_returns_marker(self):
+        """BIZ-363 — Google redirect/차단성 짧은 검색 본문은 factual evidence 가 아니다."""
+        from simpleclaw.agent import builtin_tools
+
+        google_redirect_body = (
+            "If you're having trouble accessing Google Search, please click here, "
+            "or send feedback. Google uses cookies and data to deliver services. "
+            "This page appears when automated traffic or redirects prevent normal "
+            "search result rendering. Please enable JavaScript in your browser."
+        )
+        static_mock = AsyncMock(return_value=google_redirect_body)
+        headless_mock = AsyncMock(return_value="should not be called")
+
+        with patch.object(builtin_tools, "_fetch_static", static_mock), \
+             patch.object(builtin_tools, "_fetch_headless", headless_mock):
+            result = await handle_web_fetch({"url": "https://www.google.com/search?q=worldcup"})
+
+        headless_mock.assert_not_awaited()
+        assert result.startswith("FETCH_BLOCKED: https://www.google.com/search?q=worldcup")
+        assert "Google" in result or "google" in result
 
     @pytest.mark.asyncio
     async def test_web_fetch_normal_static_does_not_trigger_block_detection(self):

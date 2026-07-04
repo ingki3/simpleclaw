@@ -15,9 +15,10 @@ from pathlib import Path
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent import skill_dispatch
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import ToolCall
-from simpleclaw.skills.models import SkillDefinition, SkillScope
+from simpleclaw.skills.models import SkillDefinition, SkillScope, SkillResult
 
 
 @pytest.fixture
@@ -107,6 +108,34 @@ def test_bare_skill_no_args_handled(config_file, tmp_path):
     expected_python = Path(skill.skill_dir) / "venv" / "bin" / "python"
     assert str(expected_python) in result
     assert str(Path(skill.script_path)) in result
+
+
+
+
+@pytest.mark.asyncio
+async def test_execute_registered_skill_falls_back_on_bad_quote(
+    config_file, tmp_path, monkeypatch,
+):
+    """닫히지 않은 quote 는 기존 split fallback 으로 tool loop 를 죽이지 않는다."""
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "news-search-skill")
+    orch._skills_by_name = {skill.name: skill}
+    seen_args: list[str] | None = None
+
+    async def fake_run_skill(skill_def, *, args, timeout, metrics, env_passthrough=None):
+        nonlocal seen_args
+        seen_args = args
+        return SkillResult(output="ok", exit_code=0, success=True)
+
+    monkeypatch.setattr(skill_dispatch, "run_skill", fake_run_skill)
+
+    result = await orch._execute_skill(
+        "news-search-skill",
+        '-q "US stock market',
+    )
+
+    assert result == "ok"
+    assert seen_args == ["-q", '"US', "stock", "market"]
 
 
 def test_unregistered_first_token_pass_through(config_file, tmp_path):

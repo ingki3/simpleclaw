@@ -141,7 +141,12 @@ def find_venv_python(script_path: Path) -> Path | None:
 
 
 async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
-    """execute_skill 도구 호출을 처리한다."""
+    """execute_skill 도구 호출을 처리한다.
+
+    BIZ-363: ``skill_name`` 이 등록 스킬을 가리키면 raw ``command`` 보다
+    registry dispatch 를 우선한다. 모델이 ``command`` 에도 같은 스킬명을 넣은
+    경우 shell command-not-found 로 빠지면 실시간 근거 수집이 실패한다.
+    """
     skill_name = str(args.get("skill_name", "") or "").strip()
     command = str(args.get("command", "") or "").strip()
     skill_args = str(args.get("args", "") or "")
@@ -151,9 +156,32 @@ async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
         result = await execute_registered_skill(orchestrator, skill_name, skill_args)
         return result or "[no output]"
     if command:
+        try:
+            command_parts = shlex.split(command)
+        except ValueError:
+            command_parts = command.split()
+        command_skill_name = command_parts[0] if command_parts else ""
+        if command_skill_name and orchestrator._resolve_skill_name(command_skill_name) is not None:
+            command_args = " ".join(shlex.quote(part) for part in command_parts[1:])
+            result = await execute_registered_skill(orchestrator, command_skill_name, command_args)
+            return result or "[no output]"
         return await orchestrator._execute_command(skill_name, command)
     result = await execute_registered_skill(orchestrator, skill_name, skill_args)
     return result or "[no output]"
+
+
+def _parse_skill_args(args_str: str) -> list[str] | None:
+    """등록 스킬 args 문자열을 shell quoting 규칙으로 파싱한다.
+
+    닫히지 않은 quote 등 LLM 생성 오류는 기존 split 동작으로 fallback 해서
+    tool loop 전체를 죽이지 않는다.
+    """
+    if not args_str:
+        return None
+    try:
+        return shlex.split(args_str)
+    except ValueError:
+        return args_str.split()
 
 
 def _extract_registered_skill_args_from_command(skill_name: str, command: str) -> str:
@@ -197,17 +225,7 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
         return None
 
     try:
-        if args_str:
-            try:
-                # LLM tool-call의 args는 문자열 하나로 넘어온다. quoted query를 단순
-                # split하면 news-search `-q "... ..."` 같은 단일 인자가 깨지므로
-                # shell-like parsing으로 보존한다.
-                args = shlex.split(args_str)
-            except ValueError:
-                # 잘못 닫힌 quote 등은 기존 best-effort 동작을 유지한다.
-                args = args_str.split()
-        else:
-            args = None
+        args = _parse_skill_args(args_str)
         result = await run_skill(
             skill,
             args=args,
@@ -220,3 +238,4 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
     except Exception as exc:  # noqa: BLE001 — tool loop를 죽이지 않고 오류 문자열 반환.
         logger.error("Skill '%s' execution failed: %s", skill_name, exc)
         return f"Error executing skill {skill_name}: {str(exc)[:200]}"
+

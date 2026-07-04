@@ -172,6 +172,11 @@ _BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
     "attention required",
     "please turn javascript on",
     "ddos protection",
+    # BIZ-363: Google Search redirects / automated-traffic interstitials are
+    # not usable factual evidence for live schedules or broadcasts.
+    "trouble accessing google search",
+    "automated traffic",
+    "redirects prevent normal search result rendering",
     "몇 초 안에 이동하지 않는 경우",
     "google 검색 결과로 이동",
 )
@@ -180,6 +185,12 @@ _BLOCK_PAGE_SIGNATURES: tuple[str, ...] = (
 # 양쪽이 모두 짧은 응답을 돌려준 경우만 적용 — 정상적인 짧은 페이지(에러 404 등)
 # 까지는 잡지 않도록 ``handle_web_fetch`` 에서 fallback 경로를 거친 뒤에만 검사.
 _BLOCK_PAGE_SHORT_THRESHOLD = 400
+
+
+def _contains_block_page_signature(body: str) -> bool:
+    """짧은 길이와 무관하게 알려진 anti-bot 시그니처만 판정한다."""
+    lower = body.strip().lower()
+    return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
 
 
 def _looks_like_block_page(body: str) -> bool:
@@ -194,8 +205,7 @@ def _looks_like_block_page(body: str) -> bool:
     stripped = body.strip()
     if len(stripped) < _BLOCK_PAGE_SHORT_THRESHOLD:
         return True
-    lower = stripped.lower()
-    return any(sig in lower for sig in _BLOCK_PAGE_SIGNATURES)
+    return _contains_block_page_signature(stripped)
 
 
 def _format_block_page_response(
@@ -219,8 +229,10 @@ def _format_block_page_response(
         f"This site appears to block automated fetching (detected via {via}). "
         "Both static fetch and the headless browser fallback returned a short "
         "or anti-bot body. Do NOT retry the same URL with agent-browser, cli, "
-        "or another skill — reply to the user that the page cannot be "
-        "retrieved automatically and offer a graceful alternative.\n"
+        "or another skill. If interactive browser_handoff is available, use it "
+        "to open local Chrome and wait for extension-approved page text. Do not "
+        "ask the user to copy/paste page text. If browser_handoff is unavailable, "
+        "explain that local browser handoff is required.\n"
         f"--- diagnostic body ({len(body.strip())} chars) ---\n{snippet}"
     )
 
@@ -480,6 +492,13 @@ async def handle_web_fetch(
         return f"(via headless render; static fetch returned {static_text})\n\n{body}"
 
     static_len = len(static_text.strip())
+    if _contains_block_page_signature(static_text):
+        logger.info(
+            "web_fetch static returned block page signature for %s (%d chars)",
+            url, static_len,
+        )
+        return _format_block_page_response(url, static_text, via="static signature")
+
     if static_len < STATIC_FALLBACK_THRESHOLD:
         logger.info(
             "web_fetch static returned %d chars (< %d), falling back to headless",
