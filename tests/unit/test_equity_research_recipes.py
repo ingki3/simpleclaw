@@ -18,7 +18,12 @@ from simpleclaw.recipes.loader import discover_recipes
 
 LIVE_RECIPE_ROOT = Path("/Users/simplist/.simpleclaw-agent/default/recipes")
 EQUITY_RECIPES = {"tearsheet", "bullbear", "earnings"}
-ACCESSIBLE_SKILLS = {"us-stock-skill", "kr-stock-skill", "news-search-skill"}
+ACCESSIBLE_SKILLS = {
+    "us-stock-skill",
+    "kr-stock-skill",
+    "news-search-skill",
+    "google-news-search-skill",
+}
 
 
 def _require_live_recipe_root() -> Path:

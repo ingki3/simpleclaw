@@ -47,7 +47,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from simpleclaw.channels.admin_env_local import (  # noqa: E402
-    DEFAULT_ADMIN_BASE,
     DEFAULT_ENV_LOCAL_PATH,
     sync_env_local,
 )
