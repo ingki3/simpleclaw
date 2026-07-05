@@ -102,6 +102,10 @@
 
 ## Done
 
+### 2026-07-05
+
+- [x] **BIZ-423: Recipe settings timeout을 실행 경로에 반영** — live `/agent-study-daily`가 `settings.timeout: 180`을 선언했는데도 loader가 버려 executor 기본 60초로 실행되다 `Command timed out after 60s`로 실패한 회귀 수정(Option A — in-process 구조 유지 최소 수정). (1) `recipes/models.py`: `RecipeSettings(timeout=60)` dataclass + `RecipeDefinition.settings` 필드, `DEFAULT_STEP_TIMEOUT=60` 상수. (2) `recipes/loader.py`: `settings:` 섹션 파싱 `_parse_settings()` — 양의 int만 채택(bool 제외), 누락/비정상 값은 WARN + 60초 폴백(parse failure로 레시피를 죽이지 않음). (3) `agent/commands.py` 수동 슬래시 v1 `steps:` 경로와 `daemon/scheduler.py` cron v1 경로 모두 `execute_recipe(timeout=getattr(recipe.settings, "timeout", 60))` 전달. (4) `docs/feature-recipes.md`에 `settings.timeout` 사용법 문서화. 단위 테스트 11개 신규(loader 7, slash 2, cron 2) RED→GREEN. 검증: `tests/unit/` 2141 passed(equity live-asset 테스트 1건은 dev에서도 실패하는 기존 이슈), ruff clean, live recipe 파일 smoke — timeout 180 파싱 확인. (2026-07-05)
+
 ### 2026-06-30
 
 - [x] **BIZ-388: Agent Study Wiki — Study item SQLite index와 migrations** — Markdown 위키가 source of truth이지만 질문 시 빠른 retrieval/freshness filtering에는 구조화 index가 필요해, 사용자 메모리(`memory_items`)와 섞이지 않게 `study_topics`/`study_items` 테이블을 conversations.db에 additive로 추가했다. (1) migration `db/migrations_data/conversations/0005_agent_study_items.sql`(이슈 SQL draft 그대로 — topics PK·items AUTOINCREMENT·topic/retrieved_at/confidence 인덱스, FK). (2) `study/types.py`에 `StudyItemRecord`(SQLite read model) 추가 — 기존 `StudyItemStatus`(confirmed/reported/rumored/analysis/stale/unknown) 재사용. (3) `study/index_store.py` `StudyIndexStore` — 스키마 SoT를 migration SQL 파일 1곳으로 단일화해 `initialize_schema()`가 동일 SQL을 idempotent 재실행, `upsert_topic`/`add_item`, LIKE 토큰 매칭 `search_lexical`(와일드카드 이스케이프·topic scope), tz-safe `fresh_items`(freshness/valid_until/status/confidence gate). (4) `study/paths.py` `index_path()` 추가 — 운영자 조회(`StudyWikiStore`, BIZ-395)와 같은 `index.sqlite`를 가리키도록 위치 일원화. 단위 테스트 `test_study_index_store.py` 11개 + `test_db_migrations.py` study 테이블·버전 회귀 갱신. 검증: `tests/unit/` 1933 passed, ruff clean. (2026-06-30)

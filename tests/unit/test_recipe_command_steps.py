@@ -241,3 +241,95 @@ class TestStepsRecipeSlashCommand:
             ("evented", "start", "1 steps"),
             ("evented", "complete", "1 steps"),
         ]
+
+
+class TestStepsRecipeTimeoutPropagation:
+    """BIZ-423 — recipe `settings.timeout` 이 수동 슬래시 경로에서
+    ``execute_recipe(timeout=...)`` 로 전달되는지 검증.
+
+    배경: live `/agent-study-daily` 는 `settings.timeout: 180` 을 선언했지만
+    executor 기본 60초로 실행되어 `Command timed out after 60s` 로 실패했다.
+    """
+
+    def _patch_executor_spy(self, monkeypatch, captured: dict):
+        """executor 의 execute_recipe 를 spy 로 교체 — 호출 kwargs 를 기록한다.
+
+        commands.py 는 호출 시점에 lazy import 하므로 모듈 속성 패치로 충분하다.
+        """
+        import simpleclaw.recipes.executor as executor_mod
+        from simpleclaw.recipes.models import RecipeResult, StepResult, StepStatus
+
+        async def spy_exec(recipe, **kwargs):
+            captured.update(kwargs)
+            return RecipeResult(
+                recipe_name=recipe.name,
+                success=True,
+                step_results=[
+                    StepResult(
+                        step_name="run", status=StepStatus.SUCCESS, output="ok",
+                    )
+                ],
+            )
+
+        monkeypatch.setattr(executor_mod, "execute_recipe", spy_exec)
+
+    @pytest.mark.asyncio
+    async def test_settings_timeout_forwarded_to_execute_recipe(
+        self, tmp_path, monkeypatch,
+    ):
+        recipes_dir = tmp_path / "recipes"
+        _write_steps_recipe(
+            recipes_dir,
+            "study-daily",
+            "name: study-daily\n"
+            "description: command bridge\n"
+            "settings:\n"
+            "  timeout: 180\n"
+            "steps:\n"
+            "  - type: command\n"
+            "    name: run\n"
+            "    content: echo hi\n",
+        )
+
+        captured: dict = {}
+        self._patch_executor_spy(monkeypatch, captured)
+
+        result = await try_recipe_command(
+            "/study-daily",
+            _unused_react_loop,
+            recipes_dir=recipes_dir,
+            legacy_recipes_dir=None,
+        )
+
+        assert result is not None
+        assert captured["timeout"] == 180
+
+    @pytest.mark.asyncio
+    async def test_default_timeout_forwarded_when_settings_missing(
+        self, tmp_path, monkeypatch,
+    ):
+        """settings 미선언 시 기존 executor 기본과 동일한 60초가 전달된다."""
+        recipes_dir = tmp_path / "recipes"
+        _write_steps_recipe(
+            recipes_dir,
+            "plain",
+            "name: plain\n"
+            "description: no settings\n"
+            "steps:\n"
+            "  - type: command\n"
+            "    name: run\n"
+            "    content: echo hi\n",
+        )
+
+        captured: dict = {}
+        self._patch_executor_spy(monkeypatch, captured)
+
+        result = await try_recipe_command(
+            "/plain",
+            _unused_react_loop,
+            recipes_dir=recipes_dir,
+            legacy_recipes_dir=None,
+        )
+
+        assert result is not None
+        assert captured["timeout"] == 60

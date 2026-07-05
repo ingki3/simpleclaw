@@ -666,6 +666,93 @@ class TestRecipeCronInvokesLLM:
         assert any(
             "no LLM input" in rec.message for rec in caplog.records
         )
+
+
+class TestRecipeCronTimeoutPropagation:
+    """BIZ-423 — cron v1(steps) 레시피 실행 시 `settings.timeout` 이
+    ``execute_recipe(timeout=...)`` 로 전달되는지 검증."""
+
+    @pytest.fixture
+    def setup(self, tmp_path):
+        from simpleclaw.daemon.models import CronJob
+        store = DaemonStore(tmp_path / "test.db")
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        return store, apscheduler, tmp_path, CronJob
+
+    def _write_recipe(self, root, name: str, settings_block: str):
+        rdir = root / name
+        rdir.mkdir(parents=True)
+        (rdir / "recipe.yaml").write_text(
+            f"name: {name}\n"
+            "description: command bridge\n"
+            + settings_block
+            + "steps:\n"
+            "  - type: command\n"
+            "    name: run\n"
+            "    content: echo hi\n",
+            encoding="utf-8",
+        )
+
+    async def _run_and_capture(self, setup, settings_block: str, monkeypatch):
+        """레시피를 등록하고 _execute_action 실행 — execute_recipe kwargs 캡처."""
+        store, apscheduler, tmp_path, CronJob = setup
+        recipes_dir = tmp_path / "recipes"
+        self._write_recipe(recipes_dir, "study-daily", settings_block)
+
+        scheduler = CronScheduler(
+            store, apscheduler,
+            recipes_dir=recipes_dir,
+            legacy_recipes_dir=None,
+        )
+
+        import simpleclaw.recipes.executor as executor_mod
+        from simpleclaw.recipes.models import (
+            RecipeResult, StepResult, StepStatus,
+        )
+        captured: dict = {}
+
+        async def spy_exec(recipe, **kwargs):
+            captured.update(kwargs)
+            return RecipeResult(
+                recipe_name=recipe.name,
+                success=True,
+                step_results=[
+                    StepResult(
+                        step_name="run",
+                        status=StepStatus.SUCCESS,
+                        output="",
+                    )
+                ],
+            )
+
+        monkeypatch.setattr(executor_mod, "execute_recipe", spy_exec)
+
+        job = CronJob(
+            name="study-cron",
+            cron_expression="0 0 * * *",
+            action_type=ActionType.RECIPE,
+            action_reference="study-daily",
+        )
+        await scheduler._execute_action(job)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_settings_timeout_forwarded_to_execute_recipe(
+        self, setup, monkeypatch,
+    ):
+        captured = await self._run_and_capture(
+            setup, "settings:\n  timeout: 180\n", monkeypatch,
+        )
+        assert captured["timeout"] == 180
+
+    @pytest.mark.asyncio
+    async def test_default_timeout_forwarded_when_settings_missing(
+        self, setup, monkeypatch,
+    ):
+        captured = await self._run_and_capture(setup, "", monkeypatch)
+        assert captured["timeout"] == 60
+
+
 class TestCronDowTranslation:
     """표준 crontab day_of_week(0/7=sun, 1=mon..) → APScheduler(0=mon..6=sun) 매핑."""
 

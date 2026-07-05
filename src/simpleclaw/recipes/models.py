@@ -5,6 +5,7 @@
 
 주요 모델:
 - RecipeDefinition: recipe.yaml에서 파싱된 레시피 전체 정의
+- RecipeSettings: 레시피 단위 실행 설정 (settings.timeout 등)
 - RecipeStep: 레시피 내 개별 실행 단계
 - RecipeResult / StepResult: 실행 결과
 - StepStatus: 단계별 부분 실패 처리를 위한 상태(success/skipped/failed)
@@ -66,6 +67,22 @@ class RecipeStep:
     rollback: str = ""                        # 롤백 시 실행할 셸 명령 (선택)
 
 
+# 스텝 실행 timeout 기본값(초). executor 의 기존 기본과 동일하게 유지해
+# settings 미선언 레시피의 동작이 BIZ-423 이전과 달라지지 않게 한다.
+DEFAULT_STEP_TIMEOUT = 60
+
+
+@dataclass
+class RecipeSettings:
+    """recipe.yaml ``settings:`` 섹션의 레시피 단위 실행 설정.
+
+    BIZ-423 — live `agent-study-daily` 가 ``settings.timeout: 180`` 을
+    선언했지만 로더가 버려서 executor 기본 60초로 실행되던 문제를 막기 위해
+    모델 차원에서 보존한다.
+    """
+    timeout: int = DEFAULT_STEP_TIMEOUT  # command/prompt 스텝별 최대 실행 시간(초)
+
+
 @dataclass
 class RecipeDefinition:
     """recipe.yaml에서 파싱된 레시피 전체 정의.
@@ -81,6 +98,7 @@ class RecipeDefinition:
     instructions: str = ""                                          # v2 지시문 텍스트
     recipe_dir: str = ""                                            # 레시피 디렉터리 경로
     on_error: OnErrorPolicy = OnErrorPolicy.ABORT                   # 기본 실패 정책
+    settings: RecipeSettings = field(default_factory=RecipeSettings)  # 실행 설정
 
 
 @dataclass
