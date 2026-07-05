@@ -26,6 +26,7 @@ from simpleclaw.config import (
     load_agent_config,
     load_asset_selection_config,
     load_daemon_config,
+    load_mcp_config,
     load_memory_config,
     load_persona_config,
     load_recipes_config,
@@ -70,6 +71,7 @@ from simpleclaw.skills.learning import (
     suggestion_from_candidate_payload,
     trace_fingerprint,
 )
+from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
 
 from simpleclaw.agent import (
@@ -641,6 +643,12 @@ class AgentOrchestrator:
         skills_config = self._load_skills_config()
         self._skills_config = skills_config
         self._skill_learning_config = load_skills_learning_config(config_path)
+
+        # BIZ-424: MCP config는 부팅 시 로드하되, 서버 연결(외부 subprocess 실행)은
+        # 첫 turn 준비 시 _ensure_mcp_connected()가 lazy one-shot으로 수행한다.
+        self._mcp_config = load_mcp_config(config_path)
+        self._mcp_manager: MCPManager | None = None
+        self._mcp_connected = False
 
         # Cron scheduler — build_tool_definitions에서 참조하므로 리로드 전에 초기화
         self._cron_scheduler: CronScheduler | None = None
@@ -1282,6 +1290,52 @@ class AgentOrchestrator:
     # Native Function Calling loop
     # ------------------------------------------------------------------
 
+    def _resolve_mcp_secret(self, value: str) -> str | None:
+        """MCP env 값의 secret reference를 해석한다.
+
+        참조 형태(env:/file:/keyring:)만 시크릿 매니저를 통과시키고, 평문 값은
+        그대로 전달한다 — MCP 서버 env에 평문 설정값(TZ 등)을 쓰는 경우와 호환.
+        """
+        if value.startswith(("env:", "file:", "keyring:")):
+            resolved = default_manager().resolve(value)
+            # 해소 실패(빈 문자열)는 키 자체를 전달하지 않는다 — 빈 시크릿으로
+            # 외부 서버가 오동작하는 것보다 명확한 미설정이 낫다.
+            return resolved or None
+        return value
+
+    async def _ensure_mcp_connected(self) -> None:
+        """MCP 서버 discovery를 lazy one-shot으로 수행한다.
+
+        연결은 첫 turn 준비 시 1회만 시도한다 — 매 turn 재연결은 stdio subprocess
+        스폰 비용이 크고, 서버 설정 변경은 admin policy상 restart가 필요하다.
+        """
+        if self._mcp_connected:
+            return
+        # 실패한 서버가 있어도 재시도하지 않도록 시도 자체를 one-shot으로 마킹한다.
+        self._mcp_connected = True
+        if not self._mcp_config.get("enabled") or not self._mcp_config.get("servers"):
+            return
+        if self._mcp_manager is None:
+            self._mcp_manager = MCPManager(secret_resolver=self._resolve_mcp_secret)
+        try:
+            await self._mcp_manager.connect_servers(self._mcp_config)
+        except Exception as exc:  # noqa: BLE001 — MCP 연결 실패가 turn 전체를 죽이지 않음
+            logger.warning("MCP server discovery failed: %s", exc)
+
+    def _mcp_call_available(self, *, operator_tools: bool) -> bool:
+        """현재 context에서 mcp_call 노출 여부를 판단한다.
+
+        runtime context는 runtime-scope tool이 하나라도 있어야 노출하고,
+        operator context는 연결된 tool이 있으면 scope와 무관하게 노출한다.
+        """
+        if self._mcp_manager is None:
+            return False
+        return any(
+            operator_tools
+            or str(tool.metadata.get("scope") or "operator") == "runtime"
+            for tool in self._mcp_manager.list_tools()
+        )
+
     async def _prepare_tool_loop_state(
         self,
         text: str,
@@ -1436,6 +1490,8 @@ class AgentOrchestrator:
             if operator_tools
             else (ToolScope.RUNTIME,)
         )
+        # BIZ-424: MCP 서버 연결 보장 후, 호출 가능한 tool이 있을 때만 mcp_call 노출
+        await self._ensure_mcp_connected()
         tools = build_tool_definitions(
             active_skills,
             cron_available=self._cron_scheduler is not None,
@@ -1444,6 +1500,7 @@ class AgentOrchestrator:
             browser_handoff_available=bool(
                 self._browser_handoff_config.get("enabled", False)
             ),
+            mcp_available=self._mcp_call_available(operator_tools=operator_tools),
         )
         # BIZ-363: realtime-lookup-skill 이 이미 근거를 실어 준 경우 그 자체를
         # 최신 근거로 인정하고, live-fact 질의로 판정됐는데 근거가 없으면 tool
