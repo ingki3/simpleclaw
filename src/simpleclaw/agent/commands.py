@@ -4,7 +4,9 @@
 
 동작 흐름:
 - /cron: CronScheduler를 통해 예약 작업의 CRUD를 수행
-- /recipe-name: 레시피를 검색하고, 파라미터를 치환한 후 ReAct 루프로 실행
+- /recipe-name: 레시피를 검색하고, 파라미터를 치환한 후 실행
+  - v2(instructions): 변수 렌더링 후 ReAct 루프(LLM)로 실행
+  - v1(steps): cron scheduler 와 동일하게 execute_recipe 로 스텝 직접 실행 (BIZ-421)
 """
 
 from __future__ import annotations
@@ -293,6 +295,59 @@ async def try_recipe_command(
             on_progress, ProgressEvent("recipe", cmd_name, "complete", "instructions")
         )
         return result, cmd_name
+
+    # BIZ-421 — v1(steps 기반) 레시피: cron scheduler(_execute_action) 와 동일하게
+    # execute_recipe 로 command/prompt 스텝을 직접 실행한다. instructions 를
+    # 추가하면 scheduler 가 v2 로 간주해 command 스텝을 건너뛰므로, 수동 슬래시
+    # 경로가 v1 을 지원하는 것이 올바른 봉합 지점이다.
+    if recipe.steps:
+        from simpleclaw.recipes.executor import execute_recipe
+        from simpleclaw.recipes.models import RecipeExecutionError
+
+        # command guard 는 orchestrator 바인딩 메서드(`react_loop_fn.__self__`)에서
+        # 가져온다 — scheduler 의 `getattr(self._agent, "_command_guard", None)` 과
+        # 같은 규약. 테스트 등 unbound 함수가 넘어오면 guard 없이 실행된다.
+        guard = getattr(
+            getattr(react_loop_fn, "__self__", None), "_command_guard", None
+        )
+
+        try:
+            # recipe/step start·complete·fail 이벤트는 execute_recipe 가
+            # step count detail 과 함께 직접 발행한다.
+            result = await execute_recipe(
+                recipe,
+                variables=params,
+                command_guard=guard,
+                on_progress=on_progress,
+            )
+        except RecipeExecutionError as exc:
+            # 필수 파라미터 누락 등 실행 전 검증 실패 — traceback 없이 요약만 노출.
+            await emit_progress_event(
+                on_progress, ProgressEvent("recipe", cmd_name, "fail", str(exc))
+            )
+            return f"레시피 '{cmd_name}' 실행 실패: {exc}", cmd_name
+
+        # 상세 stdout/stderr 는 사용자 채널이 아닌 운영 로그로만 남긴다.
+        if result.debug_log:
+            logger.debug("Recipe '%s' debug log:\n%s", cmd_name, result.debug_log)
+
+        succeeded = sum(1 for s in result.step_results if s.success)
+        total = len(result.step_results)
+
+        if result.success:
+            output = "\n".join(
+                s.output for s in result.step_results if s.output and s.success
+            )
+            return (
+                output or f"Recipe completed: {succeeded}/{total} steps succeeded",
+                cmd_name,
+            )
+
+        summary = f"Recipe failed: {succeeded}/{total} steps succeeded"
+        if result.error_summary:
+            # 사용자 노출용 한 줄 요약만 — debug_log(stderr 전체)는 노출하지 않는다.
+            summary += f"\n{result.error_summary}"
+        return summary, cmd_name
 
     return (
         f"레시피 '{cmd_name}'에 instructions가 정의되어 있지 않습니다.",
