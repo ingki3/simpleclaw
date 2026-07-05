@@ -33,6 +33,7 @@ dev = [
     "pytest-cov>=5.0",
     "pytest-asyncio>=0.24",
     "pytest-aiohttp>=1.0",
+    "ruff>=0.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -41,3 +42,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "offline: integration test that does not require external network, API keys, live Telegram, or live daemon",
+    "live: test requires live local runtime or operator-controlled environment",
+    "external: test requires external network/API",
+]

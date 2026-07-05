@@ -38,6 +38,8 @@ from simpleclaw.security.secrets import (
     set_default_manager,
 )
 
+pytestmark = pytest.mark.offline
+
 
 class _InMemoryBackend:
     """OS keyring/file 백엔드를 인메모리로 갈아끼우는 더미 — 테스트 격리용."""
