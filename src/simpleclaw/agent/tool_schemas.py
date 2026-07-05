@@ -739,6 +739,37 @@ _SKILL_LEARNING_TOOL = ToolDefinition(
 )
 
 
+# BIZ-424 — generic MCP 호출 도구. 개별 MCP tool을 동적 스키마로 주입하는 대신
+# 단일 generic tool로 노출한다(스키마 폭증/임의 동적 주입 버그 방지). execute_skill과
+# 같은 동적 도구 계열이라 static native registry에는 등록하지 않고,
+# build_tool_definitions가 mcp_available일 때만 덧붙인다.
+_MCP_CALL_TOOL = ToolDefinition(
+    name="mcp_call",
+    description=(
+        "Call a configured MCP server tool. Use asset_inventory(type='mcp') first "
+        "when unsure which servers/tools are connected. Only configured MCP tools are allowed."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "server": {
+                "type": "string",
+                "description": "Configured MCP server name, e.g. 'time'.",
+            },
+            "tool": {
+                "type": "string",
+                "description": "Tool name exposed by that MCP server, e.g. 'get_current_time'.",
+            },
+            "arguments": {
+                "type": "object",
+                "description": "JSON object passed to the MCP tool. Use {} if no args are required.",
+            },
+        },
+        "required": ["server", "tool"],
+    },
+)
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_WEB_FETCH_TOOL),
@@ -920,6 +951,7 @@ def build_tool_definitions(
     scopes: Iterable[ToolScope | str] = DEFAULT_TOOL_SCOPES,
     operator_gate: bool = False,
     browser_handoff_available: bool = False,
+    mcp_available: bool = False,
 ) -> list[ToolDefinition]:
     """현재 상태에 맞는 ToolDefinition 목록을 조립한다.
 
@@ -928,6 +960,7 @@ def build_tool_definitions(
         cron_available: CronScheduler가 주입되었으면 True.
         scopes: 노출할 native tool scope 목록. 기본값은 runtime만 허용한다.
         operator_gate: operator/development scope 노출을 허가하는 명시 gate.
+        mcp_available: 현재 context에서 호출 가능한 MCP tool이 연결되어 있으면 True.
 
     Returns:
         LLM에 전달할 ToolDefinition 리스트.
@@ -941,6 +974,11 @@ def build_tool_definitions(
             browser_handoff_available=browser_handoff_available,
         )
     ]
+
+    # 연결된 MCP tool이 있을 때만 generic mcp_call을 노출 — 서버가 없으면 모델이
+    # 존재하지 않는 MCP tool을 추측 호출할 이유 자체를 없앤다.
+    if mcp_available and ToolScope.RUNTIME in _normalize_scopes(scopes):
+        tools.append(_MCP_CALL_TOOL)
 
     # 외부 스킬이 있으면 execute_skill 함수 추가
     if skills:

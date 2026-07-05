@@ -301,15 +301,32 @@ def _mcp_inventory(
         servers = {}
     configured = sorted(str(name) for name in servers)
     connected = sorted(mcp_manager.get_connected_servers()) if mcp_manager else []
+    connection_errors: dict[str, str] = {}
+    if mcp_manager is not None and hasattr(mcp_manager, "get_connection_errors"):
+        connection_errors = dict(mcp_manager.get_connection_errors())
     tools = []
     if mcp_manager is not None:
-        tools = [
-            {"name": tool.name, "source_name": tool.source_name}
-            for tool in sorted(mcp_manager.list_tools(), key=lambda item: item.name)
-        ]
+        for tool in sorted(
+            mcp_manager.list_tools(), key=lambda item: (item.source_name, item.name)
+        ):
+            metadata = getattr(tool, "metadata", None)
+            if not isinstance(metadata, dict):
+                metadata = {}
+            input_schema = metadata.get("input_schema")
+            item: dict[str, Any] = {
+                "name": tool.name,
+                "source_name": tool.source_name,
+                "scope": str(metadata.get("scope") or "operator"),
+                "has_input_schema": bool(input_schema),
+            }
+            # 전체 schema는 요청 시에만 — 기본 응답의 토큰 팽창을 막는다.
+            if include_paths and input_schema:
+                item["input_schema"] = input_schema
+            tools.append(item)
     payload: dict[str, Any] = {
         "configured_servers": configured,
         "connected_servers": connected,
+        "connection_errors": connection_errors,
         "tools": tools,
     }
     if include_paths:

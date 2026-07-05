@@ -104,6 +104,9 @@ class ToolDefinition:
     description: str = ""                  # 도구 설명
     source: ToolSource = ToolSource.SKILL  # 소스 유형
     source_name: str = ""                  # 소스 서버/스킬 이름
+    # MCP tool metadata (input_schema, scope 등) — inventory/dispatch가 노출 범위와
+    # 인자 형태를 판단할 때 사용한다. 스킬 도구는 빈 dict를 유지한다.
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 class SkillError(Exception):

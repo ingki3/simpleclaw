@@ -293,3 +293,74 @@ class TestDiscoverWithLegacyFallback:
         primary.mkdir()
         recipes = discover_recipes(primary)
         assert recipes == []
+
+
+class TestRecipeSettingsTimeout:
+    """BIZ-423 — recipe.yaml `settings.timeout` 파싱/폴백 검증.
+
+    구현 규약(테스트에 명시):
+    - 유효한 양의 int 만 timeout 으로 채택한다.
+    - 누락/비정상 값(음수, 0, 문자열, bool, 비-dict settings)은 기본 60초로
+      폴백하며, RecipeParseError 로 레시피 전체를 죽이지 않는다.
+    """
+
+    def _write_recipe(self, tmp_path, settings_block: str) -> Path:
+        rdir = tmp_path / "study-daily"
+        rdir.mkdir(parents=True)
+        rfile = rdir / "recipe.yaml"
+        rfile.write_text(
+            "name: study-daily\n"
+            "description: command bridge\n"
+            + settings_block
+            + "steps:\n"
+            "  - type: command\n"
+            "    name: run\n"
+            "    content: echo hi\n",
+            encoding="utf-8",
+        )
+        return rfile
+
+    def test_settings_timeout_preserved(self, tmp_path):
+        """live agent-study-daily 와 동일한 settings.timeout: 180 이 보존된다."""
+        rfile = self._write_recipe(tmp_path, "settings:\n  timeout: 180\n")
+        recipe = load_recipe(rfile)
+        assert recipe.settings.timeout == 180
+
+    def test_missing_settings_defaults_to_60(self, tmp_path):
+        rfile = self._write_recipe(tmp_path, "")
+        recipe = load_recipe(rfile)
+        assert recipe.settings.timeout == 60
+
+    def test_negative_timeout_falls_back_to_60(self, tmp_path, caplog):
+        rfile = self._write_recipe(tmp_path, "settings:\n  timeout: -1\n")
+        with caplog.at_level("WARNING"):
+            recipe = load_recipe(rfile)
+        assert recipe.settings.timeout == 60
+        assert any("timeout" in rec.message for rec in caplog.records)
+
+    def test_zero_timeout_falls_back_to_60(self, tmp_path):
+        rfile = self._write_recipe(tmp_path, "settings:\n  timeout: 0\n")
+        assert load_recipe(rfile).settings.timeout == 60
+
+    def test_non_numeric_timeout_falls_back_to_60(self, tmp_path, caplog):
+        rfile = self._write_recipe(tmp_path, 'settings:\n  timeout: "abc"\n')
+        with caplog.at_level("WARNING"):
+            recipe = load_recipe(rfile)
+        assert recipe.settings.timeout == 60
+        assert any("timeout" in rec.message for rec in caplog.records)
+
+    def test_bool_timeout_falls_back_to_60(self, tmp_path):
+        """YAML `timeout: true` — bool 은 int 서브클래스지만 timeout 으로 채택 금지."""
+        rfile = self._write_recipe(tmp_path, "settings:\n  timeout: true\n")
+        assert load_recipe(rfile).settings.timeout == 60
+
+    def test_non_dict_settings_falls_back_without_parse_failure(
+        self, tmp_path, caplog,
+    ):
+        """settings 가 dict 가 아니어도 레시피 파싱 자체는 살아야 한다."""
+        rfile = self._write_recipe(tmp_path, "settings: broken\n")
+        with caplog.at_level("WARNING"):
+            recipe = load_recipe(rfile)
+        assert recipe.name == "study-daily"
+        assert recipe.settings.timeout == 60
+        assert any("settings" in rec.message for rec in caplog.records)

@@ -314,9 +314,12 @@ async def try_recipe_command(
         try:
             # recipe/step start·complete·fail 이벤트는 execute_recipe 가
             # step count detail 과 함께 직접 발행한다.
+            # BIZ-423 — recipe `settings.timeout` 을 실행에 반영한다. settings 가
+            # 없는 구식 RecipeDefinition(테스트 stub 등)에도 안전하도록 방어적 접근.
             result = await execute_recipe(
                 recipe,
                 variables=params,
+                timeout=getattr(recipe.settings, "timeout", 60),
                 command_guard=guard,
                 on_progress=on_progress,
             )

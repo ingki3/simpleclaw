@@ -216,3 +216,147 @@ class TestMCPManager:
 
         assert manager.get_connected_servers() == ["good-server"]
         assert [tool.name for tool in manager.list_tools()] == ["ok"]
+        assert "bad-server" in manager.get_connection_errors()
+        assert "tools/list" in manager.get_connection_errors()["bad-server"]
+
+    @pytest.mark.asyncio
+    async def test_tool_schema_scope_and_errors_are_recorded(self, monkeypatch):
+        """discovery 결과에 tool input schema와 server scope가 보존된다."""
+        _install_fake_mcp(
+            monkeypatch,
+            {
+                "schema-command": {
+                    "initialize_result": _initialize_result_with_capabilities(
+                        tools=SimpleNamespace(listChanged=False)
+                    ),
+                    "tools": [
+                        SimpleNamespace(
+                            name="echo",
+                            description="Echo text",
+                            inputSchema={
+                                "type": "object",
+                                "properties": {"text": {"type": "string"}},
+                                "required": ["text"],
+                            },
+                        )
+                    ],
+                },
+            },
+        )
+        manager = MCPManager()
+
+        await manager.connect_servers(
+            {
+                "enabled": True,
+                "servers": {
+                    "schema-server": {
+                        "command": "schema-command",
+                        "scope": "runtime",
+                    }
+                },
+            }
+        )
+
+        tool = manager.list_tools()[0]
+        assert tool.name == "echo"
+        assert tool.source_name == "schema-server"
+        assert tool.metadata["input_schema"]["properties"]["text"]["type"] == "string"
+        assert tool.metadata["scope"] == "runtime"
+        assert manager.get_connection_errors() == {}
+
+    @pytest.mark.asyncio
+    async def test_same_tool_name_on_two_servers_does_not_collide(self, monkeypatch):
+        """서로 다른 서버가 같은 도구 이름을 제공해도 둘 다 등록된다."""
+        _install_fake_mcp(
+            monkeypatch,
+            {
+                "alpha-command": {
+                    "initialize_result": _initialize_result_with_capabilities(
+                        tools=SimpleNamespace(listChanged=False)
+                    ),
+                    "tools": [SimpleNamespace(name="echo", description="alpha echo")],
+                },
+                "beta-command": {
+                    "initialize_result": _initialize_result_with_capabilities(
+                        tools=SimpleNamespace(listChanged=False)
+                    ),
+                    "tools": [SimpleNamespace(name="echo", description="beta echo")],
+                },
+            },
+        )
+        manager = MCPManager()
+
+        await manager.connect_servers(
+            {
+                "servers": {
+                    "alpha": {"command": "alpha-command"},
+                    "beta": {"command": "beta-command"},
+                }
+            }
+        )
+
+        pairs = sorted((tool.source_name, tool.name) for tool in manager.list_tools())
+        assert pairs == [("alpha", "echo"), ("beta", "echo")]
+
+    @pytest.mark.asyncio
+    async def test_call_tool_blocks_operator_only_tool_from_runtime(self, monkeypatch):
+        """operator scope 도구는 runtime scope 호출에서 거부된다."""
+        from simpleclaw.skills.models import MCPConnectionError
+
+        _install_fake_mcp(
+            monkeypatch,
+            {
+                "op-command": {
+                    "initialize_result": _initialize_result_with_capabilities(
+                        tools=SimpleNamespace(listChanged=False)
+                    ),
+                    "tools": [SimpleNamespace(name="danger", description="op tool")],
+                },
+            },
+        )
+        manager = MCPManager()
+
+        await manager.connect_servers(
+            {"servers": {"op-server": {"command": "op-command", "scope": "operator"}}}
+        )
+
+        with pytest.raises(MCPConnectionError, match="operator-only"):
+            await manager.call_tool("op-server", "danger", {}, scope="runtime")
+
+    @pytest.mark.asyncio
+    async def test_call_tool_unknown_server_tool_pair(self):
+        """등록되지 않은 (server, tool) 조합 호출은 명확한 오류를 낸다."""
+        from simpleclaw.skills.models import MCPConnectionError
+
+        manager = MCPManager()
+
+        with pytest.raises(MCPConnectionError, match="'nope.echo' not found"):
+            await manager.call_tool("nope", "echo", {})
+
+
+class TestSubprocessEnv:
+    def test_build_subprocess_env_filters_and_resolves(self, monkeypatch):
+        """baseline + 명시 env만 전달되고 secret reference가 해석된다."""
+        monkeypatch.setenv("PATH", "/usr/bin")
+        monkeypatch.setenv("HOME", "/Users/test")
+        monkeypatch.setenv("SECRET_SHOULD_NOT_LEAK", "nope")
+
+        manager = MCPManager(
+            secret_resolver=lambda value: "resolved-token" if value == "file:token" else value
+        )
+
+        env = manager._build_subprocess_env({"TOKEN": "file:token", "PLAIN": "ok"})
+
+        assert env["PATH"] == "/usr/bin"
+        assert env["HOME"] == "/Users/test"
+        assert env["TOKEN"] == "resolved-token"
+        assert env["PLAIN"] == "ok"
+        assert "SECRET_SHOULD_NOT_LEAK" not in env
+
+    def test_build_subprocess_env_drops_unresolvable_secret(self):
+        """resolver가 None을 반환한 키는 subprocess env에서 제외된다."""
+        manager = MCPManager(secret_resolver=lambda value: None)
+
+        env = manager._build_subprocess_env({"TOKEN": "file:missing"})
+
+        assert "TOKEN" not in env
