@@ -11,6 +11,8 @@ import pytest
 
 from simpleclaw.skills.mcp_client import MCPManager
 
+pytestmark = pytest.mark.offline
+
 
 @pytest.mark.asyncio
 async def test_stdio_mcp_discovery_and_call():

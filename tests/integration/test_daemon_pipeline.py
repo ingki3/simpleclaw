@@ -5,6 +5,8 @@ import pytest
 from simpleclaw.daemon.daemon import AgentDaemon
 from simpleclaw.daemon.models import ActionType, DaemonLockError
 
+pytestmark = pytest.mark.offline
+
 
 @pytest.fixture
 def config_file(tmp_path):
