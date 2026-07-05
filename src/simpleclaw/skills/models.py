@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from simpleclaw.capability import CapabilityMetadata
+
 
 
 class SkillScope(Enum):
@@ -85,6 +87,9 @@ class SkillDefinition:
     # 재시도 정책: SKILL.md 프론트매터의 ``retry`` 블록에서 파싱된다. 미지정 시 None
     # — 실행기는 None을 "비활성"으로 간주하므로 기존 스킬은 동작 변경 없이 유지된다.
     retry_policy: RetryPolicy | None = None
+    # BIZ-425 — capability 선언. 미선언 시 보수 기본값(read_only=False,
+    # side_effects=True)이라 자동 실행 후보가 되지 않는다.
+    capability: CapabilityMetadata = field(default_factory=CapabilityMetadata)
 
 
 @dataclass
