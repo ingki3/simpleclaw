@@ -9,6 +9,12 @@ BIZ-394 — 라우터는 더 이상 특정 사건 키워드(예: "월드컵")만
 *구조적 cue 조합*으로 현재성·영향 분석 질문을 잡아낸다. 또한 답변 근거로 쓰이는
 Agent Study Wiki context 가 stale 하거나 confidence 가 낮으면, 그 자체를 신호로 삼아
 현재 사실 재조회(at-least guarded) 를 강제한다(배경지식만으로 단정하지 않도록).
+
+BIZ-425 — 일반 사용자 turn 의 입력 텍스트는 orchestrator 가 TurnFrame 으로
+맥락 복원한 ``normalized_question`` 이라는 전제를 둔다(원문은 DB 저장 전용).
+도메인별 route override(예: sports standings → guarded)는 여기 추가하지 않는다
+— 케이스별 처리는 skill/recipe capability metadata 와 capability router 가
+담당하고, 이 라우터는 구조적 cue 만 본다.
 """
 
 from __future__ import annotations
