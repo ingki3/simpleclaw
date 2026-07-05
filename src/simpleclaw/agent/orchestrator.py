@@ -88,7 +88,15 @@ from simpleclaw.agent.asset_selector import (
     filter_assets_by_selection,
     normalize_selector_response,
 )
-from simpleclaw.agent.clarify import ClarifyRequest, clarify_chat_id_var
+from simpleclaw.agent.capability_router import (
+    CapabilityDecision,
+    select_capability,
+)
+from simpleclaw.agent.clarify import (
+    ClarifyRequest,
+    clarify_chat_id_var,
+    normalize_options,
+)
 from simpleclaw.agent.commands import (
     parse_goal_command,
     try_cron_command,
@@ -109,6 +117,7 @@ from simpleclaw.agent.tool_loop import (
     ToolLoopRunner,
     ToolLoopState,
 )
+from simpleclaw.agent.turn_frame import build_turn_frame
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
@@ -1021,41 +1030,118 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
+                # BIZ-425 — follow-up/축약 발화를 최근 대화 맥락으로 정규화한
+                # TurnFrame 을 만든다. route/capability 판단에는 정규화 질문을
+                # 쓰고, DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문을 유지.
+                recent_for_frame = [
+                    {"role": msg.role.value, "content": msg.content}
+                    for msg in self._store.get_recent(limit=self._history_limit)
+                ]
+                turn_frame = build_turn_frame(text, recent_messages=recent_for_frame)
+                logger.info(
+                    "TurnFrame built: confidence=%.2f original_len=%d "
+                    "normalized_len=%d ambiguity=%d context=%s",
+                    turn_frame.confidence,
+                    len(turn_frame.original_text),
+                    len(turn_frame.normalized_question),
+                    len(turn_frame.ambiguity_options),
+                    turn_frame.context_summary[:60] or "-",
+                )
+
+                # BIZ-425 — ClarifyGate: 복수 맥락 후보로 복원이 애매하면 임의
+                # 실행 대신 기존 clarify 인프라(BIZ-260)로 사용자에게 되묻는다.
+                if (
+                    turn_frame.needs_clarification
+                    and len(turn_frame.ambiguity_options) >= 2
+                ):
+                    clarify_request = ClarifyRequest(
+                        question="어느 맥락 기준으로 이어서 확인할까요?",
+                        options=normalize_options(
+                            list(turn_frame.ambiguity_options)
+                        ),
+                    )
+                    self._pending_clarify[chat_id] = clarify_request
+                    response_text = clarify_request.format_user_visible()
+                    self._save_turn(text, response_text)
+                    return response_text
+
+                route_input = turn_frame.normalized_question
+
+                # BIZ-425 — read-only capability 후보를 route classifier 보다
+                # 먼저 판단한다. 도메인별 route override 없이, 자산이 선언한
+                # capability metadata 와 일반 의도 cue 교집합으로만 고른다.
+                capability_decision = select_capability(
+                    route_input,
+                    skills=self._exposable_skills(),
+                    recipes=getattr(self, "_recipes", []),
+                )
+                if capability_decision is not None:
+                    logger.info(
+                        "Capability decision: selected=%s:%s auto_execute=%s "
+                        "reasons=%s",
+                        capability_decision.asset_type,
+                        capability_decision.asset_name,
+                        capability_decision.safe_to_auto_execute,
+                        list(capability_decision.reasons),
+                    )
+
                 # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면, 그
                 # 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least guarded)를
                 # 강제한다. 회수는 내부에서 실패를 삼키므로 라우팅을 막지 않는다.
-                study_context_for_routing = self._context_retrieval.study_context_for_routing(text)
+                study_context_for_routing = (
+                    self._context_retrieval.study_context_for_routing(route_input)
+                )
                 route_decision = classify_response_route(
-                    text,
+                    route_input,
                     route_threshold=int(
                         self._complex_fact_config.get("route_threshold", 3)
                     ),
                     study_context=study_context_for_routing,
                 )
+                # BIZ-425 — read-only capability 로 직접 해결 가능한 조회성
+                # 질문은 complex 과승격 대신 tool loop(강한 자산 힌트)로 보낸다.
+                # 단, 남은 변수(경우의 수/시나리오)가 필요한 질문은 단일 조회로
+                # 답할 수 없으므로 complex workflow 를 유지한다.
+                capability_preempts_complex = (
+                    capability_decision is not None
+                    and capability_decision.safe_to_auto_execute
+                    and not route_decision.needs_remaining_variables
+                )
+                logger.info(
+                    "Route decision: route=%s score=%d reasons=%s "
+                    "capability_preempt=%s",
+                    route_decision.route.value,
+                    route_decision.complexity_score,
+                    route_decision.reasons,
+                    capability_preempts_complex,
+                )
                 if (
                     self._complex_fact_config.get("enabled", False)
                     and route_decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+                    and not capability_preempts_complex
                 ):
                     response_text = await self._run_complex_fact_workflow(
-                        text,
+                        route_input,
                         route_decision,
                         on_progress=on_progress,
                     )
                     tool_loop_result = ToolLoopResult(response_text)
                 elif self._skill_learning_config.get("enabled", False):
                     tool_loop_result = await self._run_tool_loop_result(
-                        text,
+                        route_input,
                         attachments=attachments,
                         on_text_delta=on_text_delta,
                         on_progress=on_progress,
+                        capability_hint=capability_decision,
                     )
                     response_text = tool_loop_result.text
                 else:
                     response_text = await self._tool_loop(
-                        text,
+                        route_input,
                         attachments=attachments,
                         on_text_delta=on_text_delta,
                         on_progress=on_progress,
+                        capability_hint=capability_decision,
                     )
                     tool_loop_result = ToolLoopResult(response_text)
 
@@ -1346,11 +1432,17 @@ class AgentOrchestrator:
         on_progress: ProgressCallback | None,
         operator_tools: bool = False,
         allow_cron_mutation: bool = True,
+        capability_hint: CapabilityDecision | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
         컨텍스트/RAG/자산 선택/실시간 evidence 준비는 오케스트레이터 경계에 남기고,
         실제 반복 lifecycle은 ``ToolLoopRunner``가 담당하도록 상태 객체만 만든다.
+
+        BIZ-425: ``capability_hint`` 가 주어지면 해당 read-only 자산을 그 유형의
+        유일한 후보로 강하게 선택하고 selector LLM 호출을 건너뛴다(Option B —
+        직접 실행 대신 강한 자산 힌트로 부작용 위험을 줄이고, 최종 자연어 답변
+        생성 경로는 기존 tool loop 로 유지).
         """
         # 현재 시각을 KST로 주입
         from datetime import datetime, timezone, timedelta
@@ -1412,7 +1504,45 @@ class AgentOrchestrator:
         active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
         active_recipes_before_skills = False
 
-        asset_selection = await self._select_assets_for_turn(text, active_skills, active_recipes)
+        # BIZ-425 — capability 힌트가 실제 후보와 매칭되면 그 자산을 유형 내
+        # 유일 후보로 좁힌다. 힌트 자산이 목록에 없으면(리로드 경합 등) 조용히
+        # 기존 selector 경로로 폴백한다.
+        capability_hinted = False
+        if capability_hint is not None and capability_hint.safe_to_auto_execute:
+            if capability_hint.asset_type == "skill":
+                hinted_skills = [
+                    s for s in active_skills
+                    if s.name == capability_hint.asset_name
+                ]
+                if hinted_skills:
+                    active_skills = hinted_skills
+                    capability_hinted = True
+            elif capability_hint.asset_type == "recipe":
+                hinted_recipes = [
+                    r for r in active_recipes
+                    if r.name == capability_hint.asset_name
+                ]
+                if hinted_recipes:
+                    active_recipes = hinted_recipes
+                    active_recipes_before_skills = True
+                    capability_hinted = True
+            if capability_hinted:
+                active_skills_prompt = self._format_skills_for_prompt(active_skills)
+                active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
+                logger.info(
+                    "Capability hint applied: %s:%s narrowed candidates "
+                    "(skills=%d recipes=%d); selector bypassed",
+                    capability_hint.asset_type,
+                    capability_hint.asset_name,
+                    len(active_skills),
+                    len(active_recipes),
+                )
+
+        asset_selection = (
+            None
+            if capability_hinted
+            else await self._select_assets_for_turn(text, active_skills, active_recipes)
+        )
         if asset_selection is not None and not asset_selection.fallback_required:
             selected_skills, selected_recipes = filter_assets_by_selection(
                 skills=active_skills,
@@ -1532,6 +1662,7 @@ class AgentOrchestrator:
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
         allow_cron_mutation: bool = True,
+        capability_hint: CapabilityDecision | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
@@ -1557,6 +1688,7 @@ class AgentOrchestrator:
             on_progress=on_progress,
             operator_tools=operator_tools,
             allow_cron_mutation=allow_cron_mutation,
+            capability_hint=capability_hint,
         )
         result = await ToolLoopRunner(self).run(state)
         return result
@@ -1571,6 +1703,7 @@ class AgentOrchestrator:
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
         allow_cron_mutation: bool = True,
+        capability_hint: CapabilityDecision | None = None,
     ) -> str:
         """기존 호출자를 위한 문자열 compatibility wrapper."""
         result = await self._run_tool_loop_result(
@@ -1581,6 +1714,7 @@ class AgentOrchestrator:
             on_progress=on_progress,
             operator_tools=operator_tools,
             allow_cron_mutation=allow_cron_mutation,
+            capability_hint=capability_hint,
         )
         return result.text
 

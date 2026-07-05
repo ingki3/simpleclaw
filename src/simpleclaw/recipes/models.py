@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from simpleclaw.capability import CapabilityMetadata
+
 
 class StepType(Enum):
     """레시피 스텝의 유형."""
@@ -99,6 +101,8 @@ class RecipeDefinition:
     recipe_dir: str = ""                                            # 레시피 디렉터리 경로
     on_error: OnErrorPolicy = OnErrorPolicy.ABORT                   # 기본 실패 정책
     settings: RecipeSettings = field(default_factory=RecipeSettings)  # 실행 설정
+    # BIZ-425 — capability 선언. 미선언 시 보수 기본값이라 자동 실행 후보 제외.
+    capability: CapabilityMetadata = field(default_factory=CapabilityMetadata)
 
 
 @dataclass

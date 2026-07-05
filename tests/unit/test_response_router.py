@@ -50,3 +50,34 @@ def test_route_threshold_can_promote_medium_complexity_question():
         route_threshold=2,
     )
     assert decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+
+
+# ----------------------------------------------------------------------
+# BIZ-425 — 정규화된 질문 기준 route 동작 보존
+# ----------------------------------------------------------------------
+
+
+def test_remaining_games_scenario_still_uses_complex_workflow():
+    """경우의 수/남은 변수 질문은 정규화/capability 도입 후에도 complex 유지."""
+    decision = classify_response_route(
+        "롯데가 남은 경기에서 몇 승을 해야 3위 가능성이 있어? 경우의 수 알려줘"
+    )
+    assert decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+    assert decision.needs_remaining_variables is True
+    assert decision.needs_calculation is True
+
+
+def test_normalized_followup_lookup_is_guarded_not_complex():
+    """맥락 접두어가 붙은 정규화 조회 질문은 complex 로 과승격되지 않는다."""
+    decision = classify_response_route(
+        "(직전 대화 맥락: 롯데, 야구, KT) 그럼 현재 순위는?"
+    )
+    assert decision.route == ResponseRoute.CURRENT_FACT_GUARDED_LOOP
+    assert decision.needs_current_facts is True
+
+
+def test_normalized_prefix_does_not_add_rule_or_condition_cues():
+    """정규화 접두 문구 자체는 rule/condition cue 점수를 만들지 않는다."""
+    plain = classify_response_route("그럼 현재 순위는?")
+    normalized = classify_response_route("(직전 대화 맥락: 부산, 출장) 그럼 현재 순위는?")
+    assert normalized.route == plain.route

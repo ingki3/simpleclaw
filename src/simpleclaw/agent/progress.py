@@ -33,6 +33,20 @@ _KIND_ICONS = {
     "goal": "🎯",
     "complex_fact": "🔎",
 }
+# BIZ-425 — complex fact workflow 의 내부 슬롯 이름을 사용자 친화 한국어로
+# 표시하기 위한 라벨 맵. 내부 영어 slot question 은 사용자에게 노출하지 않는다
+# (상세 slot/question 은 structured log 에만 남긴다).
+_COMPLEX_FACT_LABELS = {
+    "current_state": "최신 상태 확인",
+    "comparison_set": "비교 대상 확인",
+    "calculation_inputs": "계산 입력 확인",
+    "decision_rules": "판정 기준 확인",
+    "remaining_variables": "남은 변수 확인",
+    "conflict_resolution": "상충 정보 정리",
+    "impact_analysis": "영향 분석 확인",
+}
+# complex fact detail dict 에서 사용자 노출을 막을 내부 필드.
+_COMPLEX_FACT_HIDDEN_DETAIL_KEYS = frozenset({"question"})
 
 
 @dataclass(frozen=True)
@@ -66,11 +80,25 @@ def redact_secrets(value: Any, *, limit: int = 160) -> str:
 
 
 def format_progress_line(event: ProgressEvent) -> str:
-    """단일 progress 이벤트를 Telegram placeholder 에 들어갈 compact 한 줄로 만든다."""
+    """단일 progress 이벤트를 Telegram placeholder 에 들어갈 compact 한 줄로 만든다.
+
+    BIZ-425: ``complex_fact`` 이벤트는 내부 슬롯 이름(current_state 등)과 영어
+    slot question 을 그대로 노출하지 않고 한국어 라벨로 바꿔 표시한다.
+    """
     icon = _KIND_ICONS.get(event.kind, "•")
     label = _STATUS_LABELS.get(event.status, event.status)
-    head = f"{icon} {event.name or event.kind} {label}"
-    detail = redact_secrets(event.detail)
+    name = event.name or event.kind
+    detail_value = event.detail
+    if event.kind == "complex_fact":
+        name = _COMPLEX_FACT_LABELS.get(event.name, name)
+        if isinstance(detail_value, dict):
+            detail_value = {
+                key: value
+                for key, value in detail_value.items()
+                if key not in _COMPLEX_FACT_HIDDEN_DETAIL_KEYS
+            } or None
+    head = f"{icon} {name} {label}"
+    detail = redact_secrets(detail_value)
     return f"{head} — {detail}" if detail else head
 
 
