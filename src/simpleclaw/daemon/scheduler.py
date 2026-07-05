@@ -608,7 +608,12 @@ class CronScheduler:
 
             # v1 레시피 (steps 기반): 스텝별 실행
             guard = getattr(self._agent, "_command_guard", None) if self._agent else None
-            result = await execute_recipe(recipe, command_guard=guard)
+            # BIZ-423 — recipe `settings.timeout` 을 cron 실행에도 동일하게 반영.
+            result = await execute_recipe(
+                recipe,
+                timeout=getattr(recipe.settings, "timeout", 60),
+                command_guard=guard,
+            )
 
             # 디버그 로그는 사용자 채널이 아닌 운영 로그로만 노출한다.
             if result.debug_log:

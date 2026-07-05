@@ -21,10 +21,12 @@ from pathlib import Path
 import yaml
 
 from simpleclaw.recipes.models import (
+    DEFAULT_STEP_TIMEOUT,
     OnErrorPolicy,
     RecipeDefinition,
     RecipeParameter,
     RecipeParseError,
+    RecipeSettings,
     RecipeStep,
     StepType,
 )
@@ -59,6 +61,39 @@ def _parse_on_error(value: object, source: Path) -> OnErrorPolicy | None:
         raise RecipeParseError(
             f"Invalid on_error '{value}' in {source} (expected one of: {valid})"
         ) from e
+
+
+def _parse_settings(value: object, source: Path) -> RecipeSettings:
+    """``settings:`` YAML 섹션을 ``RecipeSettings`` 로 변환한다.
+
+    BIZ-423 — timeout 은 실행 안전장치이므로, 값이 이상하다고 레시피 전체를
+    parse failure 로 죽이면 오히려 cron/슬래시 실행이 통째로 사라진다.
+    비정상 값은 경고 로그 + 기본 60초 폴백으로 처리한다.
+
+    채택 규약: 양의 int 만 timeout 으로 인정한다. bool 은 int 의 서브클래스지만
+    ``timeout: true`` 같은 오타를 1초 timeout 으로 해석하면 안 되므로 제외한다.
+    """
+    if value is None:
+        return RecipeSettings()
+    if not isinstance(value, dict):
+        logger.warning(
+            "Ignoring non-mapping 'settings' section in %s (got %s) — "
+            "falling back to default timeout %ds.",
+            source, type(value).__name__, DEFAULT_STEP_TIMEOUT,
+        )
+        return RecipeSettings()
+
+    timeout = value.get("timeout")
+    if timeout is None:
+        return RecipeSettings()
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        logger.warning(
+            "Invalid settings.timeout %r in %s (expected a positive integer) — "
+            "falling back to default timeout %ds.",
+            timeout, source, DEFAULT_STEP_TIMEOUT,
+        )
+        return RecipeSettings()
+    return RecipeSettings(timeout=timeout)
 
 
 def _scan_recipes_dir(recipes_path: Path) -> list[RecipeDefinition]:
@@ -232,4 +267,5 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         instructions=data.get("instructions", ""),
         recipe_dir=str(recipe_path.parent),
         on_error=default_on_error,
+        settings=_parse_settings(data.get("settings"), recipe_path),
     )
