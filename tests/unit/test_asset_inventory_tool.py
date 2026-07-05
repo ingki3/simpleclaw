@@ -161,9 +161,16 @@ def test_asset_inventory_selector_config_and_mcp_summary(tmp_path):
     assert payload["sections"]["selector"]["config"]["skill_top_k"] == 7
     assert payload["sections"]["mcp"]["configured_servers"] == ["browser"]
     assert payload["sections"]["mcp"]["connected_servers"] == ["browser"]
+    # metadata가 없는 tool은 operator scope/schema 없음으로 fail-closed 요약된다.
     assert payload["sections"]["mcp"]["tools"] == [
-        {"name": "open_page", "source_name": "browser"}
+        {
+            "name": "open_page",
+            "source_name": "browser",
+            "scope": "operator",
+            "has_input_schema": False,
+        }
     ]
+    assert payload["sections"]["mcp"]["connection_errors"] == {}
 
 
 @pytest.mark.asyncio

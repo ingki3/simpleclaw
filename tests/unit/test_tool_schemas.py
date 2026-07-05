@@ -296,3 +296,38 @@ class TestToolScopeFiltering:
             )
         }
         assert protected_names <= expanded_names
+
+
+class TestMCPCallTool:
+    """generic mcp_call 도구의 조건부 노출을 검증한다 (BIZ-424)."""
+
+    def test_mcp_call_tool_available_when_mcp_available(self):
+        tools = build_tool_definitions(
+            [],
+            cron_available=False,
+            scopes=(ToolScope.RUNTIME,),
+            mcp_available=True,
+        )
+        names = {tool.name for tool in tools}
+        assert "mcp_call" in names
+
+    def test_mcp_call_tool_hidden_when_not_available(self):
+        tools = build_tool_definitions(
+            [],
+            cron_available=False,
+            scopes=(ToolScope.RUNTIME,),
+            mcp_available=False,
+        )
+        names = {tool.name for tool in tools}
+        assert "mcp_call" not in names
+
+    def test_mcp_call_tool_hidden_by_default(self):
+        """mcp_available 미지정 시 기존 tool 목록이 그대로 유지된다."""
+        tools = build_tool_definitions(skills=[], cron_available=True)
+        assert "mcp_call" not in {tool.name for tool in tools}
+
+    def test_mcp_call_schema_requires_server_and_tool(self):
+        tools = build_tool_definitions([], mcp_available=True)
+        mcp_call = next(tool for tool in tools if tool.name == "mcp_call")
+        assert mcp_call.parameters["required"] == ["server", "tool"]
+        assert set(mcp_call.parameters["properties"]) == {"server", "tool", "arguments"}

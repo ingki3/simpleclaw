@@ -94,6 +94,23 @@ async def dispatch_tool_call(
         return handle_skill_docs(args, orchestrator._skills_by_name)
     if name == "search_memory":
         return await orchestrator._search_memory(args)
+    if name == "mcp_call":
+        manager = getattr(orchestrator, "_mcp_manager", None)
+        if manager is None:
+            return "Error: MCP is not initialized."
+        server = str(args.get("server") or "").strip()
+        tool = str(args.get("tool") or "").strip()
+        if not server or not tool:
+            return "Error: 'server' and 'tool' arguments are required."
+        arguments = args.get("arguments") or {}
+        if not isinstance(arguments, dict):
+            return "Error: 'arguments' must be a JSON object."
+        # scope는 호출 context에서 파생 — LLM 인자로 조작할 수 없게 한다.
+        scope = "operator" if operator_tools else "runtime"
+        try:
+            return await manager.call_tool(server, tool, arguments, scope=scope)
+        except Exception as exc:  # noqa: BLE001 — user-facing tool boundary
+            return f"Error: MCP tool call failed: {str(exc)[:500]}"
     if name == "cron":
         return handle_cron_action(
             args,
