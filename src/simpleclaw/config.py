@@ -51,6 +51,7 @@ from simpleclaw.config_sections.daemon import (
     load_daemon_config,
 )
 from simpleclaw.config_sections.llm import _LLM_DEFAULTS, load_llm_config
+from simpleclaw.config_sections.mcp import _MCP_DEFAULTS, load_mcp_config
 from simpleclaw.config_sections.memory import _MEMORY_DEFAULTS, load_memory_config
 from simpleclaw.config_sections.security import load_security_config
 from simpleclaw.config_sections.study import _STUDY_DEFAULTS, load_study_config
@@ -62,6 +63,7 @@ __all__ = [
     "_DAEMON_DEFAULTS",
     "_DEFAULTS",
     "_LLM_DEFAULTS",
+    "_MCP_DEFAULTS",
     "_MEMORY_DEFAULTS",
     "_RECIPES_DEFAULTS",
     "_SKILL_LEARNING_DEFAULTS",
@@ -90,6 +92,7 @@ __all__ = [
     "load_asset_selection_config",
     "load_daemon_config",
     "load_llm_config",
+    "load_mcp_config",
     "load_memory_config",
     "load_persona_config",
     "load_recipes_config",
