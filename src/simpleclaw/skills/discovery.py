@@ -19,6 +19,7 @@ from pathlib import Path
 
 import yaml
 
+from simpleclaw.capability import CapabilityMetadata, parse_capability_metadata
 from simpleclaw.skills.models import RetryPolicy, SkillDefinition, SkillScope
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,8 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
     name = ""
     description = ""
     retry_policy: RetryPolicy | None = None
+    # BIZ-425 — capability 미선언 스킬은 보수 기본값(자동 실행 후보 제외).
+    capability = CapabilityMetadata()
 
     # YAML frontmatter를 먼저 시도 (---\n...\n---)
     fm_match = re.match(r"^---\s*\n(.+?)\n---\s*\n", content, re.DOTALL)
@@ -122,6 +125,9 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
                 name = fm.get("name", "")
                 description = fm.get("description", "")
                 retry_policy = _parse_retry_policy(fm.get("retry"), skill_md)
+                capability = parse_capability_metadata(
+                    fm.get("capability"), source=str(skill_md)
+                )
         except yaml.YAMLError:
             pass
 
@@ -183,6 +189,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
         skill_dir=str(skill_md.parent),
         commands=commands,
         retry_policy=retry_policy,
+        capability=capability,
     )
 
 

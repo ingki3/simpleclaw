@@ -20,6 +20,7 @@ from pathlib import Path
 
 import yaml
 
+from simpleclaw.capability import parse_capability_metadata
 from simpleclaw.recipes.models import (
     DEFAULT_STEP_TIMEOUT,
     OnErrorPolicy,
@@ -268,4 +269,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         recipe_dir=str(recipe_path.parent),
         on_error=default_on_error,
         settings=_parse_settings(data.get("settings"), recipe_path),
+        capability=parse_capability_metadata(
+            data.get("capability"), source=str(recipe_path)
+        ),
     )
