@@ -30,6 +30,7 @@ class MockProvider(LLMProvider):
         tools=None,
         system_blocks=None,
         max_tokens: int | None = None,
+        **kwargs,  # BIZ-427 structured output 등 신규 optional kwargs 허용
     ) -> LLMResponse:
         return await self._mock_send(
             system_prompt, user_message, messages, tools, system_blocks, max_tokens
