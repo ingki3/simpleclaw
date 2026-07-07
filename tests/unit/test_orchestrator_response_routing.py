@@ -53,6 +53,11 @@ agent:
   history_limit: 3
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 2
+  # BIZ-426 — 이 파일은 결정적(keyword) TurnFrame/response_router fallback
+  # 경로의 회귀를 지키는 테스트다. primary LLM turn analysis 경로는
+  # test_orchestrator_turn_analysis.py 가 검증한다.
+  turn_analysis:
+    enabled: false
   complex_fact_workflow:
     enabled: false
 skills:
@@ -92,7 +97,10 @@ async def test_disabled_complex_workflow_falls_back_to_tool_loop(config_file):
 @pytest.mark.asyncio
 async def test_smalltalk_does_not_enter_complex_workflow_when_enabled(config_file):
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="안녕하세요 형님."))
@@ -106,7 +114,10 @@ async def test_smalltalk_does_not_enter_complex_workflow_when_enabled(config_fil
 @pytest.mark.asyncio
 async def test_enabled_complex_question_uses_complex_workflow(config_file, monkeypatch):
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="should not be direct loop"))
@@ -130,7 +141,10 @@ async def test_enabled_complex_question_uses_complex_workflow(config_file, monke
 @pytest.mark.asyncio
 async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(config_file, monkeypatch):
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="근거 기반 현재 날씨"))
@@ -153,7 +167,10 @@ async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(
 async def test_world_cup_scenario_uses_complex_workflow_when_enabled(config_file, monkeypatch):
     """BIZ-394: 월드컵 경우의 수(현재성+규칙+남은 변수) 질문은 complex workflow로 간다."""
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="should not be direct loop"))
@@ -180,7 +197,10 @@ async def test_market_impact_question_does_not_use_complex_but_not_standard(
 ):
     """BIZ-394: 시장 영향 분석 질문은 complex까지는 아니어도 standard default로 안 떨어진다."""
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="근거 기반 답변"))
@@ -332,7 +352,10 @@ async def test_read_only_capability_preempts_complex_fact_route(
 ):
     """read-only capability 후보가 있으면 조회성 질문은 complex 로 과승격되지 않는다."""
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     _write_capability_skill(config_file)
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()
@@ -367,7 +390,10 @@ async def test_scenario_question_still_uses_complex_despite_capability(
 ):
     """남은 변수(경우의 수)가 필요한 질문은 capability 후보가 있어도 complex 유지."""
     text = config_file.read_text(encoding="utf-8")
-    config_file.write_text(text.replace("enabled: false", "enabled: true"), encoding="utf-8")
+    config_file.write_text(text.replace(
+        "complex_fact_workflow:\n    enabled: false",
+        "complex_fact_workflow:\n    enabled: true",
+    ), encoding="utf-8")
     _write_capability_skill(config_file)
     orch = AgentOrchestrator(config_file)
     orch._router = MagicMock()

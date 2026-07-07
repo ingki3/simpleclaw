@@ -33,6 +33,9 @@ llm:
 agent:
   history_limit: 5
   db_path: "{tmp_path}/conversations.db"
+  # BIZ-426 — trace 검증은 send 호출 수에 민감하므로 LLM turn analysis 를 끈다.
+  turn_analysis:
+    enabled: false
 
 skills:
   local_dir: "{tmp_path}/local_skills"

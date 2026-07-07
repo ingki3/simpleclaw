@@ -167,6 +167,9 @@ agent:
   history_limit: 1
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 2
+  # BIZ-426 — selector send side_effect 시퀀스 보존을 위해 turn analysis 비활성.
+  turn_analysis:
+    enabled: false
   asset_selection:
     enabled: true
     backend: gemini

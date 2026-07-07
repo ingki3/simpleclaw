@@ -117,6 +117,7 @@ from simpleclaw.agent.tool_loop import (
     ToolLoopRunner,
     ToolLoopState,
 )
+from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
 from simpleclaw.agent.turn_frame import build_turn_frame
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
@@ -626,6 +627,9 @@ class AgentOrchestrator:
         self._browser_handoff_config = agent_config.get("browser_handoff", {})
         self._goal_loop_config = agent_config.get("goal_loop", {})
         self._complex_fact_config = agent_config.get("complex_fact_workflow", {})
+        # BIZ-426 — 일반 turn 앞단 LLM turn analysis 설정. 기본 활성이며,
+        # 비활성/분석 실패 시에는 기존 결정적(keyword) 경로가 fallback 이다.
+        self._turn_analysis_config = agent_config.get("turn_analysis", {}) or {}
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
             self._config_path,
             persona_config=persona_config,
@@ -1030,50 +1034,93 @@ class AgentOrchestrator:
                     )
                     return recipe_result
 
-                # BIZ-425 — follow-up/축약 발화를 최근 대화 맥락으로 정규화한
-                # TurnFrame 을 만든다. route/capability 판단에는 정규화 질문을
-                # 쓰고, DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문을 유지.
-                recent_for_frame = [
+                # BIZ-426 — 일반 turn 의 primary path 는 LLM turn analysis 다.
+                # follow-up 정규화/clarify/intents/domains/route 를 LLM structured
+                # JSON 판단 하나로 결정한다. 분석 비활성 또는 provider 장애 시에만
+                # 기존 결정적(keyword) 경로(BIZ-425 TurnFrame + response_router)로
+                # 내려간다. DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문 유지.
+                recent_for_analysis = [
                     {"role": msg.role.value, "content": msg.content}
                     for msg in self._store.get_recent(limit=self._history_limit)
                 ]
-                turn_frame = build_turn_frame(text, recent_messages=recent_for_frame)
-                logger.info(
-                    "TurnFrame built: confidence=%.2f original_len=%d "
-                    "normalized_len=%d ambiguity=%d context=%s",
-                    turn_frame.confidence,
-                    len(turn_frame.original_text),
-                    len(turn_frame.normalized_question),
-                    len(turn_frame.ambiguity_options),
-                    turn_frame.context_summary[:60] or "-",
-                )
+                turn_analysis = None
+                turn_analysis_cfg = self._turn_analysis_config
+                if bool(turn_analysis_cfg.get("enabled", True)):
+                    turn_analysis = await analyze_turn_with_llm(
+                        text,
+                        recent_messages=recent_for_analysis,
+                        router=self._router,
+                        backend_name=turn_analysis_cfg.get("backend"),
+                        max_tokens=int(turn_analysis_cfg.get("max_tokens", 512)),
+                        max_recent_messages=int(
+                            turn_analysis_cfg.get("max_recent_messages", 12)
+                        ),
+                    )
+                    logger.info(
+                        "TurnAnalysis built: source=%s route=%s confidence=%.2f "
+                        "original_len=%d normalized_len=%d ambiguity=%d "
+                        "intents=%s domains=%s",
+                        turn_analysis.source,
+                        turn_analysis.route.value,
+                        turn_analysis.confidence,
+                        len(turn_analysis.original_text),
+                        len(turn_analysis.normalized_question),
+                        len(turn_analysis.ambiguity_options),
+                        list(turn_analysis.intents),
+                        list(turn_analysis.domains),
+                    )
+                    if turn_analysis.source != "llm":
+                        # 분석 실패(fallback) — LLM 판단을 신뢰하지 않고 아래
+                        # 결정적 호환 경로로 내려간다(운영 연속성 우선).
+                        turn_analysis = None
 
-                # BIZ-425 — ClarifyGate: 복수 맥락 후보로 복원이 애매하면 임의
-                # 실행 대신 기존 clarify 인프라(BIZ-260)로 사용자에게 되묻는다.
-                if (
-                    turn_frame.needs_clarification
-                    and len(turn_frame.ambiguity_options) >= 2
-                ):
+                if turn_analysis is not None:
+                    needs_clarification = turn_analysis.needs_clarification
+                    ambiguity_options = list(turn_analysis.ambiguity_options)
+                    route_input = turn_analysis.normalized_question
+                else:
+                    # BIZ-425 호환 fallback — deterministic keyword 정규화.
+                    turn_frame = build_turn_frame(
+                        text, recent_messages=recent_for_analysis
+                    )
+                    logger.info(
+                        "TurnFrame built: confidence=%.2f original_len=%d "
+                        "normalized_len=%d ambiguity=%d context=%s",
+                        turn_frame.confidence,
+                        len(turn_frame.original_text),
+                        len(turn_frame.normalized_question),
+                        len(turn_frame.ambiguity_options),
+                        turn_frame.context_summary[:60] or "-",
+                    )
+                    needs_clarification = turn_frame.needs_clarification
+                    ambiguity_options = list(turn_frame.ambiguity_options)
+                    route_input = turn_frame.normalized_question
+
+                # ClarifyGate: 복원이 애매하면 임의 실행 대신 기존 clarify
+                # 인프라(BIZ-260)로 사용자에게 되묻는다 — LLM/결정적 경로 공통.
+                if needs_clarification and len(ambiguity_options) >= 2:
                     clarify_request = ClarifyRequest(
                         question="어느 맥락 기준으로 이어서 확인할까요?",
-                        options=normalize_options(
-                            list(turn_frame.ambiguity_options)
-                        ),
+                        options=normalize_options(ambiguity_options),
                     )
                     self._pending_clarify[chat_id] = clarify_request
                     response_text = clarify_request.format_user_visible()
                     self._save_turn(text, response_text)
                     return response_text
 
-                route_input = turn_frame.normalized_question
-
-                # BIZ-425 — read-only capability 후보를 route classifier 보다
-                # 먼저 판단한다. 도메인별 route override 없이, 자산이 선언한
-                # capability metadata 와 일반 의도 cue 교집합으로만 고른다.
+                # BIZ-425/BIZ-426 — read-only capability 후보를 route 결정보다
+                # 먼저 판단한다. LLM 이 제공한 intents/domains 가 1순위이고,
+                # 없으면 keyword cue 추론이 fallback 으로 동작한다.
                 capability_decision = select_capability(
                     route_input,
                     skills=self._exposable_skills(),
                     recipes=getattr(self, "_recipes", []),
+                    explicit_intents=(
+                        turn_analysis.intents if turn_analysis is not None else None
+                    ),
+                    explicit_domains=(
+                        turn_analysis.domains if turn_analysis is not None else None
+                    ),
                 )
                 if capability_decision is not None:
                     logger.info(
@@ -1085,19 +1132,24 @@ class AgentOrchestrator:
                         list(capability_decision.reasons),
                     )
 
-                # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면, 그
-                # 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least guarded)를
-                # 강제한다. 회수는 내부에서 실패를 삼키므로 라우팅을 막지 않는다.
-                study_context_for_routing = (
-                    self._context_retrieval.study_context_for_routing(route_input)
-                )
-                route_decision = classify_response_route(
-                    route_input,
-                    route_threshold=int(
-                        self._complex_fact_config.get("route_threshold", 3)
-                    ),
-                    study_context=study_context_for_routing,
-                )
+                if turn_analysis is not None:
+                    # BIZ-426 — primary route 는 LLM 판단을 그대로 쓴다.
+                    # keyword 기반 classify_response_route 는 아래 fallback 전용.
+                    route_decision = turn_analysis.to_route_decision()
+                else:
+                    # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면,
+                    # 그 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least
+                    # guarded)를 강제한다. 회수는 내부에서 실패를 삼킨다.
+                    study_context_for_routing = (
+                        self._context_retrieval.study_context_for_routing(route_input)
+                    )
+                    route_decision = classify_response_route(
+                        route_input,
+                        route_threshold=int(
+                            self._complex_fact_config.get("route_threshold", 3)
+                        ),
+                        study_context=study_context_for_routing,
+                    )
                 # BIZ-425 — read-only capability 로 직접 해결 가능한 조회성
                 # 질문은 complex 과승격 대신 tool loop(강한 자산 힌트)로 보낸다.
                 # 단, 남은 변수(경우의 수/시나리오)가 필요한 질문은 단일 조회로

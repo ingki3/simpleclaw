@@ -35,6 +35,9 @@ agent:
   history_limit: 3
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 2
+  # BIZ-426 — tool loop 프롬프트/저장 동작은 결정적 fallback 경로로 검증.
+  turn_analysis:
+    enabled: false
 
 skills:
   local_dir: "{tmp_path}/local_skills"
