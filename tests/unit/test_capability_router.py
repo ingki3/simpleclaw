@@ -182,6 +182,80 @@ def test_timeliness_cue_alone_does_not_match(fake_skill):
     assert decision is None
 
 
+def test_select_capability_uses_explicit_llm_intents_without_keyword_cues(fake_skill):
+    """BIZ-426 — LLM 이 제공한 intents/domains 는 keyword cue 없이도 매칭된다."""
+    skill = fake_skill(
+        "sports-lookup-skill",
+        domains=("sports",),
+        intents=("standings",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+    )
+    decision = select_capability(
+        "표 좀 보여줘",  # 현재성/도메인 keyword cue 없음
+        skills=[skill],
+        recipes=[],
+        explicit_intents=("standings",),
+        explicit_domains=("sports",),
+    )
+    assert decision is not None
+    assert decision.asset_name == "sports-lookup-skill"
+    assert decision.matched_intents == ("standings",)
+    assert decision.matched_domains == ("sports",)
+
+
+def test_select_capability_explicit_domain_mismatch_is_filtered(fake_skill):
+    """LLM 제공 도메인과 자산 선언 도메인이 서로 다르면 매칭하지 않는다."""
+    market_skill = fake_skill(
+        "market-quote-skill",
+        domains=("market",),
+        intents=("standings",),
+        read_only=True,
+        side_effects=False,
+    )
+    decision = select_capability(
+        "표 좀 보여줘",
+        skills=[market_skill],
+        recipes=[],
+        explicit_intents=("standings",),
+        explicit_domains=("sports",),
+    )
+    assert decision is None
+
+
+def test_select_capability_explicit_weak_intent_alone_does_not_match(fake_skill):
+    """LLM 제공이라도 realtime_lookup 단독 의도는 자산을 특정하지 않는다."""
+    skill = fake_skill(
+        "sports-lookup-skill",
+        domains=("sports",),
+        intents=("realtime_lookup",),
+        read_only=True,
+        side_effects=False,
+    )
+    decision = select_capability(
+        "지금 뭐 하고 있어?",
+        skills=[skill],
+        recipes=[],
+        explicit_intents=("realtime_lookup",),
+    )
+    assert decision is None
+
+
+def test_select_capability_still_falls_back_when_explicit_metadata_absent(fake_skill):
+    """explicit metadata 가 없으면 기존 keyword 추론 fallback 이 유지된다."""
+    skill = fake_skill(
+        "weather-skill",
+        domains=("weather",),
+        intents=("weather",),
+        read_only=True,
+        side_effects=False,
+    )
+    decision = select_capability("오늘 서울 날씨", skills=[skill], recipes=[])
+    assert decision is not None
+    assert decision.asset_name == "weather-skill"
+
+
 def test_infer_intents_and_domains_are_generic():
     assert "standings" in infer_intents("현재 리그 순위표 보여줘")
     assert "quote" in infer_intents("오늘 삼성전자 주가 얼마야?")

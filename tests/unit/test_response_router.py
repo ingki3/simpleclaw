@@ -1,3 +1,9 @@
+"""keyword route classifier 계약 테스트.
+
+BIZ-426 — classify_response_route 는 primary 가 아니라 LLM turn analysis
+비활성/실패 시의 결정적 fallback 이다. 이 테스트들은 그 fallback 계약을 지킨다.
+"""
+
 from simpleclaw.agent.response_router import ResponseRoute, classify_response_route
 
 

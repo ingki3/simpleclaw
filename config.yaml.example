@@ -72,6 +72,16 @@ agent:
     max_rounds: 3
     judge_max_tokens: 768
     max_answer_chars_for_judge: 6000
+  # BIZ-426 — 일반 turn 앞단의 LLM turn analysis. follow-up 맥락 복원(정규화 질문),
+  # clarify 필요성, domains/intents, 실행 route(standard/current/complex)를 keyword
+  # heuristic 대신 LLM structured JSON 판단으로 결정한다. 분석 실패/비활성 시에는
+  # 기존 결정적 TurnFrame + response_router 가 fallback 으로 동작한다.
+  turn_analysis:
+    enabled: true
+    backend: null          # null 이면 llm.default backend 사용 (저렴/고속 backend 지정 가능)
+    max_tokens: 512        # 분석 응답 토큰 상한 — 레이턴시/비용 제어
+    max_recent_messages: 12
+    fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``
