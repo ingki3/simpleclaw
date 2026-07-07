@@ -425,10 +425,9 @@ class GeminiProvider(LLMProvider):
         BIZ-427 — SimpleClaw 에서 structured output 은 비스트리밍 send() 전용이다.
         required 스트리밍 요청은 명확히 거부하고, required 가 아니면 힌트를
         무시한다 — 스트리밍 tool loop 에 schema 가 오적용되는 사고 방지.
+        BIZ-430 — 거부는 힌트 유무가 아니라 required 플래그만으로 결정한다.
         """
-        if require_structured_output and (
-            response_mime_type or response_schema is not None
-        ):
+        if require_structured_output:
             raise LLMProviderError(
                 "Gemini structured output is only supported on non-streaming "
                 "send() in SimpleClaw"
