@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from simpleclaw.agent.response_router import ResponseRoute
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_analysis import (
+    TURN_ANALYSIS_RESPONSE_SCHEMA,
     analyze_turn_with_llm,
     parse_turn_analysis_payload,
 )
@@ -256,3 +258,95 @@ async def test_analyze_turn_with_llm_falls_back_on_invalid_json():
 
     assert analysis.source == "fallback"
     assert analysis.normalized_question == "그럼 현재 순위는?"
+
+
+# ----------------------------------------------------------------------
+# BIZ-427 — TURN_ANALYSIS_RESPONSE_SCHEMA / structured output 요청
+# ----------------------------------------------------------------------
+
+
+def test_turn_analysis_response_schema_has_required_route_enum_and_ordering():
+    schema = TURN_ANALYSIS_RESPONSE_SCHEMA
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]["route"]["enum"]) == {
+        route.value for route in ResponseRoute
+    }
+    assert "propertyOrdering" in schema
+    assert schema["required"] == schema["propertyOrdering"]
+    assert "normalized_question" in schema["required"]
+    # 모든 property 가 required/propertyOrdering 에 빠짐없이 포함되어야 한다.
+    assert set(schema["properties"].keys()) == set(schema["required"])
+
+
+_VALID_ANALYSIS_JSON = (
+    '{"is_followup":false,"normalized_question":"안녕","context_summary":"",'
+    '"confidence":1,"needs_clarification":false,"ambiguity_options":[],'
+    '"domains":[],"intents":[],"route":"standard_tool_loop",'
+    '"complexity_score":0,"needs_current_facts":false,"needs_rules":false,'
+    '"needs_remaining_variables":false,"needs_calculation":false,'
+    '"needs_comparison_or_conditions":false,"needs_conflict_resolution":false,'
+    '"needs_impact_analysis":false,"reasons":["greeting"]}'
+)
+
+
+@pytest.mark.asyncio
+async def test_analyze_turn_with_llm_requests_structured_json_schema():
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_VALID_ANALYSIS_JSON))
+
+    await analyze_turn_with_llm(
+        "안녕",
+        recent_messages=[],
+        router=router,
+        backend_name="gemini",
+        max_tokens=256,
+    )
+
+    request = router.send.call_args.args[0]
+    assert request.response_mime_type == "application/json"
+    assert request.response_schema == TURN_ANALYSIS_RESPONSE_SCHEMA
+    assert request.require_structured_output is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_turn_with_llm_structured_output_false_keeps_plain_request():
+    """escape hatch — structured_output=False 면 기존 프롬프트-only 요청 유지."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_VALID_ANALYSIS_JSON))
+
+    await analyze_turn_with_llm(
+        "안녕",
+        recent_messages=[],
+        router=router,
+        structured_output=False,
+    )
+
+    request = router.send.call_args.args[0]
+    assert request.response_mime_type is None
+    assert request.response_schema is None
+    assert request.require_structured_output is False
+
+
+@pytest.mark.asyncio
+async def test_turn_analysis_fallback_logs_structured_output_context(caplog):
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text='{"bad": '))
+
+    with caplog.at_level(
+        logging.WARNING, logger="simpleclaw.agent.turn_analysis"
+    ):
+        analysis = await analyze_turn_with_llm(
+            "새로 알게 된 내용 이야기해줘봐",
+            recent_messages=[],
+            router=router,
+            backend_name="gemini",
+        )
+
+    assert analysis.source == "fallback"
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "structured" in joined.lower()
+    assert "raw_len=" in joined
+    assert "backend=gemini" in joined
+    # raw 응답 전문(사용자 발화 포함 가능)은 로그에 노출하지 않는다.
+    assert '{"bad":' not in joined
