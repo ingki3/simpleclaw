@@ -100,13 +100,21 @@ def select_capability(
     *,
     skills: list[SkillDefinition],
     recipes: list[RecipeDefinition],
+    explicit_intents: tuple[str, ...] | list[str] | None = None,
+    explicit_domains: tuple[str, ...] | list[str] | None = None,
 ) -> CapabilityDecision | None:
     """정규화 질문에 맞는 read-only 자동 실행 후보를 하나 고른다.
 
+    BIZ-426 — LLM TurnAnalysis 가 제공한 ``explicit_intents``/``explicit_domains``
+    가 있으면 그것을 1순위로 쓴다. keyword cue 추론(:func:`infer_intents`,
+    :func:`infer_domains`)은 LLM metadata 가 없을 때(분석 비활성/실패)의
+    호환용 fallback 이다.
+
     매칭 규칙:
-    - 자산의 선언 intents 와 질문 추론 intents 의 교집합이 있어야 한다.
-      단, 시점 cue(realtime_lookup)만 겹치는 매칭은 제외한다.
-    - 자산이 domains 를 선언했고 질문에서도 도메인이 추론됐는데 교집합이
+    - 자산의 선언 intents 와 질문 intents(LLM 제공 또는 keyword 추론)의
+      교집합이 있어야 한다. 단, 시점 cue(realtime_lookup)만 겹치는 매칭은
+      제외한다.
+    - 자산이 domains 를 선언했고 질문에서도 도메인이 특정됐는데 교집합이
       없으면 오매칭으로 보고 제외한다.
     - `safe_for_auto_execution` (명시 선언된 read-only + 무부수효과) 자산만
       후보로 반환한다. 부작용 자산은 점수와 무관하게 None.
@@ -114,10 +122,10 @@ def select_capability(
     Returns:
         가장 높은 점수의 :class:`CapabilityDecision`, 후보가 없으면 None.
     """
-    question_intents = set(infer_intents(normalized_question))
+    question_intents = set(explicit_intents or infer_intents(normalized_question))
     if not question_intents:
         return None
-    question_domains = set(infer_domains(normalized_question))
+    question_domains = set(explicit_domains or infer_domains(normalized_question))
 
     assets: list[tuple[str, str, object]] = [
         ("skill", skill.name, skill) for skill in skills
