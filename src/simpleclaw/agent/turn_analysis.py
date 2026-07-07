@@ -380,13 +380,14 @@ async def analyze_turn_with_llm(
         response = await router.send(request)
         return parse_turn_analysis_payload(response.text, original_text=original)
     except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
-        # 진단은 raw 응답 길이/backend 등 안전 메타데이터만 남긴다 —
-        # raw 전문에는 사용자 발화가 포함될 수 있어 로그에 노출하지 않는다.
+        # 진단은 예외 타입/raw 응답 길이/backend 등 안전 메타데이터만 남긴다 —
+        # provider 예외 메시지와 raw 전문에는 사용자 발화가 그대로 포함될 수
+        # 있어 원문 문자열은 로그에 노출하지 않는다 (BIZ-430).
         raw_len = len(getattr(response, "text", "") or "")
         logger.warning(
             "Turn analysis structured output failed; using conservative "
-            "fallback: %s (structured=%s raw_len=%d backend=%s)",
-            exc,
+            "fallback (error_type=%s structured=%s raw_len=%d backend=%s)",
+            type(exc).__name__,
             structured_output,
             raw_len,
             backend_name or "default",

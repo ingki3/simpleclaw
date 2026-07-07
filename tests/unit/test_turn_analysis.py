@@ -352,3 +352,37 @@ async def test_turn_analysis_fallback_logs_structured_output_context(caplog):
     assert "backend=gemini" in joined
     # raw 응답 전문(사용자 발화 포함 가능)은 로그에 노출하지 않는다.
     assert '{"bad":' not in joined
+
+
+@pytest.mark.asyncio
+async def test_turn_analysis_fallback_does_not_log_exception_text(caplog):
+    """BIZ-430 — provider 예외 메시지가 사용자 발화/raw payload 를 담고 있어도
+    fallback warning 에는 예외 원문이 노출되지 않아야 한다."""
+    secret = "사용자 비밀 원문"
+    raw_like = '{"normalized_question": "leaked"}'
+    router = AsyncMock()
+    router.send = AsyncMock(
+        side_effect=RuntimeError(f"provider echoed {secret} {raw_like}")
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="simpleclaw.agent.turn_analysis"
+    ):
+        analysis = await analyze_turn_with_llm(
+            secret,
+            recent_messages=[],
+            router=router,
+            backend_name="gemini",
+        )
+
+    assert analysis.source == "fallback"
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    # 예외 원문(사용자 발화·raw-like payload 포함)은 어디에도 없어야 한다.
+    assert secret not in joined
+    assert raw_like not in joined
+    assert "provider echoed" not in joined
+    # 안전 메타데이터(예외 타입, structured 플래그, raw 길이, backend)만 남는다.
+    assert "error_type=RuntimeError" in joined
+    assert "structured=True" in joined
+    assert "raw_len=0" in joined
+    assert "backend=gemini" in joined
