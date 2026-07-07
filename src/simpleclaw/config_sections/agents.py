@@ -392,6 +392,21 @@ _SKILL_LEARNING_DEFAULTS: dict = {
     "max_trace_observation_chars": 1200,
 }
 
+# BIZ-428 — recipe learning 기본 설정값.
+# 운영 기본은 disabled — 켜도 후보는 pending 큐에만 쌓이는 approval-only 흐름이며,
+# live recipes.dir 설치는 operator recipe_learning tool의 materialize 승인 경로만
+# 수행한다. structured_output 은 BIZ-427 response_schema 기반 JSON 강제 게이트.
+_RECIPE_LEARNING_DEFAULTS: dict = {
+    "enabled": False,
+    "min_tool_calls": 2,
+    "min_distinct_tools": 2,
+    "min_final_chars": 500,
+    "suggestions_file": "~/.simpleclaw-agent/default/recipe_suggestions.jsonl",
+    "require_operator_accept": True,
+    "max_trace_observation_chars": 1200,
+    "structured_output": True,
+}
+
 
 def load_recipes_config(config_path: str | Path) -> dict:
     """config.yaml 에서 레시피 디렉터리 설정을 로드한다 (BIZ-202).
@@ -449,6 +464,39 @@ def load_skills_learning_config(config_path: str | Path) -> dict:
         "target_dir": target_dir,
         "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
         "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
+    }
+
+
+def load_recipe_learning_config(config_path: str | Path) -> dict:
+    """config.yaml의 ``recipes.learning`` 블록을 안전한 기본값으로 보강해 로드한다.
+
+    skill learning 이 ``skills.learning`` 아래에 있듯이 recipe learning 은
+    ``recipes.learning`` 아래에 둔다 — 후보 산출물(recipe.yaml)이 속한 서브시스템과
+    설정 위치를 일치시킨다. 파일이 없거나 파싱에 실패하면 disabled 기본값으로
+    돌아간다 (BIZ-428 approval-only safe default).
+    """
+    config_path = Path(config_path)
+    raw: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            recipes = data.get("recipes", {}) if isinstance(data, dict) else {}
+            raw = recipes.get("learning", {}) if isinstance(recipes, dict) else {}
+        except (yaml.YAMLError, OSError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _RECIPE_LEARNING_DEFAULTS
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "min_tool_calls": _coerce_int_config(raw.get("min_tool_calls", defaults["min_tool_calls"]), defaults["min_tool_calls"], minimum=1),
+        "min_distinct_tools": _coerce_int_config(raw.get("min_distinct_tools", defaults["min_distinct_tools"]), defaults["min_distinct_tools"], minimum=1),
+        "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
+        "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
+        "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
+        "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
+        "structured_output": bool(raw.get("structured_output", defaults["structured_output"])),
     }
 
 
