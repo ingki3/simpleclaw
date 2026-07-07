@@ -1,4 +1,8 @@
-"""BIZ-425 — TurnFrame 정규화(원문 보존 + 맥락 복원 + ambiguity 판정) 테스트."""
+"""BIZ-425 — TurnFrame 정규화(원문 보존 + 맥락 복원 + ambiguity 판정) 테스트.
+
+BIZ-426 — TurnFrame 은 더 이상 primary 경로가 아니다. 이 테스트들은 LLM
+turn analysis 비활성/실패 시의 결정적 fallback 동작 계약을 지킨다.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,10 @@
-"""Lightweight response route classifier for SimpleClaw turns.
+"""Fallback response route classifier for SimpleClaw turns.
+
+BIZ-426 — 일반 turn 의 primary route 판단은 ``agent.turn_analysis.enabled``
+가 켜져 있을 때 LLM TurnAnalysis(``simpleclaw.agent.turn_analysis``)가
+수행한다. 이 모듈은 provider 장애/turn analysis 비활성 시의 결정적
+fallback 과 route 계약 단위 테스트를 위해 유지된다 — 신규 keyword cue
+확장으로 라우팅 문제를 풀지 말 것(스킬/프롬프트/LLM 판단 우선).
 
 The router is intentionally conservative. It sends only structurally complex
 factual/scenario questions into ComplexFactWorkflow. Simple chat, normal tool
