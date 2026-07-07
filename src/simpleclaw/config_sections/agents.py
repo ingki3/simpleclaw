@@ -114,6 +114,9 @@ _AGENT_DEFAULTS: dict = {
         "backend": None,  # None 이면 llm.default backend 사용
         "max_tokens": 512,
         "max_recent_messages": 12,
+        # BIZ-427: Gemini structured output(response_schema)으로 schema 준수
+        # JSON 을 강제. False 는 프롬프트-only JSON 지시 escape hatch.
+        "structured_output": True,
         "fallback_mode": "conservative_original",
     },
 }
@@ -353,6 +356,12 @@ def _agent_with_defaults(agent: dict) -> dict:
                 ),
                 turn_analysis_defaults["max_recent_messages"],
                 minimum=0,
+            ),
+            "structured_output": bool(
+                turn_analysis.get(
+                    "structured_output",
+                    turn_analysis_defaults["structured_output"],
+                )
             ),
             "fallback_mode": str(
                 turn_analysis.get(

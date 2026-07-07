@@ -81,6 +81,7 @@ agent:
     backend: null          # null 이면 llm.default backend 사용 (저렴/고속 backend 지정 가능)
     max_tokens: 512        # 분석 응답 토큰 상한 — 레이턴시/비용 제어
     max_recent_messages: 12
+    structured_output: true  # BIZ-427 — Gemini response_mime_type + response_schema 로 JSON 강제
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는

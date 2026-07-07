@@ -156,7 +156,9 @@ def test_to_route_decision_maps_all_slot_flags():
 
 def test_turn_analysis_system_prompt_loads():
     spec = load_system_prompt("turn_analysis")
-    assert "Return ONLY a valid JSON object" in spec.system_prompt
+    # BIZ-427 — JSON shape 는 response_schema 가 강제하므로 프롬프트는
+    # schema 준수 전제 + semantic guidance 만 담는다.
+    assert "schema" in spec.system_prompt.lower()
     assert "normalized_question" in spec.system_prompt
     assert "complex_fact_workflow" in spec.system_prompt
     # 분석기는 사용자에게 답하지 않는다는 계약이 프롬프트에 명시돼야 한다.
@@ -198,7 +200,7 @@ async def test_analyze_turn_with_llm_sends_recent_context():
     assert request.max_tokens == 256
     assert "오늘 롯데 야구" in request.user_message
     assert "그럼 현재 순위는?" in request.user_message
-    assert "Return ONLY a valid JSON object" in request.system_prompt
+    assert "Do not answer the user" in request.system_prompt
     assert analysis.normalized_question == "롯데 맥락에서 현재 순위는?"
     assert analysis.route == ResponseRoute.CURRENT_FACT_GUARDED_LOOP
     assert analysis.source == "llm"
