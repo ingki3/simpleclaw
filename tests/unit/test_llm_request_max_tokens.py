@@ -342,6 +342,7 @@ class _CapturingProvider(LLMProvider):
         tools=None,
         system_blocks=None,
         max_tokens: int | None = None,
+        **kwargs,  # BIZ-427 structured output 등 신규 optional kwargs 허용
     ) -> LLMResponse:
         self.last_send_max_tokens = max_tokens
         return LLMResponse(text="ok", backend_name="cap")
@@ -355,6 +356,7 @@ class _CapturingProvider(LLMProvider):
         system_blocks=None,
         on_text_delta=None,
         max_tokens: int | None = None,
+        **kwargs,  # BIZ-427 structured output 등 신규 optional kwargs 허용
     ) -> LLMResponse:
         self.last_stream_max_tokens = max_tokens
         return LLMResponse(text="ok", backend_name="cap")
