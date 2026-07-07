@@ -24,6 +24,10 @@ agent:
   history_limit: 5
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 3
+  # BIZ-426 — 멀티턴 도구 루프의 send side_effect 시퀀스를 보존하기 위해
+  # LLM turn analysis 를 끈다(결정적 fallback 경로 검증).
+  turn_analysis:
+    enabled: false
 
 security:
   command_guard:

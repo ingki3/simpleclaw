@@ -107,6 +107,15 @@ _AGENT_DEFAULTS: dict = {
         "enable_claim_verifier": True,
         "enable_progress_events": True,
     },
+    # BIZ-426: 일반 turn 앞단 LLM turn analysis. 기본 활성 — keyword heuristic
+    # (TurnFrame/response_router)은 분석 비활성/실패 시의 fallback 으로만 동작.
+    "turn_analysis": {
+        "enabled": True,
+        "backend": None,  # None 이면 llm.default backend 사용
+        "max_tokens": 512,
+        "max_recent_messages": 12,
+        "fallback_mode": "conservative_original",
+    },
 }
 
 
@@ -177,6 +186,17 @@ def _agent_with_defaults(agent: dict) -> dict:
     if not isinstance(complex_fact, dict):
         complex_fact = {}
     complex_defaults = _AGENT_DEFAULTS["complex_fact_workflow"]
+
+    turn_analysis = agent.get("turn_analysis", {})
+    if not isinstance(turn_analysis, dict):
+        turn_analysis = {}
+    turn_analysis_defaults = _AGENT_DEFAULTS["turn_analysis"]
+    turn_analysis_backend = turn_analysis.get(
+        "backend", turn_analysis_defaults["backend"]
+    )
+    # 빈 문자열 backend 는 미설정으로 간주 — 기본 LLM backend 로 라우팅한다.
+    if isinstance(turn_analysis_backend, str) and not turn_analysis_backend.strip():
+        turn_analysis_backend = None
     planner_backend = str(
         complex_fact.get("planner_backend", complex_defaults["planner_backend"])
     )
@@ -313,6 +333,30 @@ def _agent_with_defaults(agent: dict) -> dict:
                 complex_fact.get(
                     "enable_progress_events",
                     complex_defaults["enable_progress_events"],
+                )
+            ),
+        },
+        "turn_analysis": {
+            "enabled": bool(
+                turn_analysis.get("enabled", turn_analysis_defaults["enabled"])
+            ),
+            "backend": turn_analysis_backend,
+            "max_tokens": _coerce_int_config(
+                turn_analysis.get("max_tokens", turn_analysis_defaults["max_tokens"]),
+                turn_analysis_defaults["max_tokens"],
+                minimum=64,
+            ),
+            "max_recent_messages": _coerce_int_config(
+                turn_analysis.get(
+                    "max_recent_messages",
+                    turn_analysis_defaults["max_recent_messages"],
+                ),
+                turn_analysis_defaults["max_recent_messages"],
+                minimum=0,
+            ),
+            "fallback_mode": str(
+                turn_analysis.get(
+                    "fallback_mode", turn_analysis_defaults["fallback_mode"]
                 )
             ),
         },

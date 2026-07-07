@@ -35,6 +35,10 @@ agent:
   history_limit: 5
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 5
+  # BIZ-426 — 이 파일은 도구 루프/결정적 경로 자체를 검증하므로 LLM turn
+  # analysis 를 끈다(켜면 분석용 send 호출이 mock 시퀀스를 소비).
+  turn_analysis:
+    enabled: false
 
 skills:
   local_dir: "{tmp_path}/local_skills"

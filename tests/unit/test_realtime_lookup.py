@@ -33,6 +33,10 @@ agent:
   history_limit: 5
   db_path: "{tmp_path}/conversations.db"
   max_tool_iterations: 3
+  # BIZ-426 — realtime lookup 가드는 keyword route fallback 경로를 검증하므로
+  # LLM turn analysis 를 끈다.
+  turn_analysis:
+    enabled: false
 
 security:
   command_guard:
