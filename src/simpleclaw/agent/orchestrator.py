@@ -16,6 +16,7 @@ Hot-reload 정책:
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 import os
@@ -63,6 +64,7 @@ from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.learning import (
+    SKILL_SUGGESTION_RESPONSE_SCHEMA,
     SkillSuggestion,
     SkillSuggestionStore,
     build_skill_candidate_prompt,
@@ -1358,9 +1360,40 @@ class AgentOrchestrator:
                 snapshots=snapshots,
                 source_msg_ids=source_msg_ids,
             )
-            SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+            if suggestion is None:
+                return
+            stored = SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(
+                suggestion
+            )
+            await self._notify_skill_candidate_pending(stored)
         except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
             logger.exception("Skill-learning candidate hook failed")
+
+    async def _notify_skill_candidate_pending(self, suggestion: SkillSuggestion) -> None:
+        """pending skill 후보를 운영자에게 알린다 — 최소한 명확한 이벤트 로그를 남긴다.
+
+        채널(Telegram 등)이 ``_skill_candidate_notifier`` 를 주입하면 그 hook 을
+        best-effort 로 호출하고, 없으면 감사 가능한 info 로그만 남긴다. 알림 실패가
+        후보 적재를 되돌리면 안 되므로 예외는 여기서 흡수한다.
+        """
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        logger.info(
+            "Skill suggestion pending operator review: id=%s skill=%s "
+            "risk_flags=%s validation_errors=%d",
+            suggestion.id,
+            suggestion.skill_name,
+            suggestion.risk_flags,
+            len(suggestion.validation_errors),
+        )
+        notifier = getattr(self, "_skill_candidate_notifier", None)
+        if not cfg.get("notify_on_candidate", True) or notifier is None:
+            return
+        try:
+            result = notifier(suggestion)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — 알림 실패는 후보 적재와 무관하다.
+            logger.exception("Skill candidate notification hook failed")
 
     async def _draft_skill_suggestion(
         self,
@@ -1369,24 +1402,50 @@ class AgentOrchestrator:
         assistant_text: str,
         snapshots: list,
         source_msg_ids: list[int],
-    ) -> SkillSuggestion:
-        """LLM으로 skill package 후보 JSON을 생성한다."""
+    ) -> SkillSuggestion | None:
+        """LLM으로 skill package 후보 JSON을 생성한다.
+
+        BIZ-429 — BIZ-427 의 provider-neutral structured output 으로 후보 JSON 을
+        schema-constrained 로 강제한다. 실패 시 raw 전문 대신 raw_len/error class
+        같은 안전 진단만 로그하고 ``None`` 을 반환해 후보 적재만 건너뛴다.
+        """
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        structured_output = bool(cfg.get("structured_output", True))
         fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
         prompt = build_skill_candidate_prompt(
             user_text=user_text,
             assistant_text=assistant_text,
             trace=snapshots,
         )
-        response = await self._router.send(LLMRequest(user_message=prompt, max_tokens=2048))
-        payload = json.loads((response.text or "{}").strip())
-        if not isinstance(payload, dict):
-            raise ValueError("Skill candidate response must be a JSON object")
-        return suggestion_from_candidate_payload(
-            payload,
-            trace_fingerprint_value=fp,
-            source_msg_ids=source_msg_ids,
-            trace=snapshots,
-        )
+        response = None
+        try:
+            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            if structured_output:
+                request.response_mime_type = "application/json"
+                request.response_schema = SKILL_SUGGESTION_RESPONSE_SCHEMA
+                request.require_structured_output = True
+            response = await self._router.send(request)
+            payload = json.loads((response.text or "{}").strip())
+            if not isinstance(payload, dict):
+                raise ValueError("Skill candidate response must be a JSON object")
+            return suggestion_from_candidate_payload(
+                payload,
+                trace_fingerprint_value=fp,
+                source_msg_ids=source_msg_ids,
+                trace=snapshots,
+            )
+        except Exception as exc:  # noqa: BLE001 — 후보 실패는 turn 을 막지 않는다.
+            # raw 전문에는 사용자 발화/도구 관측이 섞일 수 있어 로그에 남기지 않는다.
+            raw_len = len(getattr(response, "text", "") or "")
+            logger.warning(
+                "Skill suggestion structured output failed; skipping candidate: "
+                "%s (error=%s structured=%s raw_len=%d)",
+                exc,
+                type(exc).__name__,
+                structured_output,
+                raw_len,
+            )
+            return None
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.
