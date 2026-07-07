@@ -1055,6 +1055,9 @@ class AgentOrchestrator:
                         max_recent_messages=int(
                             turn_analysis_cfg.get("max_recent_messages", 12)
                         ),
+                        structured_output=bool(
+                            turn_analysis_cfg.get("structured_output", True)
+                        ),
                     )
                     logger.info(
                         "TurnAnalysis built: source=%s route=%s confidence=%.2f "

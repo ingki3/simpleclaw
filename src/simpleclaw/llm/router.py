@@ -99,6 +99,9 @@ class LLMRouter:
                 system_blocks=request.system_blocks,
                 on_text_delta=on_text_delta,
                 max_tokens=request.max_tokens,
+                response_mime_type=request.response_mime_type,
+                response_schema=request.response_schema,
+                require_structured_output=request.require_structured_output,
             )
 
         logger.info("Routing request to backend '%s'", backend_name)
@@ -109,6 +112,9 @@ class LLMRouter:
             request.tools,
             system_blocks=request.system_blocks,
             max_tokens=request.max_tokens,
+            response_mime_type=request.response_mime_type,
+            response_schema=request.response_schema,
+            require_structured_output=request.require_structured_output,
         )
 
     def list_backends(self) -> list[str]:

@@ -44,6 +44,127 @@ _MAX_AMBIGUITY_OPTIONS = 4
 # 분석 프롬프트가 본 응답보다 커지는 역전을 막는다.
 _MAX_MESSAGE_CHARS = 1200
 
+# BIZ-427 — required/propertyOrdering 을 한 소스로 유지하기 위한 필드 순서.
+# propertyOrdering 은 Gemini 2.0 계열에서 structured output 안정성에 필요하다.
+_TURN_ANALYSIS_FIELDS = [
+    "is_followup",
+    "normalized_question",
+    "context_summary",
+    "confidence",
+    "needs_clarification",
+    "ambiguity_options",
+    "domains",
+    "intents",
+    "route",
+    "complexity_score",
+    "needs_current_facts",
+    "needs_rules",
+    "needs_remaining_variables",
+    "needs_calculation",
+    "needs_comparison_or_conditions",
+    "needs_conflict_resolution",
+    "needs_impact_analysis",
+    "reasons",
+]
+
+# BIZ-427 — Gemini structured output 용 TurnAnalysis JSON Schema.
+# 프롬프트-only JSON 지시가 live 에서 `Unterminated string` 파싱 실패를 내는
+# 문제를 schema-constrained 출력으로 차단한다. `route` 만 enum 으로 강제하고
+# `domains`/`intents` 는 capability 확장성을 위해 free string array 로 둔다.
+# 스키마는 문법(shape)만 보장하므로 semantic clamp 는 계속
+# parse_turn_analysis_payload() 가 담당한다.
+TURN_ANALYSIS_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "description": (
+        "Structured analysis of one SimpleClaw user turn for normalization "
+        "and routing."
+    ),
+    "properties": {
+        "is_followup": {
+            "type": "boolean",
+            "description": (
+                "Whether the current message depends on recent conversation "
+                "context."
+            ),
+        },
+        "normalized_question": {
+            "type": "string",
+            "description": (
+                "Internal execution question. Preserve original meaning; add "
+                "resolved context only when needed."
+            ),
+        },
+        "context_summary": {
+            "type": "string",
+            "description": "Short explanation of the context used, or empty if none.",
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Confidence in normalization/routing decision from 0 to 1.",
+        },
+        "needs_clarification": {
+            "type": "boolean",
+            "description": (
+                "True if multiple plausible contexts or missing details require "
+                "asking the user."
+            ),
+        },
+        "ambiguity_options": {
+            "type": "array",
+            "description": "2-4 concise options if clarification is needed; otherwise empty.",
+            "items": {"type": "string"},
+            "maxItems": 4,
+        },
+        "domains": {
+            "type": "array",
+            "description": (
+                "Coarse domains such as sports, market, weather, entertainment, "
+                "study, productivity."
+            ),
+            "items": {"type": "string"},
+            "maxItems": 6,
+        },
+        "intents": {
+            "type": "array",
+            "description": (
+                "Coarse intents such as standings, quote, weather, drama_info, "
+                "realtime_lookup, scenario_analysis."
+            ),
+            "items": {"type": "string"},
+            "maxItems": 8,
+        },
+        "route": {
+            "type": "string",
+            "enum": [route.value for route in ResponseRoute],
+            "description": "Top-level execution route.",
+        },
+        "complexity_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Overall complexity score from 0 to 10.",
+        },
+        "needs_current_facts": {"type": "boolean"},
+        "needs_rules": {"type": "boolean"},
+        "needs_remaining_variables": {"type": "boolean"},
+        "needs_calculation": {"type": "boolean"},
+        "needs_comparison_or_conditions": {"type": "boolean"},
+        "needs_conflict_resolution": {"type": "boolean"},
+        "needs_impact_analysis": {"type": "boolean"},
+        "reasons": {
+            "type": "array",
+            "description": "Short reasons for the decision.",
+            "items": {"type": "string"},
+            "maxItems": 5,
+        },
+    },
+    "required": _TURN_ANALYSIS_FIELDS,
+    "additionalProperties": False,
+    "propertyOrdering": _TURN_ANALYSIS_FIELDS,
+}
+
 
 @dataclass(frozen=True)
 class TurnAnalysis:
@@ -211,6 +332,7 @@ async def analyze_turn_with_llm(
     backend_name: str | None = None,
     max_tokens: int = 512,
     max_recent_messages: int = 12,
+    structured_output: bool = True,
 ) -> TurnAnalysis:
     """LLM으로 follow-up/정규화/clarify/복잡도/라우팅을 한 번에 판단한다.
 
@@ -222,6 +344,9 @@ async def analyze_turn_with_llm(
         backend_name: 분석 전용 backend. None 이면 라우터 기본 backend.
         max_tokens: 분석 응답 토큰 상한 — 레이턴시/비용 제어용.
         max_recent_messages: 프롬프트에 포함할 최근 메시지 수 상한.
+        structured_output: True(기본)면 Gemini structured output 으로 schema
+            준수 JSON 을 강제한다 (BIZ-427). False 는 프롬프트-only JSON 지시로
+            동작하는 운영 escape hatch.
 
     Returns:
         LLM 판단 결과(:class:`TurnAnalysis`, ``source="llm"``). 호출/파싱
@@ -237,6 +362,7 @@ async def analyze_turn_with_llm(
         "## Current user message\n"
         f"{original}"
     )
+    response = None
     try:
         request = LLMRequest(
             system_prompt=load_system_prompt("turn_analysis").system_prompt,
@@ -244,8 +370,25 @@ async def analyze_turn_with_llm(
             backend_name=backend_name,
             max_tokens=max_tokens,
         )
+        if structured_output:
+            # BIZ-427 — schema-constrained JSON 출력을 provider 에 요구한다.
+            # 미지원 provider 는 LLMProviderError 를 던지고 아래 fallback 으로
+            # 안전하게 내려간다.
+            request.response_mime_type = "application/json"
+            request.response_schema = TURN_ANALYSIS_RESPONSE_SCHEMA
+            request.require_structured_output = True
         response = await router.send(request)
         return parse_turn_analysis_payload(response.text, original_text=original)
     except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
-        logger.warning("Turn analysis LLM failed; using conservative fallback: %s", exc)
+        # 진단은 raw 응답 길이/backend 등 안전 메타데이터만 남긴다 —
+        # raw 전문에는 사용자 발화가 포함될 수 있어 로그에 노출하지 않는다.
+        raw_len = len(getattr(response, "text", "") or "")
+        logger.warning(
+            "Turn analysis structured output failed; using conservative "
+            "fallback: %s (structured=%s raw_len=%d backend=%s)",
+            exc,
+            structured_output,
+            raw_len,
+            backend_name or "default",
+        )
         return _fallback_analysis(original)

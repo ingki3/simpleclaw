@@ -103,6 +103,12 @@ class LLMRequest:
     BIZ-297 — ``max_tokens`` 가 None 이 아니면 프로바이더가 해당 값을 출력 토큰 cap
     으로 사용한다. None 이면 각 프로바이더의 기존 기본값(Claude 4096, OpenAI/Gemini
     는 API 모델 기본값) 으로 fallback — 호환성 1순위.
+
+    BIZ-427 — ``response_mime_type``/``response_schema`` 는 provider-neutral
+    structured output 힌트다. schema-constrained 출력을 지원하는 프로바이더
+    (현재 Gemini)는 네이티브 config 로 매핑하고, 미지원 프로바이더는
+    ``require_structured_output=False`` 면 조용히 무시, ``True`` 면 명확한
+    ``LLMProviderError`` 를 던진다 — 호출자가 fallback 여부를 결정하게 한다.
     """
     system_prompt: str = ""
     user_message: str = ""
@@ -111,6 +117,9 @@ class LLMRequest:
     tools: list[ToolDefinition] | None = None
     system_blocks: list[SystemBlock] | None = None
     max_tokens: int | None = None
+    response_mime_type: str | None = None
+    response_schema: dict | type | None = None
+    require_structured_output: bool = False
 
 
 @dataclass
