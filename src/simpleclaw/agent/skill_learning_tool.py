@@ -3,7 +3,8 @@
 BIZ-429 — 운영자 승인 UX 를 담당한다. ``show``/``diff`` 는 운영자가 설치 판단에
 필요한 요약·위험 신호·검증 오류·파일 미리보기를 제공하고, ``materialize`` 는
 ``accepted`` 상태 + ``confirm=true`` 두 게이트를 모두 통과해야만 실제 runtime
-skill 로 설치한다(자동 materialize 경로 없음).
+skill 로 설치한다(자동 materialize 경로 없음). 두 게이트는 어떤 config 로도
+완화할 수 없다 — ``require_operator_accept`` 우회는 BIZ-432 에서 제거했다.
 """
 
 from __future__ import annotations
@@ -85,9 +86,8 @@ def _handle_materialize(
     skills_config: dict,
 ) -> str:
     """accepted + confirm 이중 게이트를 통과한 후보만 설치한다."""
-    # 게이트 1 — 운영자 승인. require_operator_accept=False 로 명시했을 때만 완화.
-    require_accept = bool(config.get("require_operator_accept", True))
-    if require_accept and suggestion.status != "accepted":
+    # 게이트 1 — 운영자 승인. 설정으로 끌 수 없는 무조건 게이트다(BIZ-432).
+    if suggestion.status != "accepted":
         return (
             "Error: suggestion must be accepted before materialize "
             f"(current status: {suggestion.status}). "
@@ -112,7 +112,6 @@ def _handle_materialize(
             suggestion,
             target_dir=target_dir,
             overwrite=bool(args.get("overwrite", False)),
-            require_accepted=require_accept,
         )
     except (ValueError, FileExistsError, PermissionError, SyntaxError) as exc:
         return f"Error: materialize failed: {exc}"

@@ -41,6 +41,9 @@ _SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
 )
+# BIZ-432 — 저장/로그를 허용하는 risk flag 전체 집합. LLM payload 가 임의 문자열
+# (secret 포함 가능)을 risk_flags 로 흘려도 이 밖의 값은 어디에도 남지 않는다.
+RISK_FLAG_ALLOWLIST = ("network", "subprocess", "file_write", "external_api")
 _RISK_KEYWORDS = {
     "network": (
         "requests.",
@@ -139,11 +142,9 @@ SKILL_SUGGESTION_RESPONSE_SCHEMA: dict = {
         },
         "risk_flags": {
             "type": "array",
-            "description": (
-                "Self-declared risk flags such as network, subprocess, "
-                "file_write, external_api."
-            ),
-            "items": {"type": "string"},
+            "description": "Self-declared risk flags from the fixed allowlist.",
+            # BIZ-432 — 스키마 단계에서도 allowlist 로 제한해 임의 문자열 유입을 줄인다.
+            "items": {"type": "string", "enum": list(RISK_FLAG_ALLOWLIST)},
             "maxItems": 8,
         },
     },
@@ -225,7 +226,7 @@ class SkillSuggestion:
             dict(references or {}),
             list(source_msg_ids or []),
             list(trace or []),
-            sorted(set(risk_flags or [])),
+            normalize_risk_flags(risk_flags),
             list(validation_errors or []),
             "pending",
             None,
@@ -266,7 +267,8 @@ class SkillSuggestion:
                 for v in trace_raw
                 if isinstance(v, dict)
             ],
-            risk_flags=list(raw.get("risk_flags") or []),
+            # legacy 저장분에 임의 문자열이 남아 있어도 로드 시점에 정화한다.
+            risk_flags=normalize_risk_flags(raw.get("risk_flags")),
             validation_errors=list(raw.get("validation_errors") or []),
             status=str(raw.get("status") or "pending"),
             materialized_path=raw.get("materialized_path"),
@@ -278,6 +280,32 @@ class SkillSuggestion:
             if isinstance(updated, str)
             else datetime.now(),
         )
+
+
+def normalize_risk_flags(values: Any) -> list[str]:
+    """risk flag 목록을 allowlist 값만 남긴 정렬된 리스트로 정규화한다 (BIZ-432).
+
+    LLM payload 나 legacy 저장 데이터에서 온 risk_flags 는 임의 문자열일 수
+    있고 secret-like 값이 섞일 수 있으므로, 대소문자/구분자만 보정한 뒤
+    allowlist 밖 값은 전부 버린다. 버린 값 자체는 secret 일 수 있어 로그에도
+    남기지 않고 개수만 경고한다.
+    """
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    kept: set[str] = set()
+    dropped = 0
+    for value in values:
+        normalized = str(value).strip().lower().replace("-", "_")
+        if normalized in RISK_FLAG_ALLOWLIST:
+            kept.add(normalized)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "Dropped %d non-allowlisted risk flag value(s); values are not logged.",
+            dropped,
+        )
+    return sorted(kept)
 
 
 def normalize_skill_name(value: str) -> str:
@@ -399,8 +427,10 @@ def suggestion_from_candidate_payload(
         payload.get("skill_md")
         or f"---\nname: {skill_name}\ndescription: Generated skill candidate.\n---\n# {skill_name}\n"
     )
+    # LLM 이 선언한 risk_flags 는 allowlist 로 정화한 뒤에만 자체 감지 결과와 합친다.
     risk_flags = sorted(
-        set(payload.get("risk_flags") or []) | set(detect_risk_flags(skill_md, scripts))
+        set(normalize_risk_flags(payload.get("risk_flags")))
+        | set(detect_risk_flags(skill_md, scripts))
     )
     validation_errors = validate_skill_package_plan(
         skill_name=skill_name, skill_md=skill_md, scripts=scripts, references=references

@@ -6,12 +6,14 @@ from simpleclaw.agent.tool_loop import ToolTraceStep
 from simpleclaw.skills.learning import (
     MAX_SKILL_DESCRIPTION_CHARS,
     REQUIRED_SKILL_MD_SECTIONS,
+    RISK_FLAG_ALLOWLIST,
     SKILL_MD_SECTION_ORDER,
     SKILL_SUGGESTION_RESPONSE_SCHEMA,
     SkillSuggestion,
     SkillSuggestionStore,
     build_skill_candidate_prompt,
     is_complex_successful_trace,
+    normalize_risk_flags,
     suggestion_from_candidate_payload,
     validate_skill_package_plan,
 )
@@ -135,6 +137,73 @@ def test_suggestion_from_candidate_payload_accepts_entry_arrays():
     assert "network" in suggestion.risk_flags
     assert suggestion.validation_errors == []
     assert suggestion.status == "pending"
+
+
+def test_normalize_risk_flags_keeps_allowlist_and_normalizes_shape():
+    """대소문자/구분자만 다른 allowlist 값은 정규화해 보존한다."""
+    assert normalize_risk_flags(["Network", "file-write", "subprocess"]) == [
+        "file_write",
+        "network",
+        "subprocess",
+    ]
+    assert normalize_risk_flags(None) == []
+    assert normalize_risk_flags("network") == []
+
+
+def test_normalize_risk_flags_drops_secret_like_and_unknown_values():
+    """allowlist 밖 문자열은 secret-like 여부와 무관하게 저장 대상에서 제외한다."""
+    assert normalize_risk_flags(
+        ["token=abcdef1234567890", "sk-abcdefghijklmnopqrstuvwx", "custom-flag"]
+    ) == []
+
+
+def test_suggestion_from_candidate_payload_sanitizes_llm_risk_flags():
+    """LLM payload 의 risk_flags 는 allowlist 를 거쳐서만 반영된다 (BIZ-432)."""
+    payload = {
+        "title": "News brief",
+        "rationale": "Reusable trace",
+        "skill_name": "news-brief",
+        "skill_md": _skill_md("news-brief"),
+        "scripts": [],
+        "references": [],
+        "risk_flags": ["network", "token=abcdef1234567890", "arbitrary-injected-text"],
+    }
+    suggestion = suggestion_from_candidate_payload(
+        payload, trace_fingerprint_value="fp", source_msg_ids=[1], trace=[]
+    )
+    assert suggestion.risk_flags == ["network"]
+    assert all(flag in RISK_FLAG_ALLOWLIST for flag in suggestion.risk_flags)
+
+
+def test_suggestion_new_pending_normalizes_risk_flags():
+    suggestion = SkillSuggestion.new_pending(
+        title="T",
+        rationale="R",
+        trace_fingerprint="fp",
+        skill_name="demo-skill",
+        skill_md=_skill_md(),
+        risk_flags=["Network", "password=hunter2hunter2", "external_api"],
+    )
+    assert suggestion.risk_flags == ["external_api", "network"]
+
+
+def test_suggestion_from_dict_drops_non_allowlisted_risk_flags():
+    """저장소에 남아 있던 legacy 임의 risk_flags 도 로드 시점에 정화된다."""
+    suggestion = SkillSuggestion.from_dict(
+        {
+            "id": "x",
+            "title": "T",
+            "skill_name": "demo-skill",
+            "skill_md": _skill_md(),
+            "risk_flags": ["subprocess", "ghp_abcdefghijklmnopqrstuv"],
+        }
+    )
+    assert suggestion.risk_flags == ["subprocess"]
+
+
+def test_skill_suggestion_schema_constrains_risk_flags_to_allowlist():
+    items = SKILL_SUGGESTION_RESPONSE_SCHEMA["properties"]["risk_flags"]["items"]
+    assert items["enum"] == list(RISK_FLAG_ALLOWLIST)
 
 
 def test_suggestion_from_candidate_payload_accepts_legacy_dict():
