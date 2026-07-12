@@ -19,6 +19,7 @@ from simpleclaw.agent.action_result import (
     ActionResultLedger,
     fallback_for_empty_final_from_ledger,
     infer_action_result,
+    looks_like_explicit_error_header,
 )
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
@@ -260,26 +261,13 @@ def _tool_result_provides_usable_live_evidence(content: str) -> bool:
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
-    """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다."""
-    stripped = content.strip()
-    if not stripped:
-        return False
+    """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
-    lowered = stripped.lower()
-    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
-        return True
-
-    for line in stripped.splitlines()[:3]:
-        header = line.strip().lower()
-        if not header:
-            continue
-        return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
-            for prefix in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
-        )
-    return False
+    BIZ-437: ledger 추론(action_result)과 같은 기준을 공유해, 같은 observation
+    이 ledger 에서는 unknown 인데 legacy fallback 에서는 오류로 갈라지는 일이
+    없게 한다.
+    """
+    return looks_like_explicit_error_header(content)
 
 
 def _tool_result_looks_like_not_found(content: str) -> bool:
