@@ -213,3 +213,64 @@ async def test_schema_parse_failure_does_not_break_user_response(tmp_path, monke
     )
 
     assert not (tmp_path / "recipe_suggestions.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_logs_no_raw_message(tmp_path, monkeypatch, caplog):
+    """BIZ-435 — provider 예외 메시지는 로그에 남기지 않고 class/진단만 기록한다."""
+    orchestrator = _orchestrator(
+        tmp_path, monkeypatch, learning=_enabled_learning_block(tmp_path)
+    )
+    orchestrator._router.send = AsyncMock(
+        side_effect=RuntimeError("provider body with user secret sk-SECRETSECRETSECRET")
+    )
+
+    with caplog.at_level("WARNING"):
+        await orchestrator._capture_recipe_learning_candidate(
+            "user", "x" * 600, _complex_result(), [1]
+        )
+
+    assert not (tmp_path / "recipe_suggestions.jsonl").exists()
+    assert "sk-SECRETSECRETSECRET" not in caplog.text
+    assert "provider body" not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "raw_len=0" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_response_logs_no_raw_text(tmp_path, monkeypatch, caplog):
+    """BIZ-435 — 파싱 실패한 raw 응답 전문은 로그에 남지 않고 길이만 기록한다."""
+    orchestrator = _orchestrator(
+        tmp_path, monkeypatch, learning=_enabled_learning_block(tmp_path)
+    )
+    response = MagicMock()
+    response.text = "RAW-USER-OBSERVATION token=abcd1234efgh5678 not json"
+    orchestrator._router.send = AsyncMock(return_value=response)
+
+    with caplog.at_level("WARNING"):
+        await orchestrator._capture_recipe_learning_candidate(
+            "user", "x" * 600, _complex_result(), [1]
+        )
+
+    assert not (tmp_path / "recipe_suggestions.jsonl").exists()
+    assert "RAW-USER-OBSERVATION" not in caplog.text
+    assert "abcd1234efgh5678" not in caplog.text
+    assert "JSONDecodeError" in caplog.text
+    assert f"raw_len={len(response.text)}" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_response_skips_candidate(tmp_path, monkeypatch):
+    """JSON 이지만 object 가 아니면 후보 저장을 건너뛴다 (draft가 None 반환)."""
+    orchestrator = _orchestrator(
+        tmp_path, monkeypatch, learning=_enabled_learning_block(tmp_path)
+    )
+    response = MagicMock()
+    response.text = json.dumps(["not", "an", "object"])
+    orchestrator._router.send = AsyncMock(return_value=response)
+
+    await orchestrator._capture_recipe_learning_candidate(
+        "user", "x" * 600, _complex_result(), [1]
+    )
+
+    assert not (tmp_path / "recipe_suggestions.jsonl").exists()

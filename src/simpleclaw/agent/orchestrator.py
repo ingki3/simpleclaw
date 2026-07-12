@@ -1502,6 +1502,8 @@ class AgentOrchestrator:
                 snapshots=snapshots,
                 source_msg_ids=source_msg_ids,
             )
+            if suggestion is None:
+                return
             RecipeSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
         except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
             logger.exception("Recipe-learning candidate hook failed")
@@ -1513,35 +1515,51 @@ class AgentOrchestrator:
         assistant_text: str,
         snapshots: list,
         source_msg_ids: list[int],
-    ) -> RecipeSuggestion:
+    ) -> RecipeSuggestion | None:
         """LLM으로 recipe(반복 워크플로) 후보 JSON을 생성한다.
 
         BIZ-427 structured output 게이트가 켜져 있으면 provider에
-        ``response_schema`` 기반 JSON을 강제한다. 미지원 provider는
-        ``LLMProviderError`` 를 던지고 상위 capture hook이 후보 생성만 건너뛴다.
+        ``response_schema`` 기반 JSON을 강제한다. BIZ-435 — 실패 시 skill
+        learning과 동일하게 raw 전문/프롬프트 대신 exception class·structured
+        flag·raw_len 만 로그하고 ``None`` 을 반환해 후보 적재만 건너뛴다.
         """
         cfg = getattr(self, "_recipe_learning_config", {}) or {}
+        structured_output = bool(cfg.get("structured_output", True))
         fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
         prompt = build_recipe_candidate_prompt(
             user_text=user_text,
             assistant_text=assistant_text,
             trace=snapshots,
         )
-        request = LLMRequest(user_message=prompt, max_tokens=2048)
-        if cfg.get("structured_output", True):
-            request.response_mime_type = "application/json"
-            request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
-            request.require_structured_output = True
-        response = await self._router.send(request)
-        payload = json.loads((response.text or "{}").strip())
-        if not isinstance(payload, dict):
-            raise ValueError("Recipe candidate response must be a JSON object")
-        return suggestion_from_recipe_payload(
-            payload,
-            trace_fingerprint_value=fp,
-            source_msg_ids=source_msg_ids,
-            trace=snapshots,
-        )
+        response = None
+        try:
+            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            if structured_output:
+                request.response_mime_type = "application/json"
+                request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
+                request.require_structured_output = True
+            response = await self._router.send(request)
+            payload = json.loads((response.text or "{}").strip())
+            if not isinstance(payload, dict):
+                raise ValueError("Recipe candidate response must be a JSON object")
+            return suggestion_from_recipe_payload(
+                payload,
+                trace_fingerprint_value=fp,
+                source_msg_ids=source_msg_ids,
+                trace=snapshots,
+            )
+        except Exception as exc:  # noqa: BLE001 — 후보 실패는 turn 을 막지 않는다.
+            # raw 전문/exception 메시지에는 사용자 발화·도구 관측·provider 응답이
+            # 섞일 수 있어 클래스 이름과 길이 진단만 남긴다.
+            raw_len = len(getattr(response, "text", "") or "")
+            logger.warning(
+                "Recipe suggestion drafting failed; skipping candidate "
+                "(error=%s structured=%s raw_len=%d)",
+                type(exc).__name__,
+                structured_output,
+                raw_len,
+            )
+            return None
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.

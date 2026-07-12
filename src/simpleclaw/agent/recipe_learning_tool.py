@@ -7,8 +7,8 @@ list/show/accept/reject/materialize 한다 (BIZ-428).
 - materialize는 live ``recipes.dir`` 를 쓰는 유일한 경로이며,
   ``recipe_generate`` install과 동일한 policy(:func:`install_validated_recipe`)를
   재사용한다 — 승인 상태 + ``confirm=true`` + validation pass + overwrite/backup.
-- ``require_operator_accept`` (기본 true)면 ``accepted`` 상태 후보만 materialize
-  가능하다. false로 낮추면 pending 후보도 confirm과 함께 설치할 수 있다.
+- materialize 의 accepted 게이트는 설정으로 완화할 수 없다. ``confirm=true`` 는
+  별도 최종 확인일 뿐 pending 후보 설치를 허용하지 않는다 (BIZ-435).
 - materialize 직전에 정적 검증(:func:`validate_recipe_suggestion_plan`)과
   loader/render smoke(:func:`validate_recipe_candidate`)를 다시 수행한다 —
   후보 저장 이후 코드/정책이 바뀌었어도 설치 시점 기준으로 안전해야 한다.
@@ -111,13 +111,9 @@ def _materialize(
         "warnings": [],
     }
 
-    # 승인 게이트 — 자동 materialize 금지. require_operator_accept=false 로
-    # 명시적으로 낮춘 운영 환경에서만 pending 후보 직접 설치를 허용한다.
-    allowed_statuses = (
-        ("accepted",)
-        if bool(config.get("require_operator_accept", True))
-        else ("pending", "accepted")
-    )
+    # 승인 게이트 — 자동 materialize 금지. BIZ-435 이후 어떤 config 로도 pending
+    # 후보를 직접 설치할 수 없고, operator accept + confirm 이중 게이트를 유지한다.
+    allowed_statuses = ("accepted",)
     if suggestion.status not in allowed_statuses:
         payload["errors"].append(
             f"materialize requires status in {list(allowed_statuses)}; "

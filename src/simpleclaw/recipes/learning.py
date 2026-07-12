@@ -29,19 +29,49 @@ from typing import Any
 
 import yaml
 
-# skill learning과 공유하는 trace snapshot/redaction helper — 후보 큐는 분리해도
-# 원본 민감값을 저장하지 않는 redaction 정책은 한 소스로 유지한다.
+# skill learning과 공유하는 trace snapshot/redaction/risk 정화 helper — 후보 큐는
+# 분리해도 원본 민감값을 저장하지 않는 redaction/allowlist 정책은 한 소스로 유지한다.
 from simpleclaw.skills.learning import (
+    RISK_FLAG_ALLOWLIST,
     SkillTraceStepSnapshot,
     _contains_secret_like,
     _redact_text,
+    _RISK_KEYWORDS,
     detect_risk_flags,
+    normalize_risk_flags,
 )
 
 logger = logging.getLogger(__name__)
 
 RecipeSuggestionStatus = str
 VALID_RECIPE_SUGGESTION_STATUSES = ("pending", "accepted", "rejected", "materialized")
+
+# BIZ-435 — recipe 후보가 저장/표시/로그할 수 있는 risk flag 전체 집합.
+# skill 공용 allowlist에 recipe 전용 ``cron_hint``(반복 실행 리스크 표시)만 더한다.
+# LLM schema enum에는 cron_hint를 넣지 않는다 — cron_hint 플래그는 payload의
+# cron_hint 필드에서 파생되는 내부 표시이지 LLM self-declare 대상이 아니다.
+RECIPE_RISK_FLAG_ALLOWLIST = (*RISK_FLAG_ALLOWLIST, "cron_hint")
+
+# BIZ-435 — source trace 기반 위험 감지용 tool 이름 토큰 힌트. LLM payload의
+# self-declared risk_flags만 신뢰하면 위험 표시가 누락될 수 있어, trace의 tool
+# 이름에서 직접 신호를 찾는다. 위험 누락(false negative)이 과잉 표시보다 승인
+# UX에 해로우므로 file_manage 같은 쓰기 가능 도구도 보수적으로 포함한다.
+_TRACE_RISK_TOOL_TOKENS = {
+    "network": (
+        "web",
+        "http",
+        "https",
+        "fetch",
+        "download",
+        "browser",
+        "url",
+        "curl",
+        "wget",
+        "webhook",
+    ),
+    "subprocess": ("cli", "shell", "bash", "exec", "command", "subprocess", "terminal"),
+    "file_write": ("write", "manage", "save", "delete", "remove", "mkdir", "unlink"),
+}
 
 # recipe_generate와 동일한 name 규칙 — materialize가 같은 install policy를
 # 재사용하므로 후보 단계에서 미리 같은 규칙으로 정규화/검증한다.
@@ -140,6 +170,9 @@ RECIPE_SUGGESTION_RESPONSE_SCHEMA: dict = {
                     },
                 },
                 "required": _RECIPE_PARAMETER_FIELDS,
+                # BIZ-435 — parameter entry에 unknown key가 스며들면 그대로 저장돼
+                # 승인 화면/recipe.yaml까지 전파되므로 스키마 단계에서 차단한다.
+                "additionalProperties": False,
                 "propertyOrdering": _RECIPE_PARAMETER_FIELDS,
             },
             "maxItems": 8,
@@ -154,15 +187,16 @@ RECIPE_SUGGESTION_RESPONSE_SCHEMA: dict = {
         },
         "risk_flags": {
             "type": "array",
-            "description": (
-                "Risk labels such as network, external_api, subprocess, "
-                "file_write; empty if none."
-            ),
-            "items": {"type": "string"},
+            "description": "Self-declared risk flags from the fixed allowlist.",
+            # BIZ-435 — 스키마 단계에서도 allowlist 로 제한해 임의 문자열(잠재적
+            # secret 포함) 유입을 줄인다. cron_hint 플래그는 내부 파생값이라 제외.
+            "items": {"type": "string", "enum": list(RISK_FLAG_ALLOWLIST)},
             "maxItems": 8,
         },
     },
     "required": _RECIPE_SUGGESTION_FIELDS,
+    # BIZ-435 — skill schema와 동일하게 unknown root property를 차단한다.
+    "additionalProperties": False,
     "propertyOrdering": _RECIPE_SUGGESTION_FIELDS,
 }
 
@@ -220,7 +254,7 @@ class RecipeSuggestion:
             (cron_hint or "").strip() or None,
             list(source_msg_ids or []),
             list(trace or []),
-            sorted(set(risk_flags or [])),
+            normalize_recipe_risk_flags(risk_flags),
             list(validation_errors or []),
             "pending",
             None,
@@ -262,7 +296,8 @@ class RecipeSuggestion:
                 for v in trace_raw
                 if isinstance(v, dict)
             ],
-            risk_flags=list(raw.get("risk_flags") or []),
+            # legacy 저장분에 임의 문자열이 남아 있어도 로드 시점에 정화한다 (BIZ-435).
+            risk_flags=normalize_recipe_risk_flags(raw.get("risk_flags")),
             validation_errors=list(raw.get("validation_errors") or []),
             status=str(raw.get("status") or "pending"),
             materialized_path=raw.get("materialized_path"),
@@ -274,6 +309,43 @@ class RecipeSuggestion:
             if isinstance(updated, str)
             else datetime.now(),
         )
+
+
+def normalize_recipe_risk_flags(values: Any) -> list[str]:
+    """recipe risk flag 목록을 recipe allowlist 기준으로 정화한다 (BIZ-435).
+
+    skill 쪽 :func:`normalize_risk_flags` 와 같은 정책(대소문자/구분자 보정,
+    allowlist 밖 값은 값 자체를 어디에도 남기지 않고 개수만 경고)을
+    ``cron_hint`` 가 포함된 recipe 전용 allowlist로 적용한다.
+    """
+    return normalize_risk_flags(values, allowlist=RECIPE_RISK_FLAG_ALLOWLIST)
+
+
+def detect_trace_risk_flags(trace: list[Any]) -> list[str]:
+    """redacted source trace에서 allowlist 위험 플래그를 감지한다 (BIZ-435).
+
+    LLM payload의 self-declared ``risk_flags`` 와 recipe_yaml 키워드만 보면
+    trace가 실제로 수행한 network/subprocess/file_write/external_api 행위가
+    승인 화면에서 누락될 수 있다. tool 이름 토큰과 (redacted) arguments 텍스트
+    에서 직접 신호를 찾아 후보 risk_flags에 합산할 값을 돌려준다.
+    """
+    flags: set[str] = set()
+    for step in trace or []:
+        tool_name = str(getattr(step, "tool_name", "") or "").lower()
+        tokens = set(re.split(r"[^a-z0-9]+", tool_name))
+        for flag, hints in _TRACE_RISK_TOOL_TOKENS.items():
+            if tokens & set(hints):
+                flags.add(flag)
+        arguments = getattr(step, "arguments", {}) or {}
+        args_text = json.dumps(arguments, ensure_ascii=False, default=str).lower()
+        if "http://" in args_text or "https://" in args_text:
+            flags.add("network")
+        # 코드 지향 키워드지만 cli 명령/스크립트 조각이 arguments로 넘어오는
+        # 경우가 많아 skill 쪽 키워드 집합을 그대로 재사용한다.
+        for flag, words in _RISK_KEYWORDS.items():
+            if any(w in args_text for w in words):
+                flags.add(flag)
+    return sorted(flags)
 
 
 def normalize_recipe_name(value: str) -> str:
@@ -356,8 +428,13 @@ def suggestion_from_recipe_payload(
             "parameters": parameters,
         }
     )
-    risk_flags = set(payload.get("risk_flags") or []) | set(
-        detect_risk_flags(recipe_yaml)
+    # BIZ-435 — LLM self-declared 값은 allowlist로 정화한 뒤에만 쓰고, recipe_yaml
+    # 키워드 감지와 source trace 기반 감지를 합산한다. payload만 신뢰하면 trace가
+    # 실제 수행한 위험 행위가 승인 화면에서 누락될 수 있다.
+    risk_flags = (
+        set(normalize_recipe_risk_flags(payload.get("risk_flags")))
+        | set(detect_risk_flags(recipe_yaml))
+        | set(detect_trace_risk_flags(trace))
     )
     if cron_hint:
         # 반복 실행 후보임을 승인 단계에서 눈에 띄게 남긴다 — cron 생성은 별도 승인.
@@ -518,12 +595,15 @@ class RecipeSuggestionStore:
 
 
 __all__ = [
+    "RECIPE_RISK_FLAG_ALLOWLIST",
     "RECIPE_SUGGESTION_RESPONSE_SCHEMA",
     "RecipeSuggestion",
     "RecipeSuggestionStore",
     "VALID_RECIPE_SUGGESTION_STATUSES",
     "build_recipe_candidate_prompt",
+    "detect_trace_risk_flags",
     "normalize_recipe_name",
+    "normalize_recipe_risk_flags",
     "suggestion_from_recipe_payload",
     "validate_recipe_suggestion_plan",
 ]

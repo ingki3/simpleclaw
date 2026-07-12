@@ -101,7 +101,7 @@ recipes:
     min_distinct_tools: 2        # 후보로 볼 최소 distinct tool 수
     min_final_chars: 500         # 최종 답변 최소 길이 — 짧은 응답은 후보 제외
     suggestions_file: "~/.simpleclaw-agent/default/recipe_suggestions.jsonl"
-    require_operator_accept: true  # materialize 전 accept 승인 필수 (safe default)
+    # materialize 는 항상 accept 후 confirm=true 가 필요하며 설정으로 완화할 수 없다.
     max_trace_observation_chars: 1200
     structured_output: true      # BIZ-427 — response_schema 로 후보 JSON 강제
 
@@ -196,8 +196,7 @@ skills:
     suggestions_file: "~/.simpleclaw-agent/default/skill_suggestions.jsonl"
     # materialize 대상 skill 루트. 생략하면 skills.local_dir 사용.
     # target_dir: ".agent/skills"
-    # false 로 바꾸면 accepted 상태 없이 materialize 가 허용된다 — 권장하지 않음.
-    require_operator_accept: true
+    # materialize 는 항상 accept 후 confirm=true 가 필요하며 설정으로 완화할 수 없다.
     # 후보 생성 성공 시 운영자 알림 hook(주입된 경우) 호출 + pending 이벤트 로그.
     notify_on_candidate: true
     # 후보 LLM 출력을 BIZ-427 schema-constrained JSON 으로 강제 (Gemini 계열).
