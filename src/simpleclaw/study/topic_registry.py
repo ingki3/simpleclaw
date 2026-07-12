@@ -464,6 +464,17 @@ class EvolvingTopicRegistry:
         """검색 폴백 전용(archived) topic 만 반환한다."""
         return [t for t in self._topics.values() if t.is_archived]
 
+    # -- 적재 -----------------------------------------------------------
+
+    def add_existing(self, topic: Topic) -> None:
+        """이미 영속화된 topic 을 상태 전이 없이 그대로 적재한다.
+
+        ``topics.yaml`` 에서 로드한 topic 을 evolution pass 전에 채워 넣는 용도다.
+        record() 와 달리 점수/상태 재계산을 하지 않는다 — 로드 시점의 상태는
+        디스크가 SoT 이고, 전이는 이후 record()/evolve() 가 결정한다.
+        """
+        self._topics[topic.topic_id] = topic
+
     # -- 신호 수용 -----------------------------------------------------
 
     def record(self, signal: TopicSignal) -> Topic | None:
