@@ -122,6 +122,8 @@ async def test_orchestrator_uses_llm_normalized_question_for_tool_loop(
     assert kwargs["backend_name"] == "gemini"
     assert kwargs["max_tokens"] == 256
     assert kwargs["max_recent_messages"] == 8
+    # BIZ-427 — config 에 structured_output 미지정이어도 기본 True 로 전달된다.
+    assert kwargs["structured_output"] is True
 
 
 @pytest.mark.asyncio
@@ -396,3 +398,30 @@ async def test_turn_analysis_decisions_are_logged_without_user_text(
     assert "TurnAnalysis built:" in caplog.text
     assert "Route decision:" in caplog.text
     assert "부산 출장" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_structured_output_config_false_reaches_analyzer(
+    config_file, monkeypatch
+):
+    """BIZ-427 — config 의 structured_output: false 가 분석기 인자로 전달된다."""
+    text = config_file.read_text(encoding="utf-8")
+    config_file.write_text(
+        text.replace(
+            "max_recent_messages: 8",
+            "max_recent_messages: 8\n    structured_output: false",
+        ),
+        encoding="utf-8",
+    )
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    orch._tool_loop = AsyncMock(return_value="안녕하세요")
+
+    await orch.process_message("안녕", user_id=1, chat_id=1)
+
+    assert analyzer.call_args.kwargs["structured_output"] is False

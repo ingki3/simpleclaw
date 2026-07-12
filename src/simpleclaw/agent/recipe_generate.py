@@ -88,14 +88,46 @@ def handle_recipe_generate(
         payload.update({"ok": True, "recipe": validation.get("recipe")})
         return _json(payload)
 
+    install = install_validated_recipe(args, target_path=target_path)
+    payload["errors"].extend(install["errors"])
+    payload.update(
+        {
+            "ok": install["ok"],
+            "installed": install["installed"],
+            "backup_path": install["backup_path"],
+        }
+    )
+    if install["recipe"] is not None:
+        payload["recipe"] = install["recipe"]
+    return _json(payload)
+
+
+def install_validated_recipe(
+    args: dict[str, Any], *, target_path: Path
+) -> dict[str, Any]:
+    """검증을 통과한 recipe candidate를 승인 정책 아래 설치한다.
+
+    ``recipe_generate`` install과 ``recipe_learning`` materialize가 공유하는
+    live 설치 policy의 단일 구현: ``confirm=true`` 필수, 기존 recipe는
+    ``overwrite=true`` + timestamped backup 없이는 교체 금지, atomic write 후
+    loader 재검증까지 수행한다. 호출자는 이 함수 이전에
+    :func:`validate_recipe_candidate` 통과를 보장해야 한다.
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "installed": False,
+        "backup_path": None,
+        "errors": [],
+        "recipe": None,
+    }
     if not bool(args.get("confirm", False)):
-        payload["errors"].append("install requires confirm=true")
-        return _json(payload)
+        result["errors"].append("install requires confirm=true")
+        return result
     if target_path.exists() and not bool(args.get("overwrite", False)):
-        payload["errors"].append(
+        result["errors"].append(
             "target recipe already exists; pass overwrite=true to backup and replace"
         )
-        return _json(payload)
+        return result
 
     backup_path: Path | None = None
     if target_path.exists():
@@ -107,10 +139,10 @@ def handle_recipe_generate(
     try:
         installed_recipe = load_recipe(target_path)
     except RecipeParseError as exc:
-        payload["errors"].append(f"post-install validation failed: {exc}")
-        return _json(payload)
+        result["errors"].append(f"post-install validation failed: {exc}")
+        return result
 
-    payload.update(
+    result.update(
         {
             "ok": True,
             "installed": True,
@@ -118,7 +150,7 @@ def handle_recipe_generate(
             "recipe": _recipe_summary(installed_recipe, target_path),
         }
     )
-    return _json(payload)
+    return result
 
 
 def build_recipe_yaml(args: dict[str, Any]) -> str:
@@ -152,7 +184,7 @@ def validate_recipe_candidate(
 ) -> dict[str, Any]:
     """candidate recipe를 임시 경로에 써서 loader/render smoke를 수행한다."""
     candidate_path = candidate_dir / "recipe.yaml"
-    errors = _static_candidate_errors(args)
+    errors = static_candidate_errors(args)
     warnings: list[str] = []
     if errors:
         return {
@@ -202,8 +234,11 @@ def validate_recipe_candidate(
     }
 
 
-def _static_candidate_errors(args: dict[str, Any]) -> list[str]:
-    """파일 쓰기 전 검출 가능한 recipe candidate 오류를 반환한다."""
+def static_candidate_errors(args: dict[str, Any]) -> list[str]:
+    """파일 쓰기 전 검출 가능한 recipe candidate 오류를 반환한다.
+
+    ``recipe_learning`` 후보 검증에서도 재사용되므로 public helper로 둔다.
+    """
     errors: list[str] = []
     name = str(args.get("name") or "").strip()
     instructions = str(args.get("instructions") or "")
@@ -307,4 +342,11 @@ def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
-__all__ = ["DEFAULT_CONFIG_PATH", "build_recipe_yaml", "handle_recipe_generate", "validate_recipe_candidate"]
+__all__ = [
+    "DEFAULT_CONFIG_PATH",
+    "build_recipe_yaml",
+    "handle_recipe_generate",
+    "install_validated_recipe",
+    "static_candidate_errors",
+    "validate_recipe_candidate",
+]

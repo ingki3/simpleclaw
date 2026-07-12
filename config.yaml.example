@@ -81,6 +81,7 @@ agent:
     backend: null          # null 이면 llm.default backend 사용 (저렴/고속 backend 지정 가능)
     max_tokens: 512        # 분석 응답 토큰 상한 — 레이턴시/비용 제어
     max_recent_messages: 12
+    structured_output: true  # BIZ-427 — Gemini response_mime_type + response_schema 로 JSON 강제
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
@@ -89,6 +90,20 @@ agent:
 # 레거시 위치 ``.agent/recipes/`` 도 다음 마이너 릴리스까지는 한 번 폴백한다.
 recipes:
   dir: "~/.simpleclaw/recipes"
+  # BIZ-428 — recipe learning. 성공한 복잡 tool trace를 "반복 실행 절차" 후보로
+  # pending 큐(JSONL)에만 저장하는 approval-only 기능. 기본 disabled.
+  # 켜도 자동 설치는 없다 — live recipes.dir 설치는 운영자 recipe_learning tool의
+  # accept 후 materialize(confirm=true, 검증/backup 정책)로만 수행된다.
+  # cron_hint 는 후보 metadata로만 저장되며 cron job 을 자동 생성하지 않는다.
+  learning:
+    enabled: false
+    min_tool_calls: 2            # 후보로 볼 최소 tool 호출 수
+    min_distinct_tools: 2        # 후보로 볼 최소 distinct tool 수
+    min_final_chars: 500         # 최종 답변 최소 길이 — 짧은 응답은 후보 제외
+    suggestions_file: "~/.simpleclaw-agent/default/recipe_suggestions.jsonl"
+    require_operator_accept: true  # materialize 전 accept 승인 필수 (safe default)
+    max_trace_observation_chars: 1200
+    structured_output: true      # BIZ-427 — response_schema 로 후보 JSON 강제
 
 # 시맨틱 메모리 (RAG, spec 005 Phase 2)
 # enabled: true 로 켜면 sentence-transformers가 첫 메시지에 모델(~500MB)을 다운로드한다.
@@ -149,6 +164,27 @@ skills:
   local_dir: ".agent/skills"
   global_dir: "~/.agents/skills"
   execution_timeout: 60
+  # BIZ-429 — 성공한 복잡 tool trace 를 pending skill 후보로 적재하는 학습 큐.
+  # 기본 disabled(안전 기본값). 켜도 후보는 자동 설치되지 않으며, 운영자가
+  # skill_learning 도구로 show/diff 검토 → accept → materialize(confirm=true)
+  # 를 거쳐야만 실제 runtime skill 이 된다.
+  learning:
+    enabled: false
+    # 후보로 볼 최소 trace 조건 — 이보다 단순한 turn 은 후보를 만들지 않는다.
+    min_tool_calls: 2
+    min_distinct_tools: 2
+    min_final_chars: 500
+    # pending/accepted/rejected/materialized 후보를 보관하는 JSONL sidecar.
+    suggestions_file: "~/.simpleclaw-agent/default/skill_suggestions.jsonl"
+    # materialize 대상 skill 루트. 생략하면 skills.local_dir 사용.
+    # target_dir: ".agent/skills"
+    # false 로 바꾸면 accepted 상태 없이 materialize 가 허용된다 — 권장하지 않음.
+    require_operator_accept: true
+    # 후보 생성 성공 시 운영자 알림 hook(주입된 경우) 호출 + pending 이벤트 로그.
+    notify_on_candidate: true
+    # 후보 LLM 출력을 BIZ-427 schema-constrained JSON 으로 강제 (Gemini 계열).
+    structured_output: true
+    max_trace_observation_chars: 1200
 
 # MCP (Model Context Protocol) — stdio 서버만 지원. 서버 변경은 restart 필요.
 # scope: runtime  → 일반 사용자 tool loop에 노출 (명시적 opt-in)

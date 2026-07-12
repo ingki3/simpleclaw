@@ -114,6 +114,9 @@ _AGENT_DEFAULTS: dict = {
         "backend": None,  # None 이면 llm.default backend 사용
         "max_tokens": 512,
         "max_recent_messages": 12,
+        # BIZ-427: Gemini structured output(response_schema)으로 schema 준수
+        # JSON 을 강제. False 는 프롬프트-only JSON 지시 escape hatch.
+        "structured_output": True,
         "fallback_mode": "conservative_original",
     },
 }
@@ -354,6 +357,12 @@ def _agent_with_defaults(agent: dict) -> dict:
                 turn_analysis_defaults["max_recent_messages"],
                 minimum=0,
             ),
+            "structured_output": bool(
+                turn_analysis.get(
+                    "structured_output",
+                    turn_analysis_defaults["structured_output"],
+                )
+            ),
             "fallback_mode": str(
                 turn_analysis.get(
                     "fallback_mode", turn_analysis_defaults["fallback_mode"]
@@ -379,8 +388,28 @@ _SKILL_LEARNING_DEFAULTS: dict = {
     "min_final_chars": 500,
     "suggestions_file": "~/.simpleclaw-agent/default/skill_suggestions.jsonl",
     "target_dir": None,
+    # BIZ-432 — require_operator_accept 키 제거. materialize 의 accepted 게이트는
+    # 설정으로 완화할 수 없으므로 config.yaml 에 남아 있어도 무시된다.
+    "max_trace_observation_chars": 1200,
+    # BIZ-429 — 후보 생성 시 운영자 알림 hook 호출 여부.
+    "notify_on_candidate": True,
+    # BIZ-429 — 후보 LLM 출력을 BIZ-427 schema-constrained JSON 으로 강제할지.
+    "structured_output": True,
+}
+
+# BIZ-428 — recipe learning 기본 설정값.
+# 운영 기본은 disabled — 켜도 후보는 pending 큐에만 쌓이는 approval-only 흐름이며,
+# live recipes.dir 설치는 operator recipe_learning tool의 materialize 승인 경로만
+# 수행한다. structured_output 은 BIZ-427 response_schema 기반 JSON 강제 게이트.
+_RECIPE_LEARNING_DEFAULTS: dict = {
+    "enabled": False,
+    "min_tool_calls": 2,
+    "min_distinct_tools": 2,
+    "min_final_chars": 500,
+    "suggestions_file": "~/.simpleclaw-agent/default/recipe_suggestions.jsonl",
     "require_operator_accept": True,
     "max_trace_observation_chars": 1200,
+    "structured_output": True,
 }
 
 
@@ -438,8 +467,42 @@ def load_skills_learning_config(config_path: str | Path) -> dict:
         "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
         "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
         "target_dir": target_dir,
+        "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
+        "notify_on_candidate": bool(raw.get("notify_on_candidate", defaults["notify_on_candidate"])),
+        "structured_output": bool(raw.get("structured_output", defaults["structured_output"])),
+    }
+
+
+def load_recipe_learning_config(config_path: str | Path) -> dict:
+    """config.yaml의 ``recipes.learning`` 블록을 안전한 기본값으로 보강해 로드한다.
+
+    skill learning 이 ``skills.learning`` 아래에 있듯이 recipe learning 은
+    ``recipes.learning`` 아래에 둔다 — 후보 산출물(recipe.yaml)이 속한 서브시스템과
+    설정 위치를 일치시킨다. 파일이 없거나 파싱에 실패하면 disabled 기본값으로
+    돌아간다 (BIZ-428 approval-only safe default).
+    """
+    config_path = Path(config_path)
+    raw: dict = {}
+    if config_path.is_file():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            recipes = data.get("recipes", {}) if isinstance(data, dict) else {}
+            raw = recipes.get("learning", {}) if isinstance(recipes, dict) else {}
+        except (yaml.YAMLError, OSError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _RECIPE_LEARNING_DEFAULTS
+    return {
+        "enabled": bool(raw.get("enabled", defaults["enabled"])),
+        "min_tool_calls": _coerce_int_config(raw.get("min_tool_calls", defaults["min_tool_calls"]), defaults["min_tool_calls"], minimum=1),
+        "min_distinct_tools": _coerce_int_config(raw.get("min_distinct_tools", defaults["min_distinct_tools"]), defaults["min_distinct_tools"], minimum=1),
+        "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
+        "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
         "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
         "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
+        "structured_output": bool(raw.get("structured_output", defaults["structured_output"])),
     }
 
 

@@ -16,6 +16,7 @@ Hot-reload 정책:
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from simpleclaw.config import (
     load_mcp_config,
     load_memory_config,
     load_persona_config,
+    load_recipe_learning_config,
     load_recipes_config,
     load_security_config,
     load_skills_learning_config,
@@ -59,10 +61,18 @@ from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.secrets import default_manager
 from simpleclaw.security.sanitize import sanitize_tool_output
+from simpleclaw.recipes.learning import (
+    RECIPE_SUGGESTION_RESPONSE_SCHEMA,
+    RecipeSuggestion,
+    RecipeSuggestionStore,
+    build_recipe_candidate_prompt,
+    suggestion_from_recipe_payload,
+)
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.learning import (
+    SKILL_SUGGESTION_RESPONSE_SCHEMA,
     SkillSuggestion,
     SkillSuggestionStore,
     build_skill_candidate_prompt,
@@ -159,6 +169,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "deploy_status",
     "recipe_validate",
     "recipe_generate",
+    "recipe_learning",
     "skill_validate",
     "restart_runtime",
     "skill_learning",
@@ -656,6 +667,9 @@ class AgentOrchestrator:
         skills_config = self._load_skills_config()
         self._skills_config = skills_config
         self._skill_learning_config = load_skills_learning_config(config_path)
+        # BIZ-428 — recipe learning은 skill learning과 별도 config gate.
+        # 기본 disabled이며, 켜도 후보는 pending 큐에만 쌓인다 (approval-only).
+        self._recipe_learning_config = load_recipe_learning_config(config_path)
 
         # BIZ-424: MCP config는 부팅 시 로드하되, 서버 연결(외부 subprocess 실행)은
         # 첫 turn 준비 시 _ensure_mcp_connected()가 lazy one-shot으로 수행한다.
@@ -1055,6 +1069,9 @@ class AgentOrchestrator:
                         max_recent_messages=int(
                             turn_analysis_cfg.get("max_recent_messages", 12)
                         ),
+                        structured_output=bool(
+                            turn_analysis_cfg.get("structured_output", True)
+                        ),
                     )
                     logger.info(
                         "TurnAnalysis built: source=%s route=%s confidence=%.2f "
@@ -1178,7 +1195,10 @@ class AgentOrchestrator:
                         on_progress=on_progress,
                     )
                     tool_loop_result = ToolLoopResult(response_text)
-                elif self._skill_learning_config.get("enabled", False):
+                elif self._skill_learning_config.get(
+                    "enabled", False
+                ) or self._recipe_learning_config.get("enabled", False):
+                    # skill/recipe 학습 후보 capture는 tool trace가 필요하다.
                     tool_loop_result = await self._run_tool_loop_result(
                         route_input,
                         attachments=attachments,
@@ -1212,6 +1232,9 @@ class AgentOrchestrator:
                     text, response_text, list(msg_ids)
                 )
                 await self._capture_skill_learning_candidate(
+                    text, response_text, tool_loop_result, list(msg_ids)
+                )
+                await self._capture_recipe_learning_candidate(
                     text, response_text, tool_loop_result, list(msg_ids)
                 )
                 return response_text
@@ -1355,9 +1378,40 @@ class AgentOrchestrator:
                 snapshots=snapshots,
                 source_msg_ids=source_msg_ids,
             )
-            SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+            if suggestion is None:
+                return
+            stored = SkillSuggestionStore(cfg["suggestions_file"]).upsert_pending(
+                suggestion
+            )
+            await self._notify_skill_candidate_pending(stored)
         except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
             logger.exception("Skill-learning candidate hook failed")
+
+    async def _notify_skill_candidate_pending(self, suggestion: SkillSuggestion) -> None:
+        """pending skill 후보를 운영자에게 알린다 — 최소한 명확한 이벤트 로그를 남긴다.
+
+        채널(Telegram 등)이 ``_skill_candidate_notifier`` 를 주입하면 그 hook 을
+        best-effort 로 호출하고, 없으면 감사 가능한 info 로그만 남긴다. 알림 실패가
+        후보 적재를 되돌리면 안 되므로 예외는 여기서 흡수한다.
+        """
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        logger.info(
+            "Skill suggestion pending operator review: id=%s skill=%s "
+            "risk_flags=%s validation_errors=%d",
+            suggestion.id,
+            suggestion.skill_name,
+            suggestion.risk_flags,
+            len(suggestion.validation_errors),
+        )
+        notifier = getattr(self, "_skill_candidate_notifier", None)
+        if not cfg.get("notify_on_candidate", True) or notifier is None:
+            return
+        try:
+            result = notifier(suggestion)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — 알림 실패는 후보 적재와 무관하다.
+            logger.exception("Skill candidate notification hook failed")
 
     async def _draft_skill_suggestion(
         self,
@@ -1366,19 +1420,123 @@ class AgentOrchestrator:
         assistant_text: str,
         snapshots: list,
         source_msg_ids: list[int],
-    ) -> SkillSuggestion:
-        """LLM으로 skill package 후보 JSON을 생성한다."""
+    ) -> SkillSuggestion | None:
+        """LLM으로 skill package 후보 JSON을 생성한다.
+
+        BIZ-429 — BIZ-427 의 provider-neutral structured output 으로 후보 JSON 을
+        schema-constrained 로 강제한다. 실패 시 raw 전문 대신 raw_len/error class
+        같은 안전 진단만 로그하고 ``None`` 을 반환해 후보 적재만 건너뛴다.
+        """
+        cfg = getattr(self, "_skill_learning_config", {}) or {}
+        structured_output = bool(cfg.get("structured_output", True))
         fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
         prompt = build_skill_candidate_prompt(
             user_text=user_text,
             assistant_text=assistant_text,
             trace=snapshots,
         )
-        response = await self._router.send(LLMRequest(user_message=prompt, max_tokens=2048))
+        response = None
+        try:
+            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            if structured_output:
+                request.response_mime_type = "application/json"
+                request.response_schema = SKILL_SUGGESTION_RESPONSE_SCHEMA
+                request.require_structured_output = True
+            response = await self._router.send(request)
+            payload = json.loads((response.text or "{}").strip())
+            if not isinstance(payload, dict):
+                raise ValueError("Skill candidate response must be a JSON object")
+            return suggestion_from_candidate_payload(
+                payload,
+                trace_fingerprint_value=fp,
+                source_msg_ids=source_msg_ids,
+                trace=snapshots,
+            )
+        except Exception as exc:  # noqa: BLE001 — 후보 실패는 turn 을 막지 않는다.
+            # raw 전문에는 사용자 발화/도구 관측이 섞일 수 있어 로그에 남기지 않는다.
+            raw_len = len(getattr(response, "text", "") or "")
+            logger.warning(
+                "Skill suggestion structured output failed; skipping candidate: "
+                "%s (error=%s structured=%s raw_len=%d)",
+                exc,
+                type(exc).__name__,
+                structured_output,
+                raw_len,
+            )
+            return None
+
+    async def _capture_recipe_learning_candidate(
+        self,
+        user_text: str,
+        assistant_text: str,
+        result: ToolLoopResult,
+        source_msg_ids: list[int],
+    ) -> None:
+        """성공한 복잡 tool trace를 best-effort pending recipe 후보로 적재한다.
+
+        BIZ-428 — skill 후보와 별도 config gate(``recipes.learning``)/큐로 동작한다.
+        후보 생성 실패는 사용자 응답을 깨지 않고 warning 로그만 남긴다. live
+        ``recipes.dir`` 설치는 여기서 하지 않는다 — operator ``recipe_learning``
+        tool의 materialize 승인 경로만 수행한다.
+        """
+        cfg = getattr(self, "_recipe_learning_config", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+        try:
+            trace = list(result.trace or [])
+            if not result.success or not is_complex_successful_trace(
+                trace,
+                assistant_text,
+                min_tool_calls=int(cfg.get("min_tool_calls", 2)),
+                min_distinct_tools=int(cfg.get("min_distinct_tools", 2)),
+                min_final_chars=int(cfg.get("min_final_chars", 500)),
+            ):
+                return
+            snapshots = snapshots_from_trace(
+                trace,
+                max_observation_chars=int(cfg.get("max_trace_observation_chars", 1200)),
+            )
+            suggestion = await self._draft_recipe_suggestion(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                snapshots=snapshots,
+                source_msg_ids=source_msg_ids,
+            )
+            RecipeSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+            logger.exception("Recipe-learning candidate hook failed")
+
+    async def _draft_recipe_suggestion(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        snapshots: list,
+        source_msg_ids: list[int],
+    ) -> RecipeSuggestion:
+        """LLM으로 recipe(반복 워크플로) 후보 JSON을 생성한다.
+
+        BIZ-427 structured output 게이트가 켜져 있으면 provider에
+        ``response_schema`` 기반 JSON을 강제한다. 미지원 provider는
+        ``LLMProviderError`` 를 던지고 상위 capture hook이 후보 생성만 건너뛴다.
+        """
+        cfg = getattr(self, "_recipe_learning_config", {}) or {}
+        fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
+        prompt = build_recipe_candidate_prompt(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            trace=snapshots,
+        )
+        request = LLMRequest(user_message=prompt, max_tokens=2048)
+        if cfg.get("structured_output", True):
+            request.response_mime_type = "application/json"
+            request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
+            request.require_structured_output = True
+        response = await self._router.send(request)
         payload = json.loads((response.text or "{}").strip())
         if not isinstance(payload, dict):
-            raise ValueError("Skill candidate response must be a JSON object")
-        return suggestion_from_candidate_payload(
+            raise ValueError("Recipe candidate response must be a JSON object")
+        return suggestion_from_recipe_payload(
             payload,
             trace_fingerprint_value=fp,
             source_msg_ids=source_msg_ids,

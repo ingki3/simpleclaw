@@ -722,7 +722,68 @@ _SKILL_LEARNING_TOOL = ToolDefinition(
     name="skill_learning",
     description=(
         "운영자 전용 skill learning review 도구. 성공한 복잡 tool trace에서 생성된 "
-        "pending skill 후보를 list/show/accept/reject/materialize 한다."
+        "pending skill 후보를 list/show/diff/accept/reject/materialize 한다. "
+        "materialize 는 accepted 상태 + confirm=true 를 모두 요구한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "show", "diff", "accept", "reject", "materialize"],
+                "description": (
+                    "list=후보 요약 목록, show=승인 판단용 상세(요약/risk/validation/"
+                    "파일 미리보기), diff=설치 시 파일 create/update preview, "
+                    "accept/reject=운영자 승인/거절, materialize=승인된 후보 설치."
+                ),
+            },
+            "id": {
+                "type": "string",
+                "description": "대상 suggestion id. list 를 제외한 모든 action 에 필수.",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["pending", "all"],
+                "description": "action=list 필터. 기본 pending.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "action=reject 시 저장할 거절 사유.",
+            },
+            "target_dir": {
+                "type": "string",
+                "description": "diff/materialize 대상 skill 루트 override. 생략 시 설정값.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": (
+                    "action=materialize 에서 동일 skill 이 이미 있을 때 백업 후 "
+                    "교체할지. 기본 false(충돌 시 거부)."
+                ),
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": (
+                    "action=materialize 필수 안전장치. show/diff 검토 후 true 로 "
+                    "명시해야만 설치된다."
+                ),
+            },
+        },
+        "required": ["action"],
+    },
+)
+
+
+# BIZ-428 — skill_learning과 별도 큐. skill 후보가 "새 능력/도구 사용법"이라면
+# recipe 후보는 "반복 실행 절차/워크플로"로 산출물(recipe.yaml)/검증/승인 질문이
+# 다르다. materialize는 recipe_generate install과 동일한 confirm/backup policy.
+_RECIPE_LEARNING_TOOL = ToolDefinition(
+    name="recipe_learning",
+    description=(
+        "운영자 전용 recipe learning review 도구. 성공한 복잡 tool trace에서 생성된 "
+        "pending recipe(반복 워크플로) 후보를 list/show/accept/reject/materialize 한다. "
+        "materialize는 accepted 상태 + confirm=true + validation pass일 때만 configured "
+        "recipes.dir에 백업+검증+atomic write로 설치한다."
     ),
     parameters={
         "type": "object",
@@ -730,9 +791,15 @@ _SKILL_LEARNING_TOOL = ToolDefinition(
             "action": {"type": "string", "enum": ["list", "show", "accept", "reject", "materialize"]},
             "id": {"type": "string"},
             "status": {"type": "string", "enum": ["pending", "all"]},
-            "reason": {"type": "string"},
-            "target_dir": {"type": "string"},
-            "overwrite": {"type": "boolean"},
+            "reason": {"type": "string", "description": "reject 사유. action=reject에서 사용."},
+            "confirm": {
+                "type": "boolean",
+                "description": "materialize side effect 승인. action=materialize에서 true 필수.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "기존 recipe.yaml이 있을 때 백업 후 덮어쓸지 여부. 기본 false.",
+            },
         },
         "required": ["action"],
     },
@@ -838,6 +905,13 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _SKILL_LEARNING_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.HIGH,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        # materialize가 live recipes.dir를 쓰므로 recipe_generate와 같은 HIGH risk.
+        _RECIPE_LEARNING_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.HIGH,
         operator_gate_required=True,

@@ -47,6 +47,19 @@ def handle_recipe_generate(*args: Any, **kwargs: Any) -> str:
     return _handler(*args, **kwargs)
 
 
+def handle_recipe_learning(*args: Any, **kwargs: Any) -> str:
+    """recipe_learning handler를 지연 import한다.
+
+    recipe_generate와 같은 이유 — handler가 recipes package를 import하므로
+    ``simpleclaw.recipes`` 로드 중 tool_dispatch가 재진입하는 순환을 피한다.
+    """
+    from simpleclaw.agent.recipe_learning_tool import (
+        handle_recipe_learning as _handler,
+    )
+
+    return _handler(*args, **kwargs)
+
+
 async def dispatch_tool_call(
     orchestrator: Any,
     tool_call: ToolCall,
@@ -182,6 +195,15 @@ async def dispatch_tool_call(
             args,
             config=orchestrator._skill_learning_config,
             skills_config=orchestrator._skills_config,
+        )
+    if name == "recipe_learning":
+        if not operator_tools:
+            return "Error: recipe_learning is available only in operator context."
+        return handle_recipe_learning(
+            args,
+            config=orchestrator._recipe_learning_config,
+            config_path=orchestrator._config_path,
+            workspace_dir=orchestrator._workspace_dir,
         )
     if name == "study_status":
         if not operator_tools:

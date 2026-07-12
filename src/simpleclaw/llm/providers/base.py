@@ -16,13 +16,43 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Awaitable, Callable
 
-from simpleclaw.llm.models import LLMResponse, SystemBlock, ToolDefinition
+from simpleclaw.llm.models import (
+    LLMProviderError,
+    LLMResponse,
+    SystemBlock,
+    ToolDefinition,
+)
 
 TextDeltaCallback = Callable[[str], Awaitable[None]]
 
 
 class LLMProvider(ABC):
     """모든 LLM 프로바이더(API 및 CLI)의 기본 클래스."""
+
+    def _reject_required_structured_output(
+        self,
+        *,
+        response_mime_type: str | None,
+        response_schema: dict | type | None,
+        require_structured_output: bool,
+        reason: str = "does not support structured output yet",
+    ) -> None:
+        """schema-constrained 출력을 보장할 수 없을 때의 공통 가드 (BIZ-427/430).
+
+        ``require_structured_output=False`` 면 힌트를 조용히 무시해 기존 호출
+        회귀를 막고, ``True`` 면 명확한 ``LLMProviderError`` 를 던져 호출자가
+        fallback 여부를 결정하게 한다 — 잘못된 JSON 을 조용히 돌려주는 것보다
+        빠른 실패가 안전하다.
+
+        BIZ-430 — "required" 계약은 mime/schema 힌트의 존재 여부가 아니라
+        호출자의 보장 요구(``require_structured_output=True``)만으로 결정된다.
+        힌트 없는 required 요청도 미지원 provider 에서는 즉시 거부한다.
+        """
+        # 힌트 인자는 시그니처 통일용으로만 받는다 — 거부 판단에는 쓰지 않는다.
+        del response_mime_type, response_schema
+        if require_structured_output:
+            name = getattr(self, "_name", type(self).__name__)
+            raise LLMProviderError(f"Provider '{name}' {reason}")
 
     @abstractmethod
     async def send(
@@ -33,6 +63,9 @@ class LLMProvider(ABC):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
         """LLM에 메시지를 전송하고 응답을 반환한다.
 
@@ -45,6 +78,13 @@ class LLMProvider(ABC):
                 ``cache=True`` 블록 끝에 prompt caching 경계 마커를 부착한다.
                 그 외 프로바이더는 모든 블록을 단일 문자열로 합친다.
             max_tokens: 출력 토큰 cap. None 이면 프로바이더 기본값을 사용한다 (BIZ-297).
+            response_mime_type: structured output MIME 힌트 (BIZ-427, 예:
+                ``application/json``). 미지원 프로바이더는 무시할 수 있다.
+            response_schema: structured output JSON Schema (BIZ-427). 지원
+                프로바이더는 네이티브 config 로 매핑한다.
+            require_structured_output: True 면 schema-constrained 출력을 보장할
+                수 없는 프로바이더는 조용히 무시하는 대신 ``LLMProviderError``
+                를 던져야 한다 (BIZ-427).
 
         Returns:
             LLMResponse: 텍스트 응답(또는 tool_calls)과 메타데이터를 담은 객체.
@@ -59,6 +99,9 @@ class LLMProvider(ABC):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
         """LLM 응답을 스트리밍하면서 ``on_text_delta`` 로 텍스트 델타를 흘려보낸다.
 
@@ -66,6 +109,9 @@ class LLMProvider(ABC):
         호출해 완성된 응답을 한 번에 콜백으로 흘려보낸 뒤 동일 LLMResponse 를
         그대로 돌려준다. 호출 측에서 보면 "스트리밍 호출했지만 한 덩이가 한 번에
         도착" 한 것과 동일하므로 sink 측에서 자연스럽게 placeholder 갱신 후 종료.
+
+        structured output 필드(BIZ-427)는 send() 로 그대로 위임한다 — 수용/거부
+        판단은 각 프로바이더의 send() 정책을 따른다.
         """
         response = await self.send(
             system_prompt=system_prompt,
@@ -74,6 +120,9 @@ class LLMProvider(ABC):
             tools=tools,
             system_blocks=system_blocks,
             max_tokens=max_tokens,
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
+            require_structured_output=require_structured_output,
         )
         if on_text_delta is not None and response.text:
             await on_text_delta(response.text)

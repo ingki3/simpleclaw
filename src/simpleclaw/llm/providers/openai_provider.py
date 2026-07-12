@@ -130,8 +130,20 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
-        """Chat Completions API로 메시지를 전송하고 응답을 반환한다."""
+        """Chat Completions API로 메시지를 전송하고 응답을 반환한다.
+
+        BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부하고,
+        아니면 힌트를 무시한다 (기존 호출 회귀 0).
+        """
+        self._reject_required_structured_output(
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
+            require_structured_output=require_structured_output,
+        )
         # BIZ-252 — OpenAI 는 prompt caching 마커가 없는 단일 문자열만 받으므로
         # system_blocks 가 있으면 캐시 플래그를 무시하고 텍스트만 이어 붙인다.
         effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
@@ -208,6 +220,9 @@ class OpenAIProvider(LLMProvider):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
         """Chat Completions streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -219,7 +234,14 @@ class OpenAIProvider(LLMProvider):
 
         스트림 중 콜백 예외는 흡수해 누적은 완수한다 (Claude/Gemini 와 동일 정책 —
         sink 측 일시 오류가 LLM 응답 자체를 깨뜨리지 않도록).
+
+        BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부.
         """
+        self._reject_required_structured_output(
+            response_mime_type=response_mime_type,
+            response_schema=response_schema,
+            require_structured_output=require_structured_output,
+        )
         effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
         msg_list: list[dict] = []
         if effective_system:

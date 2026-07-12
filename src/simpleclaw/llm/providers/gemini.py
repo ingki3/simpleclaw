@@ -280,8 +280,25 @@ class GeminiProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
-        """Gemini API로 메시지를 전송하고 응답을 반환한다."""
+        """Gemini API로 메시지를 전송하고 응답을 반환한다.
+
+        BIZ-427 — ``response_mime_type``/``response_schema`` 가 주어지면 Gemini
+        네이티브 structured output(``GenerateContentConfig.response_mime_type`` /
+        ``response_schema``)으로 매핑해 schema-valid JSON 출력을 강제한다.
+        """
+        # required 인데 두 힌트가 온전히 오지 않으면 빠르게 실패 — 반쪽 설정으로
+        # 프롬프트-only JSON 이 조용히 나가는 사고를 막는다.
+        if require_structured_output and not (
+            response_mime_type and response_schema is not None
+        ):
+            raise LLMProviderError(
+                "Gemini structured output requires both response_mime_type "
+                "and response_schema"
+            )
         # BIZ-252 — Gemini 는 prompt caching 마커가 없는 단일 문자열만 받으므로
         # system_blocks 가 있으면 텍스트만 이어 붙인다.
         effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
@@ -293,6 +310,12 @@ class GeminiProvider(LLMProvider):
             # max_output_tokens 를 비워 두고 모델 기본값에 맡긴다 (회귀 0).
             if max_tokens:
                 config.max_output_tokens = max_tokens
+
+            # BIZ-427 — structured output 매핑. 미지정이면 기존 동작 그대로.
+            if response_mime_type:
+                config.response_mime_type = response_mime_type
+            if response_schema is not None:
+                config.response_schema = response_schema
 
             # 도구 정의가 있으면 config에 추가
             if tools:
@@ -382,6 +405,9 @@ class GeminiProvider(LLMProvider):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
     ) -> LLMResponse:
         """Gemini API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -395,7 +421,17 @@ class GeminiProvider(LLMProvider):
         스트림 중 콜백 예외는 흡수해 누적은 완수한다 (Claude 와 동일 정책).
         ``on_text_delta=None`` 이면 그냥 누적만 해서 send() 와 동일 결과 — 호출
         측 통일 인터페이스.
+
+        BIZ-427 — SimpleClaw 에서 structured output 은 비스트리밍 send() 전용이다.
+        required 스트리밍 요청은 명확히 거부하고, required 가 아니면 힌트를
+        무시한다 — 스트리밍 tool loop 에 schema 가 오적용되는 사고 방지.
+        BIZ-430 — 거부는 힌트 유무가 아니라 required 플래그만으로 결정한다.
         """
+        if require_structured_output:
+            raise LLMProviderError(
+                "Gemini structured output is only supported on non-streaming "
+                "send() in SimpleClaw"
+            )
         effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
 
         config = types.GenerateContentConfig(

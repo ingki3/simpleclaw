@@ -15,6 +15,25 @@ from typing import Any
 logger = logging.getLogger(__name__)
 SkillSuggestionStatus = str
 VALID_SKILL_SUGGESTION_STATUSES = ("pending", "accepted", "rejected", "materialized")
+
+# BIZ-429 — Hermes /learn 수준의 authoring standards 상수.
+# frontmatter description은 스킬 목록 스캔 시 한 줄 요약으로 쓰이므로 짧게 강제한다.
+MAX_SKILL_DESCRIPTION_CHARS = 60
+# SKILL.md 권장 섹션 순서(프롬프트 지시용) — 전부 필수는 아니다.
+SKILL_MD_SECTION_ORDER = (
+    "When to Use",
+    "Prerequisites",
+    "How to Run",
+    "Quick Reference",
+    "Procedure",
+    "Pitfalls",
+    "Verification",
+)
+# 운영자 승인 판단에 반드시 필요한 최소 섹션 — 없으면 validation error.
+REQUIRED_SKILL_MD_SECTIONS = ("When to Use", "Procedure", "Verification")
+# 패키지 내 파일 경로 prefix 제한 — SKILL.md 외 파일은 역할별 디렉터리로 강제.
+SCRIPT_PATH_PREFIX = "scripts/"
+REFERENCE_PATH_PREFIXES = ("references/", "templates/")
 _SECRET_PATTERNS = (
     re.compile(
         r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*['\"]?[^'\"\s]{8,}"
@@ -22,11 +41,116 @@ _SECRET_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
 )
+# BIZ-432 — 저장/로그를 허용하는 risk flag 전체 집합. LLM payload 가 임의 문자열
+# (secret 포함 가능)을 risk_flags 로 흘려도 이 밖의 값은 어디에도 남지 않는다.
+RISK_FLAG_ALLOWLIST = ("network", "subprocess", "file_write", "external_api")
 _RISK_KEYWORDS = {
-    "network": ("requests.", "httpx.", "urllib", "curl ", "wget "),
-    "subprocess": ("subprocess", "os.system", "popen("),
-    "file_write": ("open(", "write_text", "write_bytes", ".write("),
-    "external_api": ("api_key", "authorization", "bearer "),
+    "network": (
+        "requests.",
+        "httpx.",
+        "aiohttp",
+        "urllib",
+        "socket.",
+        "curl ",
+        "wget ",
+    ),
+    "subprocess": ("subprocess", "os.system", "popen(", "shell=true"),
+    "file_write": (
+        "open(",
+        "write_text",
+        "write_bytes",
+        ".write(",
+        "os.remove",
+        "shutil.rmtree",
+        "unlink(",
+    ),
+    "external_api": ("api_key", "x-api-key", "authorization", "bearer "),
+}
+
+# BIZ-429 — Gemini structured output 용 SkillSuggestion 후보 JSON Schema.
+# 프롬프트-only JSON 이 live 에서 파싱 실패로 fallback 되는 문제를 BIZ-427 의
+# schema-constrained 출력으로 차단한다. scripts/references 는 임의 키 매핑을
+# structured output 이 표현할 수 없어 {path, content} entry 배열로 받고,
+# suggestion_from_candidate_payload() 가 dict 로 변환한다(legacy dict 도 허용).
+_SKILL_FILE_ENTRY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "path": {
+            "type": "string",
+            "description": (
+                "Relative file path inside the skill package, e.g. "
+                "scripts/main.py or references/notes.md."
+            ),
+        },
+        "content": {"type": "string", "description": "Full UTF-8 file content."},
+    },
+    "required": ["path", "content"],
+    "additionalProperties": False,
+    "propertyOrdering": ["path", "content"],
+}
+_SKILL_SUGGESTION_FIELDS = [
+    "title",
+    "rationale",
+    "skill_name",
+    "skill_md",
+    "scripts",
+    "references",
+    "risk_flags",
+]
+SKILL_SUGGESTION_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "description": (
+        "One reusable SimpleClaw runtime skill package candidate drafted from "
+        "a successful tool trace."
+    ),
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Short human-readable title for operator review.",
+        },
+        "rationale": {
+            "type": "string",
+            "description": "Why this trace is reusable as a runtime skill.",
+        },
+        "skill_name": {
+            "type": "string",
+            "description": "kebab-case skill package name.",
+        },
+        "skill_md": {
+            "type": "string",
+            "description": (
+                "Full SKILL.md content with YAML frontmatter (name, "
+                "description) followed by the documented procedure."
+            ),
+        },
+        "scripts": {
+            "type": "array",
+            "description": (
+                "Optional helper scripts. Every path must start with scripts/."
+            ),
+            "items": _SKILL_FILE_ENTRY_SCHEMA,
+            "maxItems": 5,
+        },
+        "references": {
+            "type": "array",
+            "description": (
+                "Optional reference/template files. Every path must start "
+                "with references/ or templates/."
+            ),
+            "items": _SKILL_FILE_ENTRY_SCHEMA,
+            "maxItems": 5,
+        },
+        "risk_flags": {
+            "type": "array",
+            "description": "Self-declared risk flags from the fixed allowlist.",
+            # BIZ-432 — 스키마 단계에서도 allowlist 로 제한해 임의 문자열 유입을 줄인다.
+            "items": {"type": "string", "enum": list(RISK_FLAG_ALLOWLIST)},
+            "maxItems": 8,
+        },
+    },
+    "required": _SKILL_SUGGESTION_FIELDS,
+    "additionalProperties": False,
+    "propertyOrdering": _SKILL_SUGGESTION_FIELDS,
 }
 
 
@@ -102,7 +226,7 @@ class SkillSuggestion:
             dict(references or {}),
             list(source_msg_ids or []),
             list(trace or []),
-            sorted(set(risk_flags or [])),
+            normalize_risk_flags(risk_flags),
             list(validation_errors or []),
             "pending",
             None,
@@ -143,7 +267,8 @@ class SkillSuggestion:
                 for v in trace_raw
                 if isinstance(v, dict)
             ],
-            risk_flags=list(raw.get("risk_flags") or []),
+            # legacy 저장분에 임의 문자열이 남아 있어도 로드 시점에 정화한다.
+            risk_flags=normalize_risk_flags(raw.get("risk_flags")),
             validation_errors=list(raw.get("validation_errors") or []),
             status=str(raw.get("status") or "pending"),
             materialized_path=raw.get("materialized_path"),
@@ -155,6 +280,32 @@ class SkillSuggestion:
             if isinstance(updated, str)
             else datetime.now(),
         )
+
+
+def normalize_risk_flags(values: Any) -> list[str]:
+    """risk flag 목록을 allowlist 값만 남긴 정렬된 리스트로 정규화한다 (BIZ-432).
+
+    LLM payload 나 legacy 저장 데이터에서 온 risk_flags 는 임의 문자열일 수
+    있고 secret-like 값이 섞일 수 있으므로, 대소문자/구분자만 보정한 뒤
+    allowlist 밖 값은 전부 버린다. 버린 값 자체는 secret 일 수 있어 로그에도
+    남기지 않고 개수만 경고한다.
+    """
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    kept: set[str] = set()
+    dropped = 0
+    for value in values:
+        normalized = str(value).strip().lower().replace("-", "_")
+        if normalized in RISK_FLAG_ALLOWLIST:
+            kept.add(normalized)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "Dropped %d non-allowlisted risk flag value(s); values are not logged.",
+            dropped,
+        )
+    return sorted(kept)
 
 
 def normalize_skill_name(value: str) -> str:
@@ -233,12 +384,22 @@ def build_skill_candidate_prompt(
     trace_json = json.dumps(
         [s.to_dict() for s in snapshots], ensure_ascii=False, indent=2
     )
+    section_order = ", ".join(SKILL_MD_SECTION_ORDER)
     return f"""You are drafting a reusable SimpleClaw runtime skill from a successful tool trace.
-Return only valid JSON. Do not include secrets, credentials, tokens, personal data, or exact raw private observations.
+Return only valid JSON matching the response schema. Do not include secrets, credentials, tokens, personal data, or exact raw private observations.
 Do not invent external side effects. Prefer a documentation-first SKILL.md and optional scripts that are safe to review.
 
+Authoring standards (mandatory):
+- SKILL.md starts with YAML frontmatter containing `name` (kebab-case, must equal skill_name) and `description`.
+- The frontmatter description must be at most {MAX_SKILL_DESCRIPTION_CHARS} characters.
+- Order SKILL.md body sections as: {section_order}. "When to Use", "Procedure", and "Verification" are required.
+- Describe SimpleClaw native or wrapped tools by their tool name (e.g. web_search, file_manage); do not over-document generic shell utilities.
+- Never invent commands, APIs, endpoints, or file paths that do not appear in the trace. Only document what the trace proves works.
+- Place helper scripts under scripts/, reference notes under references/, and reusable templates under templates/.
+- If a step relies on an OS-specific primitive, gate it explicitly by platform (e.g. "macOS only:").
+
 JSON contract:
-{{"title":"short human-readable title","rationale":"why this trace is reusable","skill_name":"kebab-case-name","skill_md":"---\\nname: kebab-case-name\\ndescription: ...\\n---\\n# ...","scripts":{{"scripts/main.py":"# optional safe script\\n"}},"references":{{"references/notes.md":"optional context"}},"risk_flags":["network","external_api"]}}
+{{"title":"short human-readable title","rationale":"why this trace is reusable","skill_name":"kebab-case-name","skill_md":"---\\nname: kebab-case-name\\ndescription: ...\\n---\\n# ...","scripts":[{{"path":"scripts/main.py","content":"# optional safe script\\n"}}],"references":[{{"path":"references/notes.md","content":"optional context"}}],"risk_flags":["network","external_api"]}}
 
 Original user request:
 {_redact_text(user_text)[:2000]}
@@ -260,16 +421,16 @@ def suggestion_from_candidate_payload(
     skill_name = normalize_skill_name(
         str(payload.get("skill_name") or payload.get("title") or "skill-suggestion")
     )
-    scripts = payload.get("scripts") if isinstance(payload.get("scripts"), dict) else {}
-    references = (
-        payload.get("references") if isinstance(payload.get("references"), dict) else {}
-    )
+    scripts = _files_mapping_from_payload(payload.get("scripts"))
+    references = _files_mapping_from_payload(payload.get("references"))
     skill_md = str(
         payload.get("skill_md")
         or f"---\nname: {skill_name}\ndescription: Generated skill candidate.\n---\n# {skill_name}\n"
     )
+    # LLM 이 선언한 risk_flags 는 allowlist 로 정화한 뒤에만 자체 감지 결과와 합친다.
     risk_flags = sorted(
-        set(payload.get("risk_flags") or []) | set(detect_risk_flags(skill_md, scripts))
+        set(normalize_risk_flags(payload.get("risk_flags")))
+        | set(detect_risk_flags(skill_md, scripts))
     )
     validation_errors = validate_skill_package_plan(
         skill_name=skill_name, skill_md=skill_md, scripts=scripts, references=references
@@ -310,15 +471,29 @@ def validate_skill_package_plan(
         errors.append("SKILL.md frontmatter name does not match target skill_name.")
     if not fm_name:
         errors.append("SKILL.md must include YAML frontmatter with a name field.")
-    lowered_md = skill_md.lower()
-    if (
-        "description:" not in lowered_md
-        and "## when to use" not in lowered_md
-        and "## trigger" not in lowered_md
-    ):
+    description = _frontmatter_description(skill_md)
+    if not description:
         errors.append(
-            "SKILL.md should include description or when-to-use/trigger guidance."
+            "SKILL.md frontmatter must include a non-empty description field."
         )
+    elif len(description) > MAX_SKILL_DESCRIPTION_CHARS:
+        errors.append(
+            "SKILL.md frontmatter description exceeds "
+            f"{MAX_SKILL_DESCRIPTION_CHARS} characters ({len(description)})."
+        )
+    # 운영자가 승인 판단에 쓰는 핵심 섹션은 heading 으로 존재해야 한다.
+    lowered_md = skill_md.lower()
+    for section in REQUIRED_SKILL_MD_SECTIONS:
+        if f"## {section.lower()}" not in lowered_md:
+            errors.append(f"SKILL.md is missing required section: {section}")
+    for rel_path in scripts:
+        if not rel_path.startswith(SCRIPT_PATH_PREFIX):
+            errors.append(f"Script path must start with scripts/: {rel_path}")
+    for rel_path in references:
+        if not rel_path.startswith(REFERENCE_PATH_PREFIXES):
+            errors.append(
+                f"Reference path must start with references/ or templates/: {rel_path}"
+            )
     for rel_path, body in {"SKILL.md": skill_md, **scripts, **references}.items():
         if _path_has_traversal(rel_path):
             errors.append(f"Unsafe relative path: {rel_path}")
@@ -432,12 +607,32 @@ class SkillSuggestionStore:
         return None
 
 
+def _files_mapping_from_payload(value: Any) -> dict[str, str]:
+    """structured output 의 {path, content} entry 배열 또는 legacy dict 를 dict 로 정규화한다."""
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}
+    out: dict[str, str] = {}
+    if isinstance(value, list):
+        for entry in value:
+            if isinstance(entry, dict) and entry.get("path"):
+                out[str(entry["path"])] = str(entry.get("content") or "")
+    return out
+
+
 def _frontmatter_name(skill_md: str) -> str | None:
     m = re.match(r"^---\s*\n(.+?)\n---\s*\n", skill_md, re.DOTALL)
     if not m:
         return None
     n = re.search(r"(?m)^name:\s*['\"]?([^'\"\n]+)", m.group(1))
     return n.group(1).strip() if n else None
+
+
+def _frontmatter_description(skill_md: str) -> str | None:
+    m = re.match(r"^---\s*\n(.+?)\n---\s*\n", skill_md, re.DOTALL)
+    if not m:
+        return None
+    d = re.search(r"(?m)^description:\s*['\"]?([^'\"\n]+)", m.group(1))
+    return d.group(1).strip() if d else None
 
 
 def _path_has_traversal(rel_path: str) -> bool:
