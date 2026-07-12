@@ -68,6 +68,23 @@ class StudyTopic(Protocol):
     freshness_hours: int
 
 
+def _topic_queries(topic: StudyTopic) -> tuple[str, ...]:
+    """topic 이 collector 에 던질 검색 쿼리 목록을 정한다.
+
+    ``search_queries`` 가 있으면 그것을 쓰고, 없으면 label 로 폴백한다.
+    ``market-reports-us-kr`` 처럼 display label 이 검색어로 부적합한 topic 이
+    label 과 검색 쿼리를 분리하는 통로다(BIZ-434). ``getattr`` 폴백을 쓰는 이유:
+    Protocol 에 필드를 강제하면 기존 테스트 stub/legacy topic 객체가 모두 깨지므로
+    optional duck-typing 으로 수용한다.
+    """
+    queries = getattr(topic, "search_queries", None)
+    if isinstance(queries, list):
+        cleaned = tuple(q.strip() for q in queries if isinstance(q, str) and q.strip())
+        if cleaned:
+            return cleaned
+    return (topic.label,)
+
+
 @dataclass(frozen=True)
 class CategorySourcePolicy:
     """한 category 의 수집 정책.
@@ -182,33 +199,35 @@ def plan_fetch_requests(
 ) -> list[StudyFetchRequest]:
     """topic 들로부터 collector 별 fetch 요청을 생성한다.
 
-    topic 하나당, 그 category 정책에 나열된 collector 마다 요청 하나를 만든다.
-    같은 topic 안에서 collector 이름이 중복되면 한 번만 생성한다(정책 오타 방어).
+    topic 하나당, 검색 쿼리(:func:`_topic_queries` — ``search_queries`` 우선,
+    없으면 label)마다 그 category 정책에 나열된 collector 별 요청을 만든다.
+    같은 쿼리 안에서 collector 이름이 중복되면 한 번만 생성한다(정책 오타 방어).
 
     Args:
         topics: 계획 대상 topic 들. :class:`StudyTopic` 인터페이스만 충족하면 된다.
         policy: 적용할 source policy. 기본은 :data:`DEFAULT_SOURCE_POLICY`.
 
     Returns:
-        topic × collector 순서가 보존된 :class:`StudyFetchRequest` 리스트.
+        topic × query × collector 순서가 보존된 :class:`StudyFetchRequest` 리스트.
     """
     requests: list[StudyFetchRequest] = []
     for topic in topics:
         category_policy = policy.for_category(topic.category)
-        seen: set[str] = set()
-        for collector in category_policy.collectors:
-            if collector in seen:
-                continue
-            seen.add(collector)
-            requests.append(
-                StudyFetchRequest(
-                    topic_id=topic.topic_id,
-                    query=topic.label,
-                    collector=collector,
-                    max_sources=topic.max_sources,
-                    freshness_hours=topic.freshness_hours,
+        for query in _topic_queries(topic):
+            seen: set[str] = set()
+            for collector in category_policy.collectors:
+                if collector in seen:
+                    continue
+                seen.add(collector)
+                requests.append(
+                    StudyFetchRequest(
+                        topic_id=topic.topic_id,
+                        query=query,
+                        collector=collector,
+                        max_sources=topic.max_sources,
+                        freshness_hours=topic.freshness_hours,
+                    )
                 )
-            )
     return requests
 
 
