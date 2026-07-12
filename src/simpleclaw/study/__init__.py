@@ -43,12 +43,25 @@ source 계획/수집·관심사 추출·갱신·실행 계층:
 
 from __future__ import annotations
 
+from .collector_adapters import (
+    CallbackWebSearchCollector,
+    GoogleNewsRSSCollector,
+)
 from .collectors import (
     CollectorRegistry,
     PlaceholderCollector,
     StudyCollector,
     StudyFetchRequest,
     StudyFetchResult,
+)
+from .evolution import (
+    EvolutionSummary,
+    apply_interest_signals,
+    interest_signal_to_topic_signal,
+    merge_registry_into_raw_topics,
+    registry_from_study_topics,
+    registry_to_study_topics,
+    slugify_topic_id,
 )
 from .index_store import StudyIndexStore
 from .interest_signals import (
@@ -93,6 +106,13 @@ from .scorer import (
     compute_topic_score,
     normalize_mentions,
     recency_decay_factor,
+)
+from .signal_provider import (
+    SourceBackedSignalProvider,
+    StaticStudySignalProvider,
+    StudySignalProvider,
+    build_interest_signals_from_sources,
+    merge_signal_providers,
 )
 from .source_planner import (
     DEFAULT_RELEVANCE_THRESHOLD,
@@ -176,6 +196,23 @@ __all__ = [
     "StudyCollector",
     "StudyFetchRequest",
     "StudyFetchResult",
+    # collector_adapters
+    "CallbackWebSearchCollector",
+    "GoogleNewsRSSCollector",
+    # evolution
+    "EvolutionSummary",
+    "apply_interest_signals",
+    "interest_signal_to_topic_signal",
+    "merge_registry_into_raw_topics",
+    "registry_from_study_topics",
+    "registry_to_study_topics",
+    "slugify_topic_id",
+    # signal_provider
+    "SourceBackedSignalProvider",
+    "StaticStudySignalProvider",
+    "StudySignalProvider",
+    "build_interest_signals_from_sources",
+    "merge_signal_providers",
     # interest_signals
     "AUTO_REPORT_MAX_WEIGHT",
     "INSIGHT_MIN_CONFIDENCE",
