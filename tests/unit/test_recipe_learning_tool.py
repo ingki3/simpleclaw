@@ -14,6 +14,7 @@ from simpleclaw.agent.recipe_learning_tool import handle_recipe_learning
 from simpleclaw.agent.tool_schemas import ToolScope, build_tool_definitions
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.recipes.learning import RecipeSuggestion, RecipeSuggestionStore
+from simpleclaw.skills.learning import SkillTraceStepSnapshot
 
 
 def _write_config(tmp_path, recipes_dir):
@@ -107,6 +108,40 @@ def test_show_returns_yaml_flags_errors_and_trace(tmp_path):
     assert result["risk_flags"] == ["network"]
     assert result["validation_errors"] == []
     assert "trace" in result
+
+
+def test_list_and_show_sanitize_legacy_risk_flags(tmp_path):
+    """BIZ-435 — legacy 저장분의 unknown/secret-like risk flag는 list/show 어디에도
+    노출되지 않고, trace/validation_errors 요약은 유지된다."""
+    store, kwargs, _ = _tool_env(tmp_path)
+    raw = RecipeSuggestion.new_pending(
+        title="레거시 후보",
+        rationale="r",
+        trace_fingerprint="fp-legacy",
+        recipe_name="legacy-recipe",
+        recipe_yaml=_recipe_yaml("legacy-recipe"),
+        trace=[
+            SkillTraceStepSnapshot(
+                tool_name="web_fetch", arguments={"url": "https://example.com"}
+            )
+        ],
+        validation_errors=["recipe candidate must include non-empty instructions (v1)"],
+    ).to_dict()
+    raw["risk_flags"] = ["network", "token=abcd1234efgh5678", "weird-flag"]
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(json.dumps(raw, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    listed = handle_recipe_learning({"action": "list"}, **kwargs)
+    shown = handle_recipe_learning({"action": "show", "id": raw["id"]}, **kwargs)
+
+    assert json.loads(listed)[0]["risk_flags"] == ["network"]
+    assert json.loads(listed)[0]["validation_errors"]
+    shown_data = json.loads(shown)
+    assert shown_data["risk_flags"] == ["network"]
+    assert shown_data["trace"][0]["tool_name"] == "web_fetch"
+    for output in (listed, shown):
+        assert "abcd1234efgh5678" not in output
+        assert "weird-flag" not in output
 
 
 def test_accept_and_reject_update_status(tmp_path):
@@ -256,7 +291,8 @@ def test_materialize_rejects_candidate_with_static_errors(tmp_path):
     assert not (recipes_dir / "secret-recipe" / "recipe.yaml").exists()
 
 
-def test_materialize_allows_pending_when_accept_gate_disabled(tmp_path):
+def test_materialize_rejects_pending_even_when_accept_config_disabled(tmp_path):
+    """require_operator_accept=False 설정으로도 accepted 게이트는 우회되지 않는다 (BIZ-435)."""
     store, kwargs, recipes_dir = _tool_env(tmp_path)
     kwargs["config"]["require_operator_accept"] = False
     saved = _seed_suggestion(store)
@@ -267,8 +303,10 @@ def test_materialize_allows_pending_when_accept_gate_disabled(tmp_path):
         )
     )
 
-    assert result["ok"] is True
-    assert (recipes_dir / "demo-recipe" / "recipe.yaml").is_file()
+    assert result["ok"] is False
+    assert any("accepted" in e for e in result["errors"])
+    assert not (recipes_dir / "demo-recipe" / "recipe.yaml").exists()
+    assert store.get(saved.id).status == "pending"
 
 
 @pytest.mark.asyncio

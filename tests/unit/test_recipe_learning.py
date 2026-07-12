@@ -1,4 +1,4 @@
-"""RecipeSuggestion 모델/저장소/검증 단위 테스트 (BIZ-428)."""
+"""RecipeSuggestion 모델/저장소/검증 단위 테스트 (BIZ-428, BIZ-435)."""
 
 from __future__ import annotations
 
@@ -6,14 +6,18 @@ import pytest
 import yaml
 
 from simpleclaw.recipes.learning import (
+    RECIPE_RISK_FLAG_ALLOWLIST,
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,
     RecipeSuggestion,
     RecipeSuggestionStore,
     build_recipe_candidate_prompt,
+    detect_trace_risk_flags,
     normalize_recipe_name,
+    normalize_recipe_risk_flags,
     suggestion_from_recipe_payload,
     validate_recipe_suggestion_plan,
 )
+from simpleclaw.skills.learning import RISK_FLAG_ALLOWLIST, SkillTraceStepSnapshot
 
 
 def _recipe_yaml(name: str = "demo-recipe") -> str:
@@ -219,6 +223,104 @@ def test_suggestion_from_payload_records_validation_errors():
     assert suggestion.validation_errors
 
 
+def test_suggestion_from_payload_detects_risks_from_trace():
+    """BIZ-435 — LLM risk_flags가 비어 있어도 trace 기반 위험이 합산돼야 한다."""
+    trace = [
+        SkillTraceStepSnapshot(
+            tool_name="web_fetch", arguments={"url": "https://example.com"}
+        ),
+        SkillTraceStepSnapshot(tool_name="cli", arguments={"command": "ls -al"}),
+        SkillTraceStepSnapshot(
+            tool_name="file_write", arguments={"path": "out/report.md"}
+        ),
+    ]
+    payload = {
+        "title": "리포트 워크플로",
+        "recipe_name": "report-workflow",
+        "instructions": "{{ query }} 리포트를 만들어줘.",
+        "risk_flags": [],
+    }
+
+    suggestion = suggestion_from_recipe_payload(
+        payload, trace_fingerprint_value="fp-trace", source_msg_ids=[], trace=trace
+    )
+
+    assert "network" in suggestion.risk_flags
+    assert "subprocess" in suggestion.risk_flags
+    assert "file_write" in suggestion.risk_flags
+    # 감지 결과도 allowlist 밖 값은 없어야 한다.
+    assert set(suggestion.risk_flags) <= set(RECIPE_RISK_FLAG_ALLOWLIST)
+
+
+def test_detect_trace_risk_flags_finds_external_api_in_arguments():
+    trace = [
+        SkillTraceStepSnapshot(
+            tool_name="mcp_call",
+            arguments={"headers": {"authorization": "[REDACTED_SECRET]"}},
+        ),
+    ]
+
+    assert "external_api" in detect_trace_risk_flags(trace)
+
+
+def test_detect_trace_risk_flags_ignores_benign_trace():
+    trace = [
+        SkillTraceStepSnapshot(tool_name="search_memory", arguments={"q": "메모"}),
+        SkillTraceStepSnapshot(tool_name="clarify", arguments={"question": "언제?"}),
+    ]
+
+    assert detect_trace_risk_flags(trace) == []
+
+
+def test_suggestion_from_payload_drops_non_allowlisted_flags(caplog):
+    """BIZ-435 — unknown/secret-like risk flag는 저장되지 않고 로그에도 값이 안 남는다."""
+    payload = {
+        "title": "정화 대상",
+        "recipe_name": "sanitize-me",
+        "instructions": "{{ query }}를 확인해줘.",
+        "risk_flags": ["network", "totally-unknown-flag", "token=SECRET123VALUE"],
+    }
+
+    with caplog.at_level("WARNING"):
+        suggestion = suggestion_from_recipe_payload(
+            payload, trace_fingerprint_value="fp-clean", source_msg_ids=[], trace=[]
+        )
+
+    assert "network" in suggestion.risk_flags
+    assert set(suggestion.risk_flags) <= set(RECIPE_RISK_FLAG_ALLOWLIST)
+    # drop 된 값 자체(잠재적 secret)는 어떤 로그에도 남지 않는다.
+    assert "SECRET123VALUE" not in caplog.text
+    assert "totally-unknown-flag" not in caplog.text
+
+
+def test_new_pending_sanitizes_risk_flags():
+    suggestion = RecipeSuggestion.new_pending(
+        title="t",
+        rationale="r",
+        trace_fingerprint="fp",
+        recipe_name="demo-recipe",
+        recipe_yaml=_recipe_yaml(),
+        risk_flags=["Network", "cron_hint", "api_key=abcd1234efgh5678"],
+    )
+
+    assert suggestion.risk_flags == ["cron_hint", "network"]
+
+
+def test_from_dict_sanitizes_legacy_risk_flags():
+    """BIZ-435 — legacy 저장분의 임의 문자열 risk flag는 로드 시점에 정화된다."""
+    raw = _suggestion().to_dict()
+    raw["risk_flags"] = ["network", "cron_hint", "ghp_abcdefghijklmnopqrstuv", "??"]
+
+    restored = RecipeSuggestion.from_dict(raw)
+
+    assert restored.risk_flags == ["cron_hint", "network"]
+
+
+def test_normalize_recipe_risk_flags_accepts_cron_hint():
+    assert normalize_recipe_risk_flags(["cron_hint", "junk"]) == ["cron_hint"]
+    assert normalize_recipe_risk_flags("not-a-list") == []
+
+
 def test_build_recipe_candidate_prompt_focuses_on_recipe_semantics():
     prompt = build_recipe_candidate_prompt(user_text="u", assistant_text="a", trace=[])
 
@@ -238,3 +340,19 @@ def test_response_schema_requires_all_fields_and_ordering():
     assert props == required == set(ordering)
     assert "recipe_name" in props
     assert "cron_hint" in props
+
+
+def test_response_schema_blocks_unknown_properties_and_enforces_flag_enum():
+    """BIZ-435 — root/parameter item에서 unknown property를 차단하고 risk_flags를
+    allowlist enum으로 제한한다."""
+    assert RECIPE_SUGGESTION_RESPONSE_SCHEMA["additionalProperties"] is False
+
+    parameter_item = RECIPE_SUGGESTION_RESPONSE_SCHEMA["properties"]["parameters"][
+        "items"
+    ]
+    assert parameter_item["additionalProperties"] is False
+
+    flag_items = RECIPE_SUGGESTION_RESPONSE_SCHEMA["properties"]["risk_flags"]["items"]
+    # LLM self-declare는 skill 공용 allowlist만 허용 — cron_hint는 내부 파생값.
+    assert set(flag_items["enum"]) == set(RISK_FLAG_ALLOWLIST)
+    assert "cron_hint" not in flag_items["enum"]

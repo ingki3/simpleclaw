@@ -407,7 +407,8 @@ _RECIPE_LEARNING_DEFAULTS: dict = {
     "min_distinct_tools": 2,
     "min_final_chars": 500,
     "suggestions_file": "~/.simpleclaw-agent/default/recipe_suggestions.jsonl",
-    "require_operator_accept": True,
+    # BIZ-435 — require_operator_accept 키 제거. recipe materialize 의 accepted
+    # 게이트는 설정으로 완화할 수 없으므로 config.yaml 에 남아 있어도 무시된다.
     "max_trace_observation_chars": 1200,
     "structured_output": True,
 }
@@ -500,7 +501,6 @@ def load_recipe_learning_config(config_path: str | Path) -> dict:
         "min_distinct_tools": _coerce_int_config(raw.get("min_distinct_tools", defaults["min_distinct_tools"]), defaults["min_distinct_tools"], minimum=1),
         "min_final_chars": _coerce_int_config(raw.get("min_final_chars", defaults["min_final_chars"]), defaults["min_final_chars"], minimum=0),
         "suggestions_file": raw.get("suggestions_file", defaults["suggestions_file"]),
-        "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
         "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
         "structured_output": bool(raw.get("structured_output", defaults["structured_output"])),
     }
