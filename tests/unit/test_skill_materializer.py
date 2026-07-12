@@ -45,19 +45,22 @@ def test_materialize_creates_skill_package(tmp_path):
     assert result.backup_dir is None
 
 
-def test_materialize_rejects_unaccepted_suggestion(tmp_path):
-    suggestion = make_suggestion(status="pending")
+@pytest.mark.parametrize("status", ["pending", "rejected", "materialized"])
+def test_materialize_rejects_unaccepted_suggestion(tmp_path, status):
+    suggestion = make_suggestion(status=status)
     with pytest.raises(PermissionError):
         materialize_skill_suggestion(suggestion, target_dir=tmp_path)
     assert not (tmp_path / "demo-skill").exists()
 
 
-def test_materialize_allows_explicit_accept_opt_out(tmp_path):
+def test_materialize_has_no_accept_gate_opt_out(tmp_path):
+    """require_accepted opt-out 제거 회귀 방지 — 미승인 설치 경로가 되살아나면 안 된다 (BIZ-432)."""
     suggestion = make_suggestion(status="pending")
-    result = materialize_skill_suggestion(
-        suggestion, target_dir=tmp_path, require_accepted=False
-    )
-    assert result.skill_dir.is_dir()
+    with pytest.raises(TypeError):
+        materialize_skill_suggestion(
+            suggestion, target_dir=tmp_path, require_accepted=False
+        )
+    assert not (tmp_path / "demo-skill").exists()
 
 
 def test_materialize_rejects_path_traversal(tmp_path):
