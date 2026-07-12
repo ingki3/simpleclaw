@@ -164,6 +164,27 @@ skills:
   local_dir: ".agent/skills"
   global_dir: "~/.agents/skills"
   execution_timeout: 60
+  # BIZ-429 — 성공한 복잡 tool trace 를 pending skill 후보로 적재하는 학습 큐.
+  # 기본 disabled(안전 기본값). 켜도 후보는 자동 설치되지 않으며, 운영자가
+  # skill_learning 도구로 show/diff 검토 → accept → materialize(confirm=true)
+  # 를 거쳐야만 실제 runtime skill 이 된다.
+  learning:
+    enabled: false
+    # 후보로 볼 최소 trace 조건 — 이보다 단순한 turn 은 후보를 만들지 않는다.
+    min_tool_calls: 2
+    min_distinct_tools: 2
+    min_final_chars: 500
+    # pending/accepted/rejected/materialized 후보를 보관하는 JSONL sidecar.
+    suggestions_file: "~/.simpleclaw-agent/default/skill_suggestions.jsonl"
+    # materialize 대상 skill 루트. 생략하면 skills.local_dir 사용.
+    # target_dir: ".agent/skills"
+    # false 로 바꾸면 accepted 상태 없이 materialize 가 허용된다 — 권장하지 않음.
+    require_operator_accept: true
+    # 후보 생성 성공 시 운영자 알림 hook(주입된 경우) 호출 + pending 이벤트 로그.
+    notify_on_candidate: true
+    # 후보 LLM 출력을 BIZ-427 schema-constrained JSON 으로 강제 (Gemini 계열).
+    structured_output: true
+    max_trace_observation_chars: 1200
 
 # MCP (Model Context Protocol) — stdio 서버만 지원. 서버 변경은 restart 필요.
 # scope: runtime  → 일반 사용자 tool loop에 노출 (명시적 opt-in)

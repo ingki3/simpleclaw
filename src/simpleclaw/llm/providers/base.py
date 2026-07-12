@@ -37,16 +37,20 @@ class LLMProvider(ABC):
         require_structured_output: bool,
         reason: str = "does not support structured output yet",
     ) -> None:
-        """schema-constrained 출력을 보장할 수 없을 때의 공통 가드 (BIZ-427).
+        """schema-constrained 출력을 보장할 수 없을 때의 공통 가드 (BIZ-427/430).
 
         ``require_structured_output=False`` 면 힌트를 조용히 무시해 기존 호출
         회귀를 막고, ``True`` 면 명확한 ``LLMProviderError`` 를 던져 호출자가
         fallback 여부를 결정하게 한다 — 잘못된 JSON 을 조용히 돌려주는 것보다
         빠른 실패가 안전하다.
+
+        BIZ-430 — "required" 계약은 mime/schema 힌트의 존재 여부가 아니라
+        호출자의 보장 요구(``require_structured_output=True``)만으로 결정된다.
+        힌트 없는 required 요청도 미지원 provider 에서는 즉시 거부한다.
         """
-        if require_structured_output and (
-            response_mime_type or response_schema is not None
-        ):
+        # 힌트 인자는 시그니처 통일용으로만 받는다 — 거부 판단에는 쓰지 않는다.
+        del response_mime_type, response_schema
+        if require_structured_output:
             name = getattr(self, "_name", type(self).__name__)
             raise LLMProviderError(f"Provider '{name}' {reason}")
 

@@ -390,6 +390,10 @@ _SKILL_LEARNING_DEFAULTS: dict = {
     "target_dir": None,
     "require_operator_accept": True,
     "max_trace_observation_chars": 1200,
+    # BIZ-429 — 후보 생성 시 운영자 알림 hook 호출 여부.
+    "notify_on_candidate": True,
+    # BIZ-429 — 후보 LLM 출력을 BIZ-427 schema-constrained JSON 으로 강제할지.
+    "structured_output": True,
 }
 
 # BIZ-428 — recipe learning 기본 설정값.
@@ -464,6 +468,8 @@ def load_skills_learning_config(config_path: str | Path) -> dict:
         "target_dir": target_dir,
         "require_operator_accept": bool(raw.get("require_operator_accept", defaults["require_operator_accept"])),
         "max_trace_observation_chars": _coerce_int_config(raw.get("max_trace_observation_chars", defaults["max_trace_observation_chars"]), defaults["max_trace_observation_chars"], minimum=200),
+        "notify_on_candidate": bool(raw.get("notify_on_candidate", defaults["notify_on_candidate"])),
+        "structured_output": bool(raw.get("structured_output", defaults["structured_output"])),
     }
 
 

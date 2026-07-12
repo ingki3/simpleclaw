@@ -133,3 +133,16 @@ class TestGeminiStreamStructuredOutputGuard:
                 response_schema={"type": "object"},
                 require_structured_output=True,
             )
+
+    @pytest.mark.asyncio
+    async def test_stream_rejects_required_without_hints(self):
+        """BIZ-430 — required 계약은 힌트 유무와 무관하다. 힌트 없는 required
+        스트리밍 요청도 API 호출 전에 즉시 거부해야 한다."""
+        provider, _ = _build_provider()
+
+        with pytest.raises(LLMProviderError):
+            await provider.stream(
+                system_prompt="classify",
+                user_message="hello",
+                require_structured_output=True,
+            )
