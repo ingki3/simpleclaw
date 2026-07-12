@@ -1,7 +1,8 @@
 """승인된 skill learning 후보를 runtime skill package로 쓰는 materializer.
 
-BIZ-429 — materialize 는 운영자 승인(accepted) 이후에만 허용되는 방어를
-tool layer 와 별개로 이 계층에서도 강제한다(``require_accepted``). overwrite
+BIZ-429/BIZ-432 — materialize 는 운영자 승인(accepted) 이후에만 허용되는
+방어를 tool layer 와 별개로 이 계층에서도 무조건 강제한다. 설정이나 인자로
+이 게이트를 끄는 opt-out 은 제공하지 않는다(BIZ-432 에서 제거). overwrite
 시에는 기존 패키지를 삭제하지 않고 백업 디렉터리로 이동해 파괴적 덮어쓰기를
 복구 가능하게 만든다.
 """
@@ -35,20 +36,17 @@ def materialize_skill_suggestion(
     *,
     target_dir: str | Path,
     overwrite: bool = False,
-    require_accepted: bool = True,
 ) -> MaterializeResult:
     """승인된 후보를 ``<target>/<skill>/`` 패키지로 안전하게 작성한다.
 
     Args:
-        suggestion: materialize 대상 후보.
+        suggestion: materialize 대상 후보. ``status == "accepted"`` 가 아니면
+            무조건 거부한다 — 상위 계층 설정으로도 완화할 수 없다(BIZ-432).
         target_dir: skill package 루트 디렉터리.
         overwrite: 동일 skill 이 이미 있으면 백업 후 교체할지 여부.
-        require_accepted: True 면 suggestion.status 가 ``accepted`` 가 아닐 때
-            거부한다. tool layer 의 승인 게이트가 우회되더라도 이 계층에서
-            자동 설치를 한 번 더 차단하기 위한 방어.
     """
     # 승인 게이트 — 검증보다 먼저 확인해 미승인 후보는 어떤 파일 작업도 하지 않는다.
-    if require_accepted and suggestion.status != "accepted":
+    if suggestion.status != "accepted":
         raise PermissionError(
             "Skill suggestion must be accepted before materialization "
             f"(current status: {suggestion.status})."

@@ -13,6 +13,8 @@ from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.recipe_generate import (
     build_recipe_yaml,
     handle_recipe_generate,
+    install_validated_recipe,
+    static_candidate_errors,
     validate_recipe_candidate,
 )
 from simpleclaw.agent.tool_schemas import ToolScope, build_tool_definitions
@@ -262,6 +264,46 @@ def test_recipe_generate_install_is_discoverable(tmp_path):
     recipes = discover_recipes(recipes_dir)
     assert payload["ok"] is True
     assert [recipe.name for recipe in recipes] == ["lotte-live"]
+
+
+def test_install_validated_recipe_helper_enforces_confirm_and_backup(tmp_path):
+    """BIZ-428 — recipe_learning materialize가 재사용하는 공용 install policy 검증."""
+    target = tmp_path / "recipes" / "demo" / "recipe.yaml"
+    args = {"name": "demo", "instructions": "확인해줘."}
+
+    blocked = install_validated_recipe(args, target_path=target)
+    assert blocked["ok"] is False
+    assert any("confirm=true" in error for error in blocked["errors"])
+    assert not target.exists()
+
+    installed = install_validated_recipe({**args, "confirm": True}, target_path=target)
+    assert installed["ok"] is True
+    assert installed["installed"] is True
+    assert target.is_file()
+
+    collision = install_validated_recipe({**args, "confirm": True}, target_path=target)
+    assert collision["ok"] is False
+    assert any("overwrite=true" in error for error in collision["errors"])
+
+    replaced = install_validated_recipe(
+        {**args, "confirm": True, "overwrite": True}, target_path=target
+    )
+    assert replaced["ok"] is True
+    assert replaced["backup_path"]
+    assert Path(replaced["backup_path"]).is_file()
+
+
+def test_static_candidate_errors_is_reusable_public_helper():
+    """recipe_learning 후보 검증에서 재사용하는 정적 오류 helper 회귀."""
+    assert static_candidate_errors({"name": "ok-recipe", "instructions": "do"}) == []
+    assert any(
+        "name" in error
+        for error in static_candidate_errors({"name": "../evil", "instructions": "do"})
+    )
+    assert any(
+        "instructions" in error
+        for error in static_candidate_errors({"name": "ok", "instructions": " "})
+    )
 
 
 @pytest.mark.asyncio

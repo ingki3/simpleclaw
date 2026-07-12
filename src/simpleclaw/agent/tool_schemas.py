@@ -774,6 +774,38 @@ _SKILL_LEARNING_TOOL = ToolDefinition(
 )
 
 
+# BIZ-428 — skill_learning과 별도 큐. skill 후보가 "새 능력/도구 사용법"이라면
+# recipe 후보는 "반복 실행 절차/워크플로"로 산출물(recipe.yaml)/검증/승인 질문이
+# 다르다. materialize는 recipe_generate install과 동일한 confirm/backup policy.
+_RECIPE_LEARNING_TOOL = ToolDefinition(
+    name="recipe_learning",
+    description=(
+        "운영자 전용 recipe learning review 도구. 성공한 복잡 tool trace에서 생성된 "
+        "pending recipe(반복 워크플로) 후보를 list/show/accept/reject/materialize 한다. "
+        "materialize는 accepted 상태 + confirm=true + validation pass일 때만 configured "
+        "recipes.dir에 백업+검증+atomic write로 설치한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["list", "show", "accept", "reject", "materialize"]},
+            "id": {"type": "string"},
+            "status": {"type": "string", "enum": ["pending", "all"]},
+            "reason": {"type": "string", "description": "reject 사유. action=reject에서 사용."},
+            "confirm": {
+                "type": "boolean",
+                "description": "materialize side effect 승인. action=materialize에서 true 필수.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "기존 recipe.yaml이 있을 때 백업 후 덮어쓸지 여부. 기본 false.",
+            },
+        },
+        "required": ["action"],
+    },
+)
+
+
 # BIZ-424 — generic MCP 호출 도구. 개별 MCP tool을 동적 스키마로 주입하는 대신
 # 단일 generic tool로 노출한다(스키마 폭증/임의 동적 주입 버그 방지). execute_skill과
 # 같은 동적 도구 계열이라 static native registry에는 등록하지 않고,
@@ -873,6 +905,13 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     ),
     NativeToolSpec(
         _SKILL_LEARNING_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.HIGH,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        # materialize가 live recipes.dir를 쓰므로 recipe_generate와 같은 HIGH risk.
+        _RECIPE_LEARNING_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.HIGH,
         operator_gate_required=True,

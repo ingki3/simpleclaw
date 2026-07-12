@@ -30,6 +30,7 @@ from simpleclaw.config import (
     load_mcp_config,
     load_memory_config,
     load_persona_config,
+    load_recipe_learning_config,
     load_recipes_config,
     load_security_config,
     load_skills_learning_config,
@@ -60,6 +61,13 @@ from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.secrets import default_manager
 from simpleclaw.security.sanitize import sanitize_tool_output
+from simpleclaw.recipes.learning import (
+    RECIPE_SUGGESTION_RESPONSE_SCHEMA,
+    RecipeSuggestion,
+    RecipeSuggestionStore,
+    build_recipe_candidate_prompt,
+    suggestion_from_recipe_payload,
+)
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.discovery import discover_skills
@@ -161,6 +169,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "deploy_status",
     "recipe_validate",
     "recipe_generate",
+    "recipe_learning",
     "skill_validate",
     "restart_runtime",
     "skill_learning",
@@ -658,6 +667,9 @@ class AgentOrchestrator:
         skills_config = self._load_skills_config()
         self._skills_config = skills_config
         self._skill_learning_config = load_skills_learning_config(config_path)
+        # BIZ-428 — recipe learning은 skill learning과 별도 config gate.
+        # 기본 disabled이며, 켜도 후보는 pending 큐에만 쌓인다 (approval-only).
+        self._recipe_learning_config = load_recipe_learning_config(config_path)
 
         # BIZ-424: MCP config는 부팅 시 로드하되, 서버 연결(외부 subprocess 실행)은
         # 첫 turn 준비 시 _ensure_mcp_connected()가 lazy one-shot으로 수행한다.
@@ -1183,7 +1195,10 @@ class AgentOrchestrator:
                         on_progress=on_progress,
                     )
                     tool_loop_result = ToolLoopResult(response_text)
-                elif self._skill_learning_config.get("enabled", False):
+                elif self._skill_learning_config.get(
+                    "enabled", False
+                ) or self._recipe_learning_config.get("enabled", False):
+                    # skill/recipe 학습 후보 capture는 tool trace가 필요하다.
                     tool_loop_result = await self._run_tool_loop_result(
                         route_input,
                         attachments=attachments,
@@ -1217,6 +1232,9 @@ class AgentOrchestrator:
                     text, response_text, list(msg_ids)
                 )
                 await self._capture_skill_learning_candidate(
+                    text, response_text, tool_loop_result, list(msg_ids)
+                )
+                await self._capture_recipe_learning_candidate(
                     text, response_text, tool_loop_result, list(msg_ids)
                 )
                 return response_text
@@ -1446,6 +1464,84 @@ class AgentOrchestrator:
                 raw_len,
             )
             return None
+
+    async def _capture_recipe_learning_candidate(
+        self,
+        user_text: str,
+        assistant_text: str,
+        result: ToolLoopResult,
+        source_msg_ids: list[int],
+    ) -> None:
+        """성공한 복잡 tool trace를 best-effort pending recipe 후보로 적재한다.
+
+        BIZ-428 — skill 후보와 별도 config gate(``recipes.learning``)/큐로 동작한다.
+        후보 생성 실패는 사용자 응답을 깨지 않고 warning 로그만 남긴다. live
+        ``recipes.dir`` 설치는 여기서 하지 않는다 — operator ``recipe_learning``
+        tool의 materialize 승인 경로만 수행한다.
+        """
+        cfg = getattr(self, "_recipe_learning_config", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+        try:
+            trace = list(result.trace or [])
+            if not result.success or not is_complex_successful_trace(
+                trace,
+                assistant_text,
+                min_tool_calls=int(cfg.get("min_tool_calls", 2)),
+                min_distinct_tools=int(cfg.get("min_distinct_tools", 2)),
+                min_final_chars=int(cfg.get("min_final_chars", 500)),
+            ):
+                return
+            snapshots = snapshots_from_trace(
+                trace,
+                max_observation_chars=int(cfg.get("max_trace_observation_chars", 1200)),
+            )
+            suggestion = await self._draft_recipe_suggestion(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                snapshots=snapshots,
+                source_msg_ids=source_msg_ids,
+            )
+            RecipeSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
+        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+            logger.exception("Recipe-learning candidate hook failed")
+
+    async def _draft_recipe_suggestion(
+        self,
+        *,
+        user_text: str,
+        assistant_text: str,
+        snapshots: list,
+        source_msg_ids: list[int],
+    ) -> RecipeSuggestion:
+        """LLM으로 recipe(반복 워크플로) 후보 JSON을 생성한다.
+
+        BIZ-427 structured output 게이트가 켜져 있으면 provider에
+        ``response_schema`` 기반 JSON을 강제한다. 미지원 provider는
+        ``LLMProviderError`` 를 던지고 상위 capture hook이 후보 생성만 건너뛴다.
+        """
+        cfg = getattr(self, "_recipe_learning_config", {}) or {}
+        fp = trace_fingerprint(snapshots, user_text=user_text, assistant_text=assistant_text)
+        prompt = build_recipe_candidate_prompt(
+            user_text=user_text,
+            assistant_text=assistant_text,
+            trace=snapshots,
+        )
+        request = LLMRequest(user_message=prompt, max_tokens=2048)
+        if cfg.get("structured_output", True):
+            request.response_mime_type = "application/json"
+            request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
+            request.require_structured_output = True
+        response = await self._router.send(request)
+        payload = json.loads((response.text or "{}").strip())
+        if not isinstance(payload, dict):
+            raise ValueError("Recipe candidate response must be a JSON object")
+        return suggestion_from_recipe_payload(
+            payload,
+            trace_fingerprint_value=fp,
+            source_msg_ids=source_msg_ids,
+            trace=snapshots,
+        )
 
     def _schedule_embedding(self, message_id: int, content: str) -> None:
         """주어진 메시지의 임베딩을 백그라운드 태스크로 부착한다.

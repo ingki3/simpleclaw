@@ -52,7 +52,6 @@ def env(tmp_path):
     config = {
         "suggestions_file": str(tmp_path / "suggestions.jsonl"),
         "target_dir": str(tmp_path / "skills"),
-        "require_operator_accept": True,
     }
     skills_config = {"local_dir": str(tmp_path / "local_skills")}
     return store, config, skills_config
@@ -146,6 +145,23 @@ def test_materialize_rejects_non_accepted_suggestion(env, tmp_path):
     assert out.startswith("Error:")
     assert "accepted" in out
     assert not (tmp_path / "skills" / "news-brief").exists()
+
+
+def test_materialize_rejects_pending_even_when_accept_config_disabled(env, tmp_path):
+    """require_operator_accept=False 설정으로도 accepted 게이트는 우회되지 않는다 (BIZ-432)."""
+    store, config, skills_config = env
+    config["require_operator_accept"] = False
+    suggestion = _make_suggestion(status="pending")
+    store.save_all([suggestion])
+
+    out = _call(
+        config, skills_config, action="materialize", id=suggestion.id, confirm=True
+    )
+
+    assert out.startswith("Error:")
+    assert "accepted" in out
+    assert not (tmp_path / "skills" / "news-brief").exists()
+    assert store.get(suggestion.id).status == "pending"
 
 
 def test_materialize_requires_confirm(env, tmp_path):
