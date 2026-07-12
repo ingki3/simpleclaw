@@ -80,6 +80,17 @@ class StudyTopic:
         created_at: 생성 시각(ISO8601) 또는 ``None``.
         updated_at: 최종 갱신 시각(ISO8601) 또는 ``None``.
         metadata: 확장용 자유 형식 메타데이터.
+        category: source policy 매핑용 분류(``"markets"``/``"ai-industry"`` 등).
+        kind: topic 출처 갈래(``"user_interest"``/``"general_news"``).
+        search_queries: collector 에 넘길 검색 쿼리 목록. 비어 있으면 label 을
+            그대로 쿼리로 쓴다. display label 이 검색어로 부적합한 topic
+            (예: ``market-reports-us-kr``)이 label 과 검색어를 분리하는 통로다.
+        source_signals: 이 topic 을 만들거나 갱신한 관심 신호의 감사 기록
+            (``{"source": ..., "source_ref": ..., "weight": ...}`` dict 목록).
+        mention_count: 누적 관심 신호 언급 횟수.
+        peak_score: 지금까지 관측된 최고 interest score.
+        last_signal_at: 마지막 관심 신호 시각(ISO8601) 또는 ``None``.
+        last_studied_at: 마지막 daily study 시각(ISO8601) 또는 ``None``.
     """
 
     id: str
@@ -94,6 +105,16 @@ class StudyTopic:
     created_at: str | None = None
     updated_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # topic evolution / source planning 확장 필드 (BIZ-434).
+    category: str = "general"
+    kind: str = "user_interest"
+    search_queries: list[str] = field(default_factory=list)
+    source_signals: list[dict[str, Any]] = field(default_factory=list)
+    mention_count: int = 0
+    peak_score: float = 0.0
+    last_signal_at: str | None = None
+    last_studied_at: str | None = None
 
 
 @dataclass

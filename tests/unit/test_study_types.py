@@ -57,6 +57,33 @@ def test_study_topic_defaults_are_independent():
     assert a.source == "manual"
 
 
+def test_study_topic_supports_evolution_metadata_defaults():
+    topic = StudyTopic(id="new-interest", label="New Interest")
+
+    assert topic.category == "general"
+    assert topic.kind == "user_interest"
+    assert topic.status == "active"
+    assert topic.search_queries == []
+    assert topic.source_signals == []
+    assert topic.mention_count == 0
+    assert topic.peak_score == 0.0
+    assert topic.last_signal_at is None
+    assert topic.last_studied_at is None
+
+
+def test_study_topic_mutable_defaults_are_independent_for_new_fields():
+    a = StudyTopic(id="a", label="A")
+    b = StudyTopic(id="b", label="B")
+
+    a.search_queries.append("query")
+    a.source_signals.append({"source": "user_message"})
+    a.metadata["x"] = 1
+
+    assert b.search_queries == []
+    assert b.source_signals == []
+    assert b.metadata == {}
+
+
 def test_study_page_defaults():
     page = StudyPage(topic_id="t1", path=Path("/tmp/t1.md"), title="T1")
     assert page.summary == ""
