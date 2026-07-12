@@ -90,6 +90,20 @@ agent:
 # 레거시 위치 ``.agent/recipes/`` 도 다음 마이너 릴리스까지는 한 번 폴백한다.
 recipes:
   dir: "~/.simpleclaw/recipes"
+  # BIZ-428 — recipe learning. 성공한 복잡 tool trace를 "반복 실행 절차" 후보로
+  # pending 큐(JSONL)에만 저장하는 approval-only 기능. 기본 disabled.
+  # 켜도 자동 설치는 없다 — live recipes.dir 설치는 운영자 recipe_learning tool의
+  # accept 후 materialize(confirm=true, 검증/backup 정책)로만 수행된다.
+  # cron_hint 는 후보 metadata로만 저장되며 cron job 을 자동 생성하지 않는다.
+  learning:
+    enabled: false
+    min_tool_calls: 2            # 후보로 볼 최소 tool 호출 수
+    min_distinct_tools: 2        # 후보로 볼 최소 distinct tool 수
+    min_final_chars: 500         # 최종 답변 최소 길이 — 짧은 응답은 후보 제외
+    suggestions_file: "~/.simpleclaw-agent/default/recipe_suggestions.jsonl"
+    require_operator_accept: true  # materialize 전 accept 승인 필수 (safe default)
+    max_trace_observation_chars: 1200
+    structured_output: true      # BIZ-427 — response_schema 로 후보 JSON 강제
 
 # 시맨틱 메모리 (RAG, spec 005 Phase 2)
 # enabled: true 로 켜면 sentence-transformers가 첫 메시지에 모델(~500MB)을 다운로드한다.

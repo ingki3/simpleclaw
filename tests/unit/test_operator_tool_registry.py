@@ -85,6 +85,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "deploy_status",
         "recipe_validate",
         "recipe_generate",
+        "recipe_learning",
         "skill_validate",
         "restart_runtime",
         "skill_learning",
@@ -121,6 +122,19 @@ def test_skill_learning_tool_operator_only():
 
     assert "skill_learning" not in runtime_names
     assert "skill_learning" in operator_names
+
+
+def test_recipe_learning_tool_operator_only():
+    """recipe_learning은 operator gate가 열린 context에만 노출된다 (BIZ-428)."""
+    runtime_names = native_tool_names(cron_available=True)
+    operator_names = native_tool_names(
+        cron_available=True,
+        scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+        operator_gate=True,
+    )
+
+    assert "recipe_learning" not in runtime_names
+    assert "recipe_learning" in operator_names
 
 
 def test_dispatch_name_validation_rejects_missing_or_unknown_names():
