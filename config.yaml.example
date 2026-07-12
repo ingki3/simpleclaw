@@ -135,11 +135,29 @@ study:
       high: 24
       medium: 72
       low: 168
-  topic_evolution:                # 주제 자동 생성/승격/소멸 정책
-    auto_create: true
-    min_interest_score: 0.55      # 주제 생성 최소 관심도
-    promote_threshold: 0.70       # 상시 주제로 승격 임계값
-    decay_after_days: 14          # 무관심 시 소멸까지의 일수
+  topic_evolution:                # 주제 자동 생성/승격/소멸 정책 (BIZ-434: daily run 연결)
+    auto_create: true             # 관심 신호에서 candidate topic 자동 생성
+    min_interest_score: 0.55      # candidate → active 승격 최소 관심도
+    promote_threshold: 0.70       # 상시 추적(감쇠 창 확장) 승격 임계값
+    decay_after_days: 14          # 신호 공백 시 cooling 까지의 일수(pinned 제외)
+  # 참고 — topic seed 예시 (BIZ-434). 런타임 topic 은 study.wiki_dir/topics.yaml
+  # 에 산다(이 config 파일이 아님). display label 은 좋은 검색 쿼리가 아닐 수
+  # 있으므로 collector 가 실제로 쓸 쿼리는 search_queries 로 분리한다. 예:
+  # market seed 는 label 을 그대로 RSS 쿼리로 쓰면 zero-result 가 반복되므로
+  # US/KR 쿼리로 나눈다.
+  #
+  # topics:
+  #   - id: market-reports-us-kr
+  #     label: US/Korean market reports and watchpoints
+  #     category: markets
+  #     kind: user_interest
+  #     status: pinned              # 운영자 seed 는 pinned(자동 감쇠 제외, sticky)
+  #     source: operator-bootstrap
+  #     search_queries:             # label 대신 collector 에 넘길 검색 쿼리
+  #       - US stock market latest news
+  #       - Wall Street market outlook today
+  #       - KOSPI Korean stock market latest news
+  #       - 한국 증시 코스피 시장 뉴스
   safety:                         # 사실성 가드
     require_sources: true                     # 출처 없는 항목 금지
     low_confidence_requires_disclaimer: true  # 저신뢰 항목은 면책 문구 필수

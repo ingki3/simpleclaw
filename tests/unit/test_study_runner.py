@@ -357,3 +357,139 @@ def test_missing_required_var_raises():
     spec = load_topic_update_prompt()
     with pytest.raises(Exception):
         spec.format(topic_title="x")  # 나머지 required_vars 누락
+
+
+# ---------------------------------------------------------------------------
+# BIZ-434: topic evolution / selection reason / fallback wording
+# ---------------------------------------------------------------------------
+
+
+def test_daily_note_includes_topic_selection_reason(tmp_path):
+    """daily note 가 pinned seed 와 관심 신호 기반 topic 을 구분해 설명한다."""
+    wiki_dir = tmp_path / "wiki"
+    _write_topics(
+        wiki_dir,
+        [
+            {
+                "id": "market-reports-us-kr",
+                "title": "US/KR 시장 리포트",
+                "status": "pinned",
+                "source": "operator-bootstrap",
+                "category": "markets",
+            },
+            {
+                "id": "ai-coding-agents",
+                "title": "AI coding agents",
+                "status": "active",
+                "category": "ai-industry",
+                "last_signal_at": "2026-06-28T00:00:00+00:00",
+            },
+        ],
+    )
+    runner = _make_runner(
+        wiki_dir,
+        _registry(
+            FakeCollector(
+                "news-search-skill",
+                {"market-reports-us-kr": 0.9, "ai-coding-agents": 0.9},
+            )
+        ),
+    )
+    runner.run()
+
+    daily = (wiki_dir / "daily" / "2026-06-29.md").read_text(encoding="utf-8")
+    assert "## Topic Selection" in daily
+    assert "`market-reports-us-kr` — pinned seed (operator-bootstrap)" in daily
+    assert "`ai-coding-agents` — recent interest signal" in daily
+
+
+def test_daily_note_distinguishes_rss_zero_from_fallback_success(tmp_path):
+    """우선순위 collector 0건 + 후순위 성공은 '전체 실패'가 아니라 fallback 성공."""
+    wiki_dir = tmp_path / "wiki"
+    _write_topics(
+        wiki_dir,
+        [
+            {
+                "id": "market-reports-us-kr",
+                "title": "US/KR 시장 리포트",
+                "category": "general",  # fallback 정책: news-search-skill, web_search
+            }
+        ],
+    )
+    # 첫 collector 는 0건, 두 번째 collector 가 수집 성공.
+    zero_rss = FakeCollector("news-search-skill", {})  # 등록됐지만 0건
+    fallback = FakeCollector("web_search", {"market-reports-us-kr": 0.9})
+    runner = _make_runner(wiki_dir, _registry(zero_rss, fallback))
+
+    summary = runner.run()
+
+    daily = (wiki_dir / "daily" / "2026-06-29.md").read_text(encoding="utf-8")
+    expected = (
+        "market-reports-us-kr:news-search-skill: returned zero items; "
+        "fallback collected 1 sources"
+    )
+    assert expected in daily
+    assert expected in summary.limitations
+    assert summary.topics_updated == 1  # run 은 성공으로 집계된다.
+
+
+def test_unregistered_collector_zero_is_not_reported_as_limitation(tmp_path):
+    """미등록(placeholder) collector 의 0건은 fallback 한계로 언급하지 않는다."""
+    wiki_dir = tmp_path / "wiki"
+    _write_topics(wiki_dir, [{"id": "t", "title": "T", "category": "general"}])
+    # news-search-skill 은 미등록(placeholder 폴백), web_search 만 수집.
+    runner = _make_runner(
+        wiki_dir, _registry(FakeCollector("web_search", {"t": 0.9}))
+    )
+
+    summary = runner.run()
+
+    assert not any("returned zero items" in lim for lim in summary.limitations)
+
+
+def test_candidate_and_cooling_topics_are_not_studied(tmp_path):
+    """candidate/cooling topic 은 승격 전까지 daily study 대상이 아니다."""
+    wiki_dir = tmp_path / "wiki"
+    _write_topics(
+        wiki_dir,
+        [
+            {"id": "active-t", "title": "Active", "status": "active"},
+            {"id": "cand-t", "title": "Candidate", "status": "candidate"},
+            {"id": "cool-t", "title": "Cooling", "status": "cooling"},
+        ],
+    )
+    runner = _make_runner(
+        wiki_dir,
+        _registry(
+            FakeCollector(
+                "news-search-skill",
+                {"active-t": 0.9, "cand-t": 0.9, "cool-t": 0.9},
+            )
+        ),
+    )
+
+    summary = runner.run()
+
+    assert summary.topics_considered == 1
+    assert (wiki_dir / "topics" / "active-t" / "overview.md").exists()
+    assert not (wiki_dir / "topics" / "cand-t" / "overview.md").exists()
+    assert not (wiki_dir / "topics" / "cool-t" / "overview.md").exists()
+
+
+def test_runner_without_signal_provider_skips_evolution(tmp_path):
+    """signal_provider 미주입이면 evolution 은 실행되지 않는다(opt-in)."""
+    wiki_dir = tmp_path / "wiki"
+    _write_topics(wiki_dir, [{"id": "t", "title": "T", "interest_score": 0.1}])
+    runner = _make_runner(
+        wiki_dir, _registry(FakeCollector("news-search-skill", {"t": 0.9}))
+    )
+
+    summary = runner.run()
+
+    assert summary.evolution is None
+    saved = yaml.safe_load((wiki_dir / "topics.yaml").read_text(encoding="utf-8"))
+    # evolution 이 안 돌았으므로 status/score 재계산 없이 원형 유지.
+    assert saved["topics"][0].get("status") is None or saved["topics"][0].get(
+        "status"
+    ) == "active"
+    assert saved["topics"][0]["interest_score"] == 0.1
