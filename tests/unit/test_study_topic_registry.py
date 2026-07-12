@@ -463,3 +463,73 @@ class TestPolicyFromConfig:
         assert policy.auto_create is True
         assert policy.min_interest_score == pytest.approx(0.55)
         assert policy.decay_after_days == pytest.approx(14.0)
+
+
+# ======================================================================
+# BIZ-434: evolution 필드 round-trip
+# ======================================================================
+
+
+def test_topic_registry_round_trips_evolution_fields(tmp_path: Path):
+    path = tmp_path / "topics.yaml"
+    path.write_text(
+        "topics:\n"
+        "  - id: llm-routing\n"
+        "    label: LLM routing\n"
+        "    status: active\n"
+        "    category: ai-industry\n"
+        "    kind: user_interest\n"
+        "    search_queries:\n"
+        "      - LLM routing agents latest\n"
+        "    source_signals:\n"
+        "      - source: user_message\n"
+        "        source_ref: msg-1\n"
+        "        weight: 0.72\n"
+        "    mention_count: 3\n"
+        "    peak_score: 0.81\n"
+        "    last_signal_at: '2026-07-12T00:00:00+09:00'\n"
+        "    last_studied_at: '2026-07-12T06:00:00+09:00'\n",
+        encoding="utf-8",
+    )
+
+    registry = TopicRegistry.load(path)
+    topic = registry.get("llm-routing")
+
+    assert topic is not None
+    assert topic.category == "ai-industry"
+    assert topic.kind == "user_interest"
+    assert topic.search_queries == ["LLM routing agents latest"]
+    assert topic.source_signals[0]["source"] == "user_message"
+    assert topic.mention_count == 3
+    assert topic.peak_score == 0.81
+    assert topic.last_signal_at == "2026-07-12T00:00:00+09:00"
+    assert topic.last_studied_at == "2026-07-12T06:00:00+09:00"
+
+    registry.save()
+    reloaded = TopicRegistry.load(path).get("llm-routing")
+    assert reloaded is not None
+    assert reloaded.search_queries == ["LLM routing agents latest"]
+    assert reloaded.source_signals[0]["source_ref"] == "msg-1"
+
+
+def test_topic_from_dict_normalizes_malformed_containers(tmp_path: Path):
+    """손편집으로 list/dict 자리에 스칼라가 들어와도 안전하게 정규화된다."""
+    path = tmp_path / "topics.yaml"
+    path.write_text(
+        "topics:\n"
+        "  - id: broken\n"
+        "    label: Broken\n"
+        "    tags: not-a-list\n"
+        "    search_queries: 12\n"
+        "    source_signals: oops\n"
+        "    metadata: nope\n",
+        encoding="utf-8",
+    )
+
+    topic = TopicRegistry.load(path).get("broken")
+
+    assert topic is not None
+    assert topic.tags == []
+    assert topic.search_queries == []
+    assert topic.source_signals == []
+    assert topic.metadata == {}

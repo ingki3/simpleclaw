@@ -84,11 +84,23 @@ from .types import StudyTopic
 _TOPIC_FIELDS = {f.name for f in fields(StudyTopic)}
 
 
+def _as_list(value: object) -> list:
+    """사람이 편집한 YAML 의 list 필드를 방어적으로 정규화한다(비-list 는 빈 목록)."""
+    return value if isinstance(value, list) else []
+
+
+def _as_dict(value: object) -> dict:
+    """사람이 편집한 YAML 의 dict 필드를 방어적으로 정규화한다(비-dict 는 빈 dict)."""
+    return value if isinstance(value, dict) else {}
+
+
 def _topic_from_dict(data: dict) -> StudyTopic | None:
     """YAML dict 한 건을 ``StudyTopic`` 으로 변환한다(잘못된 항목은 ``None``).
 
     ``id`` 가 없으면 식별 불가 항목이므로 건너뛴다. 알 수 없는 키는 버리고,
-    누락 키는 dataclass 기본값에 맡긴다.
+    누락 키는 dataclass 기본값에 맡긴다. 가변 컨테이너 필드(tags/search_queries/
+    source_signals/metadata)는 사람이 손으로 편집하다 문자열/None 이 들어와도
+    깨지지 않도록 타입을 정규화한다.
     """
     if not isinstance(data, dict):
         return None
@@ -98,6 +110,15 @@ def _topic_from_dict(data: dict) -> StudyTopic | None:
     kwargs = {k: v for k, v in data.items() if k in _TOPIC_FIELDS}
     # label 이 없으면 식별자라도 보여주도록 id 로 채운다.
     kwargs.setdefault("label", topic_id)
+    for list_field in ("tags", "search_queries"):
+        if list_field in kwargs:
+            kwargs[list_field] = [str(v) for v in _as_list(kwargs[list_field])]
+    if "source_signals" in kwargs:
+        kwargs["source_signals"] = [
+            s for s in _as_list(kwargs["source_signals"]) if isinstance(s, dict)
+        ]
+    if "metadata" in kwargs:
+        kwargs["metadata"] = _as_dict(kwargs["metadata"])
     return StudyTopic(**kwargs)
 
 
