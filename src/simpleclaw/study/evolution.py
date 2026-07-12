@@ -24,7 +24,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 
 from simpleclaw.study.interest_signals import InterestSignal
