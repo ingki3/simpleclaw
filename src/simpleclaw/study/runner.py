@@ -44,7 +44,18 @@ from pathlib import Path
 
 import yaml
 
-from simpleclaw.study.collectors import CollectorRegistry, StudyFetchResult
+from simpleclaw.study.collectors import (
+    CollectorRegistry,
+    StudyFetchRequest,
+    StudyFetchResult,
+)
+from simpleclaw.study.evolution import (
+    EvolutionSummary,
+    apply_interest_signals,
+    merge_registry_into_raw_topics,
+    registry_from_study_topics,
+)
+from simpleclaw.study.signal_provider import StudySignalProvider
 from simpleclaw.study.source_planner import (
     DEFAULT_RELEVANCE_THRESHOLD,
     DEFAULT_SOURCE_POLICY,
@@ -56,12 +67,15 @@ from simpleclaw.study.source_planner import (
     plan_fetch_requests,
     select_wiki_worthy,
 )
+from simpleclaw.study.topic_registry import TopicEvolutionPolicy, load_topics
 from simpleclaw.study.wiki_updater import merge_open_questions, merge_study_update
 
 logger = logging.getLogger(__name__)
 
-# 아카이브/삭제된 topic 의 status 값 — 공부 대상에서 제외(study_status 와 동일 집합).
-_ARCHIVED_STATUSES = frozenset({"archived", "deleted", "retired"})
+# daily study 대상 status. candidate/cooling 은 아직(또는 더 이상) 공부 대상이
+# 아니고, archived/deleted/retired/paused 등 운영 상태도 제외한다 — topic
+# evolution 계약(active/pinned 만 매일 수집)과 정렬(BIZ-434).
+_STUDY_STATUSES = frozenset({"active", "pinned"})
 
 # confidence(0~1) → 등급 경계. wiki_updater 가 low 일 때 "확인 필요"로 우회한다.
 _HIGH_CONFIDENCE = 0.7
@@ -82,6 +96,8 @@ class StudyRunSummary:
     topics_updated: int
     items_added: int
     limitations: tuple[str, ...] = ()
+    # topic evolution pass 결과(signal_provider 미주입 시 None — evolution 미실행).
+    evolution: EvolutionSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +119,8 @@ class StudyTopicRecord:
     title: str
     interest_score: float
     refresh_requested: bool
+    # collector 에 넘길 검색 쿼리(비면 planner 가 label 로 폴백).
+    search_queries: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict, compare=False, repr=False)
 
 
@@ -134,6 +152,11 @@ class StudyRunner:
         max_topics_per_run: 한 번에 공부할 최대 topic 수.
         now: 시간 제공자(테스트 주입용).
         run_id_factory: run_id 생성기(테스트 주입용). 기본은 started_at 기반.
+        signal_provider: 최근 관심 신호 provider. ``None`` 이면 topic evolution
+            자체를 건너뛴다(opt-in) — evolution 은 점수 기반으로 non-pinned topic
+            을 감쇠시키므로, 신호 공급 계획 없이 켜면 수동 active topic 이 의도치
+            않게 강등될 수 있다.
+        evolution_policy: topic 생애주기 정책(None 이면 기본 정책).
     """
 
     wiki_dir: Path
@@ -144,6 +167,8 @@ class StudyRunner:
     max_topics_per_run: int = 8
     now: Callable[[], datetime] = _utcnow
     run_id_factory: Callable[[datetime], str] | None = None
+    signal_provider: StudySignalProvider | None = None
+    evolution_policy: TopicEvolutionPolicy | None = None
 
     def __post_init__(self) -> None:
         self.wiki_dir = Path(self.wiki_dir).expanduser()
@@ -172,10 +197,16 @@ class StudyRunner:
     # -- public API ---------------------------------------------------
 
     def run(self) -> StudyRunSummary:
-        """study 파이프라인을 한 번 실행하고 요약을 반환한다."""
+        """study 파이프라인을 한 번 실행하고 요약을 반환한다.
+
+        signal_provider 가 주입된 경우 topic 선택 전에 evolution pass 를 먼저
+        실행한다 — 최근 관심 신호로 candidate 생성/active 승격/stale 감쇠를
+        반영한 뒤의 topics.yaml 이 오늘 공부 대상의 SoT 가 된다.
+        """
         started = self.now()
         run_id = self._make_run_id(started)
 
+        evolution_summary = self._evolve_topics()
         raw_topics, records = self._load_topics()
         selected_topics = self._select_topics(records)
         topics_considered = len(selected_topics)
@@ -190,6 +221,8 @@ class StudyRunner:
             topic_by_id = {t.topic_id: t for t in selected_topics}
             requests = plan_fetch_requests(selected_topics, policy=self.policy)
             results = self.collectors.fetch_all(requests)
+            for lim in self._collector_fallback_limitations(requests, results):
+                limitations.add(lim)
             selection = select_wiki_worthy(
                 results,
                 topics=topic_by_id,
@@ -227,8 +260,8 @@ class StudyRunner:
                 raw_topics, records, updated_topic_ids, by_topic, finished_iso
             )
 
-        # 데일리 노트 — "오늘 무엇을 공부했는지"만 요약.
-        if topics_considered:
+        # 데일리 노트 — "오늘 무엇을/왜 공부했는지" 요약.
+        if topics_considered or (evolution_summary and evolution_summary.touched_ids):
             self._write_daily_note(
                 run_id=run_id,
                 date=finished,
@@ -236,6 +269,7 @@ class StudyRunner:
                 updated_ids=updated_topic_ids,
                 items_added=items_added,
                 limitations=sorted(limitations),
+                evolution=evolution_summary,
             )
 
         if topics_considered and not updated_topic_ids:
@@ -250,7 +284,78 @@ class StudyRunner:
             topics_updated=len(updated_topic_ids),
             items_added=items_added,
             limitations=tuple(sorted(limitations)),
+            evolution=evolution_summary,
         )
+
+    # -- topic evolution ----------------------------------------------
+
+    def _evolve_topics(self) -> EvolutionSummary | None:
+        """관심 신호를 topic 생애주기에 반영하고 topics.yaml 을 갱신한다.
+
+        signal_provider 미주입 시 아무것도 하지 않는다(opt-in). 병합은
+        :func:`merge_registry_into_raw_topics` 를 거쳐 StudyTopic 스키마 밖의
+        운영 키(source_count/refresh_requested_at/title 등)를 보존한다.
+        """
+        if self.signal_provider is None:
+            return None
+        now = self.now()
+        raw_topics, _ = self._load_topics()
+        topics = load_topics(self.topics_path)
+        registry = registry_from_study_topics(
+            topics,
+            policy=self.evolution_policy or TopicEvolutionPolicy(),
+            now_fn=self.now,
+        )
+        signals = self.signal_provider.collect()
+        summary = apply_interest_signals(registry, signals, now=now)
+        merged = merge_registry_into_raw_topics(
+            raw_topics, registry, signals=signals, now=now
+        )
+        if merged != raw_topics:
+            self._save_topics(merged)
+        return summary
+
+    # -- collector 한계 wording ----------------------------------------
+
+    def _collector_fallback_limitations(
+        self,
+        requests: Sequence[StudyFetchRequest],
+        results: Sequence[StudyFetchResult],
+    ) -> list[str]:
+        """우선순위 collector 가 0건이고 후순위가 수집한 경우의 한계 문구를 만든다.
+
+        "Google News RSS zero items" 가 run 전체 실패처럼 읽히지 않도록, 등록된
+        collector 가 0건을 반환했지만 같은 topic 의 후순위 collector 가 수집에
+        성공한 경우를 "fallback 이 대신 수집했다"로 명시한다(BIZ-434). 미등록
+        (placeholder) collector 의 0건은 미연결일 뿐이므로 언급하지 않는다.
+        """
+        # topic 별 collector 등장 순서(쿼리가 여러 개라도 collector 는 한 번만).
+        order_by_topic: dict[str, list[str]] = {}
+        for request in requests:
+            order = order_by_topic.setdefault(request.topic_id, [])
+            if request.collector not in order:
+                order.append(request.collector)
+
+        counts: dict[tuple[str, str], int] = {}
+        for result in results:
+            key = (result.request.topic_id, result.request.collector)
+            counts[key] = counts.get(key, 0) + 1
+
+        limitations: list[str] = []
+        for topic_id, order in order_by_topic.items():
+            collected = [c for c in order if counts.get((topic_id, c), 0) > 0]
+            if not collected:
+                continue  # 전부 0건이면 기존 "수집된 source 없음" 경로가 다룬다.
+            first_success = order.index(collected[0])
+            fallback_total = sum(counts.get((topic_id, c), 0) for c in collected)
+            for collector in order[:first_success]:
+                if collector not in self.collectors.collectors:
+                    continue  # 미등록 placeholder 의 0건은 노이즈.
+                limitations.append(
+                    f"{topic_id}:{collector}: returned zero items; "
+                    f"fallback collected {fallback_total} sources"
+                )
+        return limitations
 
     # -- topic registry ----------------------------------------------
 
@@ -293,6 +398,12 @@ class StudyRunner:
             kind = TopicKind(kind_raw)
         except ValueError:
             kind = TopicKind.USER_INTEREST
+        raw_queries = raw.get("search_queries")
+        search_queries = (
+            [str(q) for q in raw_queries if isinstance(q, str) and q.strip()]
+            if isinstance(raw_queries, list)
+            else []
+        )
         return StudyTopicRecord(
             topic_id=topic_id,
             label=str(raw.get("label") or title),
@@ -305,6 +416,7 @@ class StudyRunner:
                 raw.get("interest_score") or raw.get("score"), default=0.0
             ),
             refresh_requested=bool(raw.get("refresh_requested_at")),
+            search_queries=search_queries,
             raw=raw,
         )
 
@@ -313,7 +425,8 @@ class StudyRunner:
     ) -> list[StudyTopicRecord]:
         """이번 run 에서 공부할 topic 을 고른다.
 
-        - 아카이브된 topic 제외.
+        - active/pinned 만 대상(candidate/cooling/archived/운영 상태 제외 —
+          evolution 계약: candidate 는 승격 전까지 공부하지 않는다).
         - 운영자 refresh 요청이 걸린 topic 을 우선, 그다음 관심도(interest_score)
           내림차순. 동률은 원래 순서 유지(stable sort).
         - ``max_topics_per_run`` 으로 상한.
@@ -322,7 +435,7 @@ class StudyRunner:
             r
             for r in records
             if str(r.raw.get("status") or "active").strip().lower()
-            not in _ARCHIVED_STATUSES
+            in _STUDY_STATUSES
         ]
         # 우선순위: refresh 요청 먼저(True=0), 그다음 관심도 높은 순.
         ordered = sorted(
@@ -484,6 +597,23 @@ class StudyRunner:
 
     # -- daily note ---------------------------------------------------
 
+    @staticmethod
+    def _topic_selection_reason(topic: StudyTopicRecord) -> str:
+        """이 topic 이 오늘 공부 대상으로 뽑힌 이유를 사람이 읽을 문구로 만든다.
+
+        pinned seed 가 "새로 감지된 관심사"처럼 오해되지 않도록 출처를 명시하고,
+        관심 신호로 진화한 topic 과 구분한다(BIZ-434 — fixed-topic 오해 해소).
+        """
+        status = str(topic.raw.get("status") or "active").strip().lower()
+        source = str(topic.raw.get("source") or "").strip()
+        if topic.refresh_requested:
+            return "operator refresh"
+        if status == "pinned":
+            return f"pinned seed ({source or 'manual'})"
+        if topic.raw.get("last_signal_at"):
+            return "recent interest signal"
+        return "active topic"
+
     def _write_daily_note(
         self,
         *,
@@ -493,11 +623,13 @@ class StudyRunner:
         updated_ids: set[str],
         items_added: int,
         limitations: Sequence[str],
+        evolution: EvolutionSummary | None = None,
     ) -> None:
-        """daily/YYYY-MM-DD.md 에 "오늘 무엇을 공부했는지" 요약만 쓴다.
+        """daily/YYYY-MM-DD.md 에 "오늘 무엇을/왜 공부했는지" 요약을 쓴다.
 
         같은 날 재실행되면 덮어쓴다(하루 1 노트). 상세 사실은 topic 페이지/인덱스에
-        있으므로 데일리 노트는 의도적으로 요약만 담는다(설계 정책).
+        있으므로 데일리 노트는 의도적으로 요약만 담는다(설계 정책). Topic
+        Evolution/Topic Selection 섹션은 "왜 이 토픽이 골라졌는지"의 감사 창구다.
         """
         day = date.strftime("%Y-%m-%d")
         lines = [
@@ -516,6 +648,35 @@ class StudyRunner:
                 lines.append(f"- {topic.title}")
         else:
             lines.append("- (새로 갱신된 주제 없음)")
+
+        if evolution is not None:
+            lines += [
+                "",
+                "## Topic Evolution",
+                f"- created: {evolution.created}"
+                + (f" ({', '.join(evolution.created_ids)})" if evolution.created_ids else ""),
+                f"- promoted: {evolution.promoted}"
+                + (
+                    f" ({', '.join(evolution.promoted_ids)})"
+                    if evolution.promoted_ids
+                    else ""
+                ),
+                f"- cooled: {evolution.cooled}"
+                + (f" ({', '.join(evolution.cooled_ids)})" if evolution.cooled_ids else ""),
+                f"- archived: {evolution.archived}"
+                + (
+                    f" ({', '.join(evolution.archived_ids)})"
+                    if evolution.archived_ids
+                    else ""
+                ),
+            ]
+
+        if considered:
+            lines += ["", "## Topic Selection"]
+            for topic in considered:
+                lines.append(
+                    f"- `{topic.topic_id}` — {self._topic_selection_reason(topic)}"
+                )
 
         if limitations:
             lines += ["", "## 한계 / 주의"]
