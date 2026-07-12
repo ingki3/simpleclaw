@@ -932,6 +932,115 @@ async def test_empty_final_after_command_failed_header_reports_error(
 
 
 @pytest.mark.asyncio
+async def test_empty_final_after_first_line_failed_transcript_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """첫 줄이 `Failed ...`로 시작하는 정상 transcript는 오류 fallback으로 가면 안 된다 (BIZ-437)."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Failed attempts are normal in agent workflows.\n"
+            "This talk explains why retries make agents more robust.\n"
+            "정상적으로 추출된 transcript 본문입니다."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "summarize", "args": "https://youtu.be/example --youtube auto"},
+        ),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("https://youtu.be/example")
+
+    assert "확인한 근거는 있지만" in result
+    assert "execute_skill: Failed attempts are normal" in result
+    assert "확인 중 오류" not in result
+    assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_first_line_error_rates_transcript_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """첫 줄이 `Error rates ...`로 시작하는 정상 문서도 오류 fallback으로 가면 안 된다 (BIZ-437)."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Error rates in LLM agents are discussed in this transcript.\n"
+            "The speaker compares evaluation strategies across providers."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "summarize", "args": "https://youtu.be/example --youtube auto"},
+        ),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("https://youtu.be/example")
+
+    assert "확인한 근거는 있지만" in result
+    assert "execute_skill: Error rates in LLM agents" in result
+    assert "확인 중 오류" not in result
+    assert "한 번 더 말씀" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_explicit_error_header_still_reports_error(
+    config_file, monkeypatch,
+):
+    """`Error:` 헤더는 엄격화 이후에도 checked-but-failed fallback을 유지한다 (BIZ-437)."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Error: summarize exited with status 1"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 유튜브 요약해줘")
+
+    assert "확인 중 오류" in result
+    assert "Error: summarize exited with status 1" in result
+
+
+@pytest.mark.asyncio
 async def test_forced_final_answer_timeout_returns_fallback(
     config_file, monkeypatch, caplog,
 ):

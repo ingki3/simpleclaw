@@ -162,6 +162,60 @@ def test_infer_transcript_with_error_words_is_not_failure():
     assert result.status == "unknown"
 
 
+def test_infer_first_line_failed_transcript_stays_unknown():
+    """첫 문장이 `Failed ...`로 시작하는 정상 transcript는 실패로 오분류하지 않는다 (BIZ-437)."""
+    result = infer_action_result(
+        step_index=1,
+        tool_name="execute_skill",
+        tool_call_id="c1",
+        arguments={"skill_name": "summarize"},
+        sanitized_output=(
+            "Failed attempts are normal in agent workflows. This is transcript text."
+        ),
+    )
+
+    assert result.status == "unknown"
+    assert result.error is None
+
+
+def test_infer_first_line_error_rates_transcript_stays_unknown():
+    """첫 문장이 `Error rates ...`로 시작하는 정상 문서도 unknown으로 남는다 (BIZ-437)."""
+    result = infer_action_result(
+        step_index=1,
+        tool_name="execute_skill",
+        tool_call_id="c1",
+        arguments={"skill_name": "summarize"},
+        sanitized_output="Error rates in LLM agents are discussed in this transcript.",
+    )
+
+    assert result.status == "unknown"
+    assert result.error is None
+
+
+def test_infer_explicit_error_headers_still_fail():
+    """실패를 직접 선언하는 envelope/header는 엄격화 이후에도 failure로 분류된다 (BIZ-437)."""
+    headers = [
+        "Error: summarize exited with status 1",
+        "Failed: could not fetch page",
+        "Command failed: summarize exited with status 1",
+        "Command failed (exit 1): network timeout",
+        "Skill failed: reminder-skill crashed",
+        "Error executing skill google-calendar-skill: auth failed",
+        "Traceback (most recent call last):\n  File \"skill.py\", line 1",
+        '{"error": "boom"}',
+        "도구 실행 실패: sandbox 격리 위반",
+    ]
+    for header in headers:
+        result = infer_action_result(
+            step_index=1,
+            tool_name="execute_skill",
+            tool_call_id="c1",
+            arguments={"skill_name": "summarize"},
+            sanitized_output=header,
+        )
+        assert result.status == "failure", header
+
+
 def test_infer_parses_structured_json_contract():
     """스킬이 JSON envelope을 반환하면 heuristic보다 우선해 파싱한다."""
     result = infer_action_result(

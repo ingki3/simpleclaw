@@ -19,6 +19,7 @@ from simpleclaw.agent.action_result import (
     ActionResultLedger,
     fallback_for_empty_final_from_ledger,
     infer_action_result,
+    looks_like_error_envelope,
 )
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
@@ -84,15 +85,6 @@ _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
     "없습니다",
     "[]",
     "{}",
-)
-_TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
-    "error",
-    "failed",
-    "exception",
-    "traceback",
-    "command failed",
-    "skill failed",
-    "도구 실행 실패",
 )
 _TOOL_RESULT_EMPTY_FINAL_NO_EVIDENCE_MARKERS = (
     "[command completed with no output]",
@@ -260,26 +252,14 @@ def _tool_result_provides_usable_live_evidence(content: str) -> bool:
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
-    """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다."""
-    stripped = content.strip()
-    if not stripped:
-        return False
+    """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
-    lowered = stripped.lower()
-    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
-        return True
-
-    for line in stripped.splitlines()[:3]:
-        header = line.strip().lower()
-        if not header:
-            continue
-        return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
-            for prefix in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
-        )
-    return False
+    판정 기준은 ActionResult ledger 추론과 반드시 같아야 하므로 자체 heuristic 을
+    두지 않고 `action_result.looks_like_error_envelope()` 를 단일 소스로 쓴다
+    (BIZ-437 — 두 판정이 갈리면 같은 출력이 ledger 에선 unknown, fallback 에선
+    오류로 분류되는 오분류가 재발한다).
+    """
+    return looks_like_error_envelope(content)
 
 
 def _tool_result_looks_like_not_found(content: str) -> bool:

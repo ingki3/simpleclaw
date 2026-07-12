@@ -90,6 +90,7 @@ from simpleclaw.agent import (
     skill_dispatch,
     tool_dispatch,
 )
+from simpleclaw.agent.action_result import looks_like_error_envelope
 from simpleclaw.agent.asset_selector import (
     AssetSelectionResult,
     build_selector_assets,
@@ -257,18 +258,6 @@ _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS = (
     "못 찾",
     "찾지 못",
 )
-_TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
-    "error",
-    "traceback",
-    "exception",
-    "timeout",
-    "failed",
-    "command failed",
-    "tool error",
-    "오류",
-    "실패",
-)
-
 _REALTIME_LOOKUP_SKILL_NAME = "realtime-lookup-skill"
 _REALTIME_LOOKUP_CONTEXT_HEADER = "## Realtime Lookup Evidence"
 _LIVE_FACT_TIME_CUES = (
@@ -491,29 +480,11 @@ def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
     """도구 결과가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
-    정상 transcript/요약 본문에는 ``error``/``failed`` 같은 단어가 자연어로 섞일 수
-    있다. 그래서 전체 본문 검색 대신 첫 non-empty line 또는 JSON-style envelope 처럼
-    도구 실행 실패를 직접 선언하는 초반 헤더만 오류로 본다.
+    자체 heuristic 을 두면 tool_loop / ledger 판정과 갈라져 같은 출력이 경로마다
+    다르게 분류된다. 그래서 `action_result.looks_like_error_envelope()` 를 단일
+    소스로 위임한다 (BIZ-437).
     """
-    stripped = content.strip()
-    if not stripped:
-        return False
-
-    lowered = stripped.lower()
-    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
-        return True
-
-    for line in stripped.splitlines()[:3]:
-        header = line.strip().lower()
-        if not header:
-            continue
-        return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
-            for prefix in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
-        )
-    return False
+    return looks_like_error_envelope(content)
 
 def _fallback_for_empty_final_after_tools(
     tool_results: list[tuple[str, str]],

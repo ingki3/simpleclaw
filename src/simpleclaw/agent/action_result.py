@@ -30,8 +30,9 @@ from typing import Any, Literal
 ActionStatus = Literal["success", "failure", "not_found", "unknown"]
 OverallStatus = Literal["all_success", "partial_success", "all_failed", "unknown"]
 
-# tool_loop 의 empty-final 판정 상수와 동일한 값을 쓰되, tool_loop 가 이 모듈을
-# import 하므로 순환 import 를 피하기 위해 여기서 별도로 정의한다.
+# 오류 envelope 판정의 단일 소스. tool_loop / orchestrator 의 legacy empty-final
+# fallback 도 이 모듈의 `looks_like_error_envelope()` 를 그대로 사용해, ledger 추론과
+# fallback 이 같은 출력을 다르게 분류하는 일이 없게 한다 (BIZ-437).
 _ERROR_PREFIXES = (
     "error",
     "failed",
@@ -39,6 +40,17 @@ _ERROR_PREFIXES = (
     "traceback",
     "command failed",
     "skill failed",
+    "도구 실행 실패",
+)
+# prefix 뒤에 콜론 없이 이어지는 형태는 runtime 이 실제로 생성하는 오류 envelope 만
+# 명시적으로 나열한다. `startswith(f"{prefix} ")` 같은 broad 매칭은 정상 transcript 의
+# 첫 문장(`Failed attempts are normal ...`, `Error rates in LLM agents ...`)을 실패로
+# 오분류했다 (BIZ-437).
+_ERROR_ENVELOPE_PATTERNS = (
+    "error executing ",  # skill_dispatch: "Error executing skill X: ..."
+    "command failed (",  # command_dispatch: "Command failed (exit N): ..."
+    "skill failed (",
+    "traceback (most recent call last)",
     "도구 실행 실패",
 )
 _NOT_FOUND_MARKERS = (
@@ -123,11 +135,14 @@ class ActionResultLedger:
         return "unknown"
 
 
-def _looks_like_error(text: str) -> bool:
+def looks_like_error_envelope(text: str) -> bool:
     """결과 텍스트가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
     첫 non-empty 줄의 header 만 본다 — 본문 중간에 인용된 error/failed 단어로
-    정상 transcript 를 실패로 오분류하지 않기 위해서다.
+    정상 transcript 를 실패로 오분류하지 않기 위해서다. header 도 `Error:` 처럼
+    실패를 직접 선언하는 형태이거나 runtime 이 생성하는 envelope 패턴일 때만
+    오류로 본다 — `Failed attempts are normal ...` 처럼 error 단어로 시작하는
+    정상 첫 문장은 unknown 으로 남겨야 한다 (BIZ-437).
     """
     lowered = text.strip().lower()
     if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
@@ -136,12 +151,12 @@ def _looks_like_error(text: str) -> bool:
         header = line.strip().lower()
         if not header:
             continue
-        return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
+        if any(
+            header == prefix or header.startswith(f"{prefix}:")
             for prefix in _ERROR_PREFIXES
-        )
+        ):
+            return True
+        return any(header.startswith(pattern) for pattern in _ERROR_ENVELOPE_PATTERNS)
     return False
 
 
@@ -225,7 +240,7 @@ def infer_action_result(
             base.error = ActionError(message=err)
         return base
 
-    if _looks_like_error(sanitized_output):
+    if looks_like_error_envelope(sanitized_output):
         base.status = "failure"
         base.error = ActionError(
             message=sanitized_output.strip().splitlines()[0][:_FAILURE_DETAIL_MAX_CHARS],
