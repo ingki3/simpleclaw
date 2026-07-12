@@ -1302,3 +1302,74 @@ async def test_empty_final_log_includes_usage_metadata(config_file, monkeypatch,
 
     assert "empty final answer" in caplog.text
     assert "output_tokens" in caplog.text
+
+
+# ── BIZ-437: first-line error/failed 단어 오분류 방지 ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_first_line_failed_transcript_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """'Failed ...' 문장으로 시작하는 정상 결과 뒤 empty final 은 오류가 아니라 generic 근거로 답한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Failed attempts are normal in agent workflows and the speaker "
+            "explains how retries recover from them."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 영상 요약해줘")
+
+    assert "확인한 근거는 있지만" in result
+    assert "Failed attempts are normal" in result
+    assert "확인 중 오류" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_first_line_error_rates_transcript_reports_generic_result(
+    config_file, monkeypatch,
+):
+    """'Error rates ...' 문장으로 시작하는 정상 결과 뒤 empty final 도 오류로 가지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return (
+            "Error rates in LLM agents are discussed with concrete mitigation "
+            "strategies and benchmarks."
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "summarize"}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("이 문서 요약해줘")
+
+    assert "확인한 근거는 있지만" in result
+    assert "Error rates in LLM agents" in result
+    assert "확인 중 오류" not in result

@@ -30,15 +30,33 @@ from typing import Any, Literal
 ActionStatus = Literal["success", "failure", "not_found", "unknown"]
 OverallStatus = Literal["all_success", "partial_success", "all_failed", "unknown"]
 
-# tool_loop 의 empty-final 판정 상수와 동일한 값을 쓰되, tool_loop 가 이 모듈을
-# import 하므로 순환 import 를 피하기 위해 여기서 별도로 정의한다.
-_ERROR_PREFIXES = (
+# BIZ-437: error header 판정은 이 모듈이 단일 소스다. tool_loop 의
+# `_tool_result_looks_like_explicit_error()` 가 `looks_like_explicit_error_header()`
+# 를 재사용해 ledger 추론과 legacy empty-final fallback 이 항상 같은 기준으로
+# 분류하게 한다 (tool_loop 가 이 모듈을 import 하므로 역방향 의존은 두지 않는다).
+#
+# "<prefix>:" 또는 단독 헤더로 시작할 때만 오류 envelope 로 인정한다.
+# "Failed attempts are normal ..." / "Error rates in LLM agents ..." 처럼
+# 정상 transcript/문서가 같은 단어로 문장을 시작하는 경우를 실패로 오분류하지
+# 않기 위해 단순 "<prefix> " startswith 는 쓰지 않는다.
+_ERROR_HEADER_PREFIXES = (
     "error",
     "failed",
     "exception",
     "traceback",
     "command failed",
     "skill failed",
+    "도구 실행 실패",
+)
+# 콜론 없이도 실행 실패를 직접 선언하는 runtime 오류 포맷들. 자연어 문장과
+# 겹치지 않는 구체적 phrase 만 열거한다 (broad keyword 판정 금지).
+_ERROR_HEADER_PHRASES = (
+    "error executing",  # skill_dispatch: "Error executing skill X: ..."
+    "error running",
+    "failed to ",  # "Failed to connect ..."
+    "traceback (most recent call last)",
+    "command failed ",  # "Command failed with exit code 1"
+    "skill failed ",
     "도구 실행 실패",
 )
 _NOT_FOUND_MARKERS = (
@@ -123,11 +141,13 @@ class ActionResultLedger:
         return "unknown"
 
 
-def _looks_like_error(text: str) -> bool:
+def looks_like_explicit_error_header(text: str) -> bool:
     """결과 텍스트가 명시적 오류 envelope/header 로 시작하는지 판정한다.
 
     첫 non-empty 줄의 header 만 본다 — 본문 중간에 인용된 error/failed 단어로
-    정상 transcript 를 실패로 오분류하지 않기 위해서다.
+    정상 transcript 를 실패로 오분류하지 않기 위해서다. BIZ-437: header 판정도
+    "<prefix>:" / 단독 prefix / 명시적 실패 phrase 로 좁혀, "Failed attempts
+    are normal ..." 같은 정상 첫 문장을 오류로 넓히지 않는다.
     """
     lowered = text.strip().lower()
     if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
@@ -136,12 +156,12 @@ def _looks_like_error(text: str) -> bool:
         header = line.strip().lower()
         if not header:
             continue
-        return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
-            for prefix in _ERROR_PREFIXES
-        )
+        if any(
+            header == prefix or header.startswith(f"{prefix}:")
+            for prefix in _ERROR_HEADER_PREFIXES
+        ):
+            return True
+        return any(header.startswith(phrase) for phrase in _ERROR_HEADER_PHRASES)
     return False
 
 
@@ -225,7 +245,7 @@ def infer_action_result(
             base.error = ActionError(message=err)
         return base
 
-    if _looks_like_error(sanitized_output):
+    if looks_like_explicit_error_header(sanitized_output):
         base.status = "failure"
         base.error = ActionError(
             message=sanitized_output.strip().splitlines()[0][:_FAILURE_DETAIL_MAX_CHARS],
