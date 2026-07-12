@@ -1141,3 +1141,164 @@ async def test_process_message_without_callback_uses_send_signature(
 
     result = await orch.process_message("hi", user_id=1, chat_id=1)
     assert result == "plain answer"
+
+
+# ── BIZ-436: ActionResultLedger 기반 empty-final 복구 ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_calendar_create_reports_success_from_ledger(
+    config_file, monkeypatch,
+):
+    """calendar create 성공 뒤 Gemini final 이 비어도 '확정 못함'이 아니라 완료를 보고해야 한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    async def fake_dispatch(tc):
+        if tc.name == "skill_docs":
+            return "[Skill documentation for google-calendar-skill]"
+        return (
+            "Creating event...\n"
+            "Event created successfully: https://www.google.com/calendar/event?eid=abc\n"
+            "Event ID: 1l8ivhtgrt68f9h9i4n6s7f1d0"
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "skill_docs", {"name": "google-calendar-skill"}),
+        _tool_response(
+            "c2",
+            "execute_skill",
+            {
+                "skill_name": "google-calendar-skill",
+                "args": "create --calendar-name 골프 --summary '해비치 박민재 골프'",
+            },
+        ),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("7월 26일 해비치 박민재 골프 일정 추가해줘")
+
+    assert "작업이 완료됐습니다" in result
+    assert "1l8ivhtgrt68f9h9i4n6s7f1d0" in result
+    assert "확정" not in result
+    assert "답변을 마무리하지 못했습니다" not in result
+
+
+@pytest.mark.asyncio
+async def test_empty_final_after_partial_success_reports_completed_and_failed_steps(
+    config_file, monkeypatch,
+):
+    """여러 tool 중 일부 side-effect 성공 후 실패가 있어도 완료된 작업을 숨기지 않는다."""
+    orch = AgentOrchestrator(config_file)
+    orch._max_tool_iterations = 3
+
+    dispatch_outputs = [
+        (
+            "Creating event...\n"
+            "Event created successfully: https://www.google.com/calendar/event?eid=abc\n"
+            "Event ID: evt123"
+        ),
+        "Error executing skill reminder-skill: scheduler unavailable",
+    ]
+
+    async def fake_dispatch(tc):
+        return dispatch_outputs.pop(0)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "google-calendar-skill", "args": "create ..."}),
+        _tool_response("c2", "execute_skill", {"skill_name": "reminder-skill", "args": "create ..."}),
+        _text_response(""),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("일정 추가하고 리마인더도 걸어줘")
+
+    assert "일부" in result
+    assert "evt123" in result
+    assert "scheduler unavailable" in result
+    assert "전체 실패" not in result
+
+
+@pytest.mark.asyncio
+async def test_forced_final_answer_request_does_not_include_tools(
+    config_file, monkeypatch,
+):
+    """forced final-answer 단계는 side-effect tool 재실행을 막기 위해 tools 없이 호출되어야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "tool output"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+
+    seen_requests = []
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "google-calendar-skill"}),
+        _tool_response("c2", "execute_skill", {"skill_name": "google-calendar-skill"}),
+        _text_response("최종 답변"),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("반복 도구 테스트")
+
+    assert result.startswith("최종 답변")
+    assert seen_requests[-1].tools is None
+
+
+@pytest.mark.asyncio
+async def test_empty_final_log_includes_usage_metadata(config_file, monkeypatch, caplog):
+    """empty-final 경고 로그에 최소한 usage 메타데이터가 남아 원인 분석이 가능해야 한다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(tc):
+        return "Creating event...\nEvent created successfully: url\nEvent ID: evt123"
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response("c1", "execute_skill", {"skill_name": "google-calendar-skill"}),
+        LLMResponse(
+            text="",
+            model="test",
+            tool_calls=None,
+            usage={"input_tokens": 100, "output_tokens": 0},
+        ),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[i]
+
+    orch._router.send = fake_send
+
+    with caplog.at_level(logging.WARNING, logger="simpleclaw.agent.orchestrator"):
+        await orch.process_cron_message("일정 추가")
+
+    assert "empty final answer" in caplog.text
+    assert "output_tokens" in caplog.text

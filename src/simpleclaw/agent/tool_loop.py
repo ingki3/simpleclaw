@@ -15,6 +15,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from simpleclaw.agent.action_result import (
+    ActionResultLedger,
+    fallback_for_empty_final_from_ledger,
+    infer_action_result,
+)
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
     clarify_chat_id_var,
@@ -488,6 +493,7 @@ class ToolLoopRunner:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
         invoked_tool_sequence: list[str] = []
         tool_results_for_empty_final: list[tuple[str, str]] = []
+        action_ledger = ActionResultLedger()
         trace: list[ToolTraceStep] = []
         agent_browser_call_count = 0
         prev_snapshot = state.previous_mutation_snapshot
@@ -546,11 +552,25 @@ class ToolLoopRunner:
                 if tool_results_for_empty_final:
                     logger.warning(
                         "Tool loop [%d] empty final answer after tool results; "
-                        "returning synthesized fallback finish_reason=%s diagnostics=%s",
+                        "returning synthesized fallback finish_reason=%s usage=%s "
+                        "diagnostics=%s",
                         i + 1,
                         response.finish_reason,
+                        response.usage,
                         response.diagnostics,
                     )
+                    # BIZ-436: side-effect 성공이 확인된 turn 은 ledger 기반
+                    # 결정적 fallback 으로 완료/부분성공을 보고한다. 그 외에는
+                    # 빈 문자열이 반환되어 기존 text fallback UX 를 유지한다.
+                    ledger_fallback = fallback_for_empty_final_from_ledger(
+                        action_ledger,
+                    )
+                    if ledger_fallback:
+                        return ToolLoopResult(
+                            ledger_fallback,
+                            trace=trace,
+                            iterations=i + 1,
+                        )
                     fallback_text = fallback_for_empty_final_after_tools(
                         tool_results_for_empty_final,
                     )
@@ -662,6 +682,15 @@ class ToolLoopRunner:
                     )
                 )
                 tool_results_for_empty_final.append((tc.name, sanitized))
+                action_ledger.append(
+                    infer_action_result(
+                        step_index=len(action_ledger.results) + 1,
+                        tool_name=tc.name,
+                        tool_call_id=tc.id,
+                        arguments=tc.arguments,
+                        sanitized_output=sanitized,
+                    )
+                )
                 state.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
