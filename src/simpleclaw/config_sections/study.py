@@ -4,9 +4,12 @@ Study Wiki는 사용자 프로필/기억(USER.md, MEMORY.md, insights)과 분리
 배경지식" 저장소다. 이 경계가 없으면 자동 브리핑에서 본 주제가 사용자 관심사로
 과대 일반화되거나, 낡은 외부 사실이 사용자 메모리처럼 영속되는 문제가 생긴다.
 
-이 모듈은 ``config.yaml``의 ``study:`` 섹션을 기본값과 병합해 반환하는 스켈레톤이다.
-실제 study runner / wiki 파일 생성 / retrieval 연동은 후속 이슈 범위이며, 여기서는
-설정 defaults만 고정한다(테스트로 보장).
+이 모듈은 ``config.yaml``의 ``study:`` 섹션을 기본값과 병합해 반환한다.
+``topic_evolution`` 하위 정책은 ``TopicEvolutionPolicy.from_config`` 가 그대로
+소비하며, BIZ-434 부터 daily runner(``StudyRunner``)가 signal provider 주입 시
+이 정책으로 topic 생성/승격/감쇠를 수행한다. topic 별 검색 쿼리
+(``search_queries``)는 config 가 아니라 런타임 ``<wiki_dir>/topics.yaml`` 의 각
+topic 항목에 둔다 — shape 예시는 ``config.yaml.example`` 의 study 섹션 주석 참조.
 
 설계 결정:
 - 모든 기능은 opt-in(``enabled: false`` 기본). study는 외부 네트워크 호출을 동반할 수
