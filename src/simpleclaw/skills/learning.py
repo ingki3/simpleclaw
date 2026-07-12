@@ -282,13 +282,16 @@ class SkillSuggestion:
         )
 
 
-def normalize_risk_flags(values: Any) -> list[str]:
+def normalize_risk_flags(
+    values: Any, *, allowlist: tuple[str, ...] = RISK_FLAG_ALLOWLIST
+) -> list[str]:
     """risk flag 목록을 allowlist 값만 남긴 정렬된 리스트로 정규화한다 (BIZ-432).
 
     LLM payload 나 legacy 저장 데이터에서 온 risk_flags 는 임의 문자열일 수
     있고 secret-like 값이 섞일 수 있으므로, 대소문자/구분자만 보정한 뒤
     allowlist 밖 값은 전부 버린다. 버린 값 자체는 secret 일 수 있어 로그에도
-    남기지 않고 개수만 경고한다.
+    남기지 않고 개수만 경고한다. recipe learning 처럼 도메인 전용 플래그가
+    추가로 필요한 호출자는 ``allowlist`` 로 자체 상수를 넘긴다 (BIZ-435).
     """
     if not isinstance(values, (list, tuple, set)):
         return []
@@ -296,7 +299,7 @@ def normalize_risk_flags(values: Any) -> list[str]:
     dropped = 0
     for value in values:
         normalized = str(value).strip().lower().replace("-", "_")
-        if normalized in RISK_FLAG_ALLOWLIST:
+        if normalized in allowlist:
             kept.add(normalized)
         else:
             dropped += 1
