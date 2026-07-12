@@ -338,3 +338,65 @@ def test_fallback_degrades_for_empty_or_meta_only_ledger():
         is_meta=True,
     ))
     assert fallback_for_empty_final_from_ledger(ledger) == ""
+
+
+# ── BIZ-437: first-line error/failed 단어 오분류 방지 ─────────────────
+
+
+def test_infer_first_line_failed_transcript_stays_unknown():
+    """정상 transcript가 'Failed ...' 문장으로 시작해도 실패로 오분류하지 않는다."""
+    result = infer_action_result(
+        step_index=1,
+        tool_name="execute_skill",
+        tool_call_id="c1",
+        arguments={"skill_name": "summarize"},
+        sanitized_output=(
+            "Failed attempts are normal in agent workflows and the speaker "
+            "explains how retries recover from them."
+        ),
+    )
+
+    assert result.status == "unknown"
+    assert result.error is None
+
+
+def test_infer_first_line_error_rates_transcript_stays_unknown():
+    """정상 문서가 'Error rates ...' 문장으로 시작해도 실패로 오분류하지 않는다."""
+    result = infer_action_result(
+        step_index=1,
+        tool_name="execute_skill",
+        tool_call_id="c1",
+        arguments={"skill_name": "summarize"},
+        sanitized_output=(
+            "Error rates in LLM agents are discussed with concrete mitigation "
+            "strategies and benchmarks."
+        ),
+    )
+
+    assert result.status == "unknown"
+    assert result.error is None
+
+
+def test_infer_explicit_error_headers_still_fail():
+    """명시적 오류 envelope/header 는 계속 failure 로 분류된다."""
+    explicit_error_outputs = [
+        "Error: sqlite3 database is locked",
+        "Failed: could not reach scheduler",
+        "Command failed: summarize exited with status 1",
+        "Skill failed: google-calendar-skill",
+        "Traceback (most recent call last):\n  File ...",
+        "Error executing skill google-calendar-skill: auth failed",
+        "Failed to connect to upstream API",
+        '{"error": "quota exceeded"}',
+        "도구 실행 실패: 권한 없음",
+    ]
+
+    for output in explicit_error_outputs:
+        result = infer_action_result(
+            step_index=1,
+            tool_name="execute_skill",
+            tool_call_id="c1",
+            arguments={"skill_name": "summarize"},
+            sanitized_output=output,
+        )
+        assert result.status == "failure", f"failure 로 분류돼야 함: {output!r}"
