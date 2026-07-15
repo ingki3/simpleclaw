@@ -437,6 +437,32 @@ class SubagentReviewLedger:
         """
         return not self.blocking_records(issue_id)
 
+    def gate_evidence(self, issue_id: str) -> dict[str, Any]:
+        """required gate 상태를 verification evidence 입력 형태로 요약한다.
+
+        BIZ-441 verification ledger 가 subagent required gate 미완료를
+        ``subagent_gate`` stage 의 done block evidence 로 기록할 수 있게 하는
+        read helper 다. verification 모듈에 의존하지 않도록 plain dict 로
+        반환한다 — status 문자열은 VerificationStatus 값과 일치한다.
+        """
+        blocking = self.blocking_records(issue_id)
+        if blocking:
+            purposes = ", ".join(r.purpose or r.id for r in blocking)
+            summary = (
+                f"required subagent review {len(blocking)}건 미완료: {purposes}"
+            )
+            status = "pending"
+        else:
+            summary = "required subagent review gate 전부 완료"
+            status = "passed"
+        return {
+            "stage": "subagent_gate",
+            "status": status,
+            "summary": summary,
+            "source": "subagent_ledger",
+            "blocking_record_ids": [r.id for r in blocking],
+        }
+
 
 __all__ = [
     "REVIEW_STATUS_COMPLETED",

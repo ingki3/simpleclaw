@@ -13,6 +13,9 @@ from simpleclaw.agent.review_subagent_ledger_tool import (
     handle_review_subagent_ledger,
 )
 from simpleclaw.agent.runtime_status import handle_runtime_status
+from simpleclaw.agent.verification_evidence_tool import (
+    handle_verification_evidence,
+)
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.skill_learning_tool import handle_skill_learning
 from simpleclaw.agent.study_status import handle_study_status
@@ -218,6 +221,14 @@ async def dispatch_tool_call(
                 "Error: review_subagent_ledger is available only in operator context."
             )
         return handle_review_subagent_ledger(
+            args, config_path=orchestrator._config_path
+        )
+    if name == "verification_evidence":
+        if not operator_tools:
+            return (
+                "Error: verification_evidence is available only in operator context."
+            )
+        return handle_verification_evidence(
             args, config_path=orchestrator._config_path
         )
     if name == "clarify":
