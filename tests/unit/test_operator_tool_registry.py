@@ -90,6 +90,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "restart_runtime",
         "skill_learning",
         "study_status",
+        "review_subagent_ledger",
     }
     assert runtime_names.isdisjoint(protected_names)
 
@@ -135,6 +136,19 @@ def test_recipe_learning_tool_operator_only():
 
     assert "recipe_learning" not in runtime_names
     assert "recipe_learning" in operator_names
+
+
+def test_review_subagent_ledger_tool_operator_only():
+    """review_subagent_ledger 는 operator gate 가 열린 context 에만 노출된다 (BIZ-440)."""
+    runtime_names = native_tool_names(cron_available=True)
+    operator_names = native_tool_names(
+        cron_available=True,
+        scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+        operator_gate=True,
+    )
+
+    assert "review_subagent_ledger" not in runtime_names
+    assert "review_subagent_ledger" in operator_names
 
 
 def test_dispatch_name_validation_rejects_missing_or_unknown_names():

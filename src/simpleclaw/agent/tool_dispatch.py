@@ -9,6 +9,9 @@ from simpleclaw.agent.config_inspect import handle_config_inspect
 from simpleclaw.agent.deploy_status import handle_deploy_status
 from simpleclaw.agent.log_debug import handle_log_debug
 from simpleclaw.agent.restart_runtime import handle_restart_runtime
+from simpleclaw.agent.review_subagent_ledger_tool import (
+    handle_review_subagent_ledger,
+)
 from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.skill_learning_tool import handle_skill_learning
@@ -209,6 +212,14 @@ async def dispatch_tool_call(
         if not operator_tools:
             return "Error: study_status is available only in operator context."
         return handle_study_status(args, config_path=orchestrator._config_path)
+    if name == "review_subagent_ledger":
+        if not operator_tools:
+            return (
+                "Error: review_subagent_ledger is available only in operator context."
+            )
+        return handle_review_subagent_ledger(
+            args, config_path=orchestrator._config_path
+        )
     if name == "clarify":
         return handle_clarify(
             args,
