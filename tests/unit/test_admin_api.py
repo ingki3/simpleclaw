@@ -534,6 +534,57 @@ class TestHealthAndSystem:
         assert data["status"] == "ok"
         assert "metrics" in data
         assert "pending_changes" in data
+        # drain_status_provider 미주입 시 drain 키는 생략된다 (BIZ-442).
+        assert "drain" not in data
+
+    @pytest.mark.asyncio
+    async def test_health_includes_drain_status_when_provider_given(
+        self, tmp_state, aiohttp_client
+    ):
+        """BIZ-442 — drain 상태/active operation 수가 health 에 노출된다."""
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            drain_status_provider=lambda: {
+                "draining": True,
+                "reason": "deploy BIZ-442",
+                "active_operations": 2,
+            },
+        )
+        client = await aiohttp_client(srv.get_app())
+        resp = await client.get("/admin/v1/health", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["drain"]["draining"] is True
+        assert data["drain"]["reason"] == "deploy BIZ-442"
+        assert data["drain"]["active_operations"] == 2
+
+    @pytest.mark.asyncio
+    async def test_health_survives_drain_provider_failure(
+        self, tmp_state, aiohttp_client
+    ):
+        """drain 콜백 예외가 health 응답 자체를 죽이면 안 된다."""
+
+        def broken() -> dict:
+            raise RuntimeError("drain state unavailable")
+
+        srv = AdminAPIServer(
+            auth_token="test-token",
+            config_path=tmp_state["config_path"],
+            audit_log=AuditLog(tmp_state["audit_dir"]),
+            secrets_manager=_make_secrets_manager(),
+            admin_state_dir=tmp_state["state_dir"],
+            drain_status_provider=broken,
+        )
+        client = await aiohttp_client(srv.get_app())
+        resp = await client.get("/admin/v1/health", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert "drain" not in data
 
     @pytest.mark.asyncio
     async def test_system_info_returns_diagnostics(self, client, tmp_state):
