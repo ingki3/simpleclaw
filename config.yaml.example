@@ -172,6 +172,17 @@ review:
     # 완료된 record 의 보존 일수. 저장 시점에 기간을 넘긴 completed record 만
     # 정리하며, 미완료(running/late) record 는 기간과 무관하게 보존된다.
     retention_days: 90
+  # BIZ-441 — issue 단위 verification evidence ledger. PR CI/release CI/
+  # deploy/restart/health smoke/product-intent/subagent gate 검증 결과를
+  # 구조화 저장하고(JSONL, 같은 issue+stage 는 upsert), required stage 가 전부
+  # passed evidence 를 가질 때만 done 을 허용한다. raw_excerpt 는 저장 전
+  # 시크릿 redaction + 길이 제한. 조작은 운영자 전용 verification_evidence
+  # tool 로만 수행한다.
+  verification_ledger:
+    path: "~/.simpleclaw-agent/default/verification_evidence_ledger.jsonl"
+    # terminal(passed/failed/skipped) record 의 보존 일수. pending record 는
+    # "아직 검증 안 됨" 증거이므로 기간과 무관하게 보존된다.
+    retention_days: 90
 
 security:
   # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일

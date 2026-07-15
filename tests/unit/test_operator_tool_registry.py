@@ -91,6 +91,7 @@ def test_default_native_tool_names_do_not_include_operator_or_development_tools(
         "skill_learning",
         "study_status",
         "review_subagent_ledger",
+        "verification_evidence",
     }
     assert runtime_names.isdisjoint(protected_names)
 
@@ -149,6 +150,19 @@ def test_review_subagent_ledger_tool_operator_only():
 
     assert "review_subagent_ledger" not in runtime_names
     assert "review_subagent_ledger" in operator_names
+
+
+def test_verification_evidence_tool_operator_only():
+    """verification_evidence 는 operator gate 가 열린 context 에만 노출된다 (BIZ-441)."""
+    runtime_names = native_tool_names(cron_available=True)
+    operator_names = native_tool_names(
+        cron_available=True,
+        scopes=(ToolScope.RUNTIME, ToolScope.OPERATOR),
+        operator_gate=True,
+    )
+
+    assert "verification_evidence" not in runtime_names
+    assert "verification_evidence" in operator_names
 
 
 def test_dispatch_name_validation_rejects_missing_or_unknown_names():

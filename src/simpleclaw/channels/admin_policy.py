@@ -104,9 +104,11 @@ POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     "daemon.dreaming.*": (HOT, ["daemon.dreaming"]),
     "daemon.wait_state.*": (HOT, ["daemon.wait_states"]),
     "daemon.cron_retry.*": (HOT, ["daemon.scheduler"]),
-    # Review — subagent review ledger (BIZ-440). 도구 handler 가 호출 시점마다
-    # config 를 다시 읽으므로 경로/보존 기간 변경은 재시작 없이 반영된다.
+    # Review — subagent review ledger (BIZ-440) / verification evidence ledger
+    # (BIZ-441). 도구 handler 가 호출 시점마다 config 를 다시 읽으므로
+    # 경로/보존 기간 변경은 재시작 없이 반영된다.
     "review.subagent_ledger.*": (HOT, ["review.subagent_ledger"]),
+    "review.verification_ledger.*": (HOT, ["review.verification_ledger"]),
     # Persona
     "persona.token_budget": (HOT, ["persona.assembler"]),
     "persona.local_dir": (PROCESS_RESTART, ["persona.resolver"]),

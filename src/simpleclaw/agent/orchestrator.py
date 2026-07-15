@@ -175,6 +175,7 @@ _NATIVE_DISPATCH_TOOL_NAMES = frozenset({
     "skill_learning",
     "study_status",
     "review_subagent_ledger",
+    "verification_evidence",
 })
 validate_dispatch_tool_names(
     _NATIVE_DISPATCH_TOOL_NAMES,
