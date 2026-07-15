@@ -250,6 +250,7 @@ class AdminAPIServer:
         reload_callback: ReloadCallback | None = None,
         structured_logger: object | None = None,
         health_provider: Callable[[], dict] | None = None,
+        drain_status_provider: Callable[[], dict] | None = None,
         channel_test_callback: ChannelTestCallback | None = None,
         cors_origins: list[str] | None = None,
         request_max_body_bytes: int | None = None,
@@ -293,6 +294,10 @@ class AdminAPIServer:
         self._reload_cb = reload_callback
         self._structured = structured_logger
         self._health_provider = health_provider
+        # BIZ-442 — drain 상태/active operation 스냅샷 콜백 (예:
+        # ``DrainController.status``). deploy script 가 ``/admin/v1/health`` 의
+        # ``drain`` 키를 폴링해 quiesce 완료 여부를 판단한다. 미주입 시 키 생략.
+        self._drain_status_provider = drain_status_provider
         self._channel_test_cb = channel_test_callback
 
         # BIZ-77 — 인사이트 source 역추적 엔드포인트가 사용하는 의존성. 둘 중

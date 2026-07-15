@@ -897,3 +897,60 @@ class TestTelegramBotStreaming:
 
         assert fake.edits[-1]["text"] == "최종 답변"
         assert "진행 상황" not in fake.edits[-1]["text"]
+
+
+class TestTelegramDrainNotice:
+    """BIZ-442 — drain 중 새 메시지는 채널에서 짧은 점검 안내로 즉답한다."""
+
+    @pytest.mark.asyncio
+    async def test_draining_returns_notice_without_handler_call(self):
+        handler = AsyncMock(return_value="should-not-run")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+            drain_notice_provider=lambda: "🔧 점검 중입니다.",
+        )
+        response = await bot.handle_message("Hello", 123, 999)
+        assert response == "🔧 점검 중입니다."
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_not_draining_delegates_to_handler(self):
+        handler = AsyncMock(return_value="handled")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+            drain_notice_provider=lambda: None,
+        )
+        response = await bot.handle_message("Hello", 123, 999)
+        assert response == "handled"
+        handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_user_gets_none_even_while_draining(self):
+        """drain 안내도 인증 이후에만 — 비인가 사용자에게 운영 상태를 노출하지 않는다."""
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            drain_notice_provider=lambda: "🔧 점검 중입니다.",
+        )
+        response = await bot.handle_message("Hello", 789, 999)
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_provider_failure_is_fail_open(self):
+        handler = AsyncMock(return_value="handled")
+
+        def broken() -> str | None:
+            raise RuntimeError("drain state unavailable")
+
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+            drain_notice_provider=broken,
+        )
+        response = await bot.handle_message("Hello", 123, 999)
+        assert response == "handled"

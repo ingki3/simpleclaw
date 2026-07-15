@@ -162,6 +162,28 @@ study:
     require_sources: true                     # 출처 없는 항목 금지
     low_confidence_requires_disclaimer: true  # 저신뢰 항목은 면책 문구 필수
 
+# BIZ-440 — subagent review 결과 ledger. 상위 agent 가 띄운 required/optional
+# review gate 를 구조화 기록한다(JSONL). required gate 는 완료 전까지 merge 판정을
+# 막고, optional late result 는 parent 상태를 바꾸지 않고 follow-up note 로만
+# 처리된다. 조작은 운영자 전용 review_subagent_ledger tool 로만 수행한다.
+review:
+  subagent_ledger:
+    path: "~/.simpleclaw-agent/default/review_subagent_ledger.jsonl"
+    # 완료된 record 의 보존 일수. 저장 시점에 기간을 넘긴 completed record 만
+    # 정리하며, 미완료(running/late) record 는 기간과 무관하게 보존된다.
+    retention_days: 90
+  # BIZ-441 — issue 단위 verification evidence ledger. PR CI/release CI/
+  # deploy/restart/health smoke/product-intent/subagent gate 검증 결과를
+  # 구조화 저장하고(JSONL, 같은 issue+stage 는 upsert), required stage 가 전부
+  # passed evidence 를 가질 때만 done 을 허용한다. raw_excerpt 는 저장 전
+  # 시크릿 redaction + 길이 제한. 조작은 운영자 전용 verification_evidence
+  # tool 로만 수행한다.
+  verification_ledger:
+    path: "~/.simpleclaw-agent/default/verification_evidence_ledger.jsonl"
+    # terminal(passed/failed/skipped) record 의 보존 일수. pending record 는
+    # "아직 검증 안 됨" 증거이므로 기간과 무관하게 보존된다.
+    retention_days: 90
+
 security:
   # BIZ-302 후속 — EncryptedFileBackend가 사용하는 시크릿 볼트와 마스터 키 파일
   # 경로. 미지정 시 각각 ``~/.simpleclaw/secrets.enc`` / ``~/.simpleclaw/master.key``
@@ -400,6 +422,15 @@ daemon:
     safety_backup_max_cycles: 7
   wait_state:
     default_timeout: 3600
+  # BIZ-442 — LaunchAgent restart drain/quiesce.
+  # state_file: deploy script(scripts/deploy/drain_restart_simpleclaw.py)와 bot
+  #   프로세스가 공유하는 drain 요청 파일. drain 중 새 텔레그램/웹훅/cron
+  #   intake 는 거절되고, 이미 실행 중인 turn 은 완료까지 이어진다.
+  # default_timeout: drain 요청의 자동 만료 시간(초) — script 가 해제 없이
+  #   죽어도 이 시간 뒤 intake 가 자동 복귀한다.
+  drain:
+    state_file: "~/.simpleclaw-agent/default/drain_state.json"
+    default_timeout: 120
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
   # 일시적 네트워크/API 과부하에서 자동 복구하기 위한 기본값.
   # max_attempts=1 이면 재시도 없음. backoff_strategy: linear | exponential.
