@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from simpleclaw.proactive.context_collectors import CalendarProvider, MailProvider
+from simpleclaw.security import filter_env
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ def _run_json_list(skill_path: Path, args: list[str], code: str) -> list[dict[st
         text=True,
         timeout=30,
         check=False,
+        # BIZ-443: skill venv 실행도 provider/admin secret 상속을 차단한다.
+        # gmail/gcal skill 은 OAuth 파일 자격증명을 쓰므로 env 의존이 없다.
+        env=filter_env(),
     )
     if result.returncode != 0:
         message = (result.stderr or result.stdout or f"exit={result.returncode}").strip()

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import ipaddress
 import logging
 import os
 import re
@@ -144,12 +145,52 @@ def resolve_safe_path(
 # web-fetch — 웹 페이지 가져오기
 # ------------------------------------------------------------------
 
-# 내부/로컬 네트워크 URL 패턴 — SSRF 방지를 위해 차단
-_INTERNAL_URL_RE = re.compile(
-    r"https?://(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
-    r"192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|"
-    r"\[::1\]|0\.0\.0\.0)",
-    re.I,
+# SSRF 차단 대상 호스트명 (정확 일치) — 클라우드 메타데이터 서비스의 알려진 별칭.
+# BIZ-443: IP 기반 검사(``not ip.is_global``)만으로는 DNS 이름으로 접근하는
+# 메타데이터 endpoint(GCP ``metadata.google.internal`` 등)를 막지 못한다.
+_BLOCKED_HOSTNAMES: frozenset[str] = frozenset({
+    "localhost",
+    "metadata",
+    "metadata.goog",
+    "metadata.google.internal",
+})
+
+# SSRF 차단 대상 호스트명 접미사 — 내부망 전용 TLD/도메인.
+_BLOCKED_HOST_SUFFIXES: tuple[str, ...] = (".localhost", ".local", ".internal")
+
+
+def _is_blocked_url(url: str) -> bool:
+    """SSRF 위험 URL(내부망·loopback·클라우드 메타데이터)이면 True를 반환한다.
+
+    BIZ-443: 기존 정규식 방식은 link-local(``169.254.169.254`` — AWS/GCP/Azure
+    메타데이터 IP), CGNAT(``100.64.0.0/10`` — Alibaba 메타데이터 포함), IPv6
+    link-local/ULA, 메타데이터 호스트명을 놓쳤다. ``ipaddress`` 표준 라이브러리의
+    ``is_global`` 판정으로 비공인 IP 전체를 차단하고, 호스트명은 알려진 메타데이터
+    별칭과 내부망 접미사를 차단한다. 호스트명의 DNS 해석 결과까지는 검사하지
+    않는다(DNS rebinding은 본 가드의 범위 밖 — browser_handoff native host와 동일
+    한 한계).
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return True
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return True
+    host = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not host:
+        return True
+    if host in _BLOCKED_HOSTNAMES or host.endswith(_BLOCKED_HOST_SUFFIXES):
+        return True
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False  # IP 리터럴이 아닌 일반 도메인
+    # is_global=False 는 loopback/사설망/link-local/CGNAT/reserved 전부 포함.
+    return not ip.is_global
+
+
+_BLOCKED_URL_MESSAGE = (
+    "Error: internal/local network and cloud metadata URLs are blocked."
 )
 
 
@@ -247,14 +288,39 @@ def _is_headless_retryable_static_error(static_text: str) -> bool:
     return static_text.lower().startswith("error: http 403")
 
 
+# 정적 fetch에서 수동으로 따라가는 최대 redirect 횟수.
+_STATIC_MAX_REDIRECTS = 5
+
+
 async def _fetch_static(url: str) -> str:
-    """정적 HTML/텍스트 fetch (aiohttp). 성공 시 본문, 실패 시 ``Error: ...`` 문자열."""
+    """정적 HTML/텍스트 fetch (aiohttp). 성공 시 본문, 실패 시 ``Error: ...`` 문자열.
+
+    BIZ-443: redirect는 자동 추적하지 않고 hop마다 ``_is_blocked_url`` 검사를
+    거친다 — 공개 URL이 내부망/메타데이터 endpoint로 redirect해 SSRF 가드를
+    우회하는 경로를 차단한다.
+    """
     import aiohttp
 
     timeout = aiohttp.ClientTimeout(total=30)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=True) as resp:
+            current = url
+            for _hop in range(_STATIC_MAX_REDIRECTS + 1):
+                resp = await session.get(current, allow_redirects=False)
+                if resp.status in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location", "")
+                    resp.release()
+                    if not location:
+                        return f"Error: HTTP {resp.status} redirect without Location"
+                    current = urllib.parse.urljoin(current, location)
+                    if _is_blocked_url(current):
+                        return _BLOCKED_URL_MESSAGE
+                    continue
+                break
+            else:
+                return f"Error: too many redirects (> {_STATIC_MAX_REDIRECTS})"
+
+            async with resp:
                 if resp.status != 200:
                     return f"Error: HTTP {resp.status} — {resp.reason}"
 
@@ -437,8 +503,8 @@ async def handle_web_fetch(
     if not url:
         return "Error: 'url' field is required."
 
-    if _INTERNAL_URL_RE.match(url):
-        return "Error: internal/local network URLs are blocked."
+    if _is_blocked_url(url):
+        return _BLOCKED_URL_MESSAGE
 
     force_headless = bool(routing.get("force_headless", False))
 
@@ -840,7 +906,7 @@ async def _fetch_search_result_body(url: str) -> str:
     web_search 보강 전용 경량 헬퍼. 지연을 줄이려 헤드리스 폴백 없이 정적 fetch만
     쓰고, 차단 페이지/오류/빈 본문은 조용히 건너뛰어 snippet만 남긴다.
     """
-    if not url or _INTERNAL_URL_RE.match(url):
+    if not url or _is_blocked_url(url):
         return ""
     try:
         body = await _fetch_static(url)

@@ -14,18 +14,40 @@ from __future__ import annotations
 import fnmatch
 import os
 
-# 서브프로세스 환경에서 제거할 키의 glob 패턴 목록
+# 서브프로세스 환경에서 제거할 키의 glob 패턴 목록.
+# BIZ-443: 이 목록이 모든 skill/cron/명령 서브프로세스의 기본 env scrub 정책이다.
+# 새 LLM provider/gateway를 도입하면 prefix 패턴을 여기에 추가할 것.
 DEFAULT_BLOCKLIST: list[str] = [
+    # 범용 시크릿 suffix — provider 무관하게 credential 성격의 이름을 차단
     "*_API_KEY",
+    "*_APIKEY",
     "*_TOKEN",
     "*_SECRET",
     "*_PASSWORD",
-    "TELEGRAM_*",
+    "*_PASSWD",
+    "*_CREDENTIALS",
+    "*_ACCESS_KEY",
+    "*_PRIVATE_KEY",
+    # LLM provider / gateway prefix
     "OPENAI_*",
     "ANTHROPIC_*",
+    "CLAUDE_*",
     "GOOGLE_*",
+    "GEMINI_*",
+    "AZURE_*",
+    "OPENROUTER_*",
+    "MISTRAL_*",
+    "COHERE_*",
+    "DEEPSEEK_*",
+    "GROQ_*",
+    "XAI_*",
+    "HF_*",
+    "HUGGINGFACE_*",
+    # 채널/인프라/관리용
+    "TELEGRAM_*",
     "AWS_*",
     "WEBHOOK_*",
+    "ADMIN_API_*",
     "GH_TOKEN",
     "GITHUB_*",
 ]

@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from simpleclaw.security import filter_env
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.executor import _build_command
 from simpleclaw.skills.models import SkillDefinition
@@ -213,6 +214,8 @@ def _smoke(skill: SkillDefinition, command_args: list[str]) -> dict[str, Any]:
             capture_output=True,
             timeout=_SMOKE_TIMEOUT_SECONDS,
             check=False,
+            # BIZ-443: smoke도 runtime skill 실행과 같은 env scrub 정책을 따른다
+            env=filter_env(),
         )
     except subprocess.TimeoutExpired as exc:
         return {
