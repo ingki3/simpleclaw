@@ -806,6 +806,93 @@ _RECIPE_LEARNING_TOOL = ToolDefinition(
 )
 
 
+# BIZ-440 — subagent review 결과 ledger 조작 도구. 상위 agent 가 띄운
+# required/optional review gate 를 구조화 기록하고, late optional result 는
+# parent 상태 변경 없이 follow-up note 경로로만 처리한다.
+_REVIEW_SUBAGENT_LEDGER_TOOL = ToolDefinition(
+    name="review_subagent_ledger",
+    description=(
+        "운영자 전용 subagent review 결과 ledger. 상위 agent 가 참고용으로 띄운 "
+        "subagent/parallel review 를 required(merge blocking)/optional 구분과 함께 "
+        "start/complete 로 기록하고, deadline 을 넘긴 record 는 mark_late 로 표시한다. "
+        "late optional finding 은 parent issue/merge/deploy 상태를 바꾸지 않으며 "
+        "create_followup_note 로 follow-up issue draft/note 만 연결한다. "
+        "list 는 issue 단위 record 와 can_merge 판정을 반환한다."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["start", "complete", "mark_late", "create_followup_note", "list"],
+                "description": (
+                    "start=review record 생성, complete=결과 기록, mark_late=지각 표시, "
+                    "create_followup_note=follow-up issue id/draft note 연결, "
+                    "list=issue 단위 조회(can_merge 포함)."
+                ),
+            },
+            "issue_id": {
+                "type": "string",
+                "description": "대상 issue 식별자. start/list 에 필수.",
+            },
+            "record_id": {
+                "type": "string",
+                "description": "대상 ledger record id. complete/mark_late/create_followup_note 에 필수.",
+            },
+            "gate_kind": {
+                "type": "string",
+                "enum": ["required", "optional"],
+                "description": (
+                    "start 필수. required 는 완료 전까지 merge 판정을 막고, "
+                    "optional 은 어떤 시점에도 merge blocking 이 아니다."
+                ),
+            },
+            "spawned_by": {
+                "type": "string",
+                "description": "start 필수. review 를 띄운 상위 agent/운영자 식별자.",
+            },
+            "purpose": {
+                "type": "string",
+                "description": "start 필수. 이 review 의 목적 요약 (예: 'security review').",
+            },
+            "parent_run_id": {
+                "type": "string",
+                "description": "start 선택. 상위 agent run 식별자.",
+            },
+            "deadline_at": {
+                "type": "string",
+                "description": "start 선택. ISO-8601 마감 시각 — 이후 미완료면 late 로 조회된다.",
+            },
+            "result_summary": {
+                "type": "string",
+                "description": "complete 선택. review 결과 요약.",
+            },
+            "finding_severity": {
+                "type": "string",
+                "description": "complete 선택. finding 심각도 (예: none/info/minor/major/critical).",
+            },
+            "followup_issue_id": {
+                "type": "string",
+                "description": "create_followup_note 선택. 운영자가 만든 follow-up issue id.",
+            },
+            "note": {
+                "type": "string",
+                "description": "create_followup_note 선택. follow-up issue draft/note 본문.",
+            },
+            "late_only": {
+                "type": "boolean",
+                "description": "list 선택. True 이면 late record 만 반환한다.",
+            },
+            "source_metadata": {
+                "type": "object",
+                "description": "start 선택. subagent 결과 원본 metadata (자유 형식).",
+            },
+        },
+        "required": ["action"],
+    },
+)
+
+
 # BIZ-424 — generic MCP 호출 도구. 개별 MCP tool을 동적 스키마로 주입하는 대신
 # 단일 generic tool로 노출한다(스키마 폭증/임의 동적 주입 버그 방지). execute_skill과
 # 같은 동적 도구 계열이라 static native registry에는 등록하지 않고,
@@ -919,6 +1006,13 @@ _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(
         # refresh/archive 가 topics.yaml 을 변경하므로 MEDIUM risk.
         _STUDY_STATUS_TOOL,
+        scope=ToolScope.OPERATOR,
+        risk=ToolRisk.MEDIUM,
+        operator_gate_required=True,
+    ),
+    NativeToolSpec(
+        # ledger JSONL 쓰기만 있고 merge/deploy side effect 는 없으므로 MEDIUM.
+        _REVIEW_SUBAGENT_LEDGER_TOOL,
         scope=ToolScope.OPERATOR,
         risk=ToolRisk.MEDIUM,
         operator_gate_required=True,
