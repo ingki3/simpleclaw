@@ -44,6 +44,7 @@ def build_admin_api_server(
     audit_log: AuditLog | None = None,
     structured_logger: object | None = None,
     health_provider: Callable[[], dict] | None = None,
+    drain_status_provider: Callable[[], dict] | None = None,
     restart_callback: Callable[[dict], object] | None = None,
     reload_callback: Callable[[str, dict], object] | None = None,
     admin_state_dir: str | Path | None = None,
@@ -123,6 +124,8 @@ def build_admin_api_server(
         reload_callback=reload_callback,
         structured_logger=structured_logger,
         health_provider=health_provider,
+        # BIZ-442 — ``/admin/v1/health`` 의 drain 키. deploy script quiesce 폴링용.
+        drain_status_provider=drain_status_provider,
         cors_origins=cfg["cors_origins"],
         request_max_body_bytes=cfg["request_max_body_kb"] * 1024,
         secret_rotation_callback=secret_rotation_callback,

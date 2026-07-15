@@ -231,6 +231,9 @@ async def main():
     # config 누락 시 회귀 0. 운영자가 켜고 싶을 때 config.yaml 의 telegram.streaming
     # 블록만 켜면 된다.
     streaming_config = tg_config.get("streaming", {})
+    # BIZ-442 — LaunchAgent restart drain/quiesce. 오케스트레이터가 소유한
+    # 컨트롤러 하나를 채널(텔레그램/웹훅)과 admin health 가 공유한다.
+    drain_controller = orchestrator.drain_controller
     bot = TelegramBot(
         bot_token=tg_config["bot_token"],
         whitelist_user_ids=whitelist["user_ids"],
@@ -241,6 +244,8 @@ async def main():
         clarify_provider=orchestrator.pop_pending_clarify,
         streaming_config=streaming_config,
         attachment_dir=attachment_dir,
+        # BIZ-442 — drain 중 새 메시지에 짧은 점검 안내로 즉답.
+        drain_notice_provider=drain_controller.maintenance_notice,
     )
 
     # Cron scheduler — notifier is the only external wiring.
@@ -297,6 +302,8 @@ async def main():
             alert_callback=webhook_alert_callback,
             alert_cooldown=webhook_config["alert_cooldown"],
             structured_logger=structured_logger,
+            # BIZ-442 — drain 중 새 webhook intake 는 503 + Retry-After 로 보류.
+            drain_checker=drain_controller.is_draining,
         )
         try:
             await webhook_server.start()
@@ -730,6 +737,9 @@ async def main():
             CONFIG_PATH,
             structured_logger=structured_logger,
             health_provider=_admin_health,
+            # BIZ-442 — deploy script 가 health 의 drain 키(draining/active_operations)
+            # 를 폴링해 quiesce 완료를 판단한다.
+            drain_status_provider=drain_controller.status,
             # BIZ-77 — 인사이트 source 역추적 엔드포인트(/memory/insights/{id}/sources)
             # 가 두 의존성을 모두 사용한다. dreaming_pipeline 가 같은 sidecar 경로를
             # 쓰므로 동일 InsightStore 를 공유한다.

@@ -199,6 +199,15 @@ async def _handle_health(self, request: web.Request) -> web.Response:
                 snapshot.update(extra)
         except Exception:  # noqa: BLE001
             logger.exception("health_provider failed")
+    # BIZ-442 — drain 상태/active operation 수. deploy script 의 quiesce 폴링과
+    # 운영자 점검이 이 키 하나로 "지금 재시작해도 되는가"를 판단한다.
+    if self._drain_status_provider is not None:
+        try:
+            drain_status = self._drain_status_provider()
+            if isinstance(drain_status, dict):
+                snapshot["drain"] = drain_status
+        except Exception:  # noqa: BLE001
+            logger.exception("drain_status_provider failed")
     return _json_ok(snapshot)
 
 async def _handle_system_info(self, request: web.Request) -> web.Response:

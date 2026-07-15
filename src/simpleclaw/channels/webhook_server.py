@@ -75,6 +75,7 @@ class WebhookMetrics:
     blocked_payload_too_large: int = 0  # 413
     blocked_rate_limited: int = 0  # 429
     blocked_concurrency: int = 0  # 503
+    blocked_draining: int = 0  # 503 — BIZ-442 drain/maintenance
     queue_full_events: int = 0
     alerts_sent: int = 0
 
@@ -102,6 +103,7 @@ class WebhookServer:
         alert_callback: AlertCallback | None = None,
         alert_cooldown: float = DEFAULT_ALERT_COOLDOWN,
         structured_logger: object | None = None,
+        drain_checker: Callable[[], bool] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -117,6 +119,9 @@ class WebhookServer:
         self._alert_callback = alert_callback
         self._alert_cooldown = max(0.0, float(alert_cooldown))
         self._structured_logger = structured_logger
+        # BIZ-442 — drain 중이면 True 를 반환하는 콜백 (예:
+        # ``DrainController.is_draining``). None 이면 drain 게이트 비활성.
+        self._drain_checker = drain_checker
 
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None
@@ -212,10 +217,11 @@ class WebhookServer:
         보안 검사 순서:
         1. Rate limit (429) — 인증 실패 케이스도 차단되도록 인증 전 평가
         2. 인증 (401)
-        3. Content-Length 사전 검사 (413)
-        4. 동시성 큐 게이트 (503)
-        5. 본문 파싱·필수 필드 검증 + (부족 시) 본문 크기 사후 차단 (413)
-        6. 핸들러 디스패치
+        3. Drain/maintenance 게이트 (503 + Retry-After) — BIZ-442
+        4. Content-Length 사전 검사 (413)
+        5. 동시성 큐 게이트 (503)
+        6. 본문 파싱·필수 필드 검증 + (부족 시) 본문 크기 사후 차단 (413)
+        7. 핸들러 디스패치
         """
         remote = request.remote or "unknown"
         auth_header = request.headers.get("Authorization", "")
@@ -257,7 +263,23 @@ class WebhookServer:
             logger.warning("Webhook unauthorized access from %s", remote)
             return self._build_error_response(401, "Unauthorized")
 
-        # 3) Content-Length 사전 검사 — 본문을 메모리에 적재하기 전에 차단.
+        # 3) Drain 게이트 — restart 준비 중에는 새 webhook intake 를 명시적으로
+        # 보류시킨다(503 + Retry-After 로 발신자 재시도 유도). 인증 이후에 평가해
+        # 비인가 트래픽에 운영 상태(점검 중)가 새지 않게 한다.
+        if self._drain_checker is not None:
+            try:
+                draining = bool(self._drain_checker())
+            except Exception:  # noqa: BLE001 — drain 판정 실패가 intake 를 막으면 안 됨
+                logger.exception("drain_checker failed")
+                draining = False
+            if draining:
+                self._metrics.blocked_draining += 1
+                self._record_block(remote, "draining", "server draining for restart")
+                return self._build_error_response(
+                    503, "Service Unavailable (draining)", retry_after=30
+                )
+
+        # 4) Content-Length 사전 검사 — 본문을 메모리에 적재하기 전에 차단.
         content_length = request.content_length
         if content_length is not None and content_length > self._max_body_size:
             self._metrics.blocked_payload_too_large += 1
@@ -269,7 +291,7 @@ class WebhookServer:
             self._note_consecutive_block(remote)
             return self._build_error_response(413, "Payload Too Large")
 
-        # 4) 동시성 큐 게이트 — semaphore로 동시 처리 수를 제한하고 큐가 차면 503.
+        # 5) 동시성 큐 게이트 — semaphore로 동시 처리 수를 제한하고 큐가 차면 503.
         sem = self._semaphore
         if sem is None:
             # start()를 거치지 않고 직접 핸들러를 라우터에 붙인 경우(테스트 등) 동적으로 보강.

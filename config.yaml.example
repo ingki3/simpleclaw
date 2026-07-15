@@ -422,6 +422,15 @@ daemon:
     safety_backup_max_cycles: 7
   wait_state:
     default_timeout: 3600
+  # BIZ-442 — LaunchAgent restart drain/quiesce.
+  # state_file: deploy script(scripts/deploy/drain_restart_simpleclaw.py)와 bot
+  #   프로세스가 공유하는 drain 요청 파일. drain 중 새 텔레그램/웹훅/cron
+  #   intake 는 거절되고, 이미 실행 중인 turn 은 완료까지 이어진다.
+  # default_timeout: drain 요청의 자동 만료 시간(초) — script 가 해제 없이
+  #   죽어도 이 시간 뒤 intake 가 자동 복귀한다.
+  drain:
+    state_file: "~/.simpleclaw-agent/default/drain_state.json"
+    default_timeout: 120
   # 크론 작업 재시도 정책 (BIZ-19) — 작업별 오버라이드 가능.
   # 일시적 네트워크/API 과부하에서 자동 복구하기 위한 기본값.
   # max_attempts=1 이면 재시도 없음. backoff_strategy: linear | exponential.
