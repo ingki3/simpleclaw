@@ -13,6 +13,7 @@ from simpleclaw.daemon.models import (
     WaitState,
     WaitStateNotFoundError,
 )
+from simpleclaw.daemon.drain import DrainController, DrainState
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.daemon.heartbeat import HeartbeatMonitor
 from simpleclaw.daemon.scheduler import CronScheduler
@@ -32,6 +33,8 @@ __all__ = [
     "DaemonLockError",
     "DaemonState",
     "DaemonStore",
+    "DrainController",
+    "DrainState",
     "ExecutionStatus",
     "HeartbeatMonitor",
     "HeartbeatTick",

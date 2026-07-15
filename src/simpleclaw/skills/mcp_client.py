@@ -42,6 +42,37 @@ _BASELINE_ENV_KEYS = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL",
 # None을 반환하면 해당 키는 전달하지 않는다.
 SecretResolver = Callable[[str], str | None]
 
+# BIZ-443: 인라인 코드 실행 인터프리터 — `-c`/`-e` 조합이면 argv 감사가 무의미해짐
+_INLINE_EXEC_COMMANDS = {"sh", "bash", "zsh", "dash", "ksh", "python", "python3", "node"}
+_INLINE_EXEC_FLAGS = {"-c", "-e", "--eval"}
+
+
+def _validate_stdio_config(name: str, config: dict) -> None:
+    """의심스러운 stdio 서버 설정을 fail-closed로 차단한다.
+
+    MCP 서버 command는 운영자 설정이지만, `sh -c "..."` / `python -c "..."` 처럼
+    인라인 코드 문자열을 실행하는 형태는 argv 수준의 감사·재현이 불가능하고
+    설정 주입 한 줄로 임의 셸 실행이 되는 통로다. 정상 MCP 서버는 실행 파일 +
+    인자 형태로 기동 가능하므로 인라인 실행 조합은 명확한 오류로 거부한다
+    (해당 서버만 건너뛰고 나머지 서버는 계속 연결된다 — BIZ-443).
+
+    Raises:
+        MCPConnectionError: 인라인 실행 조합이 감지된 경우.
+    """
+    command = str(config.get("command") or "")
+    base = os.path.basename(command).lower()
+    if base not in _INLINE_EXEC_COMMANDS:
+        return
+    args = [str(a) for a in (config.get("args") or [])]
+    flagged = sorted(_INLINE_EXEC_FLAGS.intersection(args))
+    if flagged:
+        raise MCPConnectionError(
+            f"MCP server '{name}' config blocked: inline-exec invocation "
+            f"('{base}' with {', '.join(flagged)}) is not allowed. "
+            "Point 'command' at the server executable (or use 'python -m <module>') "
+            "instead of an inline code string."
+        )
+
 
 class MCPManager:
     """MCP 서버 연결을 관리하고 도구 접근을 제공하는 클래스."""
@@ -98,6 +129,9 @@ class MCPManager:
             raise MCPConnectionError(
                 f"MCP server '{name}' has no command specified"
             )
+
+        # BIZ-443: 인라인 셸/코드 실행형 설정은 연결 전에 명확한 오류로 차단.
+        _validate_stdio_config(name, config)
 
         try:
             from mcp import ClientSession, StdioServerParameters

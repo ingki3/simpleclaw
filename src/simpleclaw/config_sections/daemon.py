@@ -93,6 +93,14 @@ _DAEMON_DEFAULTS: dict = {
     "wait_state": {
         "default_timeout": 3600,
     },
+    # BIZ-442: LaunchAgent restart drain/quiesce. state_file 은 deploy script 와
+    # bot 프로세스가 공유하는 drain 요청 파일, default_timeout 은 drain 요청의
+    # 자동 만료 시간(초) — script 가 clear 없이 죽어도 이 시간 뒤 intake 가
+    # 정상 복귀한다.
+    "drain": {
+        "state_file": "~/.simpleclaw-agent/default/drain_state.json",
+        "default_timeout": 120,
+    },
     # BIZ-332: proactive 후보는 fail-closed/low-noise 기본값으로만 활성화된다.
     "proactive": {
         "enabled": False,
@@ -473,6 +481,10 @@ def load_daemon_config(config_path: str | Path) -> dict:
     wait_state = daemon.get("wait_state", {})
     if not isinstance(wait_state, dict):
         wait_state = {}
+    # BIZ-442: drain 설정. dict 가 아니면 기본값으로 떨어뜨린다.
+    drain = daemon.get("drain", {})
+    if not isinstance(drain, dict):
+        drain = {}
     proactive = daemon.get("proactive", {})
 
     return {
@@ -613,6 +625,20 @@ def load_daemon_config(config_path: str | Path) -> dict:
             "default_timeout": wait_state.get(
                 "default_timeout",
                 _DAEMON_DEFAULTS["wait_state"]["default_timeout"],
+            ),
+        },
+        # BIZ-442: drain state 파일 경로 + 요청 자동 만료 시간(초).
+        "drain": {
+            "state_file": str(
+                drain.get("state_file", _DAEMON_DEFAULTS["drain"]["state_file"])
+                or _DAEMON_DEFAULTS["drain"]["state_file"]
+            ),
+            "default_timeout": _positive_int(
+                drain.get(
+                    "default_timeout",
+                    _DAEMON_DEFAULTS["drain"]["default_timeout"],
+                ),
+                _DAEMON_DEFAULTS["drain"]["default_timeout"],
             ),
         },
         "proactive": _coerce_proactive_policy(proactive),
