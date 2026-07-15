@@ -312,3 +312,87 @@ class _DummyRequest:
 
     async def json(self) -> dict:  # pragma: no cover - 게이트 분기에서 도달하지 않음
         return {}
+
+
+class TestWebhookDrainGate:
+    """BIZ-442 — drain 중 webhook intake 는 503 + Retry-After 로 보류된다."""
+
+    def _make_server(self, drain_checker):
+        return WebhookServer(
+            host="127.0.0.1",
+            port=0,
+            auth_token="test-secret",
+            drain_checker=drain_checker,
+        )
+
+    @pytest.mark.asyncio
+    async def test_draining_returns_503_with_retry_after(self, aiohttp_client):
+        server = self._make_server(lambda: True)
+        server._app = web.Application()
+        server._app.router.add_post("/webhook", server._handle_webhook)
+        client = await aiohttp_client(server._app)
+
+        resp = await client.post(
+            "/webhook",
+            json={"event_type": "test_event"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        assert resp.status == 503
+        assert resp.headers.get("Retry-After") == "30"
+        assert server.get_metrics().blocked_draining == 1
+        # drain 거절은 이벤트로 적재되지 않는다.
+        assert server.get_events() == []
+
+    @pytest.mark.asyncio
+    async def test_drain_gate_runs_after_auth(self, aiohttp_client):
+        """비인가 요청은 drain 여부와 무관하게 401 — 운영 상태 누설 방지."""
+        server = self._make_server(lambda: True)
+        server._app = web.Application()
+        server._app.router.add_post("/webhook", server._handle_webhook)
+        client = await aiohttp_client(server._app)
+
+        resp = await client.post(
+            "/webhook",
+            json={"event_type": "test_event"},
+            headers={"Authorization": "Bearer wrong"},
+        )
+
+        assert resp.status == 401
+        assert server.get_metrics().blocked_draining == 0
+
+    @pytest.mark.asyncio
+    async def test_not_draining_accepts_request(self, aiohttp_client):
+        server = self._make_server(lambda: False)
+        server._app = web.Application()
+        server._app.router.add_post("/webhook", server._handle_webhook)
+        client = await aiohttp_client(server._app)
+
+        resp = await client.post(
+            "/webhook",
+            json={"event_type": "test_event"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        assert resp.status == 200
+        assert server.get_metrics().blocked_draining == 0
+
+    @pytest.mark.asyncio
+    async def test_drain_checker_failure_is_fail_open(self, aiohttp_client):
+        """drain 판정 실패가 정상 intake 를 막으면 안 된다."""
+
+        def broken() -> bool:
+            raise RuntimeError("drain state unavailable")
+
+        server = self._make_server(broken)
+        server._app = web.Application()
+        server._app.router.add_post("/webhook", server._handle_webhook)
+        client = await aiohttp_client(server._app)
+
+        resp = await client.post(
+            "/webhook",
+            json={"event_type": "test_event"},
+            headers={"Authorization": "Bearer test-secret"},
+        )
+
+        assert resp.status == 200

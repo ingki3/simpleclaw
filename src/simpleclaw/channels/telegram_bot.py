@@ -589,6 +589,7 @@ class TelegramBot:
         streaming_config: dict | None = None,
         proactive_callback_handler: Callable[..., Awaitable[str]] | None = None,
         attachment_dir: str | Path | None = None,
+        drain_notice_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._whitelist_user_ids = set(whitelist_user_ids or [])
@@ -613,6 +614,10 @@ class TelegramBot:
         self._streaming_config = streaming_config or {}
         self._proactive_callback_handler = proactive_callback_handler
         self._attachment_dir = Path(attachment_dir).expanduser() if attachment_dir else None
+        # BIZ-442 — drain 중이면 사용자-facing 안내 문구를 반환하는 콜백.
+        # ``DrainController.maintenance_notice`` 를 그대로 주입하면 된다. None 이면
+        # 채널 레벨 게이트는 꺼지고 오케스트레이터 진입 게이트만 동작한다.
+        self._drain_notice_provider = drain_notice_provider
 
 
     def set_proactive_callback_handler(
@@ -726,6 +731,23 @@ class TelegramBot:
             return None
 
         self.log_access(user_id, chat_id, authorized=True)
+
+        # BIZ-442 — drain 중이면 오케스트레이터(페르소나 리로드/LLM 호출)까지
+        # 내려가지 않고 채널에서 즉시 짧은 점검 안내로 응답한다. 인증 이후에만
+        # 평가해 비인가 사용자에게 운영 상태가 새지 않게 한다.
+        if self._drain_notice_provider is not None:
+            try:
+                drain_notice = self._drain_notice_provider()
+            except Exception:  # noqa: BLE001 — drain 판정 실패가 응답을 막으면 안 됨
+                logger.exception("drain_notice_provider failed")
+                drain_notice = None
+            if drain_notice:
+                logger.info(
+                    "Drain active — telegram intake rejected: user=%d chat=%d",
+                    user_id,
+                    chat_id,
+                )
+                return drain_notice
 
         # 텔레그램 메시지 최대 길이 제한 (4096자)
         text = text[:4096] if len(text) > 4096 else text

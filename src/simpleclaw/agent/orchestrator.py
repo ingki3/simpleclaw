@@ -42,6 +42,11 @@ from simpleclaw.llm.models import (
     SystemBlock,
     ToolCall,
 )
+from simpleclaw.daemon.drain import (
+    DRAIN_CRON_SKIPPED_MESSAGE,
+    DRAIN_MAINTENANCE_MESSAGE,
+    DrainController,
+)
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.llm.router import create_router
 from simpleclaw.logging.trace_context import trace_scope
@@ -682,6 +687,21 @@ class AgentOrchestrator:
         # Cron scheduler — build_tool_definitions에서 참조하므로 리로드 전에 초기화
         self._cron_scheduler: CronScheduler | None = None
 
+        # BIZ-442 — LaunchAgent restart drain/quiesce. deploy script 가 같은
+        # state 파일 경로로 drain 을 요청하면 process_message/process_cron_message
+        # 진입 시 새 intake 를 거절한다. 이미 시작된 turn 은 operation 카운터로
+        # 추적되어 완료까지 이어진다.
+        drain_config = daemon_config.get("drain", {}) or {}
+        self._drain_controller = DrainController(
+            Path(
+                str(
+                    drain_config.get("state_file")
+                    or "~/.simpleclaw-agent/default/drain_state.json"
+                )
+            ).expanduser(),
+            default_timeout=float(drain_config.get("default_timeout", 120)),
+        )
+
         # 초기 로드: 페르소나·스킬 파일을 디스크에서 읽어 캐시 필드 채움
         self._reload_dynamic_files()
 
@@ -901,6 +921,15 @@ class AgentOrchestrator:
         self._cron_scheduler = scheduler
         logger.info("CronScheduler injected into AgentOrchestrator.")
 
+    @property
+    def drain_controller(self) -> DrainController:
+        """drain 상태/active operation 컨트롤러 — 채널·admin health 가 공유한다."""
+        return self._drain_controller
+
+    def set_drain_controller(self, controller: DrainController) -> None:
+        """DrainController 를 교체 주입한다 (테스트/커스텀 배선용)."""
+        self._drain_controller = controller
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -910,8 +939,15 @@ class AgentOrchestrator:
 
         대화 이력을 불러오지 않고 공유 대화 DB에 메시지를 저장하지 않는다.
         진입점이므로 trace_id를 새로 발급해 호출 체인 전체로 전파한다.
+
+        BIZ-442: drain 중이면 실행을 건너뛰고 skip 사유를 반환한다 — cron 은
+        재시작 후 다음 스케줄에서 다시 실행되므로 큐잉 없이 skip 이 안전하다.
+        이미 시작된 실행은 operation 카운터로 추적되어 완료까지 이어진다.
         """
-        with trace_scope() as trace_id:
+        if self._drain_controller.is_draining():
+            logger.info("Drain active — skipping cron message intake.")
+            return DRAIN_CRON_SKIPPED_MESSAGE
+        with trace_scope() as trace_id, self._drain_controller.operation("cron_turn"):
             logger.info("Cron message received: trace_id=%s", trace_id)
             self._reload_dynamic_files()
             return await self._tool_loop(
@@ -921,6 +957,43 @@ class AgentOrchestrator:
             )
 
     async def process_message(
+        self,
+        text: str,
+        user_id: int,
+        chat_id: int,
+        *,
+        attachments: list[MultimodalAttachment] | None = None,
+        on_text_delta: TextDeltaCallback | None = None,
+        on_progress: ProgressCallback | None = None,
+        operator_tools: bool = False,
+    ) -> str:
+        """drain 게이트를 거쳐 메시지를 처리한다 (BIZ-442).
+
+        drain 중이면 새 intake 를 즉시 "점검 중" 응답으로 거절하고 대화 DB 에는
+        저장하지 않는다 — 유지보수 자동 응답이 dreaming 코퍼스를 오염시키지
+        않게 한다. drain 이 아니면 operation 카운터로 turn 을 추적하며 실제
+        파이프라인(``_process_message_impl``)에 위임한다. 게이트는 진입 시
+        1회만 평가하므로 drain 요청 이전에 시작된 turn 은 끊기지 않는다.
+        """
+        if self._drain_controller.is_draining():
+            logger.info(
+                "Drain active — rejecting new message intake: user=%d chat=%d",
+                user_id,
+                chat_id,
+            )
+            return DRAIN_MAINTENANCE_MESSAGE
+        with self._drain_controller.operation("message_turn"):
+            return await self._process_message_impl(
+                text,
+                user_id,
+                chat_id,
+                attachments=attachments,
+                on_text_delta=on_text_delta,
+                on_progress=on_progress,
+                operator_tools=operator_tools,
+            )
+
+    async def _process_message_impl(
         self,
         text: str,
         user_id: int,
