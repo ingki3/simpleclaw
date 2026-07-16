@@ -71,6 +71,19 @@ class GeminiProvider(LLMProvider):
         self._client = genai.Client(api_key=api_key)
         self._name = name
 
+    @classmethod
+    def _map_provider_error(cls, e: Exception) -> LLMProviderError:
+        """SDK 예외를 SimpleClaw 에러 계층으로 매핑한다 (BIZ-444에서 분리).
+
+        Gemini SDK는 통합된 에러 계층이 없으므로 예외 타입 이름 기반으로
+        인증 에러를 판별한다. Vertex 프로바이더는 이 훅을 오버라이드하여
+        google-auth 예외(RefreshError 등)를 추가로 인증 에러로 분류한다.
+        """
+        error_name = type(e).__name__
+        if "auth" in error_name.lower() or "permission" in error_name.lower():
+            return LLMAuthError(f"Gemini auth failed: {e}")
+        return LLMProviderError(f"Gemini API error: {e}")
+
     @staticmethod
     def _safe_attr(obj: object, name: str) -> object | None:
         """SDK 객체의 선택 속성을 안전하게 읽고 테스트 mock 기본값은 무시한다."""
@@ -332,11 +345,7 @@ class GeminiProvider(LLMProvider):
                 config=config,
             )
         except Exception as e:
-            # Gemini SDK는 통합된 에러 계층이 없으므로 이름 기반으로 인증 에러를 판별
-            error_name = type(e).__name__
-            if "auth" in error_name.lower() or "permission" in error_name.lower():
-                raise LLMAuthError(f"Gemini auth failed: {e}") from e
-            raise LLMProviderError(f"Gemini API error: {e}") from e
+            raise self._map_provider_error(e) from e
 
         # 응답에서 tool_calls와 text 추출
         text = ""
@@ -492,11 +501,8 @@ class GeminiProvider(LLMProvider):
                 if chunk.usage_metadata is not None:
                     usage_metadata = chunk.usage_metadata
         except Exception as e:
-            # send() 와 동일한 매핑 — 통합 에러 계층이 없으므로 이름 기반 분기.
-            error_name = type(e).__name__
-            if "auth" in error_name.lower() or "permission" in error_name.lower():
-                raise LLMAuthError(f"Gemini auth failed: {e}") from e
-            raise LLMProviderError(f"Gemini API error: {e}") from e
+            # send() 와 동일한 매핑 — _map_provider_error 훅으로 통일.
+            raise self._map_provider_error(e) from e
 
         text = "".join(text_parts)
 
