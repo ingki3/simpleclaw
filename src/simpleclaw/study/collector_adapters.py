@@ -24,6 +24,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from simpleclaw.security import filter_env
 from simpleclaw.study.collectors import StudyFetchRequest, StudyFetchResult
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,13 @@ def _subprocess_json(argv: Sequence[str]) -> dict:
     """argv 를 실행해 stdout JSON 을 파싱한다(실패 시 ``{"ok": False, ...}``)."""
     try:
         proc = subprocess.run(  # noqa: S603 — 고정된 skill 스크립트 호출
-            list(argv), text=True, capture_output=True, check=False, timeout=60
+            list(argv),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+            # BIZ-443: skill 스크립트는 외부 코드 — provider/admin secret 상속 차단
+            env=filter_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"ok": False, "error": str(exc)}

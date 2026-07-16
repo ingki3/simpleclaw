@@ -18,6 +18,18 @@ llm:
       type: "api"
       model: "gemini-3.5-flash"
       api_key: "env:GOOGLE_API_KEY"
+    # Vertex AI Gemini (BIZ-444) — static API key 대신 GCP IAM 기반 OAuth 인증.
+    # 토큰 발급/갱신은 google-auth 가 자동 수행하므로 시크릿 저장이 불필요하다.
+    # 사용하려면 주석 해제. 자세한 설계는 docs/spike-vertex-gemini-biz444.md 참조.
+    # vertex_gemini:
+    #   type: "api"
+    #   model: "gemini-3.5-flash"
+    #   project: "my-gcp-project"     # 생략 시 SA JSON/ADC 에서 자동 발견
+    #   location: "global"            # 생략 시 "global"
+    #   # service account JSON 경로. 생략하면 ADC 사용
+    #   # (gcloud auth application-default login 또는 GOOGLE_APPLICATION_CREDENTIALS).
+    #   # SA JSON 은 절대 repo 에 커밋하지 말 것.
+    #   credentials_path: "~/.config/simpleclaw/vertex-sa.json"
 
 # BIZ-133 — 운영 데이터(SQLite, 페르소나 라이브 파일, dreaming sidecar 등)는 모두
 # 저장소 working tree 외부 ``~/.simpleclaw/`` 로 이전됐다. git 작업과 dreaming
