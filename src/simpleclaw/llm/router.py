@@ -40,11 +40,13 @@ def _ensure_registry() -> None:
     from simpleclaw.llm.providers.claude import ClaudeProvider
     from simpleclaw.llm.providers.openai_provider import OpenAIProvider
     from simpleclaw.llm.providers.gemini import GeminiProvider
+    from simpleclaw.llm.providers.vertex_gemini import VertexGeminiProvider
     from simpleclaw.llm.cli_wrapper import CLIProvider
 
     _PROVIDER_REGISTRY["claude"] = ClaudeProvider
     _PROVIDER_REGISTRY["openai"] = OpenAIProvider
     _PROVIDER_REGISTRY["gemini"] = GeminiProvider
+    _PROVIDER_REGISTRY["vertex_gemini"] = VertexGeminiProvider
     _PROVIDER_REGISTRY["cli"] = CLIProvider
 
 
@@ -185,11 +187,21 @@ def create_router(config_path: str | Path) -> LLMRouter:
             provider_cls = _PROVIDER_REGISTRY.get(name)
             if provider_cls:
                 api_key = pconf.get("api_key", "")
+                # BIZ-444 — 프로바이더가 EXTRA_CONFIG_KEYS 로 선언한 추가 설정
+                # (예: vertex_gemini 의 project/location/credentials_path)만
+                # config 블록에서 골라 전달한다. 선언 없는 프로바이더는 기존
+                # 시그니처 그대로 — 회귀 0.
+                extra_kwargs = {
+                    key: pconf[key]
+                    for key in getattr(provider_cls, "EXTRA_CONFIG_KEYS", ())
+                    if key in pconf
+                }
                 try:
                     provider = provider_cls(
                         model=backend.model,
                         api_key=api_key,
                         name=name,
+                        **extra_kwargs,
                     )
                     providers[name] = provider
                 except Exception as exc:
