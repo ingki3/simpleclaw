@@ -50,13 +50,30 @@ def _max_tokens_field(model: str) -> str:
 class OpenAIProvider(LLMProvider):
     """OpenAI ChatGPT API 프로바이더."""
 
-    def __init__(self, model: str, api_key: str, name: str = "openai") -> None:
+    # BIZ-448 — create_router() 가 static provider config 블록에서 골라 전달하는
+    # 추가 설정 키. OpenRouter 같은 OpenAI-compatible endpoint 지원용이며,
+    # 런타임(user/cron/recipe) 입력으로는 절대 override 되지 않는다.
+    EXTRA_CONFIG_KEYS = ("base_url", "extra_body", "default_headers")
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        name: str = "openai",
+        base_url: str | None = None,
+        extra_body: dict | None = None,
+        default_headers: dict | None = None,
+    ) -> None:
         """OpenAIProvider를 초기화한다.
 
         Args:
-            model: 사용할 OpenAI 모델 ID (예: gpt-4o).
-            api_key: OpenAI API 키.
+            model: 사용할 모델 ID (예: gpt-4o, z-ai/glm-5.2).
+            api_key: API 키.
             name: 라우터에서 이 백엔드를 식별하는 이름.
+            base_url: OpenAI-compatible endpoint URL. None 이면 OpenAI 기본.
+            extra_body: 모든 Chat Completions 요청 body 에 주입할 provider별
+                확장 필드 (예: OpenRouter ``reasoning.enabled=false``).
+            default_headers: 클라이언트 수준 기본 HTTP 헤더.
 
         Raises:
             LLMAuthError: API 키가 비어있는 경우.
@@ -64,7 +81,12 @@ class OpenAIProvider(LLMProvider):
         if not api_key:
             raise LLMAuthError(f"API key missing for provider '{name}' (env var not set)")
         self._model = model
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._extra_body = dict(extra_body or {})
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url or None,
+            default_headers=default_headers or None,
+        )
         self._name = name
 
     @staticmethod
@@ -161,6 +183,10 @@ class OpenAIProvider(LLMProvider):
                 "model": self._model,
                 "messages": msg_list,
             }
+            # BIZ-448 — OpenRouter 등 OpenAI-compatible endpoint 확장 필드 주입
+            # (예: GLM reasoning budget 이 답변 토큰을 잠식하지 않도록 비활성화).
+            if self._extra_body:
+                kwargs["extra_body"] = self._extra_body
             if tools:
                 kwargs["tools"] = self._convert_tools(tools)
             # BIZ-297 — max_tokens 가 지정되면 모델 종류에 맞는 필드명으로 cap 을
@@ -259,6 +285,9 @@ class OpenAIProvider(LLMProvider):
             # usage 가 빠져 input/output_tokens 추적이 불가능.
             "stream_options": {"include_usage": True},
         }
+        # BIZ-448 — send() 와 동일하게 endpoint 확장 필드를 스트리밍에도 주입.
+        if self._extra_body:
+            kwargs["extra_body"] = self._extra_body
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
         # BIZ-297 — send() 와 동일하게 모델 종류에 맞는 cap 필드 매핑.
