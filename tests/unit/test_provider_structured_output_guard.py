@@ -3,10 +3,15 @@
 BIZ-427 의 공통 가드(``LLMProvider._reject_required_structured_output``)는
 mime/schema 힌트가 있을 때만 거부했다. BIZ-430 부터 "required" 계약은 힌트
 유무가 아니라 호출자의 보장 요구(``require_structured_output=True``)만으로
-결정된다 — CLI/Claude/OpenAI 처럼 schema-constrained 출력을 보장할 수 없는
+결정된다 — CLI/Claude 처럼 schema-constrained 출력을 보장할 수 없는
 provider 는 힌트 없는 required 요청도 즉시 ``LLMProviderError`` 로 거부해야
 한다. ``require_structured_output=False`` 인 기존 호출(힌트 포함)은 계속
-조용히 무시되어 회귀가 없어야 한다.
+회귀 없이 동작해야 한다.
+
+BIZ-450 — OpenAI provider 는 structured output 을 지원하게 되었지만,
+schema 없는 required 요청은 여전히 API 호출 전에 거부한다 (JSON 문법만으로는
+required 계약을 만족할 수 없음). 상세 매핑 테스트는
+``test_openai_provider_openrouter.py`` 참고.
 """
 
 from __future__ import annotations

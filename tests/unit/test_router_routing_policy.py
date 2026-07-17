@@ -288,3 +288,35 @@ async def test_router_passes_structured_kwargs_to_selected_backend():
     assert kwargs["response_mime_type"] == "application/json"
     assert kwargs["response_schema"] == schema
     assert kwargs["require_structured_output"] is True
+
+
+@pytest.mark.asyncio
+async def test_router_structured_default_success_does_not_fallback():
+    """BIZ-450 — OpenAI-compatible default 가 structured 요청을 성공 처리하면
+    Gemini fallback 이 호출되지 않아야 한다 (과거 provider 자체 거부 회귀 방지)."""
+    deepseek = DummyProvider("openrouter_deepseek_v4_pro", text='{"ok":true}')
+    gemini = DummyProvider("gemini", text='{"fallback":true}')
+    router = LLMRouter(
+        backends={},
+        providers={
+            "openrouter_deepseek_v4_pro": deepseek,
+            "gemini": gemini,
+        },
+        default_backend="openrouter_deepseek_v4_pro",
+        fallback_backend="gemini",
+        multimodal_backend="gemini",
+    )
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+    response = await router.send(
+        LLMRequest(
+            user_message="json",
+            response_mime_type="application/json",
+            response_schema=schema,
+            require_structured_output=True,
+        )
+    )
+
+    assert response.backend_name == "openrouter_deepseek_v4_pro"
+    deepseek.send.assert_awaited_once()
+    gemini.send.assert_not_called()
