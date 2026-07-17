@@ -14,8 +14,12 @@ import yaml
 from simpleclaw.config_sections.common import _resolve_secret_field
 
 # LLM 라우팅 기본 설정값
+# BIZ-448 — fallback/multimodal 은 라우팅 정책 백엔드 이름. None 이면 해당
+# 정책이 비활성화되어 기존 default-only 라우팅과 동일하게 동작한다.
 _LLM_DEFAULTS: dict = {
     "default": "claude",
+    "fallback": None,
+    "multimodal": None,
     "providers": {},
 }
 
@@ -83,7 +87,11 @@ def load_llm_config(config_path: str | Path) -> dict:
 
         providers[name] = provider
 
+    # fallback/multimodal 값 검증(가용 백엔드 존재 여부)은 create_router() 몫 —
+    # 여기서는 문자열 또는 None 을 그대로 보존한다.
     return {
         "default": llm.get("default", _LLM_DEFAULTS["default"]),
+        "fallback": llm.get("fallback", _LLM_DEFAULTS["fallback"]),
+        "multimodal": llm.get("multimodal", _LLM_DEFAULTS["multimodal"]),
         "providers": providers,
     }

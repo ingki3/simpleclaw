@@ -50,6 +50,28 @@ def _ensure_registry() -> None:
     _PROVIDER_REGISTRY["cli"] = CLIProvider
 
 
+def _request_has_attachments(request: LLMRequest) -> bool:
+    """현재 요청 messages에 provider-neutral multimodal attachments가 있는지 확인한다.
+
+    BIZ-448 — orchestrator 는 현재 turn 의 user message dict 에 ``attachments`` 를
+    싣는다. LLMRequest 자체에는 attachments 필드가 없으므로 messages 를 스캔한다.
+    """
+    for msg in request.messages or []:
+        attachments = msg.get("attachments") if isinstance(msg, dict) else None
+        if attachments:
+            return True
+    return False
+
+
+def _response_is_empty_final(response: LLMResponse) -> bool:
+    """응답이 사용자에게 보일 내용이 전혀 없는 empty final 인지 판정한다.
+
+    BIZ-448 — 보이는 텍스트도 tool call 도 없으면 (예: reasoning budget 소진)
+    fallback 재시도 대상이다.
+    """
+    return not (response.text or "").strip() and not response.tool_calls
+
+
 class LLMRouter:
     """LLM 요청을 적절한 백엔드로 라우팅하는 중앙 허브."""
 
@@ -58,6 +80,8 @@ class LLMRouter:
         backends: dict[str, LLMBackend],
         providers: dict[str, LLMProvider],
         default_backend: str,
+        fallback_backend: str | None = None,
+        multimodal_backend: str | None = None,
     ) -> None:
         """라우터를 초기화한다.
 
@@ -65,30 +89,25 @@ class LLMRouter:
             backends: 백엔드 이름 → LLMBackend 설정 매핑.
             providers: 백엔드 이름 → 초기화된 LLMProvider 인스턴스 매핑.
             default_backend: 요청에 백엔드가 지정되지 않았을 때 사용할 기본 이름.
+            fallback_backend: 암묵적 라우팅에서 기본 백엔드가 실패하거나 empty
+                final 을 반환할 때 1회 재시도할 백엔드 이름 (BIZ-448).
+            multimodal_backend: 첨부가 포함된 암묵적 요청을 라우팅할 백엔드 이름
+                (BIZ-448). 미가용 이름은 None 으로 무력화한다.
         """
         self._backends = backends
         self._providers = providers
         self._default = default_backend
+        # 가용 provider 가 없는 정책 이름은 조용히 비활성화 — 부분 가용성 보장.
+        self._fallback = fallback_backend if fallback_backend in providers else None
+        self._multimodal = multimodal_backend if multimodal_backend in providers else None
 
-    async def send(
+    async def _send_to_backend(
         self,
+        backend_name: str,
         request: LLMRequest,
         on_text_delta: TextDeltaCallback | None = None,
     ) -> LLMResponse:
-        """요청을 적절한 백엔드로 라우팅하고 응답을 반환한다.
-
-        BIZ-259: ``on_text_delta`` 콜백이 주어지면 프로바이더의 ``stream()`` 경로로
-        전환되어 텍스트 델타가 생성될 때마다 콜백이 호출된다. 콜백이 None 이면
-        기존 ``send()`` 경로를 그대로 사용 — 호출 측 회귀 0.
-        """
-        backend_name = request.backend_name or self._default
-
-        if backend_name not in self._providers:
-            raise LLMConfigError(
-                f"Unknown backend '{backend_name}'. "
-                f"Available: {', '.join(self._providers.keys())}"
-            )
-
+        """선택된 백엔드 provider 로 요청을 실제 전송한다."""
         provider = self._providers[backend_name]
 
         if on_text_delta is not None:
@@ -119,6 +138,76 @@ class LLMRouter:
             require_structured_output=request.require_structured_output,
         )
 
+    def _fallback_candidate(self, selected_backend: str, explicit_backend: bool) -> str | None:
+        """이번 요청에 적용 가능한 fallback 백엔드 이름을 계산한다.
+
+        BIZ-448 정책: explicit 백엔드 지정 요청은 호출자 의도를 존중해 절대
+        자동 fallback 하지 않는다. 선택된 백엔드와 fallback 이 같으면(예:
+        multimodal 라우팅 결과가 이미 fallback 백엔드) 재시도 의미가 없다.
+        """
+        if explicit_backend:
+            return None
+        if not self._fallback:
+            return None
+        if self._fallback == selected_backend:
+            return None
+        if self._fallback not in self._providers:
+            return None
+        return self._fallback
+
+    async def send(
+        self,
+        request: LLMRequest,
+        on_text_delta: TextDeltaCallback | None = None,
+    ) -> LLMResponse:
+        """요청을 적절한 백엔드로 라우팅하고 응답을 반환한다.
+
+        BIZ-259: ``on_text_delta`` 콜백이 주어지면 프로바이더의 ``stream()`` 경로로
+        전환되어 텍스트 델타가 생성될 때마다 콜백이 호출된다. 콜백이 None 이면
+        기존 ``send()`` 경로를 그대로 사용 — 호출 측 회귀 0.
+
+        BIZ-448 라우팅 정책 (모두 암묵적 요청, 즉 ``backend_name=None`` 에만 적용):
+          1. 첨부가 있으면 multimodal 백엔드로 라우팅.
+          2. provider 예외 또는 empty final(텍스트·tool call 모두 없음) 시
+             fallback 백엔드로 최대 1회 재시도.
+          3. 스트리밍 중에는 fallback 하지 않는다 — 이미 델타가 sink(Telegram 등)
+             로 흘러간 뒤 다른 백엔드로 재시도하면 혼합 출력이 생기기 때문.
+        """
+        explicit_backend = request.backend_name is not None
+        backend_name = request.backend_name or self._default
+        if not explicit_backend and self._multimodal and _request_has_attachments(request):
+            backend_name = self._multimodal
+
+        if backend_name not in self._providers:
+            raise LLMConfigError(
+                f"Unknown backend '{backend_name}'. "
+                f"Available: {', '.join(self._providers.keys())}"
+            )
+
+        fallback_name = self._fallback_candidate(backend_name, explicit_backend)
+
+        try:
+            response = await self._send_to_backend(backend_name, request, on_text_delta)
+        except Exception:
+            if fallback_name and on_text_delta is None:
+                logger.warning(
+                    "Backend '%s' failed; retrying fallback '%s'",
+                    backend_name,
+                    fallback_name,
+                    exc_info=True,
+                )
+                return await self._send_to_backend(fallback_name, request, None)
+            raise
+
+        if fallback_name and on_text_delta is None and _response_is_empty_final(response):
+            logger.warning(
+                "Backend '%s' returned empty final; retrying fallback '%s'",
+                backend_name,
+                fallback_name,
+            )
+            return await self._send_to_backend(fallback_name, request, None)
+        return response
+
     def list_backends(self) -> list[str]:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""
         return list(self._providers.keys())
@@ -126,6 +215,14 @@ class LLMRouter:
     def get_default_backend(self) -> str:
         """기본 백엔드 이름을 반환한다."""
         return self._default
+
+    def get_fallback_backend(self) -> str | None:
+        """Fallback 백엔드 이름을 반환한다 (미설정/미가용 시 None)."""
+        return self._fallback
+
+    def get_multimodal_backend(self) -> str | None:
+        """멀티모달 백엔드 이름을 반환한다 (미설정/미가용 시 None)."""
+        return self._multimodal
 
 
 def create_router(config_path: str | Path) -> LLMRouter:
@@ -144,6 +241,8 @@ def create_router(config_path: str | Path) -> LLMRouter:
 
     config = load_llm_config(config_path)
     default_name = config.get("default", "")
+    fallback_name = config.get("fallback")
+    multimodal_name = config.get("multimodal")
     providers_config = config.get("providers", {})
 
     if not providers_config:
@@ -183,8 +282,14 @@ def create_router(config_path: str | Path) -> LLMRouter:
                 )
                 providers[name] = provider
         else:
-            # API 프로바이더 — 레지스트리에서 이름으로 매칭
-            provider_cls = _PROVIDER_REGISTRY.get(name)
+            # API 프로바이더 — 레지스트리에서 이름으로 매칭.
+            # BIZ-448 — static ``provider:`` alias 지원: 백엔드 이름과 구현
+            # 클래스를 분리한다 (예: openrouter_glm_5_2 → openai 구현).
+            # 이 값은 config.yaml 정적 설정 전용이며 런타임 입력으로 바꿀 수 없다.
+            provider_key = pconf.get("provider") or name
+            if not isinstance(provider_key, str) or not provider_key:
+                provider_key = name
+            provider_cls = _PROVIDER_REGISTRY.get(provider_key)
             if provider_cls:
                 api_key = pconf.get("api_key", "")
                 # BIZ-444 — 프로바이더가 EXTRA_CONFIG_KEYS 로 선언한 추가 설정
@@ -210,7 +315,9 @@ def create_router(config_path: str | Path) -> LLMRouter:
                     )
             else:
                 logger.warning(
-                    "No provider implementation for '%s', skipping.", name
+                    "No provider implementation for '%s' (backend '%s'), skipping.",
+                    provider_key,
+                    name,
                 )
 
     if default_name and default_name not in providers:
@@ -224,8 +331,23 @@ def create_router(config_path: str | Path) -> LLMRouter:
     if not providers:
         raise LLMConfigError("No valid LLM providers could be initialized")
 
+    # BIZ-448 — 미가용 정책 백엔드는 경고 후 비활성화 (부분 가용성 우선).
+    if fallback_name and fallback_name not in providers:
+        logger.warning(
+            "Fallback backend '%s' not available; disabling fallback.", fallback_name
+        )
+        fallback_name = None
+    if multimodal_name and multimodal_name not in providers:
+        logger.warning(
+            "Multimodal backend '%s' not available; using default routing.",
+            multimodal_name,
+        )
+        multimodal_name = None
+
     return LLMRouter(
         backends=backends,
         providers=providers,
         default_backend=default_name,
+        fallback_backend=fallback_name,
+        multimodal_backend=multimodal_name,
     )
