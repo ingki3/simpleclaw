@@ -8,6 +8,12 @@ Function Calling:
   tools가 주어지면 ToolDefinition을 OpenAI의 function tool 형식으로 변환하여
   API에 전달하고, 응답에서 tool_calls를 감지하여 ToolCall로 반환한다.
   도구 결과 메시지(role=tool)는 OpenAI 네이티브 형식과 동일하여 변환 불필요.
+
+Structured Output (BIZ-450):
+  provider-neutral 힌트(response_mime_type/response_schema/require_structured_output)
+  를 Chat Completions ``response_format`` 으로 매핑한다. dict JSON Schema 는
+  ``json_schema`` (strict), schema 없는 optional JSON 힌트는 ``json_object`` 로
+  변환하며, Gemini 전용 확장 키(propertyOrdering)는 전송 전에 제거한다.
 """
 
 from __future__ import annotations
@@ -45,6 +51,81 @@ def _max_tokens_field(model: str) -> str:
     if name.startswith(("o1", "o3")):
         return "max_completion_tokens"
     return "max_tokens"
+
+
+# BIZ-450 — provider-neutral schema 에 섞여 들어오는 Gemini 전용 확장 키.
+# OpenAI/OpenRouter json_schema 모드는 더 엄격한 JSON Schema subset 만 받으므로
+# 검증 계약은 보존하면서 확장 키만 재귀 제거한다.
+_OPENAI_SCHEMA_DROP_KEYS = frozenset({"propertyOrdering"})
+
+
+def _sanitize_json_schema_for_openai(schema: object) -> object:
+    """OpenAI/OpenRouter 호출 전 provider 전용 JSON Schema 확장 키를 제거한다."""
+    if isinstance(schema, dict):
+        return {
+            key: _sanitize_json_schema_for_openai(value)
+            for key, value in schema.items()
+            if key not in _OPENAI_SCHEMA_DROP_KEYS
+        }
+    if isinstance(schema, list):
+        return [_sanitize_json_schema_for_openai(item) for item in schema]
+    return schema
+
+
+def _openai_response_format(
+    *,
+    provider_name: str,
+    response_mime_type: str | None,
+    response_schema: dict | type | None,
+    require_structured_output: bool,
+) -> dict | None:
+    """SimpleClaw structured output 힌트를 Chat Completions ``response_format`` 으로 매핑한다.
+
+    ``require_structured_output=True`` 는 best-effort 힌트가 아니라 보장 계약이다
+    (BIZ-430). dict JSON Schema 가 있으면 ``response_format.type=json_schema`` 로
+    보장할 수 있지만, schema 없이 JSON 문법만 강제하는 것으로는 required 계약을
+    만족할 수 없으므로 API 호출 전에 빠르게 실패한다 — 잘못된 JSON 을 조용히
+    돌려주는 것보다 호출자가 fallback 을 결정하게 하는 편이 안전하다.
+    """
+    has_hints = bool(response_mime_type) or response_schema is not None
+    if not has_hints:
+        if require_structured_output:
+            raise LLMProviderError(
+                f"Provider '{provider_name}' structured output requires "
+                "response_mime_type and response_schema"
+            )
+        return None
+
+    if response_mime_type and response_mime_type != "application/json":
+        if require_structured_output:
+            raise LLMProviderError(
+                f"Provider '{provider_name}' structured output only supports "
+                f"application/json, got {response_mime_type}"
+            )
+        return None
+
+    if response_schema is not None:
+        if not isinstance(response_schema, dict):
+            raise LLMProviderError(
+                f"Provider '{provider_name}' structured output requires "
+                "response_schema to be a dict JSON Schema"
+            )
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "simpleclaw_structured_response",
+                "strict": True,
+                "schema": _sanitize_json_schema_for_openai(response_schema),
+            },
+        }
+
+    if require_structured_output:
+        raise LLMProviderError(
+            f"Provider '{provider_name}' required structured output "
+            "requires response_schema"
+        )
+
+    return {"type": "json_object"}
 
 
 class OpenAIProvider(LLMProvider):
@@ -158,10 +239,12 @@ class OpenAIProvider(LLMProvider):
     ) -> LLMResponse:
         """Chat Completions API로 메시지를 전송하고 응답을 반환한다.
 
-        BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부하고,
-        아니면 힌트를 무시한다 (기존 호출 회귀 0).
+        BIZ-450 — structured output 힌트는 OpenAI/OpenRouter ``response_format``
+        으로 매핑한다. required 면 ``json_schema`` 를 사용하고, dict JSON Schema
+        가 없으면 API 호출 전에 빠르게 실패한다.
         """
-        self._reject_required_structured_output(
+        response_format = _openai_response_format(
+            provider_name=self._name,
             response_mime_type=response_mime_type,
             response_schema=response_schema,
             require_structured_output=require_structured_output,
@@ -183,6 +266,8 @@ class OpenAIProvider(LLMProvider):
                 "model": self._model,
                 "messages": msg_list,
             }
+            if response_format is not None:
+                kwargs["response_format"] = response_format
             # BIZ-448 — OpenRouter 등 OpenAI-compatible endpoint 확장 필드 주입
             # (예: GLM reasoning budget 이 답변 토큰을 잠식하지 않도록 비활성화).
             if self._extra_body:
@@ -261,9 +346,11 @@ class OpenAIProvider(LLMProvider):
         스트림 중 콜백 예외는 흡수해 누적은 완수한다 (Claude/Gemini 와 동일 정책 —
         sink 측 일시 오류가 LLM 응답 자체를 깨뜨리지 않도록).
 
-        BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부.
+        BIZ-450 — structured output 힌트는 send() 와 동일하게 ``response_format``
+        으로 매핑해 provider contract 를 일관되게 유지한다.
         """
-        self._reject_required_structured_output(
+        response_format = _openai_response_format(
+            provider_name=self._name,
             response_mime_type=response_mime_type,
             response_schema=response_schema,
             require_structured_output=require_structured_output,
@@ -285,6 +372,8 @@ class OpenAIProvider(LLMProvider):
             # usage 가 빠져 input/output_tokens 추적이 불가능.
             "stream_options": {"include_usage": True},
         }
+        if response_format is not None:
+            kwargs["response_format"] = response_format
         # BIZ-448 — send() 와 동일하게 endpoint 확장 필드를 스트리밍에도 주입.
         if self._extra_body:
             kwargs["extra_body"] = self._extra_body
