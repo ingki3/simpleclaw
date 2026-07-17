@@ -1,3 +1,33 @@
+# BIZ-448 — LLM 라우팅 정책 예시:
+# - default: 텍스트 기본 백엔드 (빠르고/저렴하고/품질 좋은 텍스트 모델)
+# - fallback: default 가 실패하거나 empty 응답을 반환할 때 1회 재시도할 백엔드
+# - multimodal: 이미지/파일/오디오/비디오 첨부가 포함된 요청을 라우팅할 백엔드
+# 세 키 모두 providers 아래 "백엔드 이름"을 가리키므로, 모델/프로바이더 교체는
+# config 수정만으로 가능하다. `provider:` alias 로 백엔드 이름과 구현을 분리한다
+# (예: OpenRouter 는 OpenAI-compatible 이므로 provider: openai).
+#
+# llm:
+#   default: openrouter_glm_5_2
+#   fallback: gemini
+#   multimodal: gemini
+#   providers:
+#     openrouter_glm_5_2:
+#       provider: openai
+#       type: api
+#       model: z-ai/glm-5.2
+#       api_key_env: OPENROUTER_API_KEY
+#       base_url: https://openrouter.ai/api/v1
+#       default_headers:
+#         HTTP-Referer: https://simpleclaw.local
+#         X-Title: SimpleClaw
+#       extra_body:
+#         reasoning:
+#           enabled: false   # GLM reasoning 이 completion budget 을 잠식해 empty final 이 되는 것 방지
+#     gemini:
+#       type: api
+#       model: gemini-3.5-flash
+#       api_key_env: GEMINI_API_KEY
+
 llm:
   default: "gemini"
   providers:
