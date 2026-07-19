@@ -1,53 +1,59 @@
-# BIZ-448 — LLM 라우팅 정책 예시:
-# - default: 텍스트 기본 백엔드 (빠르고/저렴하고/품질 좋은 텍스트 모델)
-# - fallback: default 가 실패하거나 empty 응답을 반환할 때 1회 재시도할 백엔드
-# - multimodal: 이미지/파일/오디오/비디오 첨부가 포함된 요청을 라우팅할 백엔드
-# 세 키 모두 providers 아래 "백엔드 이름"을 가리키므로, 모델/프로바이더 교체는
-# config 수정만으로 가능하다. `provider:` alias 로 백엔드 이름과 구현을 분리한다
-# (예: OpenRouter 는 OpenAI-compatible 이므로 provider: openai).
+# LLM backend aliases describe a role, not a vendor/model.  ``routes`` select
+# primary/retry backends; each backend explicitly selects its wire transport
+# and endpoint profile.  LLM changes take effect after a service restart.
 #
-# llm:
-#   default: openrouter_glm_5_2
-#   fallback: gemini
-#   multimodal: gemini
-#   providers:
-#     openrouter_glm_5_2:
-#       provider: openai
-#       type: api
-#       model: z-ai/glm-5.2
-#       api_key_env: OPENROUTER_API_KEY
-#       base_url: https://openrouter.ai/api/v1
-#       default_headers:
-#         HTTP-Referer: https://simpleclaw.local
-#         X-Title: SimpleClaw
-#       extra_body:
-#         reasoning:
-#           enabled: false   # GLM reasoning 이 completion budget 을 잠식해 empty final 이 되는 것 방지
-#     gemini:
-#       type: api
-#       model: gemini-3.5-flash
-#       api_key_env: GEMINI_API_KEY
+# ``gemini-openai`` below is intentionally commented out.  It is an A/B-only
+# OpenAI-compatible endpoint and must not replace native Gemini until the live
+# parity matrix (schema/tools/reasoning/multimodal/replay) is accepted.
 
 llm:
-  default: "gemini"
+  routes:
+    default: {primary: chat_primary, retry: chat_fallback}
+    turn_analysis: {primary: analysis_fast, retry: analysis_safe}
+    multimodal: {primary: vision_native}
   providers:
-    claude:
+    chat_primary:
       type: "api"
       model: "claude-sonnet-4-20250514"
+      transport: "anthropic"
+      profile: "anthropic"
       # 시크릿 참조 문법:
       #   "env:NAME"       — OS 환경변수 NAME에서 읽기
       #   "keyring:NAME"   — macOS Keychain / Linux Secret Service에서 읽기
       #   "file:NAME"      — ~/.simpleclaw/secrets.enc 암호화 볼트에서 읽기
       # 평문 값(예: "sk-...")도 동작하지만 권장하지 않음. 자세한 사항은 README 참조.
       api_key: "keyring:claude_api_key"
-    openai:
+    chat_fallback:
       type: "api"
       model: "gpt-4o"
+      transport: "openai_chat"
+      profile: "openai"
       api_key: "keyring:openai_api_key"
-    gemini:
+    analysis_fast:
       type: "api"
       model: "gemini-3.5-flash"
+      transport: "gemini"
+      profile: "gemini"
       api_key: "env:GOOGLE_API_KEY"
+    analysis_safe:
+      type: "api"
+      model: "gpt-4o"
+      transport: "openai_chat"
+      profile: "openai"
+      api_key: "keyring:openai_api_key"
+    vision_native:
+      type: "api"
+      model: "gemini-3.5-flash"
+      transport: "gemini"
+      profile: "gemini"
+      api_key: "env:GOOGLE_API_KEY"
+    # gemini_openai_ab:
+    #   type: "api"
+    #   model: "gemini-2.5-flash"
+    #   transport: "openai_chat"
+    #   profile: "gemini-openai"
+    #   api_key: "env:GOOGLE_API_KEY"
+    #   base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
     # Vertex AI Gemini (BIZ-444) — static API key 대신 GCP IAM 기반 OAuth 인증.
     # 토큰 발급/갱신은 google-auth 가 자동 수행하므로 시크릿 저장이 불필요하다.
     # 사용하려면 주석 해제. 자세한 설계는 docs/spike-vertex-gemini-biz444.md 참조.
@@ -120,14 +126,8 @@ agent:
   # 기존 결정적 TurnFrame + response_router 가 fallback 으로 동작한다.
   turn_analysis:
     enabled: true
-    # BIZ-453 — TurnAnalysis 전용 provider/model. 의도 파악/정규화/route 판단은
-    # 최종 답변 default model(llm.default)과 요구 특성이 달라 독립 지정한다.
-    # provider 는 llm.providers 의 기존 백엔드 이름이고, model 은 그 provider
-    # credentials 로 호출할 모델 ID 다. 둘 다 설정돼야 적용되며, 하나라도
-    # 비우면 아래 backend(null 이면 llm.default) 동작으로 돌아간다.
-    provider: gemini
-    model: gemini-3.5-flash
-    backend: null          # backward-compat 명시 backend. provider+model 이 우선.
+    # Backend 선택은 llm.routes.turn_analysis에서 합니다. 아래 legacy
+    # provider/model/backend 키는 한 release 동안만 읽으며 새 설정에는 쓰지 마세요.
     # BIZ-452 — 512 cap 에서는 tail `reasons` 문자열이 잘려 structured JSON 파싱이
     # 실패하는 live 사고가 있었다. 분석 응답은 원래 짧으므로 상한만 여유 있게 상향.
     max_tokens: 2048       # 분석 응답 토큰 상한 — 레이턴시/비용 제어

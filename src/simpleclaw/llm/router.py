@@ -419,6 +419,11 @@ def create_router(config_path: str | Path) -> LLMRouter:
             try:
                 provider_cls = get_transport_class(backend.transport or "")
             except LLMConfigError as exc:
+                # ``openai_responses`` is a deliberately reserved extension
+                # point.  Treat an explicit attempt to use it as a config
+                # error rather than silently falling back to another backend.
+                if backend.transport == "openai_responses":
+                    raise
                 logger.warning(
                     "Skipping provider '%s' (transport=%s profile=%s): %s",
                     name,

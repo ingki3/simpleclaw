@@ -5,7 +5,7 @@ from __future__ import annotations
 from simpleclaw.llm.models import LLMConfigError
 from simpleclaw.llm.profiles.base import ProviderProfile
 from simpleclaw.llm.profiles.anthropic import ANTHROPIC_PROFILE
-from simpleclaw.llm.profiles.gemini import GEMINI_PROFILE
+from simpleclaw.llm.profiles.gemini import GEMINI_OPENAI_PROFILE, GEMINI_PROFILE
 from simpleclaw.llm.profiles.openai_compatible import (
     GENERIC_PROFILE,
     OPENAI_PROFILE,
@@ -16,6 +16,7 @@ _BUILTIN_PROFILES: tuple[ProviderProfile, ...] = (
     OPENAI_PROFILE,
     OPENROUTER_PROFILE,
     GEMINI_PROFILE,
+    GEMINI_OPENAI_PROFILE,
     ANTHROPIC_PROFILE,
     GENERIC_PROFILE,
 )
