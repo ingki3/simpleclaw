@@ -4,10 +4,15 @@
 를 통해 `response_format.type=json_schema` 로 나가고, Gemini 전용 확장 키
 (`propertyOrdering`)가 제거되는지 검증한다 — live 에서 DeepSeek default 가
 TurnAnalysis 를 Gemini fallback 없이 처리하기 위한 계약.
+
+BIZ-452 — `choice.finish_reason` 이 `LLMResponse.finish_reason` 으로 보존되어
+출력 토큰 cap truncation(finish_reason=length)을 raw 응답 없이 진단할 수 있는
+계약도 함께 검증한다.
 """
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,7 +40,8 @@ async def test_openai_provider_accepts_turn_analysis_schema(monkeypatch):
                             '"reasons":[]}'
                         ),
                         tool_calls=None,
-                    )
+                    ),
+                    finish_reason="stop",
                 )
             ],
             usage=MagicMock(prompt_tokens=10, completion_tokens=20),
@@ -55,7 +61,7 @@ async def test_openai_provider_accepts_turn_analysis_schema(monkeypatch):
         extra_body={"reasoning": {"enabled": False}},
     )
 
-    await provider.send(
+    response = await provider.send(
         system_prompt="analyze",
         user_message="hello",
         response_mime_type="application/json",
@@ -71,3 +77,55 @@ async def test_openai_provider_accepts_turn_analysis_schema(monkeypatch):
     assert "route" in schema["properties"]
     # 원본 스키마는 변형 없이 그대로 유지되어야 한다 — Gemini 경로가 계속 사용.
     assert "propertyOrdering" in TURN_ANALYSIS_RESPONSE_SCHEMA
+    # BIZ-452 — 종료 사유가 LLMResponse 에 보존된다.
+    assert response.finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_preserves_length_finish_reason(monkeypatch, caplog):
+    """출력 cap truncation(finish_reason=length)이 응답과 sanitized 로그에 남는다."""
+    truncated_json = '{"is_followup":true,"route":"complex_fact_workflow","reasons":["cut mid strin'
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[
+                MagicMock(
+                    message=MagicMock(content=truncated_json, tool_calls=None),
+                    finish_reason="length",
+                )
+            ],
+            usage=MagicMock(prompt_tokens=10, completion_tokens=512),
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+
+    provider = OpenAIProvider(
+        model="deepseek/deepseek-v4-pro",
+        api_key="test-key",
+        name="openrouter_deepseek_v4_pro",
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="simpleclaw.llm.providers.openai_provider"
+    ):
+        response = await provider.send(
+            system_prompt="analyze",
+            user_message="user secret question",
+            response_mime_type="application/json",
+            response_schema=TURN_ANALYSIS_RESPONSE_SCHEMA,
+            require_structured_output=True,
+        )
+
+    assert response.finish_reason == "length"
+    assert response.diagnostics == {"finish_reason": "length"}
+    # response_format 계약은 유지된다.
+    assert create.call_args.kwargs["response_format"]["type"] == "json_schema"
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    # truncation 경고는 남되, 프롬프트/응답 본문은 노출되지 않는다.
+    assert "finish_reason=length" in joined
+    assert "user secret question" not in joined
+    assert "cut mid strin" not in joined

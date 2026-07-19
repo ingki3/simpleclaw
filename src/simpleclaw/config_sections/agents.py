@@ -115,11 +115,17 @@ _AGENT_DEFAULTS: dict = {
     "turn_analysis": {
         "enabled": True,
         "backend": None,  # None 이면 llm.default backend 사용
-        "max_tokens": 512,
+        # BIZ-452: 512 cap 에서는 tail `reasons` 문자열이 잘려 structured JSON
+        # 파싱이 실패하는 live 사고가 있었다. 분석 응답은 원래 짧아 실사용
+        # 토큰은 그대로이므로 상한만 2048 로 여유 있게 올린다.
+        "max_tokens": 2048,
         "max_recent_messages": 12,
         # BIZ-427: Gemini structured output(response_schema)으로 schema 준수
         # JSON 을 강제. False 는 프롬프트-only JSON 지시 escape hatch.
         "structured_output": True,
+        # BIZ-452: 파싱+truncated-tail repair 까지 실패했을 때 1회 재시도할
+        # 백엔드. None 이면 llm.fallback(router.get_fallback_backend())에 위임.
+        "retry_backend": None,
         "fallback_mode": "conservative_original",
     },
 }
@@ -203,6 +209,14 @@ def _agent_with_defaults(agent: dict) -> dict:
     # 빈 문자열 backend 는 미설정으로 간주 — 기본 LLM backend 로 라우팅한다.
     if isinstance(turn_analysis_backend, str) and not turn_analysis_backend.strip():
         turn_analysis_backend = None
+    turn_analysis_retry_backend = turn_analysis.get(
+        "retry_backend", turn_analysis_defaults["retry_backend"]
+    )
+    # 빈 문자열 retry_backend 도 미설정으로 간주 — llm.fallback 백엔드에 위임한다.
+    if isinstance(turn_analysis_retry_backend, str) and (
+        not turn_analysis_retry_backend.strip()
+    ):
+        turn_analysis_retry_backend = None
     planner_backend = str(
         complex_fact.get("planner_backend", complex_defaults["planner_backend"])
     )
@@ -366,6 +380,7 @@ def _agent_with_defaults(agent: dict) -> dict:
                     turn_analysis_defaults["structured_output"],
                 )
             ),
+            "retry_backend": turn_analysis_retry_backend,
             "fallback_mode": str(
                 turn_analysis.get(
                     "fallback_mode", turn_analysis_defaults["fallback_mode"]

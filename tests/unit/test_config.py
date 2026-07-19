@@ -384,6 +384,62 @@ agent:
         assert result["judge_max_tokens"] == 200
         assert result["max_answer_chars_for_judge"] == 1000
 
+    def test_turn_analysis_defaults(self, tmp_path: Path):
+        """BIZ-452 — max_tokens 기본값 2048, retry_backend 기본값 None."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "agent:\n  history_limit: 5\n")
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["enabled"] is True
+        assert result["backend"] is None
+        assert result["max_tokens"] == 2048
+        assert result["max_recent_messages"] == 12
+        assert result["structured_output"] is True
+        assert result["retry_backend"] is None
+        assert result["fallback_mode"] == "conservative_original"
+
+    def test_turn_analysis_overrides_and_coercion(self, tmp_path: Path):
+        """max_tokens 문자열은 int 로 coerce, 하한(64) 미만은 clamp 된다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    max_tokens: "4096"
+    retry_backend: gemini
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["max_tokens"] == 4096
+        assert result["retry_backend"] == "gemini"
+
+    def test_turn_analysis_clamps_and_normalizes_invalid_values(
+        self, tmp_path: Path
+    ):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    max_tokens: 10
+    retry_backend: "  "
+    backend: ""
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        # 하한 64 미만은 clamp — 지나치게 낮은 cap 이 truncation 사고를 재현하지 않게.
+        assert result["max_tokens"] == 64
+        # 빈 문자열 backend/retry_backend 는 미설정으로 정규화된다.
+        assert result["retry_backend"] is None
+        assert result["backend"] is None
+
 
 # ---------------------------------------------------------------------------
 # 4. load_daemon_config

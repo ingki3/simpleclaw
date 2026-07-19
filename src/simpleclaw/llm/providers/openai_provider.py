@@ -287,6 +287,20 @@ class OpenAIProvider(LLMProvider):
 
         choice = response.choices[0] if response.choices else None
         text = choice.message.content or "" if choice else ""
+        # BIZ-452 — 출력 cap 잘림(finish_reason=length) 을 raw 응답 없이도
+        # 진단할 수 있게 종료 사유를 LLMResponse 에 보존한다.
+        finish_reason = getattr(choice, "finish_reason", None) if choice else None
+        if not isinstance(finish_reason, str):
+            finish_reason = None
+        if response_format is not None and finish_reason == "length":
+            # structured output 이 토큰 cap 에서 잘리면 JSON 이 깨진다 — 호출자
+            # repair/fallback 경로 진단용 경고 (프롬프트/응답 본문은 남기지 않음).
+            logger.warning(
+                "OpenAI structured output hit output-token cap "
+                "(finish_reason=length backend=%s model=%s)",
+                self._name,
+                self._model,
+            )
 
         # tool_calls 추출
         tool_calls: list[ToolCall] | None = None
@@ -320,6 +334,8 @@ class OpenAIProvider(LLMProvider):
             model=self._model,
             usage=usage,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            diagnostics={"finish_reason": finish_reason} if finish_reason else None,
         )
 
     async def stream(
@@ -388,6 +404,7 @@ class OpenAIProvider(LLMProvider):
         # 위주로 보내고, arguments JSON 문자열은 여러 청크에 걸쳐 분할 전송한다.
         tc_accumulator: dict[int, dict] = {}
         usage = None
+        finish_reason: str | None = None
 
         try:
             stream = await self._client.chat.completions.create(**kwargs)
@@ -400,6 +417,11 @@ class OpenAIProvider(LLMProvider):
                     }
                 if not chunk.choices:
                     continue
+                # BIZ-452 — 종료 청크의 finish_reason 을 보존해 send() 와 동일한
+                # truncation 진단이 스트리밍에서도 가능하게 한다.
+                chunk_finish = getattr(chunk.choices[0], "finish_reason", None)
+                if isinstance(chunk_finish, str) and chunk_finish:
+                    finish_reason = chunk_finish
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
@@ -438,6 +460,13 @@ class OpenAIProvider(LLMProvider):
             raise LLMProviderError(f"OpenAI API error: {e}") from e
 
         text = "".join(text_parts)
+        if response_format is not None and finish_reason == "length":
+            logger.warning(
+                "OpenAI structured output hit output-token cap "
+                "(finish_reason=length backend=%s model=%s)",
+                self._name,
+                self._model,
+            )
 
         tool_calls: list[ToolCall] | None = None
         if tc_accumulator:
@@ -464,4 +493,6 @@ class OpenAIProvider(LLMProvider):
             model=self._model,
             usage=usage,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            diagnostics={"finish_reason": finish_reason} if finish_reason else None,
         )

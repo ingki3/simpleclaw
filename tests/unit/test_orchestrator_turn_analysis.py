@@ -425,3 +425,52 @@ async def test_structured_output_config_false_reaches_analyzer(
     await orch.process_message("안녕", user_id=1, chat_id=1)
 
     assert analyzer.call_args.kwargs["structured_output"] is False
+
+
+@pytest.mark.asyncio
+async def test_turn_analysis_retry_backend_config_passthrough(
+    config_file, monkeypatch
+):
+    """BIZ-452 — config 의 turn_analysis.retry_backend 가 분석기 인자로 전달된다."""
+    text = config_file.read_text(encoding="utf-8")
+    config_file.write_text(
+        text.replace(
+            "max_recent_messages: 8",
+            "max_recent_messages: 8\n    retry_backend: gemini",
+        ),
+        encoding="utf-8",
+    )
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    orch._tool_loop = AsyncMock(return_value="안녕하세요")
+
+    await orch.process_message("안녕", user_id=1, chat_id=1)
+
+    assert analyzer.call_args.kwargs["retry_backend_name"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_turn_analysis_retry_backend_defaults_to_router_fallback(
+    config_file, monkeypatch
+):
+    """BIZ-452 — retry_backend 미지정이면 llm.fallback(router)에 위임한다."""
+    orch = AgentOrchestrator(config_file)
+    monkeypatch.setattr(
+        orch._router, "get_fallback_backend", lambda: "gemini_fallback"
+    )
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    orch._tool_loop = AsyncMock(return_value="안녕하세요")
+
+    await orch.process_message("안녕", user_id=1, chat_id=1)
+
+    assert analyzer.call_args.kwargs["retry_backend_name"] == "gemini_fallback"
