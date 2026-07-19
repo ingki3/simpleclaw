@@ -18,7 +18,10 @@ _DEFAULTS = {
     "token_budget": 4096,
     "local_dir": "~/.simpleclaw-agent/default",
     "global_dir": "~/.agents/main",
+    # BIZ-451: SOUL.md(정체성·말투 tone guard)를 기본 파일 목록에 포함한다.
+    # 파일이 없는 프로필에서는 resolver가 warning 후 graceful skip 하므로 안전.
     "files": [
+        {"name": "SOUL.md", "type": "soul"},
         {"name": "AGENT.md", "type": "agent"},
         {"name": "USER.md", "type": "user"},
         {"name": "MEMORY.md", "type": "memory"},

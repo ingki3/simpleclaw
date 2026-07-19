@@ -6,7 +6,7 @@
 설계 결정:
 - 글로벌 디렉터리를 먼저 스캔한 뒤 로컬을 스캔하여 덮어쓰는 방식으로
   우선순위를 구현한다 (후발 우선).
-- 결과는 AGENT → USER → MEMORY 정규 순서로 반환한다.
+- 결과는 SOUL → AGENT → USER → MEMORY 정규 순서로 반환한다.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def resolve_persona_files(
     """로컬 및 글로벌 디렉터리에서 페르소나 파일을 탐색·해석한다.
 
     동일 유형의 파일이 양쪽에 있으면 로컬 파일이 우선한다.
-    결과는 AGENT → USER → MEMORY 정규 순서로 반환된다.
+    결과는 SOUL → AGENT → USER → MEMORY 정규 순서로 반환된다.
 
     Args:
         local_dir: 프로젝트 로컬 페르소나 디렉터리 경로.

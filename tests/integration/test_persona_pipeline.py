@@ -86,3 +86,33 @@ class TestFullPipeline:
         result = assemble_prompt(files, token_budget=4096)
         assert result.assembled_text == ""
         assert result.token_count == 0
+
+
+class TestSoulPipeline:
+    """BIZ-451: live-like persona dir(SOUL 포함)의 resolve → assemble 통합 검증."""
+
+    @pytest.fixture
+    def workspace_with_soul(self, workspace):
+        (workspace["local"] / "SOUL.md").write_text(
+            "# Soul\n\n"
+            "## 말투\n\n"
+            "- 사용자를 \"형님\"이라고 부를 것\n"
+            "- 친근한 말투를 사용하되 반말은 하지 말것\n",
+            encoding="utf-8",
+        )
+        return workspace
+
+    def test_soul_rules_in_assembled_prompt(self, workspace_with_soul):
+        """SOUL의 tone 규칙이 system prompt에 실제로 포함되어야 한다."""
+        files = resolve_persona_files(
+            workspace_with_soul["local"], workspace_with_soul["global"]
+        )
+        assert len(files) == 4
+
+        result = assemble_prompt(files, token_budget=4096)
+        text = result.assembled_text
+        assert "반말은 하지 말것" in text
+        assert "형님" in text
+        # SOUL이 AGENT보다 앞에 주입되어야 tone guard가 안정적으로 작동
+        assert text.index("반말은 하지 말것") < text.index("Agent Identity")
+        assert text.index("Agent Identity") < text.index("User Profile")

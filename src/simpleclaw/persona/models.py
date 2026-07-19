@@ -59,7 +59,7 @@ class PersonaFile:
     """파싱된 하나의 페르소나 마크다운 파일.
 
     Attributes:
-        file_type: 파일 유형 (AGENT / USER / MEMORY).
+        file_type: 파일 유형 (SOUL / AGENT / USER / MEMORY).
         source_path: 원본 파일 경로.
         source_scope: 로드 출처 (LOCAL / GLOBAL).
         sections: 파싱된 섹션 목록.
