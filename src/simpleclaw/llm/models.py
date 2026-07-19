@@ -109,6 +109,12 @@ class LLMRequest:
     (현재 Gemini)는 네이티브 config 로 매핑하고, 미지원 프로바이더는
     ``require_structured_output=False`` 면 조용히 무시, ``True`` 면 명확한
     ``LLMProviderError`` 를 던진다 — 호출자가 fallback 여부를 결정하게 한다.
+
+    BIZ-453 — ``reasoning`` 은 provider-neutral reasoning hint 다
+    (``{"enabled": bool, "effort": str, "budget_tokens": int}``). 지원
+    프로바이더(현재 Gemini)는 native thinking config 로 매핑하고, 미지원
+    프로바이더는 조용히 무시한다. 이 값은 config 로더에서만 채워지며
+    사용자/runtime tool 입력으로 설정되어서는 안 된다.
     """
     system_prompt: str = ""
     user_message: str = ""
@@ -120,6 +126,7 @@ class LLMRequest:
     response_mime_type: str | None = None
     response_schema: dict | type | None = None
     require_structured_output: bool = False
+    reasoning: dict | None = None
 
 
 @dataclass

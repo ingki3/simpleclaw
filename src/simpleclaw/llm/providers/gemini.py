@@ -35,6 +35,10 @@ from simpleclaw.llm.providers.base import (
 
 logger = logging.getLogger(__name__)
 
+# BIZ-453 — provider-neutral reasoning hint 의 effort 를 Gemini thinking budget
+# 토큰으로 바꾸는 기본 매핑. hint 에 budget_tokens 가 명시되면 그 값을 우선한다.
+_REASONING_EFFORT_BUDGET_TOKENS = {"low": 256, "medium": 512, "high": 1024}
+
 _GEMINI_INLINE_ATTACHMENT_MIME_TYPES = frozenset({
     "application/pdf",
     "text/plain",
@@ -142,6 +146,36 @@ class GeminiProvider(LLMProvider):
                 diagnostics["candidates_token_count"] = output_tokens
                 diagnostics["empty_output_tokens"] = output_tokens == 0
         return finish_reason, diagnostics or None
+
+    def _apply_reasoning(
+        self, config: types.GenerateContentConfig, reasoning: dict | None
+    ) -> None:
+        """provider-neutral reasoning hint 를 Gemini native thinking config 로 매핑한다.
+
+        BIZ-453 — ``enabled`` 가 아니면 no-op. budget 은 ``budget_tokens`` 가
+        명시되면 그 값을, 없으면 ``effort`` (low/medium/high) 기본 매핑을 쓴다.
+        installed SDK 가 ``ThinkingConfig``/``thinking_config`` 를 지원하지
+        않으면 예외를 삼키고 sanitized diagnostic 만 남긴 채 기존 요청을
+        그대로 보낸다 — reasoning 은 품질 힌트이지 실패 사유가 아니다.
+        """
+        if not isinstance(reasoning, dict) or not reasoning.get("enabled"):
+            return
+        budget = reasoning.get("budget_tokens")
+        if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
+            effort = str(reasoning.get("effort") or "medium").strip().lower()
+            budget = _REASONING_EFFORT_BUDGET_TOKENS.get(
+                effort, _REASONING_EFFORT_BUDGET_TOKENS["medium"]
+            )
+        try:
+            config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
+        except Exception as exc:  # noqa: BLE001 — SDK 미지원은 degrade 대상.
+            logger.warning(
+                "Gemini reasoning hint unsupported by installed SDK; degrading "
+                "to no-op (backend=%s model=%s error_type=%s)",
+                self._name,
+                self._model,
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _convert_tools(
@@ -296,12 +330,16 @@ class GeminiProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Gemini API로 메시지를 전송하고 응답을 반환한다.
 
         BIZ-427 — ``response_mime_type``/``response_schema`` 가 주어지면 Gemini
         네이티브 structured output(``GenerateContentConfig.response_mime_type`` /
         ``response_schema``)으로 매핑해 schema-valid JSON 출력을 강제한다.
+
+        BIZ-453 — ``reasoning`` hint 가 켜져 있으면 native thinking config 로
+        매핑한다. structured output 과 독립 필드이므로 함께 사용할 수 있다.
         """
         # required 인데 두 힌트가 온전히 오지 않으면 빠르게 실패 — 반쪽 설정으로
         # 프롬프트-only JSON 이 조용히 나가는 사고를 막는다.
@@ -329,6 +367,9 @@ class GeminiProvider(LLMProvider):
                 config.response_mime_type = response_mime_type
             if response_schema is not None:
                 config.response_schema = response_schema
+
+            # BIZ-453 — reasoning hint 매핑. 미지원 SDK 는 내부에서 no-op.
+            self._apply_reasoning(config, reasoning)
 
             # 도구 정의가 있으면 config에 추가
             if tools:
@@ -417,6 +458,7 @@ class GeminiProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Gemini API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -449,6 +491,8 @@ class GeminiProvider(LLMProvider):
         # BIZ-297 — stream() 도 send() 와 동일하게 max_tokens 를 그대로 매핑.
         if max_tokens:
             config.max_output_tokens = max_tokens
+        # BIZ-453 — reasoning hint 도 send() 와 동일하게 매핑 (미지원 시 no-op).
+        self._apply_reasoning(config, reasoning)
         if tools:
             config.tools = self._convert_tools(tools)
 
