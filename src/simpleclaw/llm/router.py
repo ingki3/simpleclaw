@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import inspect
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from simpleclaw.config import load_llm_config
 from simpleclaw.llm.models import (
@@ -28,6 +29,8 @@ from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 from simpleclaw.llm.transports import get_transport_class
 
 logger = logging.getLogger(__name__)
+
+_ValidatedResponse = TypeVar("_ValidatedResponse")
 
 # Backward-compatible view for older tests/extensions that inspected the router
 # registry directly. create_router() uses simpleclaw.llm.transports instead.
@@ -287,6 +290,36 @@ class LLMRouter:
             return await self._send_to_backend(retry_name, request, None)
         return response
 
+    async def send_validated(
+        self,
+        request: LLMRequest,
+        validate_response: Callable[[LLMResponse], _ValidatedResponse],
+    ) -> _ValidatedResponse:
+        """Send through a route and retry once when semantic validation fails.
+
+        A caller may validate an otherwise non-empty provider response (for
+        example, parse a structured JSON contract) without learning a backend
+        name or manually selecting the route retry.  This deliberately shares
+        the same route-only primary/retry policy as :meth:`send`.
+        """
+        backend_name, fallback_name = self._resolve_request(request)
+        required = self._required_capabilities(request, None)
+        self._preflight_backend(backend_name, required)
+
+        try:
+            return validate_response(await self._send_to_backend(backend_name, request))
+        except Exception:
+            retry_name = self._usable_retry(backend_name, fallback_name, required)
+            if not retry_name:
+                raise
+            logger.warning(
+                "Backend '%s' response failed validation; retrying fallback '%s'",
+                backend_name,
+                retry_name,
+                exc_info=True,
+            )
+            return validate_response(await self._send_to_backend(retry_name, request))
+
     def list_backends(self) -> list[str]:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""
         return list(self._providers.keys())
@@ -330,6 +363,7 @@ def create_router(config_path: str | Path) -> LLMRouter:
     multimodal_name = config.get("multimodal")
     providers_config = config.get("providers", {})
     routes_config = config.get("routes", {})
+    route_sources = config.get("route_sources", {})
 
     if not providers_config:
         raise LLMConfigError("No LLM providers configured in config.yaml")
@@ -447,6 +481,53 @@ def create_router(config_path: str | Path) -> LLMRouter:
         )
         multimodal_name = None
 
+    normalized_routes: dict[str, LLMRoute] = {}
+    for route_name, route_config in routes_config.items():
+        primary = route_config["primary"]
+        retry = route_config.get("retry")
+        source = route_sources.get(route_name, "explicit")
+
+        if primary not in providers:
+            if source == "explicit":
+                raise LLMConfigError(
+                    f"LLM route '{route_name}' primary backend '{primary}' is unavailable"
+                )
+            logger.warning(
+                "Legacy LLM route '%s' primary backend '%s' is unavailable; "
+                "using active default '%s'.",
+                route_name,
+                primary,
+                default_name,
+            )
+            primary = default_name
+
+        if retry and retry not in providers:
+            if source == "explicit":
+                raise LLMConfigError(
+                    f"LLM route '{route_name}' retry backend '{retry}' is unavailable"
+                )
+            logger.warning(
+                "Legacy LLM route '%s' retry backend '%s' is unavailable; disabling retry.",
+                route_name,
+                retry,
+            )
+            retry = None
+        normalized_routes[route_name] = LLMRoute(
+            name=route_name,
+            primary=primary,
+            retry=retry,
+        )
+
+    default_route = normalized_routes.get("default")
+    if default_route is None:
+        normalized_routes["default"] = LLMRoute("default", default_name, fallback_name)
+    elif default_route.primary != default_name:
+        # An explicit default is already validated above. Legacy/default
+        # materialization must follow the provider selected after init failure.
+        normalized_routes["default"] = LLMRoute(
+            "default", default_name, default_route.retry
+        )
+
     return LLMRouter(
         backends=backends,
         providers=providers,
@@ -454,12 +535,5 @@ def create_router(config_path: str | Path) -> LLMRouter:
         fallback_backend=fallback_name,
         multimodal_backend=multimodal_name,
         profiles=profiles,
-        routes={
-            route_name: LLMRoute(
-                name=route_name,
-                primary=route_config["primary"],
-                retry=route_config.get("retry"),
-            )
-            for route_name, route_config in routes_config.items()
-        },
+        routes=normalized_routes,
     )

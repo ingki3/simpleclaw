@@ -174,6 +174,10 @@ def load_llm_config(config_path: str | Path) -> dict:
         providers[name] = provider
 
     routes: dict[str, dict[str, str | None]] = {}
+    # create_router() must distinguish user-authored routes, which fail fast
+    # when unavailable, from compatibility routes that may follow an available
+    # legacy default after provider initialization.
+    route_sources: dict[str, str] = {}
     raw_routes = llm.get("routes", {})
     if isinstance(raw_routes, dict):
         for route_name, raw_route in raw_routes.items():
@@ -181,21 +185,25 @@ def load_llm_config(config_path: str | Path) -> dict:
                 continue
             normalized = _normalize_route(route_name.strip(), raw_route)
             if normalized:
-                routes[route_name.strip()] = normalized
+                normalized_name = route_name.strip()
+                routes[normalized_name] = normalized
+                route_sources[normalized_name] = "explicit"
 
     legacy_default = _clean_optional_str(
         llm.get("default", _LLM_DEFAULTS["default"])
     ) or _LLM_DEFAULTS["default"]
     legacy_fallback = _clean_optional_str(llm.get("fallback"))
     legacy_multimodal = _clean_optional_str(llm.get("multimodal"))
-    routes.setdefault(
-        "default", {"primary": legacy_default, "retry": legacy_fallback}
-    )
+    if "default" not in routes:
+        routes["default"] = {"primary": legacy_default, "retry": legacy_fallback}
+        route_sources["default"] = "legacy"
     if legacy_multimodal:
-        routes.setdefault(
-            "multimodal",
-            {"primary": legacy_multimodal, "retry": legacy_fallback},
-        )
+        if "multimodal" not in routes:
+            routes["multimodal"] = {
+                "primary": legacy_multimodal,
+                "retry": legacy_fallback,
+            }
+            route_sources["multimodal"] = "legacy"
 
     # One-release compatibility: materialize legacy TurnAnalysis model overrides
     # as ordinary static backends, then route to them. This preserves behavior
@@ -231,6 +239,7 @@ def load_llm_config(config_path: str | Path) -> dict:
         primary = _legacy_target("") or routes["default"]["primary"]
         retry = _legacy_target("retry_") or routes["default"].get("retry")
         routes["turn_analysis"] = {"primary": primary, "retry": retry}
+        route_sources["turn_analysis"] = "legacy"
 
     if any(_clean_optional_str(turn_analysis.get(key)) for key in legacy_keys):
         action = (
@@ -251,5 +260,6 @@ def load_llm_config(config_path: str | Path) -> dict:
         "fallback": routes["default"].get("retry"),
         "multimodal": routes.get("multimodal", {}).get("primary"),
         "routes": routes,
+        "route_sources": route_sources,
         "providers": providers,
     }

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from simpleclaw.agent.response_router import ResponseRoute, RouteDecision
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest
+from simpleclaw.llm.router import LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -547,69 +548,47 @@ async def analyze_turn_with_llm(
             request.reasoning = dict(reasoning)
         return request
 
-    async def _attempt() -> tuple[TurnAnalysis | None, dict]:
-        """한 backend 로 분석을 시도하고 (결과, 안전 진단 메타데이터)를 반환한다.
+    diagnostic = {"error_type": None, "raw_len": 0, "finish_reason": None}
 
-        진단에는 예외 타입/raw 길이/finish_reason/repair 상태만 담는다 —
-        provider 예외 메시지와 raw 전문에는 사용자 발화가 그대로 포함될 수
-        있어 원문 문자열은 절대 밖으로 내보내지 않는다 (BIZ-430).
-        """
-        diag: dict = {
-            "backend": "turn_analysis",
-            "error_type": None,
-            "raw_len": 0,
-            "finish_reason": None,
-            "repair_status": "none",
-        }
-        response = None
+    def _validate_response(response) -> TurnAnalysis:
+        """Parse first, then repair before the route consumes its one retry."""
+        diagnostic["raw_len"] = len(getattr(response, "text", "") or "")
+        diagnostic["finish_reason"] = getattr(response, "finish_reason", None)
         try:
-            response = await router.send(_build_request())
-            diag["raw_len"] = len(getattr(response, "text", "") or "")
-            finish_reason = getattr(response, "finish_reason", None)
-            if isinstance(finish_reason, str):
-                diag["finish_reason"] = finish_reason
-            return (
-                parse_turn_analysis_payload(response.text, original_text=original),
-                diag,
-            )
-        except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
-            diag["error_type"] = type(exc).__name__
-            # 파싱 실패(ValueError/JSONDecodeError)만 repair 대상 — provider
-            # 예외는 응답 자체가 없으므로 복구할 payload 가 없다.
-            if isinstance(exc, ValueError) and response is not None:
-                repaired = repair_turn_analysis_payload(
-                    response.text, original_text=original
+            return parse_turn_analysis_payload(response.text, original_text=original)
+        except ValueError as exc:
+            diagnostic["error_type"] = type(exc).__name__
+            repaired = repair_turn_analysis_payload(response.text, original_text=original)
+            if repaired is not None:
+                logger.warning(
+                    "Turn analysis payload repair preserved the routing decision "
+                    "(error_type=%s structured=%s raw_len=%d finish_reason=%s "
+                    "backend=turn_analysis repair_status=repaired)",
+                    diagnostic["error_type"],
+                    structured_output,
+                    diagnostic["raw_len"],
+                    diagnostic["finish_reason"],
                 )
-                if repaired is not None:
-                    diag["repair_status"] = "repaired"
-                    return repaired, diag
-                diag["repair_status"] = "failed"
-            return None, diag
+                return repaired
+            raise
 
-    analysis, diag = await _attempt()
-    if analysis is not None:
-        if diag["repair_status"] == "repaired":
-            logger.warning(
-                "Turn analysis payload truncated; repaired tail kept core "
-                "routing decision (error_type=%s structured=%s raw_len=%d "
-                "finish_reason=%s backend=%s repair_status=repaired)",
-                diag["error_type"],
-                structured_output,
-                diag["raw_len"],
-                diag["finish_reason"],
-                diag["backend"],
-            )
-        return analysis
-
-    logger.warning(
-        "Turn analysis structured output failed; using conservative "
-        "fallback (error_type=%s structured=%s raw_len=%d finish_reason=%s "
-        "backend=%s repair_status=%s)",
-        diag["error_type"],
-        structured_output,
-        diag["raw_len"],
-        diag["finish_reason"],
-        diag["backend"],
-        diag["repair_status"],
-    )
-    return _fallback_analysis(original)
+    try:
+        if isinstance(router, LLMRouter):
+            analysis = await router.send_validated(_build_request(), _validate_response)
+        else:
+            # Lightweight test/extension routers that predate the route
+            # validation API retain the one-send compatibility contract.
+            analysis = _validate_response(await router.send(_build_request()))
+    except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
+        diagnostic["error_type"] = type(exc).__name__
+        logger.warning(
+            "Turn analysis structured output failed after route retry; using conservative "
+            "fallback (error_type=%s structured=%s raw_len=%d finish_reason=%s "
+            "backend=turn_analysis repair_status=failed)",
+            diagnostic["error_type"],
+            structured_output,
+            diagnostic["raw_len"],
+            diagnostic["finish_reason"],
+        )
+        return _fallback_analysis(original)
+    return analysis

@@ -153,14 +153,25 @@ async def test_analyze_repairs_truncated_payload_without_retry():
 
 
 @pytest.mark.asyncio
-async def test_analyze_does_not_duplicate_router_retry_when_repair_fails():
-    """Provider retry belongs to the route; parse failure falls back conservatively."""
-    router = AsyncMock()
-    router.send = AsyncMock(
-        side_effect=[
-            LLMResponse(text="깨진 응답 (JSON 아님)", finish_reason="length"),
-            LLMResponse(text=_VALID_ANALYSIS_JSON),
-        ]
+async def test_analyze_retries_route_once_when_repair_fails():
+    """Malformed non-empty primary responses consume the route retry once."""
+    from simpleclaw.llm.models import LLMRoute
+    from simpleclaw.llm.router import LLMRouter
+
+    primary = AsyncMock()
+    primary.send = AsyncMock(
+        return_value=LLMResponse(text="깨진 응답 (JSON 아님)", finish_reason="length")
+    )
+    retry = AsyncMock()
+    retry.send = AsyncMock(return_value=LLMResponse(text=_VALID_ANALYSIS_JSON))
+    router = LLMRouter(
+        backends={},
+        providers={"primary": primary, "retry": retry},
+        default_backend="primary",
+        routes={
+            "default": LLMRoute("default", "primary"),
+            "turn_analysis": LLMRoute("turn_analysis", "primary", "retry"),
+        },
     )
 
     analysis = await analyze_turn_with_llm(
@@ -169,21 +180,26 @@ async def test_analyze_does_not_duplicate_router_retry_when_repair_fails():
         router=router,
     )
 
-    assert analysis.source == "fallback"
-    assert analysis.route == ResponseRoute.STANDARD_TOOL_LOOP
-    router.send.assert_awaited_once()
-    request = router.send.await_args.args[0]
-    assert request.route_name == "turn_analysis"
+    assert analysis.source == "llm"
+    assert analysis.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
+    primary.send.assert_awaited_once()
+    retry.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_analyze_falls_back_when_repair_fails(caplog):
-    router = AsyncMock()
-    router.send = AsyncMock(
-        side_effect=[
-            LLMResponse(text="깨진 응답 1", finish_reason="length"),
-            RuntimeError("fallback backend down"),
-        ]
+    from simpleclaw.llm.models import LLMRoute
+    from simpleclaw.llm.router import LLMRouter
+
+    primary = AsyncMock()
+    primary.send = AsyncMock(return_value=LLMResponse(text="깨진 응답 1", finish_reason="length"))
+    retry = AsyncMock()
+    retry.send = AsyncMock(side_effect=RuntimeError("fallback backend down"))
+    router = LLMRouter(
+        backends={},
+        providers={"primary": primary, "retry": retry},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary", "retry")},
     )
 
     with caplog.at_level(logging.WARNING, logger="simpleclaw.agent.turn_analysis"):
@@ -195,12 +211,12 @@ async def test_analyze_falls_back_when_repair_fails(caplog):
 
     assert analysis.source == "fallback"
     assert analysis.route == ResponseRoute.STANDARD_TOOL_LOOP
-    router.send.assert_awaited_once()
+    primary.send.assert_awaited_once()
+    retry.send.assert_awaited_once()
     joined = "\n".join(record.getMessage() for record in caplog.records)
     # 진단 메타데이터만 남고 raw 본문/원문은 노출되지 않는다.
     assert "backend=turn_analysis" in joined
     assert "repair_status=failed" in joined
-    assert "finish_reason=length" in joined
     assert "깨진 응답" not in joined
     assert "주가 영향" not in joined
 
