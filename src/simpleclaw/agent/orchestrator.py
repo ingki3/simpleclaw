@@ -1135,12 +1135,23 @@ class AgentOrchestrator:
                 turn_analysis = None
                 turn_analysis_cfg = self._turn_analysis_config
                 if bool(turn_analysis_cfg.get("enabled", True)):
+                    # BIZ-452 — structured JSON 파싱+repair 실패 시 1회 재시도할
+                    # backend. config 미지정이면 llm.fallback(router)에 위임한다.
+                    retry_backend = turn_analysis_cfg.get("retry_backend")
+                    if not retry_backend:
+                        get_fallback = getattr(
+                            self._router, "get_fallback_backend", None
+                        )
+                        retry_backend = (
+                            get_fallback() if callable(get_fallback) else None
+                        )
                     turn_analysis = await analyze_turn_with_llm(
                         text,
                         recent_messages=recent_for_analysis,
                         router=self._router,
                         backend_name=turn_analysis_cfg.get("backend"),
-                        max_tokens=int(turn_analysis_cfg.get("max_tokens", 512)),
+                        retry_backend_name=retry_backend,
+                        max_tokens=int(turn_analysis_cfg.get("max_tokens", 2048)),
                         max_recent_messages=int(
                             turn_analysis_cfg.get("max_recent_messages", 12)
                         ),
