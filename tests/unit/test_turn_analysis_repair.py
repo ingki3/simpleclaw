@@ -222,6 +222,42 @@ async def test_analyze_falls_back_when_repair_fails(caplog):
 
 
 @pytest.mark.asyncio
+async def test_actual_router_retry_failure_logs_are_sanitized(caplog):
+    """실제 router 경로의 양쪽 provider 실패도 raw body/원문을 남기지 않는다."""
+    from simpleclaw.llm.models import LLMRoute
+    from simpleclaw.llm.router import LLMRouter
+
+    primary_marker = "BIZ465_PRIVATE_PRIMARY_BODY"
+    retry_marker = "BIZ465_PRIVATE_RETRY_BODY"
+    user_marker = "BIZ465_PRIVATE_USER_TEXT"
+    primary = AsyncMock()
+    primary.send = AsyncMock(side_effect=RuntimeError(primary_marker))
+    retry = AsyncMock()
+    retry.send = AsyncMock(side_effect=ValueError(retry_marker))
+    router = LLMRouter(
+        backends={},
+        providers={"primary": primary, "retry": retry},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary", "retry")},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        analysis = await analyze_turn_with_llm(
+            user_marker, recent_messages=[], router=router
+        )
+
+    assert analysis.source == "fallback"
+    primary.send.assert_awaited_once()
+    retry.send.assert_awaited_once()
+    assert primary_marker not in caplog.text
+    assert retry_marker not in caplog.text
+    assert user_marker not in caplog.text
+    assert "backend=primary" in caplog.text
+    assert "route=turn_analysis" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_analyze_skips_retry_when_retry_backend_equals_primary():
     """retry backend 가 1차 backend 와 같으면 무의미한 재시도를 하지 않는다."""
     router = AsyncMock()
