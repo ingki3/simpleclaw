@@ -6,12 +6,18 @@ LLM provider 설정과 api_key 시크릿 해소를 담당한다.
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 
 from dotenv import dotenv_values
 import yaml
 
 from simpleclaw.config_sections.common import _resolve_secret_field
+from simpleclaw.llm.models import LLMConfigError
+from simpleclaw.llm.profiles import get_provider_profile, resolve_profile_name
+from simpleclaw.llm.transports import resolve_transport_name
+
+logger = logging.getLogger(__name__)
 
 # LLM 라우팅 기본 설정값
 # BIZ-448 — fallback/multimodal 은 라우팅 정책 백엔드 이름. None 이면 해당
@@ -22,6 +28,65 @@ _LLM_DEFAULTS: dict = {
     "multimodal": None,
     "providers": {},
 }
+
+
+def _clean_optional_str(value: object) -> str | None:
+    """Return a stripped string or None for blank/non-string values."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _normalize_provider_identity(name: str, provider: dict) -> tuple[str, str]:
+    """Normalize legacy provider config to explicit transport/profile keys."""
+    backend_type = provider.get("type", "api")
+    explicit_transport = _clean_optional_str(provider.get("transport"))
+    explicit_profile = _clean_optional_str(provider.get("profile"))
+    legacy_provider = _clean_optional_str(provider.get("provider"))
+
+    if backend_type == "cli":
+        transport = explicit_transport or "cli"
+        profile = explicit_profile or "generic"
+    else:
+        profile_source = explicit_profile or legacy_provider or name
+        try:
+            profile = resolve_profile_name(profile_source)
+        except LLMConfigError:
+            if explicit_profile:
+                raise
+            profile = "generic"
+        if explicit_transport:
+            transport = resolve_transport_name(explicit_transport)
+        else:
+            try:
+                transport = resolve_transport_name(profile_source)
+            except LLMConfigError:
+                transport = (
+                    get_provider_profile(profile).default_transport
+                    if profile != "generic"
+                    else profile_source
+                )
+
+    if legacy_provider and (not explicit_transport or not explicit_profile):
+        logger.warning(
+            "LLM backend '%s' uses legacy provider=%r; normalized to "
+            "transport=%r profile=%r. Prefer explicit transport/profile config.",
+            name,
+            legacy_provider,
+            transport,
+            profile,
+        )
+    elif not explicit_transport and not explicit_profile:
+        logger.warning(
+            "LLM backend '%s' relies on legacy backend-name provider inference; "
+            "normalized to transport=%r profile=%r. Prefer explicit "
+            "transport/profile config.",
+            name,
+            transport,
+            profile,
+        )
+    return transport, profile
 
 
 def _resolve_provider_api_key(provider: dict, config_dir: Path) -> str:
@@ -84,6 +149,9 @@ def load_llm_config(config_path: str | Path) -> dict:
         provider = dict(pconfig)
         provider["name"] = name
         provider["api_key"] = _resolve_provider_api_key(provider, config_path.parent)
+        provider["transport"], provider["profile"] = _normalize_provider_identity(
+            name, provider
+        )
 
         providers[name] = provider
 

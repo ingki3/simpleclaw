@@ -24,32 +24,25 @@ from simpleclaw.llm.models import (
     LLMResponse,
 )
 from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
+from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
+from simpleclaw.llm.transports import get_transport_class
 
 logger = logging.getLogger(__name__)
 
-# 프로바이더 이름 → 클래스 매핑. _ensure_registry()에서 지연 채워짐.
+# Backward-compatible view for older tests/extensions that inspected the router
+# registry directly. create_router() uses simpleclaw.llm.transports instead.
 _PROVIDER_REGISTRY: dict[str, type] = {}
 
 
 def _ensure_registry() -> None:
-    """프로바이더 레지스트리를 지연 로드한다.
-
-    순환 임포트를 피하고 선택적 의존성(openai, anthropic 등)을
-    실제 사용 시점까지 미루기 위해 최초 호출 시에만 임포트한다.
-    """
+    """Populate the legacy provider registry view from transport classes."""
     if _PROVIDER_REGISTRY:
         return
-    from simpleclaw.llm.providers.claude import ClaudeProvider
-    from simpleclaw.llm.providers.openai_provider import OpenAIProvider
-    from simpleclaw.llm.providers.gemini import GeminiProvider
-    from simpleclaw.llm.providers.vertex_gemini import VertexGeminiProvider
-    from simpleclaw.llm.cli_wrapper import CLIProvider
-
-    _PROVIDER_REGISTRY["claude"] = ClaudeProvider
-    _PROVIDER_REGISTRY["openai"] = OpenAIProvider
-    _PROVIDER_REGISTRY["gemini"] = GeminiProvider
-    _PROVIDER_REGISTRY["vertex_gemini"] = VertexGeminiProvider
-    _PROVIDER_REGISTRY["cli"] = CLIProvider
+    _PROVIDER_REGISTRY["claude"] = get_transport_class("anthropic")
+    _PROVIDER_REGISTRY["openai"] = get_transport_class("openai_chat")
+    _PROVIDER_REGISTRY["gemini"] = get_transport_class("gemini")
+    _PROVIDER_REGISTRY["vertex_gemini"] = get_transport_class("vertex_gemini")
+    _PROVIDER_REGISTRY["cli"] = get_transport_class("cli")
 
 
 def _request_has_attachments(request: LLMRequest) -> bool:
@@ -84,6 +77,7 @@ class LLMRouter:
         default_backend: str,
         fallback_backend: str | None = None,
         multimodal_backend: str | None = None,
+        profiles: dict[str, ProviderProfile] | None = None,
     ) -> None:
         """라우터를 초기화한다.
 
@@ -98,6 +92,7 @@ class LLMRouter:
         """
         self._backends = backends
         self._providers = providers
+        self._profiles = profiles or {}
         self._default = default_backend
         # 가용 provider 가 없는 정책 이름은 조용히 비활성화 — 부분 가용성 보장.
         self._fallback = fallback_backend if fallback_backend in providers else None
@@ -297,6 +292,10 @@ class LLMRouter:
         """멀티모달 백엔드 이름을 반환한다 (미설정/미가용 시 None)."""
         return self._multimodal
 
+    def get_backend_profile(self, backend_name: str) -> ProviderProfile | None:
+        """백엔드에 연결된 provider profile을 반환한다."""
+        return self._profiles.get(backend_name)
+
 
 def create_router(config_path: str | Path) -> LLMRouter:
     """config.yaml 설정으로부터 LLMRouter를 생성한다.
@@ -310,8 +309,6 @@ def create_router(config_path: str | Path) -> LLMRouter:
     Raises:
         LLMConfigError: 프로바이더가 하나도 설정되지 않았거나 초기화에 실패한 경우.
     """
-    _ensure_registry()
-
     config = load_llm_config(config_path)
     default_name = config.get("default", "")
     fallback_name = config.get("fallback")
@@ -323,6 +320,7 @@ def create_router(config_path: str | Path) -> LLMRouter:
 
     backends: dict[str, LLMBackend] = {}
     providers: dict[str, LLMProvider] = {}
+    profiles: dict[str, ProviderProfile] = {}
 
     for name, pconf in providers_config.items():
         backend_type_str = pconf.get("type", "api")
@@ -337,60 +335,74 @@ def create_router(config_path: str | Path) -> LLMRouter:
             name=name,
             backend_type=backend_type,
             model=pconf.get("model", ""),
+            transport=pconf.get("transport"),
+            profile=pconf.get("profile"),
             api_key_env=pconf.get("api_key_env"),
             command=pconf.get("command"),
             args=pconf.get("args", []),
             timeout=pconf.get("timeout", 120),
         )
         backends[name] = backend
+        profile = get_provider_profile(backend.profile or "generic")
+        profiles[name] = profile
 
         if backend_type == BackendType.CLI:
-            provider_cls = _PROVIDER_REGISTRY.get("cli")
-            if provider_cls:
+            try:
+                provider_cls = get_transport_class(backend.transport or "cli")
+            except LLMConfigError as exc:
+                logger.warning(
+                    "Skipping provider '%s' (transport=%s profile=%s): %s",
+                    name,
+                    backend.transport,
+                    backend.profile,
+                    exc,
+                )
+                continue
+            provider = provider_cls(
+                command=backend.command,
+                args=backend.args,
+                timeout=backend.timeout,
+                name=name,
+            )
+            providers[name] = provider
+        else:
+            try:
+                provider_cls = get_transport_class(backend.transport or "")
+            except LLMConfigError as exc:
+                logger.warning(
+                    "Skipping provider '%s' (transport=%s profile=%s): %s",
+                    name,
+                    backend.transport,
+                    backend.profile,
+                    exc,
+                )
+                continue
+            api_key = pconf.get("api_key", "")
+            # BIZ-444 — 프로바이더가 EXTRA_CONFIG_KEYS 로 선언한 추가 설정
+            # (예: vertex_gemini 의 project/location/credentials_path)만
+            # config 블록에서 골라 전달한다. profile hook 의 request_extra_keys 는
+            # 후속 route migration 이 provider-specific extras 를 profile 기준으로
+            # 옮길 때 쓸 계약이며, 현재 transport 생성 시그니처와 충돌시키지 않는다.
+            extra_kwargs = {
+                key: pconf[key]
+                for key in getattr(provider_cls, "EXTRA_CONFIG_KEYS", ())
+                if key in pconf
+            }
+            try:
                 provider = provider_cls(
-                    command=backend.command,
-                    args=backend.args,
-                    timeout=backend.timeout,
+                    model=backend.model,
+                    api_key=api_key,
                     name=name,
+                    **extra_kwargs,
                 )
                 providers[name] = provider
-        else:
-            # API 프로바이더 — 레지스트리에서 이름으로 매칭.
-            # BIZ-448 — static ``provider:`` alias 지원: 백엔드 이름과 구현
-            # 클래스를 분리한다 (예: openrouter_glm_5_2 → openai 구현).
-            # 이 값은 config.yaml 정적 설정 전용이며 런타임 입력으로 바꿀 수 없다.
-            provider_key = pconf.get("provider") or name
-            if not isinstance(provider_key, str) or not provider_key:
-                provider_key = name
-            provider_cls = _PROVIDER_REGISTRY.get(provider_key)
-            if provider_cls:
-                api_key = pconf.get("api_key", "")
-                # BIZ-444 — 프로바이더가 EXTRA_CONFIG_KEYS 로 선언한 추가 설정
-                # (예: vertex_gemini 의 project/location/credentials_path)만
-                # config 블록에서 골라 전달한다. 선언 없는 프로바이더는 기존
-                # 시그니처 그대로 — 회귀 0.
-                extra_kwargs = {
-                    key: pconf[key]
-                    for key in getattr(provider_cls, "EXTRA_CONFIG_KEYS", ())
-                    if key in pconf
-                }
-                try:
-                    provider = provider_cls(
-                        model=backend.model,
-                        api_key=api_key,
-                        name=name,
-                        **extra_kwargs,
-                    )
-                    providers[name] = provider
-                except Exception as exc:
-                    logger.warning(
-                        "Skipping provider '%s': %s", name, exc
-                    )
-            else:
+            except Exception as exc:
                 logger.warning(
-                    "No provider implementation for '%s' (backend '%s'), skipping.",
-                    provider_key,
+                    "Skipping provider '%s' (transport=%s profile=%s): %s",
                     name,
+                    backend.transport,
+                    backend.profile,
+                    exc,
                 )
 
     if default_name and default_name not in providers:
@@ -423,4 +435,5 @@ def create_router(config_path: str | Path) -> LLMRouter:
         default_backend=default_name,
         fallback_backend=fallback_name,
         multimodal_backend=multimodal_name,
+        profiles=profiles,
     )
