@@ -236,13 +236,19 @@ class OpenAIProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Chat Completions API로 메시지를 전송하고 응답을 반환한다.
 
         BIZ-450 — structured output 힌트는 OpenAI/OpenRouter ``response_format``
         으로 매핑한다. required 면 ``json_schema`` 를 사용하고, dict JSON Schema
         가 없으면 API 호출 전에 빠르게 실패한다.
+
+        BIZ-453 — provider-neutral ``reasoning`` hint 는 의도적으로 무시한다.
+        OpenRouter 계열은 reasoning 정책을 config 의 ``extra_body.reasoning``
+        으로 이미 제어하므로, hint 를 요청 필드로 매핑하면 정적 설정과 충돌한다.
         """
+        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,
@@ -350,6 +356,7 @@ class OpenAIProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Chat Completions streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -364,7 +371,10 @@ class OpenAIProvider(LLMProvider):
 
         BIZ-450 — structured output 힌트는 send() 와 동일하게 ``response_format``
         으로 매핑해 provider contract 를 일관되게 유지한다.
+
+        BIZ-453 — ``reasoning`` hint 는 send() 와 동일한 이유로 무시한다.
         """
+        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,

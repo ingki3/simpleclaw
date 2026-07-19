@@ -353,3 +353,39 @@ async def test_openai_provider_stream_includes_response_format(monkeypatch):
     )
 
     assert create.call_args.kwargs["response_format"]["type"] == "json_schema"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_ignores_reasoning_hint(monkeypatch):
+    """BIZ-453 — provider-neutral reasoning hint 는 무시되고, config 의
+    extra_body.reasoning 정책을 덮어쓰지 않는다."""
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=MagicMock(prompt_tokens=3, completion_tokens=1),
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+
+    provider = OpenAIProvider(
+        model="z-ai/glm-5.2",
+        api_key="test-key",
+        name="openrouter_glm_5_2",
+        extra_body={"reasoning": {"enabled": False}},
+    )
+
+    response = await provider.send(
+        system_prompt="",
+        user_message="hi",
+        reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
+    )
+
+    assert response.text == "ok"
+    # hint 는 요청 필드로 매핑되지 않고, 정적 extra_body 정책이 그대로 유지된다.
+    assert "reasoning" not in create.call_args.kwargs
+    assert create.call_args.kwargs["extra_body"] == {"reasoning": {"enabled": False}}

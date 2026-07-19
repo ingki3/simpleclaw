@@ -494,6 +494,7 @@ async def analyze_turn_with_llm(
     max_tokens: int = 2048,
     max_recent_messages: int = 12,
     structured_output: bool = True,
+    reasoning: dict | None = None,
 ) -> TurnAnalysis:
     """LLM으로 follow-up/정규화/clarify/복잡도/라우팅을 한 번에 판단한다.
 
@@ -503,6 +504,8 @@ async def analyze_turn_with_llm(
         recent_messages: ``{"role": ..., "content": ...}`` 형태의 최근 대화.
         router: ``LLMRouter`` (또는 동일 ``send`` 시그니처의 대역).
         backend_name: 분석 전용 backend. None 이면 라우터 기본 backend.
+            BIZ-453 — provider+model 전용 설정은 orchestrator 가 라우터의
+            가상 백엔드 이름(``provider#model``)으로 해석해 이 인자로 넘긴다.
         retry_backend_name: 1차 시도(파싱+truncated-tail repair 포함)가 실패했을
             때 1회 재시도할 backend (BIZ-452). None 이거나 ``backend_name`` 과
             같으면 재시도하지 않고 곧장 conservative fallback 으로 내려간다.
@@ -511,6 +514,9 @@ async def analyze_turn_with_llm(
         structured_output: True(기본)면 provider structured output 으로 schema
             준수 JSON 을 강제한다 (BIZ-427/450). False 는 프롬프트-only JSON
             지시로 동작하는 운영 escape hatch.
+        reasoning: provider-neutral reasoning hint (BIZ-453). ``enabled`` 가
+            참일 때만 요청에 실린다. 미지원 provider 는 조용히 무시하므로
+            retry backend 가 다른 provider 여도 안전하다.
 
     Returns:
         LLM 판단 결과(:class:`TurnAnalysis`, ``source="llm"``). 호출/파싱/
@@ -542,6 +548,9 @@ async def analyze_turn_with_llm(
             request.response_mime_type = "application/json"
             request.response_schema = TURN_ANALYSIS_RESPONSE_SCHEMA
             request.require_structured_output = True
+        if isinstance(reasoning, dict) and reasoning.get("enabled"):
+            # BIZ-453 — reasoning hint 는 켜져 있을 때만 요청에 싣는다.
+            request.reasoning = dict(reasoning)
         return request
 
     async def _attempt(target_backend: str | None) -> tuple[TurnAnalysis | None, dict]:

@@ -275,3 +275,123 @@ class TestLLMRouter:
         assert result.text == "Hello OpenAI"
         assert result.backend_name == "openai"
         assert result.usage == {"input_tokens": 4, "output_tokens": 2}
+
+
+class _ModelProvider(LLMProvider):
+    """BIZ-453 — model override 검증용 fake. 응답에 현재 _model 을 그대로 싣는다."""
+
+    def __init__(self, name: str, model: str):
+        self._name = name
+        self._model = model
+        self.requests: list[dict] = []
+
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+        tools=None,
+        system_blocks=None,
+        max_tokens: int | None = None,
+        **kwargs,
+    ) -> LLMResponse:
+        self.requests.append({"user_message": user_message, **kwargs})
+        return LLMResponse(
+            text=f"from {self._name}",
+            backend_name=self._name,
+            model=self._model,
+        )
+
+
+class TestEnsureModelBackend:
+    """BIZ-453 — provider+model override 가상 백엔드 등록/라우팅."""
+
+    @pytest.fixture
+    def router(self):
+        from simpleclaw.llm.models import BackendType, LLMBackend
+
+        provider = _ModelProvider("gemini", "gemini-2.0-flash")
+        return LLMRouter(
+            backends={
+                "gemini": LLMBackend(
+                    name="gemini",
+                    backend_type=BackendType.API,
+                    model="gemini-2.0-flash",
+                )
+            },
+            providers={"gemini": provider},
+            default_backend="gemini",
+        )
+
+    @pytest.mark.asyncio
+    async def test_registers_virtual_backend_with_overridden_model(self, router):
+        name = router.ensure_model_backend("gemini", "gemini-3.5-flash")
+
+        assert name == "gemini#gemini-3.5-flash"
+        response = await router.send(
+            LLMRequest(user_message="hi", backend_name=name)
+        )
+        # 가상 백엔드는 base credentials 를 재사용하되 model 만 override 한다.
+        assert response.model == "gemini-3.5-flash"
+        assert response.backend_name == name
+        # base 백엔드는 기존 모델 그대로 — override 가 원본을 오염시키지 않는다.
+        base = await router.send(LLMRequest(user_message="hi"))
+        assert base.model == "gemini-2.0-flash"
+
+    def test_same_model_reuses_base_backend(self, router):
+        assert router.ensure_model_backend("gemini", "gemini-2.0-flash") == "gemini"
+
+    def test_repeated_calls_reuse_registered_virtual_backend(self, router):
+        first = router.ensure_model_backend("gemini", "gemini-3.5-flash")
+        second = router.ensure_model_backend("gemini", "gemini-3.5-flash")
+
+        assert first == second
+        # 같은 조합은 한 번만 등록된다.
+        names = [n for n in router.list_backends() if "#" in n]
+        assert names == ["gemini#gemini-3.5-flash"]
+
+    def test_unknown_base_backend_returns_none(self, router):
+        assert router.ensure_model_backend("nonexistent", "some-model") is None
+
+    def test_empty_inputs_return_none(self, router):
+        assert router.ensure_model_backend("", "model") is None
+        assert router.ensure_model_backend("gemini", "  ") is None
+
+    def test_provider_without_model_attribute_returns_none(self):
+        """CLI 등 모델 개념이 없는 프로바이더는 override 불가 — None 으로 거부."""
+        provider = MockProvider("cli_like")  # _model 속성이 없다
+        router = LLMRouter(
+            backends={},
+            providers={"cli_like": provider},
+            default_backend="cli_like",
+        )
+
+        assert router.ensure_model_backend("cli_like", "any-model") is None
+
+
+class TestReasoningPassthrough:
+    """BIZ-453 — LLMRequest.reasoning 이 provider 로 kwargs 전달되는지."""
+
+    @pytest.mark.asyncio
+    async def test_reasoning_hint_forwarded_when_set(self):
+        provider = _ModelProvider("gemini", "gemini-3.5-flash")
+        router = LLMRouter(
+            backends={}, providers={"gemini": provider}, default_backend="gemini"
+        )
+        hint = {"enabled": True, "effort": "medium", "budget_tokens": 512}
+
+        await router.send(LLMRequest(user_message="hi", reasoning=hint))
+
+        assert provider.requests[0]["reasoning"] == hint
+
+    @pytest.mark.asyncio
+    async def test_no_reasoning_keeps_legacy_call_shape(self):
+        """미설정 요청은 reasoning kwarg 자체를 넘기지 않는다 — 대역 호환 회귀 0."""
+        provider = _ModelProvider("gemini", "gemini-3.5-flash")
+        router = LLMRouter(
+            backends={}, providers={"gemini": provider}, default_backend="gemini"
+        )
+
+        await router.send(LLMRequest(user_message="hi"))
+
+        assert "reasoning" not in provider.requests[0]

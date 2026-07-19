@@ -109,12 +109,17 @@ class ClaudeProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Claude Messages API로 메시지를 전송하고 응답을 반환한다.
 
         BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부하고,
         아니면 힌트를 무시한다 (기존 호출 회귀 0).
+
+        BIZ-453 — provider-neutral ``reasoning`` hint 는 아직 매핑하지 않고
+        무시한다 (품질 힌트 — 거부 대상 아님).
         """
+        del reasoning
         self._reject_required_structured_output(
             response_mime_type=response_mime_type,
             response_schema=response_schema,
@@ -211,6 +216,7 @@ class ClaudeProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Claude Messages API streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -223,7 +229,9 @@ class ClaudeProvider(LLMProvider):
         간헐적 텔레그램 API 오류로 죽지 않도록).
 
         BIZ-427 — structured output 은 아직 미구현. required 면 명확히 거부.
+        BIZ-453 — ``reasoning`` hint 는 send() 와 동일하게 무시한다.
         """
+        del reasoning
         self._reject_required_structured_output(
             response_mime_type=response_mime_type,
             response_schema=response_schema,

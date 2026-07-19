@@ -115,6 +115,12 @@ _AGENT_DEFAULTS: dict = {
     "turn_analysis": {
         "enabled": True,
         "backend": None,  # None 이면 llm.default backend 사용
+        # BIZ-453: 최종 답변 default model 과 독립된 TurnAnalysis 전용 모델.
+        # provider(기존 llm.providers 백엔드 이름) + model 이 모두 설정되면
+        # backend/llm.default 대신 해당 provider credentials 로 model 만 바꾼
+        # 가상 백엔드를 사용한다. 하나라도 없으면 기존 backend 동작 유지.
+        "provider": None,
+        "model": None,
         # BIZ-452: 512 cap 에서는 tail `reasons` 문자열이 잘려 structured JSON
         # 파싱이 실패하는 live 사고가 있었다. 분석 응답은 원래 짧아 실사용
         # 토큰은 그대로이므로 상한만 2048 로 여유 있게 올린다.
@@ -126,9 +132,31 @@ _AGENT_DEFAULTS: dict = {
         # BIZ-452: 파싱+truncated-tail repair 까지 실패했을 때 1회 재시도할
         # 백엔드. None 이면 llm.fallback(router.get_fallback_backend())에 위임.
         "retry_backend": None,
+        # BIZ-453: 재시도도 provider+model 로 독립 지정 가능. 둘 다 있으면
+        # retry_backend 보다 우선한다.
+        "retry_provider": None,
+        "retry_model": None,
+        # BIZ-453: provider-neutral reasoning hint. Gemini 는 native thinking
+        # config 로 매핑하고, 미지원 provider/SDK 는 안전하게 무시한다.
+        # 기본 off — 기존 배포 동작을 바꾸지 않는다.
+        "reasoning": {
+            "enabled": False,
+            "effort": "medium",
+            "budget_tokens": 512,
+        },
         "fallback_mode": "conservative_original",
     },
 }
+
+# BIZ-453 — reasoning.effort 허용값. 밖의 값은 기본(medium)으로 정규화한다.
+_REASONING_EFFORTS = {"low", "medium", "high"}
+
+
+def _coerce_optional_name(raw: object) -> str | None:
+    """provider/model 류 이름 설정을 정규화한다 — 빈 문자열/비문자열은 None."""
+    if isinstance(raw, str):
+        return raw.strip() or None
+    return None
 
 
 def load_agent_config(config_path: str | Path) -> dict:
@@ -217,6 +245,16 @@ def _agent_with_defaults(agent: dict) -> dict:
         not turn_analysis_retry_backend.strip()
     ):
         turn_analysis_retry_backend = None
+    # BIZ-453 — TurnAnalysis 전용 provider/model 및 reasoning hint 정규화.
+    turn_analysis_reasoning = turn_analysis.get("reasoning", {})
+    if not isinstance(turn_analysis_reasoning, dict):
+        turn_analysis_reasoning = {}
+    reasoning_defaults = turn_analysis_defaults["reasoning"]
+    reasoning_effort = str(
+        turn_analysis_reasoning.get("effort", reasoning_defaults["effort"])
+    ).strip().lower()
+    if reasoning_effort not in _REASONING_EFFORTS:
+        reasoning_effort = reasoning_defaults["effort"]
     planner_backend = str(
         complex_fact.get("planner_backend", complex_defaults["planner_backend"])
     )
@@ -361,6 +399,8 @@ def _agent_with_defaults(agent: dict) -> dict:
                 turn_analysis.get("enabled", turn_analysis_defaults["enabled"])
             ),
             "backend": turn_analysis_backend,
+            "provider": _coerce_optional_name(turn_analysis.get("provider")),
+            "model": _coerce_optional_name(turn_analysis.get("model")),
             "max_tokens": _coerce_int_config(
                 turn_analysis.get("max_tokens", turn_analysis_defaults["max_tokens"]),
                 turn_analysis_defaults["max_tokens"],
@@ -381,6 +421,25 @@ def _agent_with_defaults(agent: dict) -> dict:
                 )
             ),
             "retry_backend": turn_analysis_retry_backend,
+            "retry_provider": _coerce_optional_name(
+                turn_analysis.get("retry_provider")
+            ),
+            "retry_model": _coerce_optional_name(turn_analysis.get("retry_model")),
+            "reasoning": {
+                "enabled": bool(
+                    turn_analysis_reasoning.get(
+                        "enabled", reasoning_defaults["enabled"]
+                    )
+                ),
+                "effort": reasoning_effort,
+                "budget_tokens": _coerce_int_config(
+                    turn_analysis_reasoning.get(
+                        "budget_tokens", reasoning_defaults["budget_tokens"]
+                    ),
+                    reasoning_defaults["budget_tokens"],
+                    minimum=0,
+                ),
+            },
             "fallback_mode": str(
                 turn_analysis.get(
                     "fallback_mode", turn_analysis_defaults["fallback_mode"]

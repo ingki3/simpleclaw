@@ -66,6 +66,7 @@ class LLMProvider(ABC):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """LLM에 메시지를 전송하고 응답을 반환한다.
 
@@ -85,6 +86,11 @@ class LLMProvider(ABC):
             require_structured_output: True 면 schema-constrained 출력을 보장할
                 수 없는 프로바이더는 조용히 무시하는 대신 ``LLMProviderError``
                 를 던져야 한다 (BIZ-427).
+            reasoning: provider-neutral reasoning hint (BIZ-453,
+                ``{"enabled": bool, "effort": str, "budget_tokens": int}``).
+                지원 프로바이더(Gemini)는 native thinking config 로 매핑하고,
+                미지원 프로바이더는 조용히 무시해야 한다 — structured output
+                과 달리 보장 계약이 아니라 품질 힌트이기 때문.
 
         Returns:
             LLMResponse: 텍스트 응답(또는 tool_calls)과 메타데이터를 담은 객체.
@@ -102,6 +108,7 @@ class LLMProvider(ABC):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """LLM 응답을 스트리밍하면서 ``on_text_delta`` 로 텍스트 델타를 흘려보낸다.
 
@@ -123,6 +130,7 @@ class LLMProvider(ABC):
             response_mime_type=response_mime_type,
             response_schema=response_schema,
             require_structured_output=require_structured_output,
+            reasoning=reasoning,
         )
         if on_text_delta is not None and response.text:
             await on_text_delta(response.text)
