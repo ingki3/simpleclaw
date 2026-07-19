@@ -177,6 +177,35 @@ class GeminiProvider(LLMProvider):
                 type(exc).__name__,
             )
 
+    @classmethod
+    def _sanitize_response_schema(
+        cls, schema: dict | list | type | object
+    ) -> dict | list | type | object:
+        """Gemini 가 거부하는 JSON Schema 키를 재귀 제거한 복사본을 반환한다.
+
+        BIZ-454 — JSON Schema 의 ``additionalProperties`` 는 SDK/API payload 에서
+        ``additional_properties`` 로 변환되어 Gemini API 가
+        ``400 INVALID_ARGUMENT`` (`Unknown name "additional_properties" at
+        generation_config.response_schema`) 를 반환한다. dict/list 형태의
+        schema 에 한해 중첩 object/array 까지 재귀적으로 해당 키를 제거하고,
+        Gemini 가 지원하는 ``propertyOrdering``/``required``/``enum``/
+        ``properties``/``items`` 등은 그대로 보존한다.
+
+        원본 schema 는 변형하지 않는다 — 항상 복사본만 정규화하므로 동일
+        schema dict 를 쓰는 OpenAI-compatible 경로(``additionalProperties:
+        false`` 유지, BIZ-450)에 영향이 없다. pydantic 타입 등 dict 가 아닌
+        schema 는 SDK 가 자체 변환하므로 그대로 통과시킨다.
+        """
+        if isinstance(schema, dict):
+            return {
+                key: cls._sanitize_response_schema(value)
+                for key, value in schema.items()
+                if key != "additionalProperties"
+            }
+        if isinstance(schema, list):
+            return [cls._sanitize_response_schema(item) for item in schema]
+        return schema
+
     @staticmethod
     def _convert_tools(
         tools: list[ToolDefinition],
@@ -366,7 +395,11 @@ class GeminiProvider(LLMProvider):
             if response_mime_type:
                 config.response_mime_type = response_mime_type
             if response_schema is not None:
-                config.response_schema = response_schema
+                # BIZ-454 — Gemini schema dialect 에 맞게 unsupported 키를
+                # 제거한 복사본을 전달한다 (원본/타 provider 경로 불변).
+                config.response_schema = self._sanitize_response_schema(
+                    response_schema
+                )
 
             # BIZ-453 — reasoning hint 매핑. 미지원 SDK 는 내부에서 no-op.
             self._apply_reasoning(config, reasoning)
