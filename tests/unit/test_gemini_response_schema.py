@@ -21,6 +21,7 @@ import pytest
 
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
 from simpleclaw.llm.providers.gemini import GeminiProvider
+from simpleclaw.llm.profiles import get_provider_profile
 
 _NESTED_SCHEMA = {
     "type": "object",
@@ -99,12 +100,12 @@ def _build_provider() -> tuple[GeminiProvider, _FakeModels]:
 
 class TestSanitizeResponseSchema:
     def test_removes_root_and_nested_additional_properties(self):
-        sanitized = GeminiProvider._sanitize_response_schema(_NESTED_SCHEMA)
+        sanitized = get_provider_profile("gemini").adapt_schema(_NESTED_SCHEMA)
 
         assert not _contains_key(sanitized, "additionalProperties")
 
     def test_preserves_supported_schema_fields(self):
-        sanitized = GeminiProvider._sanitize_response_schema(_NESTED_SCHEMA)
+        sanitized = get_provider_profile("gemini").adapt_schema(_NESTED_SCHEMA)
 
         assert sanitized["propertyOrdering"] == ["route", "detail", "options"]
         assert sanitized["required"] == ["route"]
@@ -122,7 +123,7 @@ class TestSanitizeResponseSchema:
     def test_original_schema_is_not_mutated(self):
         source = copy.deepcopy(_NESTED_SCHEMA)
 
-        GeminiProvider._sanitize_response_schema(source)
+        get_provider_profile("gemini").adapt_schema(source)
 
         assert source == _NESTED_SCHEMA
         assert source["additionalProperties"] is False
@@ -133,13 +134,13 @@ class TestSanitizeResponseSchema:
         class _Marker:
             pass
 
-        assert GeminiProvider._sanitize_response_schema(_Marker) is _Marker
+        assert get_provider_profile("gemini").adapt_schema(_Marker) is _Marker
 
     def test_turn_analysis_schema_becomes_gemini_compatible(self):
         """live 사고 재현 입력 — 실제 TurnAnalysis schema 가 정리되는지 확인."""
         before = copy.deepcopy(TURN_ANALYSIS_RESPONSE_SCHEMA)
 
-        sanitized = GeminiProvider._sanitize_response_schema(
+        sanitized = get_provider_profile("gemini").adapt_schema(
             TURN_ANALYSIS_RESPONSE_SCHEMA
         )
 

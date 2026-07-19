@@ -14,6 +14,7 @@ import pytest
 
 from simpleclaw.llm.models import LLMProviderError
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
+from simpleclaw.llm.profiles import get_provider_profile
 
 
 def test_openai_provider_passes_base_url_and_default_headers(monkeypatch):
@@ -116,6 +117,63 @@ async def test_openai_provider_send_omits_extra_body_when_unset(monkeypatch):
     provider = OpenAIProvider(model="gpt-4o", api_key="test-key")
 
     await provider.send(system_prompt="", user_message="hi")
+
+    assert "extra_body" not in create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_openrouter_profile_maps_reasoning_hint(monkeypatch):
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=None,
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+    provider = OpenAIProvider(
+        model="vendor/model",
+        api_key="test-key",
+        profile=get_provider_profile("openrouter"),
+    )
+
+    await provider.send(
+        system_prompt="",
+        user_message="hi",
+        reasoning={"enabled": True, "effort": "medium"},
+    )
+
+    assert create.call_args.kwargs["extra_body"]["reasoning"] == {
+        "enabled": True,
+        "effort": "medium",
+    }
+
+
+@pytest.mark.asyncio
+async def test_plain_openai_profile_does_not_emit_openrouter_reasoning(monkeypatch):
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=None,
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+    provider = OpenAIProvider(model="gpt", api_key="test-key")
+
+    await provider.send(
+        system_prompt="",
+        user_message="hi",
+        reasoning={"enabled": True, "effort": "medium"},
+    )
 
     assert "extra_body" not in create.call_args.kwargs
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import logging
+import copy
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -26,6 +27,7 @@ _LLM_DEFAULTS: dict = {
     "default": "claude",
     "fallback": None,
     "multimodal": None,
+    "routes": {},
     "providers": {},
 }
 
@@ -117,6 +119,22 @@ def _resolve_provider_api_key(provider: dict, config_dir: Path) -> str:
     return str(dotenv_value or "")
 
 
+def _normalize_route(name: str, raw: object) -> dict[str, str | None] | None:
+    """Normalize shorthand/full route config without resolving backend availability."""
+    if isinstance(raw, str):
+        primary = _clean_optional_str(raw)
+        retry = None
+    elif isinstance(raw, dict):
+        primary = _clean_optional_str(raw.get("primary"))
+        retry = _clean_optional_str(raw.get("retry"))
+    else:
+        return None
+    if not primary:
+        logger.warning("Ignoring LLM route '%s' without a primary backend", name)
+        return None
+    return {"primary": primary, "retry": retry}
+
+
 def load_llm_config(config_path: str | Path) -> dict:
     """config.yaml에서 LLM 라우팅 설정을 로드한다.
 
@@ -155,11 +173,83 @@ def load_llm_config(config_path: str | Path) -> dict:
 
         providers[name] = provider
 
+    routes: dict[str, dict[str, str | None]] = {}
+    raw_routes = llm.get("routes", {})
+    if isinstance(raw_routes, dict):
+        for route_name, raw_route in raw_routes.items():
+            if not isinstance(route_name, str) or not route_name.strip():
+                continue
+            normalized = _normalize_route(route_name.strip(), raw_route)
+            if normalized:
+                routes[route_name.strip()] = normalized
+
+    legacy_default = _clean_optional_str(
+        llm.get("default", _LLM_DEFAULTS["default"])
+    ) or _LLM_DEFAULTS["default"]
+    legacy_fallback = _clean_optional_str(llm.get("fallback"))
+    legacy_multimodal = _clean_optional_str(llm.get("multimodal"))
+    routes.setdefault(
+        "default", {"primary": legacy_default, "retry": legacy_fallback}
+    )
+    if legacy_multimodal:
+        routes.setdefault(
+            "multimodal",
+            {"primary": legacy_multimodal, "retry": legacy_fallback},
+        )
+
+    # One-release compatibility: materialize legacy TurnAnalysis model overrides
+    # as ordinary static backends, then route to them. This preserves behavior
+    # without runtime provider cloning or private-field mutation.
+    agent = data.get("agent", {})
+    turn_analysis = agent.get("turn_analysis", {}) if isinstance(agent, dict) else {}
+    if not isinstance(turn_analysis, dict):
+        turn_analysis = {}
+    legacy_keys = (
+        "backend",
+        "provider",
+        "model",
+        "retry_backend",
+        "retry_provider",
+        "retry_model",
+    )
+    explicit_turn_analysis_route = "turn_analysis" in routes
+    if not explicit_turn_analysis_route:
+        def _legacy_target(prefix: str) -> str | None:
+            provider_key = f"{prefix}provider"
+            model_key = f"{prefix}model"
+            backend_key = f"{prefix}backend"
+            provider_name = _clean_optional_str(turn_analysis.get(provider_key))
+            model = _clean_optional_str(turn_analysis.get(model_key))
+            if provider_name and model and provider_name in providers:
+                alias = f"__legacy_turn_analysis_{prefix.rstrip('_') or 'primary'}"
+                providers[alias] = copy.deepcopy(providers[provider_name])
+                providers[alias]["name"] = alias
+                providers[alias]["model"] = model
+                return alias
+            return _clean_optional_str(turn_analysis.get(backend_key))
+
+        primary = _legacy_target("") or routes["default"]["primary"]
+        retry = _legacy_target("retry_") or routes["default"].get("retry")
+        routes["turn_analysis"] = {"primary": primary, "retry": retry}
+
+    if any(_clean_optional_str(turn_analysis.get(key)) for key in legacy_keys):
+        action = (
+            "ignored because explicit llm.routes.turn_analysis takes precedence"
+            if explicit_turn_analysis_route
+            else "normalized to llm.routes.turn_analysis"
+        )
+        logger.warning(
+            "agent.turn_analysis backend/provider/model selectors are deprecated; "
+            "%s. Prefer the route config.",
+            action,
+        )
+
     # fallback/multimodal 값 검증(가용 백엔드 존재 여부)은 create_router() 몫 —
     # 여기서는 문자열 또는 None 을 그대로 보존한다.
     return {
-        "default": llm.get("default", _LLM_DEFAULTS["default"]),
-        "fallback": llm.get("fallback", _LLM_DEFAULTS["fallback"]),
-        "multimodal": llm.get("multimodal", _LLM_DEFAULTS["multimodal"]),
+        "default": routes["default"]["primary"],
+        "fallback": routes["default"].get("retry"),
+        "multimodal": routes.get("multimodal", {}).get("primary"),
+        "routes": routes,
         "providers": providers,
     }

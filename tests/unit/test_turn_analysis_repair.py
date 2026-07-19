@@ -143,7 +143,6 @@ async def test_analyze_repairs_truncated_payload_without_retry():
         "그러면, 주가에 현재 상황이 어떤 영향을 줄지 예측 레포트 작성해봐",
         recent_messages=[],
         router=router,
-        retry_backend_name="gemini",
     )
 
     assert analysis.source == "llm"
@@ -154,8 +153,8 @@ async def test_analyze_repairs_truncated_payload_without_retry():
 
 
 @pytest.mark.asyncio
-async def test_analyze_retries_with_fallback_backend_when_repair_fails():
-    """repair 불가 payload 는 fallback backend 1회 재시도로 llm 판단을 보존한다."""
+async def test_analyze_does_not_duplicate_router_retry_when_repair_fails():
+    """Provider retry belongs to the route; parse failure falls back conservatively."""
     router = AsyncMock()
     router.send = AsyncMock(
         side_effect=[
@@ -168,21 +167,17 @@ async def test_analyze_retries_with_fallback_backend_when_repair_fails():
         "주가 영향 예측 레포트 작성해봐",
         recent_messages=[],
         router=router,
-        backend_name=None,
-        retry_backend_name="gemini",
     )
 
-    assert analysis.source == "llm"
-    assert analysis.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
-    assert router.send.await_count == 2
-    retry_request = router.send.await_args_list[1].args[0]
-    assert retry_request.backend_name == "gemini"
-    # 재시도 요청도 structured output 계약을 유지한다.
-    assert retry_request.require_structured_output is True
+    assert analysis.source == "fallback"
+    assert analysis.route == ResponseRoute.STANDARD_TOOL_LOOP
+    router.send.assert_awaited_once()
+    request = router.send.await_args.args[0]
+    assert request.route_name == "turn_analysis"
 
 
 @pytest.mark.asyncio
-async def test_analyze_falls_back_when_repair_and_retry_both_fail(caplog):
+async def test_analyze_falls_back_when_repair_fails(caplog):
     router = AsyncMock()
     router.send = AsyncMock(
         side_effect=[
@@ -196,20 +191,16 @@ async def test_analyze_falls_back_when_repair_and_retry_both_fail(caplog):
             "주가 영향 예측 레포트",
             recent_messages=[],
             router=router,
-            backend_name="deepseek",
-            retry_backend_name="gemini",
         )
 
     assert analysis.source == "fallback"
     assert analysis.route == ResponseRoute.STANDARD_TOOL_LOOP
-    assert router.send.await_count == 2
+    router.send.assert_awaited_once()
     joined = "\n".join(record.getMessage() for record in caplog.records)
     # 진단 메타데이터만 남고 raw 본문/원문은 노출되지 않는다.
-    assert "backend=deepseek" in joined
-    assert "retry_backend=gemini" in joined
+    assert "backend=turn_analysis" in joined
     assert "repair_status=failed" in joined
     assert "finish_reason=length" in joined
-    assert "retry_error_type=RuntimeError" in joined
     assert "깨진 응답" not in joined
     assert "주가 영향" not in joined
 
@@ -224,8 +215,6 @@ async def test_analyze_skips_retry_when_retry_backend_equals_primary():
         "질문",
         recent_messages=[],
         router=router,
-        backend_name="gemini",
-        retry_backend_name="gemini",
     )
 
     assert analysis.source == "fallback"
@@ -285,7 +274,6 @@ async def test_live_like_market_followup_keeps_complex_route_despite_truncation(
             {"role": "assistant", "content": "현재 전쟁 상황은 다음과 같습니다..."},
         ],
         router=router,
-        retry_backend_name="gemini",
     )
 
     assert analysis.source == "llm"

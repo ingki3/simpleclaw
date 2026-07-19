@@ -36,6 +36,26 @@ class ProviderProfile:
             if key in config
         }
 
+    def build_request_extras(
+        self, reasoning: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Build request-body extras from provider-neutral runtime hints.
+
+        Runtime callers cannot provide arbitrary provider payloads. Profiles may
+        translate the small canonical hint surface into endpoint-specific fields.
+        """
+        del reasoning
+        return {}
+
+    def adapt_schema(self, schema: object) -> object:
+        """Return a profile-compatible copy of a structured-output schema."""
+        return self.sanitize_response_schema(schema)
+
+    def reasoning_budget(self, reasoning: dict[str, Any] | None) -> int | None:
+        """Return a native reasoning budget, or None when the hint is optional/no-op."""
+        del reasoning
+        return None
+
     def sanitize_response_schema(self, schema: object) -> object:
         """Profile hook for schema normalization.
 
