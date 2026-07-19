@@ -836,7 +836,7 @@ class AgentOrchestrator:
 
         # BIZ-251: per-turn file mutation verifier footer.
         # 워크스페이스는 재귀 walk, 페르소나 dir 은 명시 파일 화이트리스트
-        # (AGENT.md / USER.md / MEMORY.md) 만 추적해 SQLite/dreaming 부산물이
+        # (SOUL.md / AGENT.md / USER.md / MEMORY.md) 만 추적해 SQLite/dreaming 부산물이
         # footer 노이즈로 새는 것을 차단한다. ``~/.simpleclaw-agent/default`` 가 persona
         # local_dir 인 BIZ-313 경로 가정 — 화이트리스트면 overlap 도 안전.
         persona_local = Path(
@@ -883,7 +883,7 @@ class AgentOrchestrator:
         호출 시점: __init__() 초기화 + 매 메시지 진입 시 1회.
         tool loop 내부에서는 호출하지 않아 불필요한 I/O를 방지한다.
         """
-        # --- 페르소나 리로드 (AGENT.md, USER.md, MEMORY.md) ---
+        # --- 페르소나 리로드 (SOUL.md, AGENT.md, USER.md, MEMORY.md) ---
         persona_files = resolve_persona_files(
             local_dir=self._persona_config["local_dir"],
             global_dir=self._persona_config["global_dir"],

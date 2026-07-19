@@ -527,6 +527,11 @@ persona:
   local_dir: "~/.simpleclaw-agent/default"
   global_dir: "~/.agents/main"
   files:
+    # BIZ-451 — SOUL.md는 에이전트 정체성·말투(tone guard) 파일. 호칭·존댓말 규칙이
+    # 업무 지시(AGENT)·사용자 기억(MEMORY)보다 먼저 system prompt에 주입된다.
+    # 파일이 없으면 warning 로그 후 graceful skip — 필요하면 local_dir에 생성할 것.
+    - name: "SOUL.md"
+      type: "soul"
     - name: "AGENT.md"
       type: "agent"
     - name: "USER.md"

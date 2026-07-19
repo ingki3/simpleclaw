@@ -80,6 +80,37 @@ class TestResolverMixed:
         assert by_type[FileType.MEMORY].source_scope == SourceScope.GLOBAL
 
 
+class TestResolverSoul:
+    """BIZ-451: SOUL.md 탐색과 정규 순서를 검증한다."""
+
+    def test_soul_resolved_first(self, local_dir, tmp_path):
+        (local_dir / "SOUL.md").write_text(
+            "# Soul\n\n사용자를 형님이라고 부를 것. 반말은 하지 말것.",
+            encoding="utf-8",
+        )
+        empty_global = tmp_path / "empty_global"
+        result = resolve_persona_files(local_dir, empty_global)
+        assert len(result) == 4
+        types = [pf.file_type for pf in result]
+        assert types == [
+            FileType.SOUL,
+            FileType.AGENT,
+            FileType.USER,
+            FileType.MEMORY,
+        ]
+        assert "반말은 하지 말것" in result[0].raw_content
+
+    def test_missing_soul_skipped_with_warning(self, local_dir, tmp_path, caplog):
+        """SOUL.md가 없으면 warning 로그 후 나머지 3개 파일만 반환한다."""
+        empty_global = tmp_path / "empty_global"
+        with caplog.at_level("WARNING"):
+            result = resolve_persona_files(local_dir, empty_global)
+        assert len(result) == 3
+        assert FileType.SOUL not in {pf.file_type for pf in result}
+        assert any("soul" in rec.message.lower() or "soul" in str(rec.args).lower()
+                   for rec in caplog.records)
+
+
 class TestResolverEmpty:
     def test_both_missing(self, tmp_path):
         result = resolve_persona_files(

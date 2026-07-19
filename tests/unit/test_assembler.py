@@ -81,6 +81,49 @@ class TestAssemblePromptFull:
         assert "Dreaming-managed memory omitted" not in result.assembled_text
 
 
+class TestAssemblePromptSoul:
+    """BIZ-451: SOUL 파일이 assemble order에 포함되는지 검증."""
+
+    def test_soul_included_and_first(self):
+        soul = _make_persona(FileType.SOUL, "사용자를 형님이라고 부를 것. 반말은 하지 말것.")
+        agent = _make_persona(FileType.AGENT, "I am the agent.")
+        user = _make_persona(FileType.USER, "User info here.")
+        memory = _make_persona(FileType.MEMORY, "Past events.")
+
+        result = assemble_prompt([memory, agent, soul, user], token_budget=4096)
+
+        # SOUL 내용이 실제 prompt에 포함되고, tone 규칙이 보존되어야 함
+        assert "반말은 하지 말것" in result.assembled_text
+        # 순서: SOUL → AGENT → USER → MEMORY
+        assert result.assembled_text.index("SOUL") < result.assembled_text.index("AGENT")
+        assert result.assembled_text.index("AGENT") < result.assembled_text.index("USER")
+        assert result.assembled_text.index("USER") < result.assembled_text.index("MEMORY")
+        assert result.parts[0].file_type == FileType.SOUL
+
+    def test_missing_soul_is_graceful(self):
+        """SOUL 파일이 없어도 기존 AGENT/USER/MEMORY 조합이 깨지지 않아야 한다."""
+        agent = _make_persona(FileType.AGENT, "Agent text.")
+        user = _make_persona(FileType.USER, "User text.")
+        memory = _make_persona(FileType.MEMORY, "Memory text.")
+
+        result = assemble_prompt([agent, user, memory], token_budget=4096)
+        assert "Agent text" in result.assembled_text
+        assert "User text" in result.assembled_text
+        assert "Memory text" in result.assembled_text
+        assert not result.was_truncated
+
+    def test_soul_survives_truncation(self):
+        """토큰 예산 초과 시 MEMORY부터 잘려도 SOUL 규칙은 보존되어야 한다."""
+        soul = _make_persona(FileType.SOUL, "반말은 하지 말것.")
+        agent = _make_persona(FileType.AGENT, "Agent. " * 10)
+        memory = _make_persona(FileType.MEMORY, "Memory data. " * 500)
+
+        result = assemble_prompt([soul, agent, memory], token_budget=100)
+        assert result.was_truncated
+        assert result.token_count <= 100
+        assert "반말은 하지 말것" in result.assembled_text
+
+
 class TestAssemblePromptPartial:
     """Test assembly with fewer than 3 files."""
 
