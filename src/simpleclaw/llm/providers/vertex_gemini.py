@@ -36,6 +36,7 @@ from google.oauth2 import service_account
 
 from simpleclaw.llm.models import LLMAuthError, LLMProviderError
 from simpleclaw.llm.providers.gemini import GeminiProvider
+from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 
 # service account 토큰에 부여할 OAuth scope — Vertex AI 호출의 표준 scope.
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
@@ -59,6 +60,7 @@ class VertexGeminiProvider(GeminiProvider):
         project: str | None = None,
         location: str | None = None,
         credentials_path: str | None = None,
+        profile: ProviderProfile | None = None,
     ) -> None:
         """VertexGeminiProvider를 초기화한다.
 
@@ -76,6 +78,7 @@ class VertexGeminiProvider(GeminiProvider):
         """
         self._model = model
         self._name = name
+        self._profile = profile or get_provider_profile("gemini")
 
         credentials = None
         if credentials_path:

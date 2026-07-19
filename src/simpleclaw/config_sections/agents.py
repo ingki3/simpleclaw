@@ -114,6 +114,7 @@ _AGENT_DEFAULTS: dict = {
     # (TurnFrame/response_router)은 분석 비활성/실패 시의 fallback 으로만 동작.
     "turn_analysis": {
         "enabled": True,
+        "route": "turn_analysis",
         "backend": None,  # None 이면 llm.default backend 사용
         # BIZ-453: 최종 답변 default model 과 독립된 TurnAnalysis 전용 모델.
         # provider(기존 llm.providers 백엔드 이름) + model 이 모두 설정되면
@@ -398,6 +399,7 @@ def _agent_with_defaults(agent: dict) -> dict:
             "enabled": bool(
                 turn_analysis.get("enabled", turn_analysis_defaults["enabled"])
             ),
+            "route": "turn_analysis",
             "backend": turn_analysis_backend,
             "provider": _coerce_optional_name(turn_analysis.get("provider")),
             "model": _coerce_optional_name(turn_analysis.get("model")),

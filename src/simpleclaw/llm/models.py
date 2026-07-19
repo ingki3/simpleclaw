@@ -35,6 +35,15 @@ class LLMBackend:
     timeout: int = 120
 
 
+@dataclass(frozen=True)
+class LLMRoute:
+    """A named role route resolved to a primary backend and optional retry."""
+
+    name: str
+    primary: str
+    retry: str | None = None
+
+
 @dataclass
 class ToolDefinition:
     """Provider-agnostic 도구 정의 (JSON Schema 기반).
@@ -120,6 +129,7 @@ class LLMRequest:
     """
     system_prompt: str = ""
     user_message: str = ""
+    route_name: str | None = None
     backend_name: str | None = None
     messages: list[dict] | None = None
     tools: list[ToolDefinition] | None = None
@@ -129,6 +139,7 @@ class LLMRequest:
     response_schema: dict | type | None = None
     require_structured_output: bool = False
     reasoning: dict | None = None
+    required_capabilities: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass

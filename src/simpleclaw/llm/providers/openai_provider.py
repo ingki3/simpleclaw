@@ -36,6 +36,7 @@ from simpleclaw.llm.providers.base import (
     TextDeltaCallback,
     flatten_system_blocks,
 )
+from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class OpenAIProvider(LLMProvider):
         base_url: str | None = None,
         extra_body: dict | None = None,
         default_headers: dict | None = None,
+        profile: ProviderProfile | None = None,
     ) -> None:
         """OpenAIProvider를 초기화한다.
 
@@ -163,12 +165,19 @@ class OpenAIProvider(LLMProvider):
             raise LLMAuthError(f"API key missing for provider '{name}' (env var not set)")
         self._model = model
         self._extra_body = dict(extra_body or {})
+        self._profile = profile or get_provider_profile("openai")
         self._client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url=base_url or None,
             default_headers=default_headers or None,
         )
         self._name = name
+
+    def _request_extra_body(self, reasoning: dict | None) -> dict:
+        """Merge profile defaults with trusted static backend configuration."""
+        extras = self._profile.build_request_extras(reasoning)
+        extras.update(self._extra_body)
+        return extras
 
     @staticmethod
     def _convert_tools(tools: list[ToolDefinition]) -> list[dict]:
@@ -244,15 +253,18 @@ class OpenAIProvider(LLMProvider):
         으로 매핑한다. required 면 ``json_schema`` 를 사용하고, dict JSON Schema
         가 없으면 API 호출 전에 빠르게 실패한다.
 
-        BIZ-453 — provider-neutral ``reasoning`` hint 는 의도적으로 무시한다.
-        OpenRouter 계열은 reasoning 정책을 config 의 ``extra_body.reasoning``
-        으로 이미 제어하므로, hint 를 요청 필드로 매핑하면 정적 설정과 충돌한다.
+        Endpoint-specific reasoning/schema behavior is delegated to the profile.
+        Static ``extra_body`` config wins over profile-generated defaults.
         """
-        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
+        adapted_schema = (
+            self._profile.adapt_schema(response_schema)
+            if response_schema is not None
+            else None
+        )
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,
-            response_schema=response_schema,
+            response_schema=adapted_schema,
             require_structured_output=require_structured_output,
         )
         # BIZ-252 — OpenAI 는 prompt caching 마커가 없는 단일 문자열만 받으므로
@@ -276,8 +288,9 @@ class OpenAIProvider(LLMProvider):
                 kwargs["response_format"] = response_format
             # BIZ-448 — OpenRouter 등 OpenAI-compatible endpoint 확장 필드 주입
             # (예: GLM reasoning budget 이 답변 토큰을 잠식하지 않도록 비활성화).
-            if self._extra_body:
-                kwargs["extra_body"] = self._extra_body
+            extra_body = self._request_extra_body(reasoning)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
             if tools:
                 kwargs["tools"] = self._convert_tools(tools)
             # BIZ-297 — max_tokens 가 지정되면 모델 종류에 맞는 필드명으로 cap 을
@@ -372,13 +385,17 @@ class OpenAIProvider(LLMProvider):
         BIZ-450 — structured output 힌트는 send() 와 동일하게 ``response_format``
         으로 매핑해 provider contract 를 일관되게 유지한다.
 
-        BIZ-453 — ``reasoning`` hint 는 send() 와 동일한 이유로 무시한다.
+        Endpoint-specific reasoning/schema behavior matches ``send()``.
         """
-        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
+        adapted_schema = (
+            self._profile.adapt_schema(response_schema)
+            if response_schema is not None
+            else None
+        )
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,
-            response_schema=response_schema,
+            response_schema=adapted_schema,
             require_structured_output=require_structured_output,
         )
         effective_system = flatten_system_blocks(system_blocks, fallback=system_prompt)
@@ -401,8 +418,9 @@ class OpenAIProvider(LLMProvider):
         if response_format is not None:
             kwargs["response_format"] = response_format
         # BIZ-448 — send() 와 동일하게 endpoint 확장 필드를 스트리밍에도 주입.
-        if self._extra_body:
-            kwargs["extra_body"] = self._extra_body
+        extra_body = self._request_extra_body(reasoning)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
         # BIZ-297 — send() 와 동일하게 모델 종류에 맞는 cap 필드 매핑.

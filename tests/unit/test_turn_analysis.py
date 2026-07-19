@@ -191,12 +191,12 @@ async def test_analyze_turn_with_llm_sends_recent_context():
             {"role": "assistant", "content": "롯데가 KT에 패했습니다."},
         ],
         router=router,
-        backend_name="gemini",
         max_tokens=256,
     )
 
     request = router.send.call_args.args[0]
-    assert request.backend_name == "gemini"
+    assert request.route_name == "turn_analysis"
+    assert request.backend_name is None
     assert request.max_tokens == 256
     assert "오늘 롯데 야구" in request.user_message
     assert "그럼 현재 순위는?" in request.user_message
@@ -238,7 +238,6 @@ async def test_analyze_turn_with_llm_falls_back_to_original_on_provider_error():
         "그럼 현재 순위는?",
         recent_messages=[],
         router=router,
-        backend_name=None,
         max_tokens=256,
     )
 
@@ -301,7 +300,6 @@ async def test_analyze_turn_with_llm_requests_structured_json_schema():
         "안녕",
         recent_messages=[],
         router=router,
-        backend_name="gemini",
         max_tokens=256,
     )
 
@@ -342,14 +340,13 @@ async def test_turn_analysis_fallback_logs_structured_output_context(caplog):
             "새로 알게 된 내용 이야기해줘봐",
             recent_messages=[],
             router=router,
-            backend_name="gemini",
         )
 
     assert analysis.source == "fallback"
     joined = "\n".join(record.getMessage() for record in caplog.records)
     assert "structured" in joined.lower()
     assert "raw_len=" in joined
-    assert "backend=gemini" in joined
+    assert "backend=turn_analysis" in joined
     # raw 응답 전문(사용자 발화 포함 가능)은 로그에 노출하지 않는다.
     assert '{"bad":' not in joined
 
@@ -372,7 +369,6 @@ async def test_turn_analysis_fallback_does_not_log_exception_text(caplog):
             secret,
             recent_messages=[],
             router=router,
-            backend_name="gemini",
         )
 
     assert analysis.source == "fallback"
@@ -385,4 +381,4 @@ async def test_turn_analysis_fallback_does_not_log_exception_text(caplog):
     assert "error_type=RuntimeError" in joined
     assert "structured=True" in joined
     assert "raw_len=0" in joined
-    assert "backend=gemini" in joined
+    assert "backend=turn_analysis" in joined

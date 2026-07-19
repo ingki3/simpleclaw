@@ -112,21 +112,23 @@ async def test_dedicated_provider_model_used_independently_of_default(
 
     await orch.process_message("hello", user_id=1, chat_id=1)
 
-    kwargs = analyzer.await_args.kwargs
     # 최종 답변 default 는 계속 DeepSeek 백엔드다.
     assert orch._router.get_default_backend() == "openrouter_deepseek"
-    # TurnAnalysis 는 전용 가상 백엔드(gemini credentials + 3.5 flash 모델)로 간다.
-    assert kwargs["backend_name"] == "gemini#gemini-3.5-flash"
-    virtual = orch._router._providers["gemini#gemini-3.5-flash"]
-    assert virtual._model == "gemini-3.5-flash"
+    # Legacy selector is normalized to a static backend behind the route.
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.primary == "__legacy_turn_analysis_primary"
+    assert orch._router._providers[route.primary]._model == "gemini-3.5-flash"
+    kwargs = analyzer.await_args.kwargs
+    assert "backend_name" not in kwargs
+    assert "retry_backend_name" not in kwargs
     # reasoning hint 도 함께 전달된다.
     assert kwargs["reasoning"] == {
         "enabled": True,
         "effort": "medium",
         "budget_tokens": 512,
     }
-    # retry 미지정 → llm.fallback 백엔드에 위임.
-    assert kwargs["retry_backend_name"] == "gemini"
+    assert route.retry == "gemini"
 
 
 @pytest.mark.asyncio
@@ -144,9 +146,9 @@ async def test_unset_provider_model_preserves_default_backend_behavior(
 
     await orch.process_message("hello", user_id=1, chat_id=1)
 
-    kwargs = analyzer.await_args.kwargs
-    assert kwargs["backend_name"] is None
-    # 가상 백엔드가 등록되지 않는다.
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.primary == "openrouter_deepseek"
     assert all("#" not in name for name in orch._router.list_backends())
 
 
@@ -173,9 +175,10 @@ async def test_retry_provider_model_resolved_for_retry_path(tmp_path, monkeypatc
 
     await orch.process_message("hello", user_id=1, chat_id=1)
 
-    kwargs = analyzer.await_args.kwargs
-    assert kwargs["backend_name"] == "gemini#gemini-3.5-flash"
-    assert kwargs["retry_backend_name"] == "gemini#gemini-2.5-flash"
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.primary == "__legacy_turn_analysis_primary"
+    assert route.retry == "__legacy_turn_analysis_retry"
 
 
 @pytest.mark.asyncio
@@ -201,7 +204,9 @@ async def test_unavailable_dedicated_provider_falls_back_to_backend_setting(
 
     await orch.process_message("hello", user_id=1, chat_id=1)
 
-    assert analyzer.await_args.kwargs["backend_name"] == "gemini"
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.primary == "gemini"
 
 
 class _CapturingRouter:
@@ -213,10 +218,10 @@ class _CapturingRouter:
 
     async def send(self, request):
         self.requests.append(request)
-        result = self._responses[request.backend_name]
+        result = next(iter(self._responses.values()))
         if isinstance(result, Exception):
             raise result
-        return LLMResponse(text=result, backend_name=request.backend_name or "")
+        return LLMResponse(text=result, backend_name=request.route_name or "")
 
 
 def _payload(**overrides) -> str:
@@ -252,14 +257,12 @@ async def test_reasoning_hint_attached_to_request_only_when_enabled():
         "hello",
         recent_messages=[],
         router=router,
-        backend_name="gemini#gemini-3.5-flash",
         reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
     )
     await analyze_turn_with_llm(
         "hello",
         recent_messages=[],
         router=router,
-        backend_name="gemini#gemini-3.5-flash",
         reasoning={"enabled": False, "effort": "medium", "budget_tokens": 512},
     )
 
@@ -272,29 +275,14 @@ async def test_reasoning_hint_attached_to_request_only_when_enabled():
 
 
 @pytest.mark.asyncio
-async def test_dedicated_model_failure_retries_with_retry_model():
-    """전용 모델 호출 실패 시 retry 백엔드로 1회 재시도해 llm 결과를 살린다."""
-    router = _CapturingRouter(
-        {
-            "gemini#gemini-3.5-flash": RuntimeError("provider down"),
-            "gemini#gemini-2.5-flash": _payload(normalized_question="retried"),
-        }
-    )
-
+async def test_turn_analysis_uses_route_only():
+    router = _CapturingRouter({"turn_analysis": _payload()})
     analysis = await analyze_turn_with_llm(
-        "hello",
-        recent_messages=[],
-        router=router,
-        backend_name="gemini#gemini-3.5-flash",
-        retry_backend_name="gemini#gemini-2.5-flash",
+        "hello", recent_messages=[], router=router
     )
-
     assert analysis.source == "llm"
-    assert analysis.normalized_question == "retried"
-    assert [r.backend_name for r in router.requests] == [
-        "gemini#gemini-3.5-flash",
-        "gemini#gemini-2.5-flash",
-    ]
+    assert router.requests[0].route_name == "turn_analysis"
+    assert router.requests[0].backend_name is None
 
 
 class _GeminiForwardingRouter:
@@ -371,7 +359,6 @@ async def test_gemini_backend_receives_sanitized_schema_and_keeps_llm_source():
         "hello",
         recent_messages=[],
         router=_GeminiForwardingRouter(provider),
-        backend_name="gemini#gemini-3.5-flash",
         reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
     )
 
@@ -437,7 +424,6 @@ async def test_friday_weekend_weather_reminder_normalization_regression():
         "금요일에 주말 날씨를 확인해 달라는 이야기야.",
         recent_messages=recent,
         router=router,
-        backend_name="gemini#gemini-3.5-flash",
         reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
     )
 

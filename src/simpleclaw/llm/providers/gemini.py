@@ -32,12 +32,9 @@ from simpleclaw.llm.providers.base import (
     TextDeltaCallback,
     flatten_system_blocks,
 )
+from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 
 logger = logging.getLogger(__name__)
-
-# BIZ-453 — provider-neutral reasoning hint 의 effort 를 Gemini thinking budget
-# 토큰으로 바꾸는 기본 매핑. hint 에 budget_tokens 가 명시되면 그 값을 우선한다.
-_REASONING_EFFORT_BUDGET_TOKENS = {"low": 256, "medium": 512, "high": 1024}
 
 _GEMINI_INLINE_ATTACHMENT_MIME_TYPES = frozenset({
     "application/pdf",
@@ -58,7 +55,13 @@ _GEMINI_INLINE_ATTACHMENT_MIME_TYPES = frozenset({
 class GeminiProvider(LLMProvider):
     """Google Gemini API 프로바이더."""
 
-    def __init__(self, model: str, api_key: str, name: str = "gemini") -> None:
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        name: str = "gemini",
+        profile: ProviderProfile | None = None,
+    ) -> None:
         """GeminiProvider를 초기화한다.
 
         Args:
@@ -74,6 +77,7 @@ class GeminiProvider(LLMProvider):
         self._model = model
         self._client = genai.Client(api_key=api_key)
         self._name = name
+        self._profile = profile or get_provider_profile("gemini")
 
     @classmethod
     def _map_provider_error(cls, e: Exception) -> LLMProviderError:
@@ -158,14 +162,9 @@ class GeminiProvider(LLMProvider):
         않으면 예외를 삼키고 sanitized diagnostic 만 남긴 채 기존 요청을
         그대로 보낸다 — reasoning 은 품질 힌트이지 실패 사유가 아니다.
         """
-        if not isinstance(reasoning, dict) or not reasoning.get("enabled"):
+        budget = self._profile.reasoning_budget(reasoning)
+        if budget is None:
             return
-        budget = reasoning.get("budget_tokens")
-        if not isinstance(budget, int) or isinstance(budget, bool) or budget <= 0:
-            effort = str(reasoning.get("effort") or "medium").strip().lower()
-            budget = _REASONING_EFFORT_BUDGET_TOKENS.get(
-                effort, _REASONING_EFFORT_BUDGET_TOKENS["medium"]
-            )
         try:
             config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
         except Exception as exc:  # noqa: BLE001 — SDK 미지원은 degrade 대상.
@@ -176,35 +175,6 @@ class GeminiProvider(LLMProvider):
                 self._model,
                 type(exc).__name__,
             )
-
-    @classmethod
-    def _sanitize_response_schema(
-        cls, schema: dict | list | type | object
-    ) -> dict | list | type | object:
-        """Gemini 가 거부하는 JSON Schema 키를 재귀 제거한 복사본을 반환한다.
-
-        BIZ-454 — JSON Schema 의 ``additionalProperties`` 는 SDK/API payload 에서
-        ``additional_properties`` 로 변환되어 Gemini API 가
-        ``400 INVALID_ARGUMENT`` (`Unknown name "additional_properties" at
-        generation_config.response_schema`) 를 반환한다. dict/list 형태의
-        schema 에 한해 중첩 object/array 까지 재귀적으로 해당 키를 제거하고,
-        Gemini 가 지원하는 ``propertyOrdering``/``required``/``enum``/
-        ``properties``/``items`` 등은 그대로 보존한다.
-
-        원본 schema 는 변형하지 않는다 — 항상 복사본만 정규화하므로 동일
-        schema dict 를 쓰는 OpenAI-compatible 경로(``additionalProperties:
-        false`` 유지, BIZ-450)에 영향이 없다. pydantic 타입 등 dict 가 아닌
-        schema 는 SDK 가 자체 변환하므로 그대로 통과시킨다.
-        """
-        if isinstance(schema, dict):
-            return {
-                key: cls._sanitize_response_schema(value)
-                for key, value in schema.items()
-                if key != "additionalProperties"
-            }
-        if isinstance(schema, list):
-            return [cls._sanitize_response_schema(item) for item in schema]
-        return schema
 
     @staticmethod
     def _convert_tools(
@@ -397,9 +367,7 @@ class GeminiProvider(LLMProvider):
             if response_schema is not None:
                 # BIZ-454 — Gemini schema dialect 에 맞게 unsupported 키를
                 # 제거한 복사본을 전달한다 (원본/타 provider 경로 불변).
-                config.response_schema = self._sanitize_response_schema(
-                    response_schema
-                )
+                config.response_schema = self._profile.adapt_schema(response_schema)
 
             # BIZ-453 — reasoning hint 매핑. 미지원 SDK 는 내부에서 no-op.
             self._apply_reasoning(config, reasoning)

@@ -930,47 +930,6 @@ class AgentOrchestrator:
         """DrainController 를 교체 주입한다 (테스트/커스텀 배선용)."""
         self._drain_controller = controller
 
-    def _resolve_turn_analysis_backends(self) -> tuple[str | None, str | None]:
-        """TurnAnalysis 1차/재시도 backend 이름을 config 우선순위로 결정한다.
-
-        BIZ-453 — 1차: ``provider``+``model`` 전용 모델(가상 백엔드) →
-        ``backend`` → None(라우터 기본). 재시도: ``retry_provider``+
-        ``retry_model`` → ``retry_backend`` → ``llm.fallback``.
-        provider+model 해석 실패(미가용 provider 등)는 경고 후 다음 우선순위로
-        내려간다 — TurnAnalysis 설정 오류가 turn 처리 자체를 막지 않도록.
-        provider/model 값은 config 로더를 거친 정적 설정에서만 온다.
-        """
-        cfg = self._turn_analysis_config
-        resolve = getattr(self._router, "ensure_model_backend", None)
-
-        def _dedicated(provider_key: str, model_key: str) -> str | None:
-            provider = cfg.get(provider_key)
-            model = cfg.get(model_key)
-            if not (provider and model and callable(resolve)):
-                return None
-            resolved = resolve(str(provider), str(model))
-            if resolved:
-                # live smoke 에서 TurnAnalysis 모델 attribution 을 raw-free 로
-                # 확인하기 위한 로그 (BIZ-453 DoD).
-                logger.info(
-                    "TurnAnalysis dedicated model resolved: provider=%s "
-                    "model=%s backend=%s",
-                    provider,
-                    model,
-                    resolved,
-                )
-            return resolved
-
-        primary = _dedicated("provider", "model") or cfg.get("backend")
-        retry = _dedicated("retry_provider", "retry_model") or cfg.get(
-            "retry_backend"
-        )
-        if not retry:
-            # BIZ-452 — 미지정이면 llm.fallback(router)에 위임한다.
-            get_fallback = getattr(self._router, "get_fallback_backend", None)
-            retry = get_fallback() if callable(get_fallback) else None
-        return primary, retry
-
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -1176,19 +1135,10 @@ class AgentOrchestrator:
                 turn_analysis = None
                 turn_analysis_cfg = self._turn_analysis_config
                 if bool(turn_analysis_cfg.get("enabled", True)):
-                    # BIZ-453 — 전용 provider+model(가상 백엔드) → backend →
-                    # 기본 순으로 1차 backend 를, retry_provider/retry_model →
-                    # retry_backend → llm.fallback 순으로 재시도 backend 를
-                    # 결정한다 (BIZ-452 재시도 경로와 통합).
-                    ta_backend, retry_backend = (
-                        self._resolve_turn_analysis_backends()
-                    )
                     turn_analysis = await analyze_turn_with_llm(
                         text,
                         recent_messages=recent_for_analysis,
                         router=self._router,
-                        backend_name=ta_backend,
-                        retry_backend_name=retry_backend,
                         max_tokens=int(turn_analysis_cfg.get("max_tokens", 2048)),
                         max_recent_messages=int(
                             turn_analysis_cfg.get("max_recent_messages", 12)
@@ -1203,7 +1153,7 @@ class AgentOrchestrator:
                         "confidence=%.2f original_len=%d normalized_len=%d "
                         "ambiguity=%d intents=%s domains=%s",
                         turn_analysis.source,
-                        ta_backend or "default",
+                        "turn_analysis",
                         turn_analysis.route.value,
                         turn_analysis.confidence,
                         len(turn_analysis.original_text),
@@ -2433,4 +2383,3 @@ class AgentOrchestrator:
             return data.get("skills", {}) if isinstance(data, dict) else {}
         except (yaml.YAMLError, OSError):
             return {}
-
