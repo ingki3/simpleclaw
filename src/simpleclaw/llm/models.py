@@ -27,6 +27,8 @@ class LLMBackend:
     name: str
     backend_type: BackendType
     model: str
+    transport: str | None = None
+    profile: str | None = None
     api_key_env: str | None = None
     command: str | None = None
     args: list[str] = field(default_factory=list)

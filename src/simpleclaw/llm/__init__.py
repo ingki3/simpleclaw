@@ -12,10 +12,12 @@ from simpleclaw.llm.models import (
     LLMResponse,
     LLMTimeoutError,
 )
-from simpleclaw.llm.router import LLMRouter, create_router
+from simpleclaw.llm.capabilities import LLMCapabilities
+from simpleclaw.llm.profiles import ProviderProfile
 
 __all__ = [
     "BackendType",
+    "LLMCapabilities",
     "LLMAuthError",
     "LLMBackend",
     "LLMCLINotFoundError",
@@ -26,5 +28,15 @@ __all__ = [
     "LLMResponse",
     "LLMRouter",
     "LLMTimeoutError",
+    "ProviderProfile",
     "create_router",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy router exports to avoid config-loader import cycles."""
+    if name in {"LLMRouter", "create_router"}:
+        from simpleclaw.llm.router import LLMRouter, create_router
+
+        return {"LLMRouter": LLMRouter, "create_router": create_router}[name]
+    raise AttributeError(name)
