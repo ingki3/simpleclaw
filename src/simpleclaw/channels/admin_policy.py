@@ -44,14 +44,19 @@ def _max_level(a: str, b: str) -> str:
 # ---------------------------------------------------------------------------
 POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     # LLM
-    "llm.default": (HOT, ["llm.router"]),
-    "llm.providers.*": (HOT, ["llm.router"]),
-    "llm.providers.*.model": (HOT, ["llm.router"]),
-    "llm.providers.*.api_key": (HOT, ["llm.router", "secrets"]),
-    "llm.providers.*.type": (HOT, ["llm.router"]),
-    # 카테고리별 라우팅 — Admin UI(BIZ-45)에서 도입한 키. 라우터가 다음 호출부터
-    # 새 매핑을 사용하므로 데몬 재시작 없이 Hot 등급.
-    "llm.routing.*": (HOT, ["llm.router"]),
+    # Router/provider clients are constructed at service startup.  Route,
+    # transport, profile, credential, and model edits therefore require a
+    # service restart; live hot reload is intentionally out of scope.
+    "llm.default": (SERVICE_RESTART, ["llm.router"]),
+    "llm.routes.*": (SERVICE_RESTART, ["llm.router"]),
+    "llm.providers.*": (SERVICE_RESTART, ["llm.router"]),
+    "llm.providers.*.model": (SERVICE_RESTART, ["llm.router"]),
+    "llm.providers.*.api_key": (SERVICE_RESTART, ["llm.router", "secrets"]),
+    "llm.providers.*.type": (SERVICE_RESTART, ["llm.router"]),
+    "llm.providers.*.transport": (SERVICE_RESTART, ["llm.router"]),
+    "llm.providers.*.profile": (SERVICE_RESTART, ["llm.router"]),
+    # Legacy category routing follows the same lifecycle until its migration.
+    "llm.routing.*": (SERVICE_RESTART, ["llm.router"]),
     # Agent core — 경로 키는 process restart.
     "agent.history_limit": (HOT, ["agent.orchestrator"]),
     "agent.max_tool_iterations": (HOT, ["agent.orchestrator"]),

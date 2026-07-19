@@ -8,8 +8,8 @@ import pytest
 
 from simpleclaw.llm.models import LLMRequest, LLMResponse, ToolCall, ToolDefinition
 from simpleclaw.llm.providers.base import LLMProvider
-from simpleclaw.llm.providers.gemini import GeminiProvider
 from simpleclaw.llm.providers.openai_provider import _sanitize_json_schema_for_openai
+from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.router import LLMRouter
 
 
@@ -81,7 +81,7 @@ def test_structured_schema_sanitizers_do_not_mutate_original_schema():
         },
     }
 
-    gemini_schema = GeminiProvider._sanitize_response_schema(schema)
+    gemini_schema = get_provider_profile("gemini").adapt_schema(schema)
     openai_schema = _sanitize_json_schema_for_openai(schema)
 
     assert "additionalProperties" in schema

@@ -117,9 +117,10 @@ async def test_orchestrator_uses_llm_normalized_question_for_tool_loop(
     assert result == "순위 답변"
     assert captured["text"] == "직전 롯데 야구 맥락에서 현재 KBO 순위를 알려줘"
     analyzer.assert_awaited_once()
-    # 분석기에 설정값(backend/max_tokens)과 최근 대화가 전달된다.
+    # 분석기는 route ownership을 유지하고 분석 옵션/최근 대화만 받는다.
     kwargs = analyzer.call_args.kwargs
-    assert kwargs["backend_name"] == "gemini"
+    assert "backend_name" not in kwargs
+    assert "retry_backend_name" not in kwargs
     assert kwargs["max_tokens"] == 256
     assert kwargs["max_recent_messages"] == 8
     # BIZ-427 — config 에 structured_output 미지정이어도 기본 True 로 전달된다.
@@ -428,10 +429,10 @@ async def test_structured_output_config_false_reaches_analyzer(
 
 
 @pytest.mark.asyncio
-async def test_turn_analysis_retry_backend_config_passthrough(
+async def test_turn_analysis_retry_backend_config_normalizes_to_route(
     config_file, monkeypatch
 ):
-    """BIZ-452 — config 의 turn_analysis.retry_backend 가 분석기 인자로 전달된다."""
+    """Legacy retry backend is normalized behind the TurnAnalysis route."""
     text = config_file.read_text(encoding="utf-8")
     config_file.write_text(
         text.replace(
@@ -451,18 +452,18 @@ async def test_turn_analysis_retry_backend_config_passthrough(
 
     await orch.process_message("안녕", user_id=1, chat_id=1)
 
-    assert analyzer.call_args.kwargs["retry_backend_name"] == "gemini"
+    assert "retry_backend_name" not in analyzer.call_args.kwargs
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.retry == "gemini"
 
 
 @pytest.mark.asyncio
-async def test_turn_analysis_retry_backend_defaults_to_router_fallback(
+async def test_turn_analysis_route_defaults_to_llm_fallback(
     config_file, monkeypatch
 ):
-    """BIZ-452 — retry_backend 미지정이면 llm.fallback(router)에 위임한다."""
+    """TurnAnalysis route inherits the normalized default retry backend."""
     orch = AgentOrchestrator(config_file)
-    monkeypatch.setattr(
-        orch._router, "get_fallback_backend", lambda: "gemini_fallback"
-    )
     analyzer = AsyncMock(
         return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
     )
@@ -473,4 +474,7 @@ async def test_turn_analysis_retry_backend_defaults_to_router_fallback(
 
     await orch.process_message("안녕", user_id=1, chat_id=1)
 
-    assert analyzer.call_args.kwargs["retry_backend_name"] == "gemini_fallback"
+    assert "retry_backend_name" not in analyzer.call_args.kwargs
+    route = orch._router.get_route("turn_analysis")
+    assert route is not None
+    assert route.retry == orch._router.get_fallback_backend()

@@ -12,6 +12,7 @@ def test_builtin_profiles_are_explicitly_registered():
     assert list_provider_profiles() == [
         "anthropic",
         "gemini",
+        "gemini-openai",
         "generic",
         "openai",
         "openrouter",

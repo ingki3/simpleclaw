@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from simpleclaw.agent.response_router import ResponseRoute, RouteDecision
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest
+from simpleclaw.llm.router import LLMRouter
 
 logger = logging.getLogger(__name__)
 
@@ -489,8 +490,6 @@ async def analyze_turn_with_llm(
     *,
     recent_messages: list[dict] | None,
     router,
-    backend_name: str | None = None,
-    retry_backend_name: str | None = None,
     max_tokens: int = 2048,
     max_recent_messages: int = 12,
     structured_output: bool = True,
@@ -503,12 +502,8 @@ async def analyze_turn_with_llm(
             ``normalized_question`` 을 쓴다.
         recent_messages: ``{"role": ..., "content": ...}`` 형태의 최근 대화.
         router: ``LLMRouter`` (또는 동일 ``send`` 시그니처의 대역).
-        backend_name: 분석 전용 backend. None 이면 라우터 기본 backend.
-            BIZ-453 — provider+model 전용 설정은 orchestrator 가 라우터의
-            가상 백엔드 이름(``provider#model``)으로 해석해 이 인자로 넘긴다.
-        retry_backend_name: 1차 시도(파싱+truncated-tail repair 포함)가 실패했을
-            때 1회 재시도할 backend (BIZ-452). None 이거나 ``backend_name`` 과
-            같으면 재시도하지 않고 곧장 conservative fallback 으로 내려간다.
+        Backend selection and provider retry are owned by the ``turn_analysis``
+        route in :class:`LLMRouter`.
         max_tokens: 분석 응답 토큰 상한 — 레이턴시/비용 제어용.
         max_recent_messages: 프롬프트에 포함할 최근 메시지 수 상한.
         structured_output: True(기본)면 provider structured output 으로 schema
@@ -534,11 +529,11 @@ async def analyze_turn_with_llm(
         f"{original}"
     )
 
-    def _build_request(target_backend: str | None) -> LLMRequest:
+    def _build_request() -> LLMRequest:
         request = LLMRequest(
             system_prompt=load_system_prompt("turn_analysis").system_prompt,
             user_message=user_message,
-            backend_name=target_backend,
+            route_name="turn_analysis",
             max_tokens=max_tokens,
         )
         if structured_output:
@@ -553,100 +548,47 @@ async def analyze_turn_with_llm(
             request.reasoning = dict(reasoning)
         return request
 
-    async def _attempt(target_backend: str | None) -> tuple[TurnAnalysis | None, dict]:
-        """한 backend 로 분석을 시도하고 (결과, 안전 진단 메타데이터)를 반환한다.
+    diagnostic = {"error_type": None, "raw_len": 0, "finish_reason": None}
 
-        진단에는 예외 타입/raw 길이/finish_reason/repair 상태만 담는다 —
-        provider 예외 메시지와 raw 전문에는 사용자 발화가 그대로 포함될 수
-        있어 원문 문자열은 절대 밖으로 내보내지 않는다 (BIZ-430).
-        """
-        diag: dict = {
-            "backend": target_backend or "default",
-            "error_type": None,
-            "raw_len": 0,
-            "finish_reason": None,
-            "repair_status": "none",
-        }
-        response = None
+    def _validate_response(response) -> TurnAnalysis:
+        """Parse first, then repair before the route consumes its one retry."""
+        diagnostic["raw_len"] = len(getattr(response, "text", "") or "")
+        diagnostic["finish_reason"] = getattr(response, "finish_reason", None)
         try:
-            response = await router.send(_build_request(target_backend))
-            diag["raw_len"] = len(getattr(response, "text", "") or "")
-            finish_reason = getattr(response, "finish_reason", None)
-            if isinstance(finish_reason, str):
-                diag["finish_reason"] = finish_reason
-            return (
-                parse_turn_analysis_payload(response.text, original_text=original),
-                diag,
-            )
-        except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
-            diag["error_type"] = type(exc).__name__
-            # 파싱 실패(ValueError/JSONDecodeError)만 repair 대상 — provider
-            # 예외는 응답 자체가 없으므로 복구할 payload 가 없다.
-            if isinstance(exc, ValueError) and response is not None:
-                repaired = repair_turn_analysis_payload(
-                    response.text, original_text=original
+            return parse_turn_analysis_payload(response.text, original_text=original)
+        except ValueError as exc:
+            diagnostic["error_type"] = type(exc).__name__
+            repaired = repair_turn_analysis_payload(response.text, original_text=original)
+            if repaired is not None:
+                logger.warning(
+                    "Turn analysis payload repair preserved the routing decision "
+                    "(error_type=%s structured=%s raw_len=%d finish_reason=%s "
+                    "backend=turn_analysis repair_status=repaired)",
+                    diagnostic["error_type"],
+                    structured_output,
+                    diagnostic["raw_len"],
+                    diagnostic["finish_reason"],
                 )
-                if repaired is not None:
-                    diag["repair_status"] = "repaired"
-                    return repaired, diag
-                diag["repair_status"] = "failed"
-            return None, diag
+                return repaired
+            raise
 
-    analysis, diag = await _attempt(backend_name)
-    if analysis is not None:
-        if diag["repair_status"] == "repaired":
-            logger.warning(
-                "Turn analysis payload truncated; repaired tail kept core "
-                "routing decision (error_type=%s structured=%s raw_len=%d "
-                "finish_reason=%s backend=%s repair_status=repaired)",
-                diag["error_type"],
-                structured_output,
-                diag["raw_len"],
-                diag["finish_reason"],
-                diag["backend"],
-            )
-        return analysis
-
-    # BIZ-452 — repair 까지 실패했을 때만 fallback backend 로 1회 재시도한다.
-    retry_backend = (retry_backend_name or "").strip() or None
-    if retry_backend == backend_name:
-        retry_backend = None
-    retry_diag: dict | None = None
-    if retry_backend:
+    try:
+        if isinstance(router, LLMRouter):
+            analysis = await router.send_validated(_build_request(), _validate_response)
+        else:
+            # Lightweight test/extension routers that predate the route
+            # validation API retain the one-send compatibility contract.
+            analysis = _validate_response(await router.send(_build_request()))
+    except Exception as exc:  # noqa: BLE001 — 분석 실패는 turn 을 막지 않는다.
+        diagnostic["error_type"] = type(exc).__name__
         logger.warning(
-            "Turn analysis primary attempt failed; retrying with fallback "
-            "backend (error_type=%s structured=%s raw_len=%d finish_reason=%s "
-            "backend=%s repair_status=%s retry_backend=%s)",
-            diag["error_type"],
+            "Turn analysis structured output failed after route retry; using conservative "
+            "fallback (error_type=%s structured=%s raw_len=%d finish_reason=%s "
+            "backend=turn_analysis repair_status=failed)",
+            diagnostic["error_type"],
             structured_output,
-            diag["raw_len"],
-            diag["finish_reason"],
-            diag["backend"],
-            diag["repair_status"],
-            retry_backend,
+            diagnostic["raw_len"],
+            diagnostic["finish_reason"],
         )
-        retry_analysis, retry_diag = await _attempt(retry_backend)
-        if retry_analysis is not None:
-            logger.info(
-                "Turn analysis fallback backend retry succeeded (backend=%s "
-                "retry_backend=%s repair_status=%s)",
-                diag["backend"],
-                retry_backend,
-                retry_diag["repair_status"],
-            )
-            return retry_analysis
-
-    logger.warning(
-        "Turn analysis structured output failed; using conservative "
-        "fallback (error_type=%s structured=%s raw_len=%d finish_reason=%s "
-        "backend=%s repair_status=%s retry_backend=%s retry_error_type=%s)",
-        diag["error_type"],
-        structured_output,
-        diag["raw_len"],
-        diag["finish_reason"],
-        diag["backend"],
-        diag["repair_status"],
-        retry_backend,
-        retry_diag["error_type"] if retry_diag else None,
-    )
-    return _fallback_analysis(original)
+        return _fallback_analysis(original)
+    return analysis

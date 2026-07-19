@@ -303,70 +303,12 @@ class _ModelProvider(LLMProvider):
         )
 
 
-class TestEnsureModelBackend:
-    """BIZ-453 — provider+model override 가상 백엔드 등록/라우팅."""
-
-    @pytest.fixture
-    def router(self):
-        from simpleclaw.llm.models import BackendType, LLMBackend
-
-        provider = _ModelProvider("gemini", "gemini-2.0-flash")
-        return LLMRouter(
-            backends={
-                "gemini": LLMBackend(
-                    name="gemini",
-                    backend_type=BackendType.API,
-                    model="gemini-2.0-flash",
-                )
-            },
-            providers={"gemini": provider},
-            default_backend="gemini",
-        )
-
-    @pytest.mark.asyncio
-    async def test_registers_virtual_backend_with_overridden_model(self, router):
-        name = router.ensure_model_backend("gemini", "gemini-3.5-flash")
-
-        assert name == "gemini#gemini-3.5-flash"
-        response = await router.send(
-            LLMRequest(user_message="hi", backend_name=name)
-        )
-        # 가상 백엔드는 base credentials 를 재사용하되 model 만 override 한다.
-        assert response.model == "gemini-3.5-flash"
-        assert response.backend_name == name
-        # base 백엔드는 기존 모델 그대로 — override 가 원본을 오염시키지 않는다.
-        base = await router.send(LLMRequest(user_message="hi"))
-        assert base.model == "gemini-2.0-flash"
-
-    def test_same_model_reuses_base_backend(self, router):
-        assert router.ensure_model_backend("gemini", "gemini-2.0-flash") == "gemini"
-
-    def test_repeated_calls_reuse_registered_virtual_backend(self, router):
-        first = router.ensure_model_backend("gemini", "gemini-3.5-flash")
-        second = router.ensure_model_backend("gemini", "gemini-3.5-flash")
-
-        assert first == second
-        # 같은 조합은 한 번만 등록된다.
-        names = [n for n in router.list_backends() if "#" in n]
-        assert names == ["gemini#gemini-3.5-flash"]
-
-    def test_unknown_base_backend_returns_none(self, router):
-        assert router.ensure_model_backend("nonexistent", "some-model") is None
-
-    def test_empty_inputs_return_none(self, router):
-        assert router.ensure_model_backend("", "model") is None
-        assert router.ensure_model_backend("gemini", "  ") is None
-
-    def test_provider_without_model_attribute_returns_none(self):
-        """CLI 등 모델 개념이 없는 프로바이더는 override 불가 — None 으로 거부."""
-        provider = MockProvider("cli_like")  # _model 속성이 없다
-        router = LLMRouter(
-            backends={},
-            providers={"cli_like": provider},
-            default_backend="cli_like",
-        )
-
-        assert router.ensure_model_backend("cli_like", "any-model") is None
+def test_dynamic_model_backend_clone_is_removed():
+    provider = _ModelProvider("gemini", "gemini-2.0-flash")
+    router = LLMRouter(
+        backends={}, providers={"gemini": provider}, default_backend="gemini"
+    )
+    assert not hasattr(router, "ensure_model_backend")
 
 
 class TestReasoningPassthrough:
