@@ -22,10 +22,13 @@ and declared capabilities belong to profiles, never model-name branches.
 `gemini-openai` uses `openai_chat` with Google's
 `https://generativelanguage.googleapis.com/v1beta/openai/` base URL.  It is
 opt-in only.  Native `gemini` remains the default for any route requiring
-native thinking, thought-signature/tool replay, or unverified multimodal
-parity.  The credential-gated smoke matrix records text and exact schema
-results; unverified tool/replay, reasoning, and image cases remain explicit
-XFAILs rather than optimistic capability claims.
+native thinking, thought-signature/tool replay, provider-neutral tools, or
+provider-neutral attachments.  The credential-gated smoke matrix sends the
+endpoint's documented tool/replay, `reasoning_effort` (`none`/`medium`), and
+data-URL image requests, but those results do not change runtime capabilities
+until they are recorded and the matching SimpleClaw conversion is reviewed.
+Until then `gemini-openai` declares only text, streaming, and structured-output
+support; native routes remain mandatory for the excluded cases.
 
 ## OpenAI Responses extension
 

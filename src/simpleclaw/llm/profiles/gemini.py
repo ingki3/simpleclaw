@@ -39,10 +39,11 @@ class GeminiProfile(ProviderProfile):
 class GeminiOpenAIProfile(ProviderProfile):
     """Gemini's opt-in OpenAI-compatible endpoint adapter.
 
-    This profile intentionally does not claim native replay or reasoning parity.
-    The OpenAI-compatible endpoint shares the Chat Completions wire transport,
-    but those Gemini-native protocol features need credential-gated evidence
-    before they may be used by a route requiring them.
+    This profile intentionally exposes only transport features that SimpleClaw
+    has verified end-to-end.  The OpenAI-compatible endpoint shares the Chat
+    Completions wire transport, but provider-neutral tools, attachments,
+    reasoning, and native replay must stay on the native Gemini route until
+    their request conversion and credential-gated evidence are available.
     """
 
     def sanitize_response_schema(self, schema: object) -> object:
@@ -80,10 +81,16 @@ GEMINI_OPENAI_PROFILE = GeminiOpenAIProfile(
     default_transport="openai_chat",
     aliases=("gemini_openai",),
     capabilities=LLMCapabilities(
-        tools=True,
+        # OpenAIProvider can carry OpenAI-shaped tools/content, but SimpleClaw's
+        # provider-neutral tool, attachment, reasoning, and replay contracts
+        # are not verified for this opt-in profile yet.  Keep preflight
+        # conservative so attachments cannot be silently omitted.
+        tools=False,
         streaming=True,
         structured_output=True,
-        multimodal=True,
+        multimodal=False,
+        reasoning=False,
+        native_replay=False,
     ),
     request_extra_keys=("base_url", "extra_body", "default_headers"),
 )
