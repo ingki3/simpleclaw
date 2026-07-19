@@ -697,13 +697,22 @@ class TestPolicyEngine:
         # 둘 중 더 보수적인 PROCESS_RESTART 채택.
         assert result.level == PROCESS_RESTART
 
-    def test_hot_for_llm_routing(self):
-        # BIZ-45 — 카테고리별 라우팅은 다음 호출부터 즉시 적용되므로 Hot.
+    def test_service_restart_for_llm_route_transport_and_profile(self):
+        # Router clients are created at startup; hot reload is intentionally
+        # not supported while credential/client lifecycle is unverified.
         result = classify_keys(
             "llm",
-            {"routing": {"general": "claude", "coding": "claude"}},
+            {
+                "routes": {"turn_analysis": {"primary": "analysis_fast"}},
+                "providers": {
+                    "analysis_fast": {
+                        "transport": "openai_chat", "profile": "gemini-openai"
+                    }
+                },
+            },
         )
-        assert result.level == HOT
+        assert result.level == SERVICE_RESTART
+        assert result.requires_restart is True
         assert "llm.router" in result.affected_modules
 
 
@@ -2083,4 +2092,3 @@ class TestAdminAPIRouteSmokeContracts:
         assert restart_body["outcome"] == "applied"
         assert restart_body["applied_pending"] == 0
         assert restart_calls == [{"reason": "smoke-test"}]
-

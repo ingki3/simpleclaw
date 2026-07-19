@@ -9,6 +9,10 @@ _TRANSPORT_ALIASES = {
     "openai": "openai_chat",
     "openai_chat": "openai_chat",
     "chat_completions": "openai_chat",
+    # Reserved extension point.  It is intentionally not registered until a
+    # Responses-specific wire transport exists; Chat Completions is not a
+    # substitute because reasoning/tool replay semantics differ.
+    "openai_responses": "openai_responses",
     "anthropic": "anthropic",
     "claude": "anthropic",
     "gemini": "gemini",
@@ -57,6 +61,12 @@ def get_transport_class(name: str) -> type:
     try:
         return _TRANSPORT_REGISTRY[canonical]
     except KeyError as exc:
+        if canonical == "openai_responses":
+            raise LLMConfigError(
+                "LLM transport 'openai_responses' is not registered; "
+                "implement a dedicated Responses API transport instead of "
+                "reusing openai_chat."
+            ) from exc
         known = ", ".join(sorted(_TRANSPORT_REGISTRY))
         raise LLMConfigError(
             f"No provider implementation registered for transport '{name}'. "

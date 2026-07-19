@@ -30,6 +30,26 @@ def test_unknown_transport_raises_actionable_config_error():
         get_transport_class("not-a-transport")
 
 
+def test_openai_responses_extension_is_explicitly_not_registered(tmp_path: Path):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """
+llm:
+  providers:
+    future_responses:
+      type: api
+      model: gpt-future
+      transport: openai_responses
+      profile: openai
+      api_key: test-key
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LLMConfigError, match="openai_responses.*not registered"):
+        create_router(config)
+
+
 def test_legacy_provider_config_normalizes_to_transport_profile(tmp_path: Path):
     config = tmp_path / "config.yaml"
     config.write_text(

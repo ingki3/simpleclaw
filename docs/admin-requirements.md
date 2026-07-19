@@ -28,7 +28,7 @@
 
 | # | 영역 | 키/소스 | 노출 | 편집 | 적용 | 마스킹 | 검증 |
 |---|---|---|---|---|---|---|---|
-| 1 | **LLM 라우터** | `llm.default`, `llm.providers.{claude,openai,gemini}` | ✅ | ✅ | hot-reload (다음 호출부터) | `api_key` 시 마스킹 | `default ∈ providers`; 모델명 화이트리스트(프로바이더별); API ping(선택) |
+| 1 | **LLM 라우터** | `llm.routes`, `llm.providers.{backend}`의 `transport`/`profile`/model | ✅ | ✅ | service restart 필요 | `api_key` 시 마스킹 | route backend 존재; transport/profile 유효성; API ping(선택) |
 | 2 | **Agent 코어** | `agent.history_limit`, `db_path`, `max_tool_iterations`, `workspace_dir` | ✅ | ✅(경로 외) | 즉시(다음 메시지) | — | 정수 범위(`history_limit 1–200`, `max_tool_iterations 1–20`); 경로는 read-only |
 | 3 | **시맨틱 메모리(RAG)** | `memory.rag.{enabled, model, top_k, similarity_threshold}` | ✅ | ✅ | 토글 ON 시 모델 다운로드 발생(~500MB), 그 외 즉시 | — | `top_k 1–20`, `threshold 0.0–1.0`; 모델 변경 시 인덱스 재생성 경고 |
 | 4 | **Security / CommandGuard** | `security.command_guard.{enabled, allowlist}`, `security.env_passthrough` | ✅ | ✅ | 즉시 | env 키 이름은 노출 OK, 값은 *주입 안 함* | allowlist 패턴 키는 사전 정의 set과 매칭; `env_passthrough` 항목은 시크릿 패턴(`*_KEY` 등)과 충돌 시 경고 |
@@ -64,11 +64,16 @@
 
 | 등급 | 의미 | 표시 |
 |---|---|---|
-| `Hot` | 다음 메시지/호출부터 자동 반영 (페르소나·라우터 모델·webhook rate-limit 등) | 초록 dot, “즉시 적용” 라벨 |
+| `Hot` | 다음 메시지/호출부터 자동 반영 (페르소나·webhook rate-limit 등) | 초록 dot, “즉시 적용” 라벨 |
 | `Service-restart` | 해당 서브시스템 재시작 필요 (텔레그램 봇 재기동, MCP 서버 재기동 등) — 버튼 클릭으로 트리거 가능 | 노란 dot + “서브시스템 재시작 필요(자동)” |
 | `Process-restart` | 데몬 전체 재시작 필요 (호스트·포트·DB 경로 등) | 빨간 dot + “데몬 재시작 필요(수동/자동)” |
 
 UI 결정: **편집 폼 저장 직전에 등급 칩을 노출**하고, restart 등급은 confirm 모달.
+
+LLM route/backend의 model, transport, profile, API key 변경은 client/credential lifecycle을
+검증하기 전까지 **Service-restart**입니다. LLM 설정 hot reload는 제공하지 않습니다.
+Gemini OpenAI-compatible backend는 parity matrix 승인 및 운영자 승인 전 native/default
+route를 대체할 수 없습니다.
 
 ### 2.2 마스킹 규칙
 
