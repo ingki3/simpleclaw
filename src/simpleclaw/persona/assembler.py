@@ -1,10 +1,11 @@
 """시스템 프롬프트 어셈블러 — 토큰 버짓 관리.
 
-여러 페르소나 파일(AGENT, USER, MEMORY)을 하나의 시스템 프롬프트로 조합한다.
-토큰 예산을 초과하면 우선순위가 낮은 파일(MEMORY → USER)부터 잘라낸다.
+여러 페르소나 파일(SOUL, AGENT, USER, MEMORY)을 하나의 시스템 프롬프트로 조합한다.
+토큰 예산을 초과하면 우선순위가 낮은 파일(MEMORY → USER → AGENT)부터 잘라낸다.
 
 설계 결정:
-- 파일 순서는 AGENT → USER → MEMORY 고정 (AGENT가 가장 중요).
+- 파일 순서는 SOUL → AGENT → USER → MEMORY 고정 (BIZ-451: 정체성·말투 규칙이
+  업무 지시·사용자 기억보다 먼저 주입되어야 tone guard가 안정적으로 작동한다).
 - tiktoken의 cl100k_base 인코딩으로 토큰 수를 계산한다.
 - 절삭(truncation)은 토큰 단위로 수행하여 정확도를 보장한다.
 """
@@ -22,8 +23,10 @@ logger = logging.getLogger(__name__)
 
 # 섹션 간 구분자 — 마크다운 수평선으로 시각적 분리
 _SECTION_SEPARATOR = "\n\n---\n\n"
-# 조합 우선순위 순서: AGENT(핵심 지시) → USER(사용자 설정) → MEMORY(기억)
-_FILE_ORDER = [FileType.AGENT, FileType.USER, FileType.MEMORY]
+# 조합 우선순위 순서: SOUL(정체성·말투) → AGENT(핵심 지시) → USER(사용자 설정) → MEMORY(기억)
+# BIZ-451: SOUL이 목록에 없으면 resolver가 SOUL.md를 찾아도 여기서 조용히
+# 탈락한다 — 반말 금지 같은 tone 규칙이 prompt에서 빠지는 사고의 원인이었다.
+_FILE_ORDER = [FileType.SOUL, FileType.AGENT, FileType.USER, FileType.MEMORY]
 _DREAMING_HEADING_RE = re.compile(
     r"^(#{1,6})\s+.*Dreaming (?:Updates|Insights|Journal|Clusters?)\b.*$",
     re.IGNORECASE,
@@ -248,9 +251,10 @@ def assemble_prompt(
 ) -> PromptAssembly:
     """페르소나 파일들을 토큰 예산 이내의 시스템 프롬프트로 조합한다.
 
-    파일 순서는 AGENT → USER → MEMORY. 조합된 텍스트가
+    파일 순서는 SOUL → AGENT → USER → MEMORY. 조합된 텍스트가
     토큰 예산을 초과하면 MEMORY 내용부터 뒤에서 잘라내고,
-    그래도 초과하면 USER 내용을 잘라낸다.
+    그래도 초과하면 USER → AGENT 순으로 잘라낸다. 첫 파일(SOUL)은
+    강제 절삭 단계 전까지 보존된다.
 
     Args:
         persona_files: 조합할 PersonaFile 목록.
@@ -262,7 +266,7 @@ def assemble_prompt(
     if not persona_files:
         return PromptAssembly(token_budget=token_budget)
 
-    # 정규 순서(AGENT → USER → MEMORY)에 따라 파일 정렬
+    # 정규 순서(SOUL → AGENT → USER → MEMORY)에 따라 파일 정렬
     files_by_type: dict[FileType, PersonaFile] = {}
     for pf in persona_files:
         files_by_type[pf.file_type] = pf

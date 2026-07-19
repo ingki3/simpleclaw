@@ -196,6 +196,20 @@ persona:
         assert result["global_dir"] == "~/.custom/global"
         assert result["files"] == [{"name": "CUSTOM.md", "type": "custom"}]
 
+    def test_default_files_include_soul(self, tmp_path: Path):
+        """BIZ-451: 기본 persona.files에 SOUL.md가 최우선으로 포함되어야 한다."""
+        result = load_persona_config(tmp_path / "missing.yaml")
+        assert result["files"][0] == {"name": "SOUL.md", "type": "soul"}
+        names = [f["name"] for f in result["files"]]
+        assert names == ["SOUL.md", "AGENT.md", "USER.md", "MEMORY.md"]
+
+    def test_example_config_files_include_soul(self):
+        """BIZ-451: repo config.yaml.example의 persona.files에도 SOUL.md가 있어야 한다."""
+        example = Path(__file__).parents[2] / "config.yaml.example"
+        result = load_persona_config(example)
+        names = [f["name"] for f in result["files"]]
+        assert names == ["SOUL.md", "AGENT.md", "USER.md", "MEMORY.md"]
+
 
 # ---------------------------------------------------------------------------
 # 2. load_llm_config
