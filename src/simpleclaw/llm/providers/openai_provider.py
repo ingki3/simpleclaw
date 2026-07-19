@@ -236,13 +236,19 @@ class OpenAIProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Chat Completions API로 메시지를 전송하고 응답을 반환한다.
 
         BIZ-450 — structured output 힌트는 OpenAI/OpenRouter ``response_format``
         으로 매핑한다. required 면 ``json_schema`` 를 사용하고, dict JSON Schema
         가 없으면 API 호출 전에 빠르게 실패한다.
+
+        BIZ-453 — provider-neutral ``reasoning`` hint 는 의도적으로 무시한다.
+        OpenRouter 계열은 reasoning 정책을 config 의 ``extra_body.reasoning``
+        으로 이미 제어하므로, hint 를 요청 필드로 매핑하면 정적 설정과 충돌한다.
         """
+        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,
@@ -287,6 +293,20 @@ class OpenAIProvider(LLMProvider):
 
         choice = response.choices[0] if response.choices else None
         text = choice.message.content or "" if choice else ""
+        # BIZ-452 — 출력 cap 잘림(finish_reason=length) 을 raw 응답 없이도
+        # 진단할 수 있게 종료 사유를 LLMResponse 에 보존한다.
+        finish_reason = getattr(choice, "finish_reason", None) if choice else None
+        if not isinstance(finish_reason, str):
+            finish_reason = None
+        if response_format is not None and finish_reason == "length":
+            # structured output 이 토큰 cap 에서 잘리면 JSON 이 깨진다 — 호출자
+            # repair/fallback 경로 진단용 경고 (프롬프트/응답 본문은 남기지 않음).
+            logger.warning(
+                "OpenAI structured output hit output-token cap "
+                "(finish_reason=length backend=%s model=%s)",
+                self._name,
+                self._model,
+            )
 
         # tool_calls 추출
         tool_calls: list[ToolCall] | None = None
@@ -320,6 +340,8 @@ class OpenAIProvider(LLMProvider):
             model=self._model,
             usage=usage,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            diagnostics={"finish_reason": finish_reason} if finish_reason else None,
         )
 
     async def stream(
@@ -334,6 +356,7 @@ class OpenAIProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """Chat Completions streaming — text 델타를 ``on_text_delta`` 로 흘린다.
 
@@ -348,7 +371,10 @@ class OpenAIProvider(LLMProvider):
 
         BIZ-450 — structured output 힌트는 send() 와 동일하게 ``response_format``
         으로 매핑해 provider contract 를 일관되게 유지한다.
+
+        BIZ-453 — ``reasoning`` hint 는 send() 와 동일한 이유로 무시한다.
         """
+        del reasoning  # 무시 정책 명시 — extra_body.reasoning 과 충돌 방지.
         response_format = _openai_response_format(
             provider_name=self._name,
             response_mime_type=response_mime_type,
@@ -388,6 +414,7 @@ class OpenAIProvider(LLMProvider):
         # 위주로 보내고, arguments JSON 문자열은 여러 청크에 걸쳐 분할 전송한다.
         tc_accumulator: dict[int, dict] = {}
         usage = None
+        finish_reason: str | None = None
 
         try:
             stream = await self._client.chat.completions.create(**kwargs)
@@ -400,6 +427,11 @@ class OpenAIProvider(LLMProvider):
                     }
                 if not chunk.choices:
                     continue
+                # BIZ-452 — 종료 청크의 finish_reason 을 보존해 send() 와 동일한
+                # truncation 진단이 스트리밍에서도 가능하게 한다.
+                chunk_finish = getattr(chunk.choices[0], "finish_reason", None)
+                if isinstance(chunk_finish, str) and chunk_finish:
+                    finish_reason = chunk_finish
                 delta = chunk.choices[0].delta
                 if delta is None:
                     continue
@@ -438,6 +470,13 @@ class OpenAIProvider(LLMProvider):
             raise LLMProviderError(f"OpenAI API error: {e}") from e
 
         text = "".join(text_parts)
+        if response_format is not None and finish_reason == "length":
+            logger.warning(
+                "OpenAI structured output hit output-token cap "
+                "(finish_reason=length backend=%s model=%s)",
+                self._name,
+                self._model,
+            )
 
         tool_calls: list[ToolCall] | None = None
         if tc_accumulator:
@@ -464,4 +503,6 @@ class OpenAIProvider(LLMProvider):
             model=self._model,
             usage=usage,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            diagnostics={"finish_reason": finish_reason} if finish_reason else None,
         )

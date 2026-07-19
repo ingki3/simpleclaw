@@ -57,6 +57,9 @@ POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     "agent.max_tool_iterations": (HOT, ["agent.orchestrator"]),
     "agent.db_path": (PROCESS_RESTART, ["agent.orchestrator", "memory.store"]),
     "agent.workspace_dir": (PROCESS_RESTART, ["agent.orchestrator"]),
+    # BIZ-453 — turn_analysis 설정(provider/model/reasoning/retry 포함)은
+    # orchestrator 초기화 시 캐시되므로 서비스 재시작이 필요하다.
+    "agent.turn_analysis.*": (SERVICE_RESTART, ["agent.orchestrator", "llm.router"]),
     # Memory / RAG
     "memory.rag.enabled": (HOT, ["memory.rag"]),
     "memory.rag.model": (HOT, ["memory.rag"]),

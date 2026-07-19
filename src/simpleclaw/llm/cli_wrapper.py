@@ -64,6 +64,7 @@ class CLIProvider(LLMProvider):
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
+        reasoning: dict | None = None,
     ) -> LLMResponse:
         """CLI 도구에 메시지를 stdin으로 전달하고 stdout 응답을 반환한다.
 
@@ -71,7 +72,9 @@ class CLIProvider(LLMProvider):
         지원하지 않는다 — ``max_tokens`` 인자는 시그니처 통일을 위해 받지만 무시된다.
         ``system_blocks`` 가 주어지면 텍스트만 이어 붙여 ``system_prompt`` 처럼 사용한다.
         structured output(BIZ-427)도 미지원 — required 면 명확히 거부한다.
+        reasoning hint(BIZ-453)도 미지원 — 품질 힌트이므로 조용히 무시한다.
         """
+        del reasoning
         self._reject_required_structured_output(
             response_mime_type=response_mime_type,
             response_schema=response_schema,

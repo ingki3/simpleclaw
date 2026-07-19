@@ -384,6 +384,156 @@ agent:
         assert result["judge_max_tokens"] == 200
         assert result["max_answer_chars_for_judge"] == 1000
 
+    def test_turn_analysis_defaults(self, tmp_path: Path):
+        """BIZ-452 — max_tokens 기본값 2048, retry_backend 기본값 None."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(cfg, "agent:\n  history_limit: 5\n")
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["enabled"] is True
+        assert result["backend"] is None
+        assert result["max_tokens"] == 2048
+        assert result["max_recent_messages"] == 12
+        assert result["structured_output"] is True
+        assert result["retry_backend"] is None
+        assert result["fallback_mode"] == "conservative_original"
+        # BIZ-453 — 전용 provider/model/retry/reasoning 기본값. provider/model
+        # unset 이면 기존 backend(default) 동작이 유지되고 reasoning 은 off.
+        assert result["provider"] is None
+        assert result["model"] is None
+        assert result["retry_provider"] is None
+        assert result["retry_model"] is None
+        assert result["reasoning"] == {
+            "enabled": False,
+            "effort": "medium",
+            "budget_tokens": 512,
+        }
+
+    def test_turn_analysis_dedicated_provider_model_and_reasoning(
+        self, tmp_path: Path
+    ):
+        """BIZ-453 — provider/model/retry_*/reasoning 설정 로드 및 coercion."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    provider: gemini
+    model: gemini-3.5-flash
+    retry_provider: openrouter_deepseek_v4_pro
+    retry_model: deepseek/deepseek-chat-v4
+    reasoning:
+      enabled: true
+      effort: MEDIUM
+      budget_tokens: "512"
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["provider"] == "gemini"
+        assert result["model"] == "gemini-3.5-flash"
+        assert result["retry_provider"] == "openrouter_deepseek_v4_pro"
+        assert result["retry_model"] == "deepseek/deepseek-chat-v4"
+        # effort 대문자/budget 문자열은 정규화된다.
+        assert result["reasoning"] == {
+            "enabled": True,
+            "effort": "medium",
+            "budget_tokens": 512,
+        }
+
+    def test_turn_analysis_dedicated_model_invalid_values_normalized(
+        self, tmp_path: Path
+    ):
+        """빈 문자열/비문자열 provider·model 과 이형 reasoning 값은 안전 기본값으로."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    provider: "  "
+    model: 123
+    retry_provider: ""
+    retry_model: null
+    reasoning:
+      enabled: "yes"
+      effort: extreme
+      budget_tokens: -100
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["provider"] is None
+        assert result["model"] is None
+        assert result["retry_provider"] is None
+        assert result["retry_model"] is None
+        # 허용 밖 effort 는 medium, 음수 budget 은 0 으로 clamp.
+        assert result["reasoning"]["enabled"] is True
+        assert result["reasoning"]["effort"] == "medium"
+        assert result["reasoning"]["budget_tokens"] == 0
+
+    def test_turn_analysis_reasoning_non_dict_falls_back_to_defaults(
+        self, tmp_path: Path
+    ):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            "agent:\n  turn_analysis:\n    reasoning: banana\n",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["reasoning"] == {
+            "enabled": False,
+            "effort": "medium",
+            "budget_tokens": 512,
+        }
+
+    def test_turn_analysis_overrides_and_coercion(self, tmp_path: Path):
+        """max_tokens 문자열은 int 로 coerce, 하한(64) 미만은 clamp 된다."""
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    max_tokens: "4096"
+    retry_backend: gemini
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        assert result["max_tokens"] == 4096
+        assert result["retry_backend"] == "gemini"
+
+    def test_turn_analysis_clamps_and_normalizes_invalid_values(
+        self, tmp_path: Path
+    ):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+agent:
+  turn_analysis:
+    max_tokens: 10
+    retry_backend: "  "
+    backend: ""
+""",
+        )
+
+        result = load_agent_config(cfg)["turn_analysis"]
+
+        # 하한 64 미만은 clamp — 지나치게 낮은 cap 이 truncation 사고를 재현하지 않게.
+        assert result["max_tokens"] == 64
+        # 빈 문자열 backend/retry_backend 는 미설정으로 정규화된다.
+        assert result["retry_backend"] is None
+        assert result["backend"] is None
+
 
 # ---------------------------------------------------------------------------
 # 4. load_daemon_config

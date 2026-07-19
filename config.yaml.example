@@ -120,10 +120,34 @@ agent:
   # 기존 결정적 TurnFrame + response_router 가 fallback 으로 동작한다.
   turn_analysis:
     enabled: true
-    backend: null          # null 이면 llm.default backend 사용 (저렴/고속 backend 지정 가능)
-    max_tokens: 512        # 분석 응답 토큰 상한 — 레이턴시/비용 제어
+    # BIZ-453 — TurnAnalysis 전용 provider/model. 의도 파악/정규화/route 판단은
+    # 최종 답변 default model(llm.default)과 요구 특성이 달라 독립 지정한다.
+    # provider 는 llm.providers 의 기존 백엔드 이름이고, model 은 그 provider
+    # credentials 로 호출할 모델 ID 다. 둘 다 설정돼야 적용되며, 하나라도
+    # 비우면 아래 backend(null 이면 llm.default) 동작으로 돌아간다.
+    provider: gemini
+    model: gemini-3.5-flash
+    backend: null          # backward-compat 명시 backend. provider+model 이 우선.
+    # BIZ-452 — 512 cap 에서는 tail `reasons` 문자열이 잘려 structured JSON 파싱이
+    # 실패하는 live 사고가 있었다. 분석 응답은 원래 짧으므로 상한만 여유 있게 상향.
+    max_tokens: 2048       # 분석 응답 토큰 상한 — 레이턴시/비용 제어
     max_recent_messages: 12
-    structured_output: true  # BIZ-427 — Gemini response_mime_type + response_schema 로 JSON 강제
+    structured_output: true  # BIZ-427/450 — response_mime_type + response_schema 로 JSON 강제
+    # BIZ-453 — provider-neutral reasoning hint. Gemini 는 native thinking
+    # config(thinking_budget)로 매핑하고, 미지원 provider/SDK 는 안전하게
+    # 무시한다. budget_tokens 를 비우면 effort(low/medium/high) 기본 매핑 사용.
+    reasoning:
+      enabled: true
+      effort: medium
+      budget_tokens: 512
+    # BIZ-452/453 — 파싱+truncated-tail repair 까지 실패했을 때 1회 재시도할 모델.
+    # retry_provider+retry_model 이 최우선, 다음 retry_backend, 모두 null 이면
+    # llm.fallback backend 에 위임한다. repair/재시도 순서:
+    # ① JSON repair 로 핵심 필드(route/flags) 보존 → ② retry 모델 재시도 →
+    # ③ 그래도 실패하면 conservative fallback (원문 보존 + 결정적 라우터).
+    retry_provider: null
+    retry_model: null
+    retry_backend: null
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는

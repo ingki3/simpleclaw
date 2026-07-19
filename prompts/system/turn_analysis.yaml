@@ -1,13 +1,17 @@
 # 용도: 일반 사용자 turn 앞단의 LLM turn-analysis 분류기 시스템 프롬프트.
 # 적용 범위: AgentOrchestrator.process_message() 의 ordinary turn 경로에서
 #   simpleclaw.agent.turn_analysis.analyze_turn_with_llm() 이 사용.
-# 변경 사유: BIZ-427 — JSON 모양(shape)은 Gemini structured output 의
+# 변경 사유: BIZ-452 — live 에서 DeepSeek structured JSON 이 tail `reasons`
+#   문자열 중간의 출력 토큰 cap 에서 잘려 파싱이 실패했다. 설명 필드
+#   (context_summary/reasons)를 짧게 강제하고, route/flags 같은 핵심 필드가
+#   설명보다 우선한다는 semantic guidance 를 추가.
+#   (v2: BIZ-427 — JSON 모양(shape)은 structured output 의
 #   response_schema(TURN_ANALYSIS_RESPONSE_SCHEMA)가 API 레벨에서 강제하므로,
 #   프롬프트는 수동 JSON 예시를 걷어내고 semantic guidance 중심으로 정리.
-#   (v1: BIZ-426 — 프롬프트-only JSON 지시. live 에서 Unterminated string
+#   v1: BIZ-426 — 프롬프트-only JSON 지시. live 에서 Unterminated string
 #   파싱 실패가 발생해 schema-constrained 출력으로 전환.)
 name: turn_analysis
-version: 2
+version: 3
 description: >-
   Decide whether the current user turn depends on recent context, produce an
   internal normalized question, and classify execution complexity for SimpleClaw.
@@ -30,3 +34,7 @@ system_prompt: |-
   domains: coarse topic tags such as "sports", "market", "weather", "news", "study". Empty if unclear.
   intents: coarse action tags such as "standings", "current_result", "schedule", "quote", "weather", "news", "daily_report", "realtime_lookup", "scenario_analysis". Empty if unclear.
   confidence: 0.0-1.0 — how confident you are that normalized_question preserves the intended meaning and target context.
+
+  Core routing fields (route, complexity_score, confidence, needs_* flags) matter more than descriptive fields; never let long explanations grow the output.
+  context_summary: one short sentence, under 120 characters, or empty when no context was used.
+  reasons: at most 3 short bullet-style strings; keep each under 10 words. Do not write paragraphs.
