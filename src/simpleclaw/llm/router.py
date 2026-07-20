@@ -308,15 +308,18 @@ class LLMRouter:
 
         try:
             return validate_response(await self._send_to_backend(backend_name, request))
-        except Exception:
+        except Exception as exc:
             retry_name = self._usable_retry(backend_name, fallback_name, required)
             if not retry_name:
                 raise
+            route_name = request.route_name or "default"
             logger.warning(
-                "Backend '%s' response failed validation; retrying fallback '%s'",
+                "Validated response failed; backend=%s route=%s error_type=%s "
+                "retry_backend=%s retry=true",
                 backend_name,
+                route_name,
+                type(exc).__name__,
                 retry_name,
-                exc_info=True,
             )
             return validate_response(await self._send_to_backend(retry_name, request))
 
