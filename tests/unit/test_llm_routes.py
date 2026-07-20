@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -49,6 +50,55 @@ async def test_route_retries_configured_backend_once():
     router = _router(primary_error=RuntimeError("down"))
     response = await router.send(LLMRequest(route_name="turn_analysis"))
     assert response.backend_name == "retry"
+
+
+@pytest.mark.asyncio
+async def test_validated_retry_does_not_log_provider_exception_body(caplog):
+    private_body = "BIZ465_PRIVATE_PROVIDER_BODY"
+    user_text = "BIZ465_PRIVATE_USER_TEXT"
+    router = _router(primary_error=RuntimeError(private_body))
+
+    with caplog.at_level(logging.WARNING, logger="simpleclaw.llm.router"):
+        response = await router.send_validated(
+            LLMRequest(route_name="turn_analysis", user_message=user_text),
+            lambda result: result,
+        )
+
+    assert response.backend_name == "retry"
+    router._providers["analysis"].send.assert_awaited_once()
+    router._providers["retry"].send.assert_awaited_once()
+    assert private_body not in caplog.text
+    assert user_text not in caplog.text
+    assert "backend=analysis" in caplog.text
+    assert "route=turn_analysis" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "retry_backend=retry" in caplog.text
+    assert "retry=true" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_validated_retry_does_not_log_malformed_response(caplog):
+    malformed_marker = "BIZ465_PRIVATE_MALFORMED_PAYLOAD"
+    router = _router()
+    router._providers["analysis"].send.return_value = LLMResponse(
+        text=malformed_marker, backend_name="analysis", model="m"
+    )
+
+    def validate(response: LLMResponse) -> LLMResponse:
+        if response.backend_name == "analysis":
+            raise ValueError(response.text)
+        return response
+
+    with caplog.at_level(logging.WARNING, logger="simpleclaw.llm.router"):
+        response = await router.send_validated(
+            LLMRequest(route_name="turn_analysis"), validate
+        )
+
+    assert response.backend_name == "retry"
+    router._providers["analysis"].send.assert_awaited_once()
+    router._providers["retry"].send.assert_awaited_once()
+    assert malformed_marker not in caplog.text
+    assert "error_type=ValueError" in caplog.text
 
 
 @pytest.mark.asyncio
