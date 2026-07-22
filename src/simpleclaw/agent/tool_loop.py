@@ -125,6 +125,7 @@ _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
     "(debug: final-answer LLM 호출이 {timeout:.0f}초 안에 응답하지 않음)"
 )
 _AGENT_BROWSER_PER_TURN_CALL_CAP = 2
+_LLM_TOOL_RESULT_MESSAGE_MAX_CHARS = 20_000
 _LIVE_FACT_EVIDENCE_REQUIRED_MESSAGE = (
     "검증 가능한 최신 근거를 확인하지 못해 실시간 일정/중계 정보를 단정할 수 없습니다. "
     "공식 경기 일정이나 방송사 공지처럼 최신 출처를 확인한 뒤 다시 알려 주세요."
@@ -606,7 +607,7 @@ class ToolLoopRunner:
                             "role": "tool",
                             "tool_call_id": tc.id,
                             "name": tc.name,
-                            "content": result[:3000],
+                            "content": result[:_LLM_TOOL_RESULT_MESSAGE_MAX_CHARS],
                         })
                         trace.append(
                             ToolTraceStep(
@@ -683,7 +684,7 @@ class ToolLoopRunner:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "name": tc.name,
-                    "content": sanitized[:3000],
+                    "content": sanitized[:_LLM_TOOL_RESULT_MESSAGE_MAX_CHARS],
                 })
                 if legacy_action is not None and tc.id == legacy_action.id:
                     state.user_content = (

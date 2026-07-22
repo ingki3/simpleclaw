@@ -198,6 +198,73 @@ async def test_normal_text_response_unaffected(config_file):
 
 
 @pytest.mark.asyncio
+async def test_tool_result_with_10000_chars_is_fully_present_in_next_llm_request(
+    config_file, monkeypatch,
+):
+    """BIZ-479 — 3,000자를 넘는 tool result도 새 한도 안에서는 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    tool_result = "x" * 10_000
+
+    async def fake_dispatch(_tc):
+        return tool_result
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        if len(seen_requests) == 1:
+            return _tool_response("c1", "web_fetch")
+        return _text_response("완료")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("긴 도구 결과 테스트")
+
+    assert result == "완료"
+    tool_message = next(
+        message
+        for message in seen_requests[1].messages
+        if message.get("tool_call_id") == "c1"
+    )
+    assert tool_message["content"] == tool_result
+
+
+@pytest.mark.asyncio
+async def test_tool_result_with_20001_chars_is_capped_at_20000_in_next_llm_request(
+    config_file, monkeypatch,
+):
+    """BIZ-479 — LLM으로 전달하는 tool result는 정확히 20,000자로 제한한다."""
+    orch = AgentOrchestrator(config_file)
+    tool_result = "y" * 20_000 + "z"
+
+    async def fake_dispatch(_tc):
+        return tool_result
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        if len(seen_requests) == 1:
+            return _tool_response("c1", "web_fetch")
+        return _text_response("완료")
+
+    orch._router.send = fake_send
+
+    result = await orch.process_cron_message("도구 결과 상한 테스트")
+
+    assert result == "완료"
+    tool_message = next(
+        message
+        for message in seen_requests[1].messages
+        if message.get("tool_call_id") == "c1"
+    )
+    assert len(tool_message["content"]) == 20_000
+    assert tool_message["content"] == tool_result[:20_000]
+
+
+@pytest.mark.asyncio
 async def test_attachment_context_note_is_in_current_user_message_not_saved(
     config_file,
 ):
