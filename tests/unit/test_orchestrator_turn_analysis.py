@@ -14,7 +14,7 @@ import pytest
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.response_router import ResponseRoute
 from simpleclaw.agent.turn_analysis import TurnAnalysis
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.models import LLMResponse, MultimodalAttachment
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
 
@@ -191,6 +191,52 @@ async def test_orchestrator_clarifies_when_llm_analysis_is_ambiguous(
     pending = orch.pop_pending_clarify(7)
     assert pending is not None
     assert len(pending.options) >= 2
+
+
+@pytest.mark.asyncio
+async def test_attachment_reaches_tool_loop_before_text_only_clarify(
+    config_file, monkeypatch
+):
+    """현재 turn 첨부는 text-only ambiguity보다 먼저 provider가 평가한다."""
+    orch = AgentOrchestrator(config_file)
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        AsyncMock(
+            return_value=TurnAnalysis(
+                original_text="하루 몇 알 먹는거야?",
+                normalized_question="하루 몇 알 먹는거야?",
+                confidence=0.4,
+                needs_clarification=True,
+                ambiguity_options=["특정 약/영양제 복용량", "이전 대화 속 복용법"],
+            )
+        ),
+    )
+    attachment = MultimodalAttachment(
+        data=b"jpeg-bytes",
+        mime_type="image/jpeg",
+        name="product-label.jpg",
+    )
+    orch._tool_loop = AsyncMock(return_value="라벨의 섭취 방법을 확인했습니다.")
+
+    result = await orch.process_message(
+        "하루 몇 알 먹는거야?",
+        user_id=1,
+        chat_id=7,
+        attachments=[attachment],
+    )
+
+    assert result == "라벨의 섭취 방법을 확인했습니다."
+    orch._tool_loop.assert_awaited_once()
+    passed_attachments = orch._tool_loop.call_args.kwargs["attachments"]
+    assert len(passed_attachments) == 1
+    assert passed_attachments[0] is attachment
+    assert orch.pop_pending_clarify(7) is None
+    saved_user_messages = [
+        message.content
+        for message in orch._store.get_recent(limit=2)
+        if message.role == MessageRole.USER
+    ]
+    assert saved_user_messages == ["하루 몇 알 먹는거야?"]
 
 
 @pytest.mark.asyncio

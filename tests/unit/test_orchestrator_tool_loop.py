@@ -237,6 +237,11 @@ async def test_attachment_context_note_is_in_current_user_message_not_saved(
     assert "8 bytes" in content
     assert "직접 분석" in content
     assert "불가능하면" in content
+    assert "1차 근거" in content
+    assert "이거" in content
+    assert "몇 알" in content
+    assert "명시적으로 요청하지 않았다면" in content
+    assert "첨부와 무관한 웹 검색이나 현재 사실 조회" in content
 
     saved = orch._store.get_recent(limit=2)
     assert saved[0].content == "요약해줘"
