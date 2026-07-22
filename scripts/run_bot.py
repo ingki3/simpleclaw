@@ -41,6 +41,7 @@ from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigge
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.redaction import install_telegram_token_redaction
 from simpleclaw.logging.structured_logger import StructuredLogger
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
@@ -65,6 +66,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+install_telegram_token_redaction()
 logger = logging.getLogger(__name__)
 
 CONFIG_PATH = "config.yaml"
