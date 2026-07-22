@@ -207,7 +207,7 @@ telegram:
 | `~/.simpleclaw/` | **배포/실행 트리 + 운영 데이터** — 운영 봇이 import하는 배포 코드와 `config.yaml`·`.venv`, 그리고 대화 DB(`conversations.db`), 데몬 DB(`daemon.db`), 워크스페이스, 레시피(`recipes/`), 드리밍 sidecar/안전 백업, 시크릿 볼트, 로그가 함께 있는 디렉터리 |
 | `~/.simpleclaw-agent/default/` | **에이전트 자산** — 라이브 페르소나(SOUL/AGENT/USER/MEMORY), Study Wiki, review/verification ledger, 스킬·레시피 학습 후보 큐, drain 상태, browser-handoff 저장소 |
 
-핵심 규약은 **개발 트리와 운영 실행의 분리**입니다. `run_bot.py`는 체크아웃된 트리의 코드를 그대로 import하므로, 운영 봇은 배포 트리(`~/.simpleclaw`)에서만 실행하고 개발 트리에서는 코드 작업만 합니다 — 미머지 feature 브랜치 코드가 운영에 올라가는 사고를 막기 위함입니다. 단, 배포 트리에는 코드와 운영 파일이 함께 있으므로 배포 트리를 갱신·정리할 때는 운영 데이터 영향 범위를 먼저 확인하세요. 트리 분리 원칙의 배경은 [docs/installation.md](docs/installation.md)를 참고하되, 해당 문서의 일부 경로 예시는 현행 규약과 다를 수 있습니다.
+핵심 규약은 **개발 트리와 운영 실행의 분리**입니다. `run_bot.py`는 체크아웃된 트리의 코드를 그대로 import하므로, 운영 봇은 배포 트리(`~/.simpleclaw`)에서만 실행하고 개발 트리에서는 코드 작업만 합니다 — 미머지 feature 브랜치 코드가 운영에 올라가는 사고를 막기 위함입니다. 단, 배포 트리에는 코드와 운영 파일이 함께 있으므로 배포 트리를 갱신·정리할 때는 운영 데이터 영향 범위를 먼저 확인하세요. 자세한 설치·실행·경로 검증 절차는 [docs/installation.md](docs/installation.md)를 참고하세요.
 
 ## 도구 · 스킬 · 레시피 · MCP 경계
 
