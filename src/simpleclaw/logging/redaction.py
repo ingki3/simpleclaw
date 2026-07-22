@@ -32,7 +32,7 @@ def redact_telegram_bot_tokens(value: str) -> str:
 
 
 def _redact_value(value: Any) -> Any:
-    """Redact strings nested in common logging argument containers."""
+    """Redact strings and secret-bearing deferred logging arguments."""
 
     if isinstance(value, str):
         return redact_telegram_bot_tokens(value)
@@ -45,6 +45,19 @@ def _redact_value(value: Any) -> Any:
             _redact_value(key): _redact_value(item)
             for key, item in value.items()
         }
+
+    # Logging defers ``%s`` conversion until formatting.  Third-party clients
+    # such as httpx therefore pass URL objects rather than strings in
+    # ``record.args``.  Preserve ordinary objects (and numeric ``%d``/``%f``
+    # semantics), replacing an object with its rendered form only when that
+    # form actually contains a Telegram credential.
+    try:
+        rendered = str(value)
+    except Exception:
+        return value
+    redacted = redact_telegram_bot_tokens(rendered)
+    if redacted != rendered:
+        return redacted
     return value
 
 

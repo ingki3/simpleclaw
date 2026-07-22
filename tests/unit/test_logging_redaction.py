@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from io import StringIO
 import sys
 
+import httpx
 import pytest
 
 from simpleclaw.logging.redaction import (
@@ -68,6 +70,73 @@ def test_deferred_args_are_redacted_before_formatter():
     assert f"bot{TELEGRAM_TOKEN_MARKER}/sendMessage" in rendered
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "bot{token}/sendMessage",
+        "file/bot{token}/photos/image.jpg",
+    ],
+)
+def test_httpx_url_deferred_arg_is_redacted(path: str):
+    url = httpx.URL(
+        f"https://api.telegram.org/{path.format(token=SYNTHETIC_TOKEN)}"
+    )
+
+    rendered = _format_record("HTTP Request: %s %s", ("POST", url), request_url="safe")
+
+    assert SYNTHETIC_TOKEN not in rendered
+    assert TELEGRAM_TOKEN_MARKER in rendered
+    assert rendered.startswith("HTTP Request: POST ")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "bot{token}/sendMessage",
+        "file/bot{token}/photos/image.jpg",
+    ],
+)
+def test_real_httpx_info_log_redacts_url_and_preserves_diagnostics(path: str):
+    logger = logging.getLogger("httpx")
+    original_filters = logger.filters[:]
+    original_handlers = logger.handlers[:]
+    original_level = logger.level
+    original_propagate = logger.propagate
+    output = StringIO()
+    handler = logging.StreamHandler(output)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    try:
+        logger.handlers = [handler]
+        logger.filters = []
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        install_telegram_token_redaction(
+            root_logger=logging.Logger("isolated-root"),
+            httpx_logger=logger,
+        )
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, request=request)
+
+        url = f"https://api.telegram.org/{path.format(token=SYNTHETIC_TOKEN)}"
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            response = client.post(url)
+
+        rendered = output.getvalue()
+    finally:
+        logger.filters = original_filters
+        logger.handlers = original_handlers
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+    assert response.status_code == 200
+    assert SYNTHETIC_TOKEN not in rendered
+    assert TELEGRAM_TOKEN_MARKER in rendered
+    assert "HTTP Request: POST" in rendered
+    assert "200 OK" in rendered
+
+
 def test_mapping_args_and_extra_strings_are_redacted():
     url = f"https://api.telegram.org/file/bot{SYNTHETIC_TOKEN}/document.bin"
 
@@ -96,6 +165,16 @@ def test_non_telegram_url_is_unchanged():
     rendered = _format_record("HTTP Request: %s", (url,), request_url=url)
 
     assert rendered == f"HTTP Request: {url} {url}"
+
+
+def test_non_secret_numeric_formatting_is_unchanged():
+    rendered = _format_record(
+        "status=%d elapsed=%.1f",
+        (200, 1.25),
+        request_url="safe",
+    )
+
+    assert rendered == "status=200 elapsed=1.2 safe"
 
 
 def test_install_is_idempotent_for_loggers_and_handlers():
