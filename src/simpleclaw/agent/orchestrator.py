@@ -466,6 +466,10 @@ def _format_attachment_context_note(
     lines = [
         f"## {_ATTACHMENT_CONTEXT_HEADER}",
         "첨부 내용을 직접 분석해 주세요. 불가능하면 이유와 필요한 조치를 설명해 주세요.",
+        "현재 turn의 첨부는 `이거`, `몇 알`, `이 제품` 같은 지시어를 해석할 때 "
+        "1차 근거입니다. 이전 대화보다 먼저 첨부를 분석해 주세요.",
+        "사용자가 최신 확인이나 검색을 명시적으로 요청하지 않았다면, 이전 대화만을 "
+        "근거로 첨부와 무관한 웹 검색이나 현재 사실 조회로 확장하지 마세요.",
     ]
     for index, attachment in enumerate(attachments, start=1):
         name = attachment.name or f"attachment-{index}"
@@ -1191,7 +1195,11 @@ class AgentOrchestrator:
 
                 # ClarifyGate: 복원이 애매하면 임의 실행 대신 기존 clarify
                 # 인프라(BIZ-260)로 사용자에게 되묻는다 — LLM/결정적 경로 공통.
-                if needs_clarification and len(ambiguity_options) >= 2:
+                if (
+                    needs_clarification
+                    and len(ambiguity_options) >= 2
+                    and not attachments
+                ):
                     clarify_request = ClarifyRequest(
                         question="어느 맥락 기준으로 이어서 확인할까요?",
                         options=normalize_options(ambiguity_options),
