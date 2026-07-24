@@ -88,6 +88,11 @@ from simpleclaw.skills.learning import (
 )
 from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
+from simpleclaw.skills.realtime_lookup import (
+    decode_payload as decode_realtime_lookup_payload,
+    is_usable_realtime_evidence,
+    lookup_async as run_realtime_lookup,
+)
 
 from simpleclaw.agent import (
     command_dispatch,
@@ -295,6 +300,13 @@ _LIVE_FACT_TIME_CUES = (
     "중계",
     "방송",
     "편성",
+    # 경기 결과를 묻는 구어체는 명시적인 "오늘/결과" 없이도 현재 상태 요청이다.
+    "어케 됐",
+    "어케 되었",
+    "어떻게 됐",
+    "어떻게 되었",
+    "누가 이겼",
+    "몇 대 몇",
 )
 _LIVE_FACT_CORRECTION_CUES = (
     "틀렸",
@@ -451,6 +463,10 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             "`partial` means results may be only partially reflected — flag the partiality; "
             "`final` means a confirmed result — still state the as-of/source time; "
             "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly.",
+            "For sports, state teams, scores, status, winner, and event date only when all values "
+            "come from the same `type: sports_score` fact. Never merge values across snippets or "
+            "sources, and never infer a missing sports_score field. If no complete `sports_score` "
+            "fact exists, do not state an exact score, winner, or LIVE/final status.",
             evidence.strip() or "{}",
         ]
     )
@@ -1878,6 +1894,7 @@ class AgentOrchestrator:
                 active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
         realtime_lookup_context = ""
+        realtime_lookup_usable = False
         realtime_lookup_payload = _realtime_lookup_skill_payload(
             text,
             now_kst,
@@ -1888,16 +1905,22 @@ class AgentOrchestrator:
             and self._resolve_skill_name(_REALTIME_LOOKUP_SKILL_NAME) is not None
         ):
             try:
+                payload = decode_realtime_lookup_payload(realtime_lookup_payload)
                 realtime_lookup_result = await self._execute_skill(
                     _REALTIME_LOOKUP_SKILL_NAME,
                     realtime_lookup_payload,
+                )
+                realtime_lookup_usable = is_usable_realtime_evidence(
+                    realtime_lookup_result,
+                    payload,
                 )
                 realtime_lookup_context = _format_realtime_lookup_context(
                     sanitize_tool_output(realtime_lookup_result or ""),
                 )
                 logger.info(
-                    "BIZ-359: realtime lookup skill evidence injected (%d chars)",
+                    "BIZ-480: realtime lookup evidence injected (%d chars, usable=%s)",
                     len(realtime_lookup_context),
+                    realtime_lookup_usable,
                 )
             except Exception as exc:  # noqa: BLE001 — evidence 조회 실패가 turn 전체를 죽이지 않음
                 realtime_lookup_context = _format_realtime_lookup_context(
@@ -1907,13 +1930,13 @@ class AgentOrchestrator:
                             "confidence": "low",
                             "facts": [],
                             "limitations": [
-                                f"realtime-lookup-skill failed: {str(exc)[:200]}"
+                                f"realtime lookup failed: {str(exc)[:200]}"
                             ],
                         },
                         ensure_ascii=False,
                     ),
                 )
-                logger.warning("BIZ-359: realtime lookup skill failed: %s", exc)
+                logger.warning("BIZ-480: realtime lookup failed: %s", exc)
         if realtime_lookup_context:
             rag_context = "\n\n".join(part for part in [rag_context, realtime_lookup_context] if part)
 
@@ -1947,7 +1970,7 @@ class AgentOrchestrator:
         # BIZ-363: realtime-lookup-skill 이 이미 근거를 실어 준 경우 그 자체를
         # 최신 근거로 인정하고, live-fact 질의로 판정됐는데 근거가 없으면 tool
         # loop 이 근거 없는 final answer 를 차단하도록 상태를 전달한다.
-        live_evidence_seen = bool(realtime_lookup_context)
+        live_evidence_seen = realtime_lookup_usable
 
         return ToolLoopState(
             user_content=user_content,
@@ -2341,7 +2364,20 @@ class AgentOrchestrator:
     async def _execute_skill(
         self, skill_name: str, args_str: str
     ) -> str | None:
-        """등록 스킬 실행을 skill_dispatch 에 위임한다."""
+        """등록 스킬 실행. realtime source는 내장 web-fetch 보안 정책을 재사용한다."""
+        if skill_name.lower() == _REALTIME_LOOKUP_SKILL_NAME:
+            from simpleclaw.agent.builtin_tools import handle_web_fetch
+
+            payload = decode_realtime_lookup_payload(args_str)
+
+            async def fetch_page(url: str) -> str:
+                return await handle_web_fetch(
+                    {"url": url},
+                    headless_binary=self._headless_binary,
+                )
+
+            result = await run_realtime_lookup(payload, fetch_page=fetch_page)
+            return json.dumps(result, ensure_ascii=False)
         return await skill_dispatch.execute_registered_skill(self, skill_name, args_str)
 
     # ------------------------------------------------------------------
