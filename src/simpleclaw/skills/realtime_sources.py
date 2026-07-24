@@ -178,9 +178,10 @@ def _as_of_date(as_of_kst: object) -> datetime:
 def build_sports_page_url(query: str, *, as_of_kst: object) -> str:
     """요청 기준일을 명시한 네이버 경기정보 검색 페이지 URL을 만든다."""
     date = _as_of_date(as_of_kst)
-    dated_query = (
-        f"{date.year}년 {date.month}월 {date.day}일 {query.strip()} 경기 결과"
-    ).strip()
+    # 구어체 질문 전체를 넣으면 네이버가 일반 web 결과만 반환하고 공식 경기 widget을
+    # 생략할 수 있다. 질문에서 팀을 정규화해 날짜+팀+결과의 최소 query를 사용한다.
+    target = canonical_kbo_team(query) or query.strip()
+    dated_query = f"{date.year}년 {date.month}월 {date.day}일 {target} 경기 결과".strip()
     return _NAVER_SEARCH_ENDPOINT + "?" + urlencode(
         {"where": "nexearch", "query": dated_query}
     )
