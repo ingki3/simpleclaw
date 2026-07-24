@@ -28,6 +28,7 @@ from urllib.request import Request, urlopen
 
 from simpleclaw.skills.realtime_sources import (
     FetchPage,
+    ResolveNewsUrl,
     SourceDocument,
     collect_sources,
     html_to_visible_text,
@@ -513,6 +514,7 @@ has_usable_realtime_evidence = is_usable_realtime_evidence
 async def lookup_async(
     payload: dict[str, Any],
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None = None,
 ) -> dict[str, Any]:
     """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
 
@@ -528,6 +530,7 @@ async def lookup_async(
         kind=kind,
         as_of_kst=as_of_kst,
         fetch_page=fetch_page,
+        resolve_news_url=resolve_news_url,
     )
     limitations = list(limitations)
     now_utc = datetime.now(UTC).isoformat()

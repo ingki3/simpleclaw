@@ -16,6 +16,7 @@ from simpleclaw.agent.builtin_tools import (
     _fetch_static,
     _is_blocked_url,
     handle_web_fetch,
+    resolve_web_page_link,
 )
 
 
@@ -179,3 +180,32 @@ class TestRedirectHopGuard:
         result = await _fetch_static("https://example.com/loop")
 
         assert result.startswith("Error: too many redirects")
+
+
+class TestSafePageLinkResolution:
+    @pytest.mark.asyncio
+    async def test_resolves_matching_same_site_article_from_publisher_home(self, monkeypatch):
+        home = "https://publisher.example/"
+        title = "한국형 AI 에이전트 키운다 KAIST 공동연구소 설립"
+        body = f"""<html><body>
+          <a href="/ads">무관한 광고</a>
+          <a href="/news/123">{title}</a>
+        </body></html>"""
+        calls = _install_fake_aiohttp(monkeypatch, [_FakeResponse(200, body=body)])
+
+        result = await resolve_web_page_link(home, title)
+
+        assert result == "https://publisher.example/news/123"
+        assert calls == [home]
+
+    @pytest.mark.asyncio
+    async def test_rejects_matching_external_or_private_article_link(self, monkeypatch):
+        home = "https://publisher.example/"
+        title = "검증 기사 제목"
+        body = f"""<html><body>
+          <a href="https://evil.example/{title}">{title}</a>
+          <a href="http://169.254.169.254/latest">{title}</a>
+        </body></html>"""
+        _install_fake_aiohttp(monkeypatch, [_FakeResponse(200, body=body)])
+
+        assert await resolve_web_page_link(home, title) is None
