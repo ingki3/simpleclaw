@@ -1,8 +1,7 @@
 """Tests for the markdown persona parser."""
 
-from pathlib import Path
 import tempfile
-
+from pathlib import Path
 
 from simpleclaw.persona.models import FileType, SourceScope
 from simpleclaw.persona.parser import parse_markdown

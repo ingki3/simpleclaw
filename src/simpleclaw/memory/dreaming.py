@@ -44,10 +44,20 @@ from simpleclaw.memory.active_projects import (
     ActiveProjectStore,
     filter_active,
     merge_projects,
+)
+from simpleclaw.memory.active_projects import (
     render_section_body as render_active_projects_body,
 )
 from simpleclaw.memory.agent_update_filter import filter_agent_updates_with_stats
 from simpleclaw.memory.clustering import IncrementalClusterer
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.dreaming_runs import (
+    SKIP_EMPTY_RESULTS,
+    SKIP_MIDWRITE_ABORTED,
+    SKIP_NO_MESSAGES,
+    SKIP_PREFLIGHT_FAILED,
+    DreamingRunStore,
+)
 from simpleclaw.memory.insights import (
     InsightMeta,
     InsightStore,
@@ -62,18 +72,17 @@ from simpleclaw.memory.language_policy import (
     filter_text_to_primary,
     language_instruction_block,
 )
+from simpleclaw.memory.memory_items_sync import (
+    sync_active_projects_to_memory_items,
+    sync_cluster_summary_to_memory_item,
+    sync_insights_to_memory_items,
+)
 from simpleclaw.memory.models import (
     ClusterRecord,
     ConversationMessage,
     MemoryEntry,
     is_auto_trigger_channel,
 )
-from simpleclaw.memory.memory_items_sync import (
-    sync_active_projects_to_memory_items,
-    sync_cluster_summary_to_memory_item,
-    sync_insights_to_memory_items,
-)
-from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.prompt_loader import load_dreaming_prompt
 from simpleclaw.memory.protected_section import (
     ProtectedSectionError,
@@ -83,18 +92,11 @@ from simpleclaw.memory.protected_section import (
     has_managed_section,
     replace_section_body,
 )
+from simpleclaw.memory.reject_blocklist import RejectBlocklistStore
 from simpleclaw.memory.safety_backup import (
     SafetyBackupManager,
     find_legacy_memory_backup,
 )
-from simpleclaw.memory.dreaming_runs import (
-    SKIP_EMPTY_RESULTS,
-    SKIP_MIDWRITE_ABORTED,
-    SKIP_NO_MESSAGES,
-    SKIP_PREFLIGHT_FAILED,
-    DreamingRunStore,
-)
-from simpleclaw.memory.reject_blocklist import RejectBlocklistStore
 from simpleclaw.memory.suggestions import (
     BlocklistStore,
     SuggestionStore,
@@ -479,11 +481,11 @@ class DreamingPipeline:
 # BIZ-349 — DreamingPipeline을 facade/coordinator로 유지하고, 단계별 구현은
 # service modules에 둔다. 함수 객체를 클래스에 바인딩하여 기존 public/private method
 # 이름과 monkeypatch 호환성을 보존한다.
-from simpleclaw.memory.dreaming_active_projects import (  # noqa: E402
+from simpleclaw.memory.dreaming_active_projects import (
     is_active_projects_enabled,
     update_active_projects,
 )
-from simpleclaw.memory.dreaming_cluster_pipeline import (  # noqa: E402
+from simpleclaw.memory.dreaming_cluster_pipeline import (
     _call_dreaming_llm_for_key,
     _format_cluster_section_body,
     _parse_cluster_result,
@@ -494,7 +496,7 @@ from simpleclaw.memory.dreaming_cluster_pipeline import (  # noqa: E402
     summarize_cluster,
     upsert_memory_section,
 )
-from simpleclaw.memory.dreaming_language import (  # noqa: E402
+from simpleclaw.memory.dreaming_language import (
     _call_dreaming_llm,
     _enforce_language_policy,
     _extract_json_object,
@@ -508,7 +510,7 @@ from simpleclaw.memory.dreaming_language import (  # noqa: E402
     summarize_soul,
     summarize_user,
 )
-from simpleclaw.memory.dreaming_preflight import (  # noqa: E402
+from simpleclaw.memory.dreaming_preflight import (
     _apply_auto_trigger_filter,
     _format_dated_block,
     _preflight_protected_sections,
@@ -530,12 +532,12 @@ from simpleclaw.memory.dreaming_preflight import (  # noqa: E402
     update_soul_file,
     update_user_file,
 )
-from simpleclaw.memory.dreaming_runner import (  # noqa: E402
+from simpleclaw.memory.dreaming_runner import (
     _extract_and_store_proactive_opportunities,
     _run_after_preflight,
     run,
 )
-from simpleclaw.memory.insight_meta import (  # noqa: E402
+from simpleclaw.memory.insight_meta import (
     _format_auto_applied_bullets,
     _meets_auto_promote,
     _safe_sync_memory_items,

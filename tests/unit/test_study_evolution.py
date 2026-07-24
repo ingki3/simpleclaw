@@ -11,7 +11,7 @@ DoD:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from simpleclaw.study.evolution import (
     EvolutionSummary,
@@ -30,7 +30,7 @@ from simpleclaw.study.topic_registry import (
 )
 from simpleclaw.study.types import StudyTopic
 
-NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 12, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ def test_registry_from_study_topics_preserves_pinned_seed():
     assert topic.state.value == "pinned"
     assert topic.category == "markets"
     assert topic.mention_count == 5
-    assert topic.last_signal_at == datetime(2026, 7, 1, tzinfo=timezone.utc)
+    assert topic.last_signal_at == datetime(2026, 7, 1, tzinfo=UTC)
 
 
 def test_registry_from_study_topics_skips_unmapped_status():

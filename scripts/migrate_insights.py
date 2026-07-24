@@ -39,7 +39,7 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
-from simpleclaw.memory.insights import (  # noqa: E402  — 위 sys.path 셋업 후 import
+from simpleclaw.memory.insights import (
     InsightMeta,
     InsightStore,
     compute_confidence,
@@ -151,8 +151,7 @@ def build_insights(
                 cur.last_seen = observed_at
                 cur.text = bullet  # 가장 최근 표현으로 갱신
             # first_seen 은 더 이른 날짜로 갱신
-            if observed_at < cur.first_seen:
-                cur.first_seen = observed_at
+            cur.first_seen = min(cur.first_seen, observed_at)
             cur.confidence = compute_confidence(
                 cur.evidence_count, promotion_threshold
             )

@@ -4,8 +4,8 @@ fake stdio MCP server(fixtures/fake_mcp_server.py)를 실제 subprocess로 띄�
 MCPManager의 discovery → tool metadata → call 전체 경로를 검증한다.
 """
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
 

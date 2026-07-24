@@ -155,9 +155,7 @@ def _should_retry(
         return False
     if attempt > max_retries:
         return False
-    if timeout and not policy.retry_on_timeout:
-        return False
-    return True
+    return not (timeout and not policy.retry_on_timeout)
 
 
 def _record_exhausted_if_retried(
@@ -214,7 +212,7 @@ async def _run_once(
             process.communicate(),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await kill_process_group(process, metrics=metrics)
         raise SkillTimeoutError(
             f"Skill '{skill.name}' timed out after {timeout}s"

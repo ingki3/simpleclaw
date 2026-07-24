@@ -22,10 +22,10 @@ import logging
 import os
 import re
 import shutil
-import urllib.parse
-from html import unescape
 import stat as _stat
+import urllib.parse
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -328,8 +328,8 @@ async def _fetch_static(url: str) -> str:
                 body = await resp.text(errors="replace")
 
                 if "html" in content_type:
-                    body = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.S | re.I)
-                    body = re.sub(r"<style[^>]*>.*?</style>", "", body, flags=re.S | re.I)
+                    body = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
+                    body = re.sub(r"<style[^>]*>.*?</style>", "", body, flags=re.DOTALL | re.IGNORECASE)
                     body = re.sub(r"<[^>]+>", " ", body)
                     body = re.sub(r"\s+", " ", body).strip()
 
@@ -429,7 +429,7 @@ async def _fetch_headless(
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except ProcessLookupError:
@@ -449,7 +449,7 @@ async def _fetch_headless(
         # timeout 도 8 초로 짧게 — load 자체는 보통 1~2초; 안 풀리면 빠르게 get text 단계로.
         try:
             await _run(["wait", "--load", "load"], timeout=8)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.info("agent-browser wait load timed out for %s; continuing", url)
 
         rc, out, err = await _run(["get", "text", "body"], timeout=30)
@@ -464,7 +464,7 @@ async def _fetch_headless(
             )
         return body
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "Error: headless rendering timed out."
     except FileNotFoundError as exc:
         return f"Error: headless fallback unavailable — {str(exc)[:200]}"
@@ -629,7 +629,7 @@ def _decode_duckduckgo_href(href: str) -> str:
         href = "https:" + href
     parsed = urllib.parse.urlparse(href)
     query = urllib.parse.parse_qs(parsed.query)
-    if "uddg" in query and query["uddg"]:
+    if query.get("uddg"):
         return query["uddg"][0]
     return href
 
@@ -640,13 +640,13 @@ def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
     blocks = re.split(
         r'<div[^>]+class="(?:result(?:\s|")|[^"]*\sresult(?:\s|"))[^>]*>',
         html,
-        flags=re.I,
+        flags=re.IGNORECASE,
     )
     for block in blocks[1:]:
         link_match = re.search(
             r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
             block,
-            flags=re.I | re.S,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         if not link_match:
             continue
@@ -656,7 +656,7 @@ def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
             r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|'
             r'<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>',
             block,
-            flags=re.I | re.S,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         snippet = ""
         if snippet_match:
@@ -689,12 +689,14 @@ async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]
         )
     }
     params = {"q": query}
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        async with session.get(
+    async with (
+        aiohttp.ClientSession(timeout=timeout, headers=headers) as session,
+        session.get(
             "https://html.duckduckgo.com/html/",
             params=params,
             allow_redirects=True,
-        ) as resp:
+        ) as resp,
+    ):
             if resp.status != 200:
                 raise RuntimeError(f"DuckDuckGo returned HTTP {resp.status} — {resp.reason}")
             body = await resp.text(errors="replace")
@@ -745,7 +747,7 @@ def _resolve_google_search_model() -> str:
             from simpleclaw.config import load_llm_config
 
             gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
-        except Exception:  # noqa: BLE001 — 검색 도구는 설정 로드 실패 시 기본 모델로 degrade
+        except Exception:
             logger.exception("web_search Google grounding model config load failed")
             continue
         model = str(gemini.get("model", "") or "").strip()
@@ -773,7 +775,7 @@ def _resolve_google_search_api_key() -> str:
             from simpleclaw.config import load_llm_config
 
             gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
-        except Exception:  # noqa: BLE001 — 다음 후보로 폴백
+        except Exception:
             logger.exception("web_search Google grounding API key config load failed")
             continue
         api_key = str(gemini.get("api_key", "") or "").strip()
@@ -910,7 +912,7 @@ async def _fetch_search_result_body(url: str) -> str:
         return ""
     try:
         body = await _fetch_static(url)
-    except Exception:  # noqa: BLE001 — 보강 실패는 snippet-only로 graceful degrade
+    except Exception:
         return ""
     if not body or body.startswith("Error:") or _looks_like_block_page(body):
         return ""
@@ -972,7 +974,7 @@ async def handle_web_search(
                 continue
             try:
                 body = await body_fetcher(url)
-            except Exception:  # noqa: BLE001 — 개별 본문 회수 실패는 무시하고 진행
+            except Exception:
                 body = ""
             if body:
                 item["body"] = body
@@ -1327,7 +1329,7 @@ def handle_cron_action(
                 return "Error: expires_at must be an ISO datetime string."
             try:
                 expires_at = datetime.fromisoformat(
-                    expires_at_raw.replace("Z", "+00:00")
+                    expires_at_raw
                 )
             except ValueError:
                 return "Error: expires_at must be a valid ISO datetime string."

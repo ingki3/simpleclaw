@@ -29,7 +29,6 @@ from simpleclaw.memory.insights import InsightMeta, InsightStore, normalize_topi
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.memory.reject_blocklist import RejectBlocklistStore
 
-
 # ---------------------------------------------------------------------------
 # 공통 fixture
 # ---------------------------------------------------------------------------
@@ -252,7 +251,7 @@ class TestRejectBlocklist:
         그리고 같은 topic 이 다음 LLM 회차에 다시 추출되어도 ``apply_insight_meta``
         에서 drop 된다 — 즉, 차단이 회차를 가로질러 작동해야 한다(파일 영속화 검증).
         """
-        store, pipeline, _, user_file, insights, rejects = _make_pipeline(
+        store, pipeline, _, _user_file, insights, rejects = _make_pipeline(
             tmp_path, archive_marker=True
         )
 
@@ -311,7 +310,7 @@ class TestRejectBlocklist:
         ``register_reject`` 호출 후 다른 ``run()`` 사이클이 돌아도 차단 리스트는
         ``rejects.jsonl`` 파일에서 다시 로드되어 적용된다.
         """
-        store, pipeline, _, user_file, insights, _ = _make_pipeline(
+        store, pipeline, _, _user_file, insights, _ = _make_pipeline(
             tmp_path, archive_marker=True
         )
 

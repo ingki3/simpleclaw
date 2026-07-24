@@ -128,7 +128,8 @@ def test_sports_page_url_contains_as_of_date_and_team_query():
     decoded = unquote_plus(url)
     assert "search.naver.com/search.naver" in url
     assert "2026년 7월 24일" in decoded
-    assert "롯데 야구 어케 되었나?" in decoded
+    assert "롯데 자이언츠 경기 결과" in decoded
+    assert "어케 되었나" not in decoded
     assert "경기 결과" in decoded
 
 

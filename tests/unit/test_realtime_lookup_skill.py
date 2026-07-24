@@ -19,7 +19,6 @@ import pytest
 from simpleclaw.skills import realtime_lookup
 from simpleclaw.skills.realtime_sources import SourceDocument, SportsGameFact
 
-
 # ----------------------------------------------------------------------
 # raw query fallback parser
 # ----------------------------------------------------------------------

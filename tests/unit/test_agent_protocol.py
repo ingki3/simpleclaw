@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from simpleclaw.agents.protocol import (
     SubAgentErrorDetail,
@@ -61,7 +62,7 @@ class TestSubAgentResponse:
             )
 
     def test_invalid_status_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SubAgentResponse.model_validate({"status": "weird"})
 
     def test_meta_passes_through(self):

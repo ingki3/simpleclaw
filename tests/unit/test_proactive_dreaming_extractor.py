@@ -16,7 +16,6 @@ from simpleclaw.proactive.dreaming_extractor import DreamingOpportunityExtractor
 from simpleclaw.proactive.models import OpportunityType, ProactiveOpportunity
 from simpleclaw.proactive.store import OpportunityStore
 
-
 BASE = datetime(2026, 6, 1, 8, 30)
 
 

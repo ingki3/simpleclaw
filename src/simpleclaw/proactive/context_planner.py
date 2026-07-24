@@ -12,7 +12,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from simpleclaw.proactive.context_collectors import DreamingContextSnapshot, redact_context_text
+from simpleclaw.proactive.context_collectors import (
+    DreamingContextSnapshot,
+    redact_context_text,
+)
 from simpleclaw.proactive.models import (
     OpportunityType,
     ProactiveOpportunity,

@@ -40,9 +40,10 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import yaml
 from aiohttp import web
@@ -495,8 +496,8 @@ class AdminAPIServer:
 
     def _wrap(
         self,
-        handler: Callable[[web.Request], "Awaitable[web.StreamResponse]"],
-    ) -> Callable[[web.Request], "Awaitable[web.StreamResponse]"]:
+        handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+    ) -> Callable[[web.Request], Awaitable[web.StreamResponse]]:
         async def wrapped(request: web.Request) -> web.StreamResponse:
             self._metrics.requests += 1
             if self._auth_token:
@@ -510,8 +511,8 @@ class AdminAPIServer:
                 return await handler(request)
             except web.HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Admin API handler failed: %s", exc)
+            except Exception as exc:
+                logger.exception("Admin API handler failed")
                 return _json_error(500, f"Internal error: {exc}")
 
         return wrapped
@@ -682,7 +683,7 @@ def _list_backend_keys(backend: SecretBackend) -> list[str]:
     if isinstance(backend, EncryptedFileBackend):
         # vault 파일을 직접 읽어 이름만 노출 — 값 해독은 하지 않는다.
         try:
-            data = backend._read_vault()  # noqa: SLF001 — 의도적 접근
+            data = backend._read_vault()
             return list(data.keys())
         except SecretsError:
             return []
@@ -732,8 +733,10 @@ async def _http_test_send(
     started = time.monotonic()
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers or {}) as resp:
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as session,
+            session.post(url, json=payload, headers=headers or {}) as resp,
+        ):
                 status = resp.status
                 # 응답 본문은 디버깅 단서로만 짧게 보존.
                 try:
@@ -782,7 +785,7 @@ def _rotate_master_key(backend: EncryptedFileBackend) -> int:
 
     # 1) 모든 시크릿 평문화.
     plaintexts: dict[str, str] = {}
-    data = backend._read_vault()  # noqa: SLF001
+    data = backend._read_vault()
     for name in list(data.keys()):
         try:
             value = backend.get(name)
@@ -796,7 +799,7 @@ def _rotate_master_key(backend: EncryptedFileBackend) -> int:
 
     new_key = Fernet.generate_key()
     env_overrides = os.environ.get(MASTER_KEY_ENV)
-    key_path = backend._master_key_path  # noqa: SLF001
+    key_path = backend._master_key_path
     if env_overrides is None and key_path.exists():
         ts = time.strftime("%Y%m%d-%H%M%S")
         bak = key_path.with_suffix(key_path.suffix + f".{ts}.bak")
@@ -822,7 +825,7 @@ def _rotate_master_key(backend: EncryptedFileBackend) -> int:
             os.close(fd)
 
     # 3) 빈 볼트로 초기화 후 새 키로 다시 저장.
-    backend._write_vault({})  # noqa: SLF001
+    backend._write_vault({})
     for name, value in plaintexts.items():
         backend.set(name, value)
 
@@ -834,9 +837,9 @@ def _rotate_master_key(backend: EncryptedFileBackend) -> int:
 # ---------------------------------------------------------------------------
 
 __all__ = [
-    "AdminAPIServer",
-    "AdminAPIMetrics",
     "AREA_TO_YAML_KEY",
+    "AdminAPIMetrics",
+    "AdminAPIServer",
     "ChannelTestCallback",
     "_pending_changes_path",
 ]
@@ -844,7 +847,6 @@ __all__ = [
 
 # Route modules import helpers from this module, so bind them only after every
 # shared helper above is defined.
-from simpleclaw.channels import admin_routes as _admin_routes  # noqa: E402
+from simpleclaw.channels import admin_routes as _admin_routes
 
 _admin_routes.bind_admin_route_handlers(AdminAPIServer)
-

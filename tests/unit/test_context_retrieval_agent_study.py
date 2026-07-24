@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -132,7 +132,7 @@ async def test_study_failure_is_isolated_from_conversation_flow():
 # BIZ-394 — study context freshness/confidence gate
 # --------------------------------------------------------------------------
 
-_NOW = datetime(2026, 6, 30, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 30, tzinfo=UTC)
 
 
 def test_annotate_study_freshness_flags_stale_block():

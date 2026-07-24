@@ -13,7 +13,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
@@ -85,8 +85,8 @@ def _parse_published_at(raw: str) -> str | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat()
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _candidate_from_item(node: ET.Element) -> NewsCandidate | None:
@@ -137,7 +137,7 @@ def _as_datetime(value: object) -> datetime:
     raw = str(value or "").strip()
     if raw:
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw)
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=_KST)
             return parsed
@@ -153,7 +153,7 @@ def filter_recent_candidates(
     max_age_hours: int = 48,
 ) -> list[NewsCandidate]:
     """발행시각이 as-of freshness window 안인 RSS 후보만 남긴다."""
-    as_of = _as_datetime(as_of_kst).astimezone(timezone.utc)
+    as_of = _as_datetime(as_of_kst).astimezone(UTC)
     oldest = as_of - timedelta(hours=max(1, max_age_hours))
     accepted: list[NewsCandidate] = []
     for candidate in candidates:
@@ -161,7 +161,7 @@ def filter_recent_candidates(
             continue
         try:
             published = datetime.fromisoformat(candidate.published_at).astimezone(
-                timezone.utc
+                UTC
             )
         except ValueError:
             continue
@@ -178,9 +178,10 @@ def _as_of_date(as_of_kst: object) -> datetime:
 def build_sports_page_url(query: str, *, as_of_kst: object) -> str:
     """요청 기준일을 명시한 네이버 경기정보 검색 페이지 URL을 만든다."""
     date = _as_of_date(as_of_kst)
-    dated_query = (
-        f"{date.year}년 {date.month}월 {date.day}일 {query.strip()} 경기 결과"
-    ).strip()
+    # 구어체 질문 전체를 넣으면 네이버가 일반 web 결과만 반환하고 공식 경기 widget을
+    # 생략할 수 있다. 질문에서 팀을 정규화해 날짜+팀+결과의 최소 query를 사용한다.
+    target = canonical_kbo_team(query) or query.strip()
+    dated_query = f"{date.year}년 {date.month}월 {date.day}일 {target} 경기 결과".strip()
     return _NAVER_SEARCH_ENDPOINT + "?" + urlencode(
         {"where": "nexearch", "query": dated_query}
     )

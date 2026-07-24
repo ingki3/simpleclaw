@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ DRAIN_CRON_SKIPPED_MESSAGE = (
 
 def _utcnow() -> datetime:
     """기본 now 제공자 — 테스트는 now 콜백을 주입해 시간을 고정한다."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -68,7 +68,7 @@ def _parse_iso(value: object) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -92,7 +92,7 @@ class DrainState:
         }
 
     @classmethod
-    def idle(cls) -> "DrainState":
+    def idle(cls) -> DrainState:
         """drain 요청이 없는 기본 상태."""
         return cls(draining=False)
 

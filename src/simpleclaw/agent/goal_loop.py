@@ -15,7 +15,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.llm.models import LLMRequest
 

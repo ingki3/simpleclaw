@@ -295,7 +295,7 @@ async def test_handle_web_search_missing_api_key_is_readable(monkeypatch):
     """GOOGLE/GEMINI API key 가 모두 없으면 LLM-readable 오류를 반환한다(네트워크 없음)."""
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setattr(builtin_tools, "_candidate_google_search_config_paths", lambda: [])
+    monkeypatch.setattr(builtin_tools, "_candidate_google_search_config_paths", list)
 
     # 키 부재 시 client 생성 이전에 실패해야 하므로, client 생성이 호출되면 실패로 간주.
     def _should_not_build(api_key):

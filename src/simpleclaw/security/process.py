@@ -20,8 +20,9 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -92,9 +93,7 @@ def _is_group_alive(pgid: int) -> bool:
         return True
     except OSError as exc:
         # ESRCH는 그룹이 사라진 정상 케이스, 그 외 오류는 보수적으로 잔존으로 본다.
-        if exc.errno == errno.ESRCH:
-            return False
-        return True
+        return exc.errno != errno.ESRCH
 
 
 def _reap_zombies() -> int:
@@ -228,7 +227,7 @@ async def _kill_process_group_impl(
                 reaped_zombies=reaped,
                 pgid=pgid,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     # 3) SIGKILL로 강제 종료.
@@ -245,7 +244,7 @@ async def _kill_process_group_impl(
     # 짧은 타임아웃으로 감싸 영구 블로킹을 막는다.
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("SIGKILL 후에도 process.wait() 미반환 pid=%d", pid)
     except Exception as exc:  # noqa: BLE001 — 종료 경로는 모든 예외를 흡수.
         logger.debug("process.wait() 예외 무시: %s", exc)
