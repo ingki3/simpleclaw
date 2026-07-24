@@ -58,6 +58,7 @@ def test_google_news_rss_parser_and_stale_filter_use_as_of_time():
         url="https://publisher.example/article-recent",
         source="Example News",
         published_at="2026-07-24T11:30:00+00:00",
+        source_url="https://publisher.example/",
     )
     assert filter_recent_candidates(recent, as_of_kst=_AS_OF, max_age_hours=48)
     assert filter_recent_candidates(stale, as_of_kst=_AS_OF, max_age_hours=48) == []
@@ -247,3 +248,65 @@ async def test_sports_collection_fetches_only_dated_naver_game_page():
     assert sources[0].sports_fact.away_score == 5
     assert sources[0].sports_fact.home_score == 4
     assert limitations == []
+
+
+@pytest.mark.asyncio
+async def test_google_news_standard_article_link_resolves_then_fetches_publisher_body():
+    """실제 RSS의 Google article URL은 publisher URL 해석 후 원문을 읽는다."""
+    rss_url = build_google_news_rss_url("AI news")
+    google_url = "https://news.google.com/rss/articles/CBMi-real-token?oc=5"
+    publisher_url = "https://publisher.example/original-article"
+    xml = f"""<?xml version="1.0"?><rss><channel><item>
+      <title>검증 가능한 최신 AI 기사 - Example News</title>
+      <link>{google_url}</link>
+      <pubDate>Fri, 24 Jul 2026 11:30:00 GMT</pubDate>
+      <source url="https://publisher.example">Example News</source>
+    </item></channel></rss>"""
+    fetch = FetchRecorder({rss_url: xml, publisher_url: "검증된 publisher 원문입니다. " * 40})
+    resolved = []
+
+    async def resolve(candidate):
+        resolved.append(candidate)
+        return publisher_url
+
+    sources, limitations = await collect_sources(
+        query="AI news",
+        kind="news",
+        as_of_kst=_AS_OF,
+        fetch_page=fetch,
+        resolve_news_url=resolve,
+    )
+
+    assert resolved[0].url == google_url
+    assert resolved[0].source_url == "https://publisher.example"
+    assert fetch.urls == [rss_url, publisher_url]
+    assert [source.url for source in sources] == [publisher_url]
+    assert limitations == []
+
+
+@pytest.mark.asyncio
+async def test_google_news_standard_link_without_safe_resolution_fails_closed():
+    rss_url = build_google_news_rss_url("AI news")
+    google_url = "https://news.google.com/rss/articles/CBMi-real-token?oc=5"
+    xml = f"""<?xml version="1.0"?><rss><channel><item>
+      <title>검증 가능한 최신 AI 기사 - Example News</title>
+      <link>{google_url}</link>
+      <pubDate>Fri, 24 Jul 2026 11:30:00 GMT</pubDate>
+      <source url="https://publisher.example">Example News</source>
+    </item></channel></rss>"""
+    fetch = FetchRecorder({rss_url: xml})
+
+    async def reject(_candidate):
+        return None
+
+    sources, limitations = await collect_sources(
+        query="AI news",
+        kind="news",
+        as_of_kst=_AS_OF,
+        fetch_page=fetch,
+        resolve_news_url=reject,
+    )
+
+    assert sources == []
+    assert fetch.urls == [rss_url]
+    assert any("publisher URL" in item for item in limitations)

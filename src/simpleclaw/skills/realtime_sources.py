@@ -27,6 +27,7 @@ _MAX_NEWS_SOURCES = 2
 _MAX_SOURCE_CHARS = 8000
 
 FetchPage = Callable[[str], Awaitable[str]]
+ResolveNewsUrl = Callable[["NewsCandidate"], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class NewsCandidate:
     url: str
     source: str
     published_at: str | None
+    source_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ def _candidate_from_item(node: ET.Element) -> NewsCandidate | None:
         url=url,
         source=source,
         published_at=_parse_published_at(node.findtext("pubDate") or ""),
+        source_url=(source_node.get("url") or "").strip() if source_node is not None else "",
     )
 
 
@@ -472,6 +475,7 @@ async def _collect_news_sources(
     query: str,
     as_of_kst: object,
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None,
 ) -> tuple[list[SourceDocument], list[str]]:
     limitations: list[str] = []
     rss_url = build_google_news_rss_url(query)
@@ -489,15 +493,20 @@ async def _collect_news_sources(
 
     sources: list[SourceDocument] = []
     for candidate in recent[:_MAX_NEWS_SOURCES]:
-        # Google News RSS의 news.google.com 링크는 publisher URL이 아니다. FetchPage
-        # 계약에는 최종 redirect URL이 없으므로 실제 원문 URL을 검증하지 못하면 닫힌다.
+        # Google News RSS article token은 publisher URL이 아니다. RSS source
+        # 홈페이지에서 same-site 제목 anchor를 안전하게 확인한 뒤 원문만 fetch한다.
+        target_url = candidate.url
         if _is_google_news_url(candidate.url):
-            limitations.append(
-                "Google News redirect에서 실제 publisher URL을 확인하지 못함: "
-                f"{candidate.source}"
+            target_url = (
+                await resolve_news_url(candidate) if resolve_news_url is not None else None
             )
-            continue
-        body = await fetch_page(candidate.url)
+            if not target_url:
+                limitations.append(
+                    "Google News 후보의 publisher URL을 안전하게 확인하지 못함: "
+                    f"{candidate.source}"
+                )
+                continue
+        body = await fetch_page(target_url)
         if _looks_like_fetch_failure(body):
             limitations.append(f"원문 fetch 실패: {candidate.source}")
             continue
@@ -513,7 +522,7 @@ async def _collect_news_sources(
         sources.append(
             SourceDocument(
                 source=candidate.source,
-                url=candidate.url,
+                url=target_url,
                 text=text[:_MAX_SOURCE_CHARS],
                 source_kind="news_article",
                 title=candidate.title,
@@ -595,6 +604,7 @@ async def collect_sources(
     kind: str,
     as_of_kst: object,
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None = None,
 ) -> tuple[list[SourceDocument], list[str]]:
     """도메인별 source policy에 따라 검증된 원문 source만 반환한다."""
     if kind == "sports":
@@ -608,6 +618,7 @@ async def collect_sources(
             query=query,
             as_of_kst=as_of_kst,
             fetch_page=fetch_page,
+            resolve_news_url=resolve_news_url,
         )
     return await _collect_direct_search_source(
         query=query,
@@ -619,6 +630,7 @@ async def collect_sources(
 __all__ = [
     "FetchPage",
     "NewsCandidate",
+    "ResolveNewsUrl",
     "SourceDocument",
     "SportsGameFact",
     "build_google_news_rss_url",

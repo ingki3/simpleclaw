@@ -2367,7 +2367,10 @@ class AgentOrchestrator:
     ) -> str | None:
         """등록 스킬 실행. realtime source는 내장 web-fetch 보안 정책을 재사용한다."""
         if skill_name.lower() == _REALTIME_LOOKUP_SKILL_NAME:
-            from simpleclaw.agent.builtin_tools import handle_web_fetch
+            from simpleclaw.agent.builtin_tools import (
+                handle_web_fetch,
+                resolve_web_page_link,
+            )
 
             payload = decode_realtime_lookup_payload(args_str)
 
@@ -2377,7 +2380,19 @@ class AgentOrchestrator:
                     headless_binary=self._headless_binary,
                 )
 
-            result = await run_realtime_lookup(payload, fetch_page=fetch_page)
+            async def resolve_news_url(candidate) -> str | None:
+                title = candidate.title
+                suffix = f" - {candidate.source}"
+                title = title.removesuffix(suffix)
+                if not candidate.source_url:
+                    return None
+                return await resolve_web_page_link(candidate.source_url, title)
+
+            result = await run_realtime_lookup(
+                payload,
+                fetch_page=fetch_page,
+                resolve_news_url=resolve_news_url,
+            )
             return json.dumps(result, ensure_ascii=False)
         return await skill_dispatch.execute_registered_skill(self, skill_name, args_str)
 
