@@ -411,6 +411,53 @@ async def test_live_fact_fetch_blocked_final_is_blocked(
 
 
 @pytest.mark.asyncio
+async def test_low_confidence_structured_result_does_not_flip_live_evidence(
+    config_file, monkeypatch,
+):
+    """confidence=low structured JSON은 tool loop의 live evidence gate를 열지 않는다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(_tc):
+        return (
+            '{"kind":"sports","confidence":"low",'
+            '"facts":[{"type":"sports_score","away_score":2,"home_score":1}]}'
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    responses = [
+        _tool_response(
+            "c1",
+            "execute_skill",
+            {"skill_name": "realtime-lookup-skill", "command": "payload"},
+        ),
+        _text_response("롯데가 2:1로 이겼고 경기는 LIVE입니다."),
+    ]
+    call_idx = {"i": 0}
+
+    async def fake_send(_request):
+        index = call_idx["i"]
+        call_idx["i"] += 1
+        return responses[index]
+
+    orch._router.send = fake_send
+    state = ToolLoopState(
+        user_content="롯데 야구 어케 되었나?",
+        messages=[{"role": "user", "content": "롯데 야구 어케 되었나?"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        live_evidence_seen=False,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert "확인하지 못" in result.text
+    assert "2:1" not in result.text
+    assert "LIVE" not in result.text
+
+
+@pytest.mark.asyncio
 async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answer(
     config_file, monkeypatch,
 ):

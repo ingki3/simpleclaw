@@ -17,6 +17,7 @@ import json
 import pytest
 
 from simpleclaw.skills import realtime_lookup
+from simpleclaw.skills.realtime_sources import SourceDocument, SportsGameFact
 
 # ----------------------------------------------------------------------
 # raw query fallback parser
@@ -49,10 +50,15 @@ def test_parse_args_empty_returns_empty_dict():
 def test_main_with_raw_korean_args_does_not_error(monkeypatch, capsys):
     """raw Korean args 직접 호출이 Unicode/base64 오류로 끝나지 않는다."""
     monkeypatch.setattr(
-        realtime_lookup, "discover_result_links", lambda query, limit=2: ([], [])
-    )
-    monkeypatch.setattr(
-        realtime_lookup, "fetch_text", lambda url: ("", ["network disabled in test"])
+        realtime_lookup,
+        "lookup",
+        lambda payload: {
+            "query": payload["query"],
+            "confidence": "low",
+            "facts": [],
+            "timeline_validation": {"status": "no_evidence"},
+            "limitations": ["network disabled in test"],
+        },
     )
 
     rc = realtime_lookup.main(["오늘", "코스피", "지수", "마감"])
@@ -189,14 +195,23 @@ def test_extract_time_signals_collects_dates():
 # ----------------------------------------------------------------------
 
 
+def _document_source(text: str) -> SourceDocument:
+    return SourceDocument(
+        source="Example News",
+        url="https://example.com/article",
+        text=text,
+        source_kind="news_article",
+        title="검증 기사",
+        published_at="2026-06-26T09:00:00+00:00",
+    )
+
+
 def test_lookup_includes_timeline_validation_and_freshness(monkeypatch):
     """lookup()은 timeline_validation, freshness, limitations를 포함한다."""
-    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
-    monkeypatch.setattr(
-        realtime_lookup,
-        "fetch_text",
-        lambda url: ("결승전은 내일 오후 8시 개최 예정입니다." * 5, []),
-    )
+    async def fake_collect_sources(**_kwargs):
+        return [_document_source("결승전은 내일 오후 8시 개최 예정입니다." * 5)], []
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
 
     result = realtime_lookup.lookup(
         {"query": "오늘 결승전 결과", "as_of_kst": "2026-06-26T20:00:00+09:00"}
@@ -214,15 +229,14 @@ def test_lookup_includes_timeline_validation_and_freshness(monkeypatch):
 
 def test_lookup_marks_pending_source_with_limitation(monkeypatch):
     """current_pending 출처는 부분 확정 한계를 limitations로 명시한다."""
-    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
-    monkeypatch.setattr(
-        realtime_lookup,
-        "fetch_text",
-        lambda url: (
-            "1차전은 종료됐습니다. 2차전은 내일 예정으로 남아 있습니다." * 5,
-            [],
-        ),
-    )
+    async def fake_collect_sources(**_kwargs):
+        return [
+            _document_source(
+                "1차전은 종료됐습니다. 2차전은 내일 예정으로 남아 있습니다." * 5
+            )
+        ], []
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
 
     result = realtime_lookup.lookup({"query": "시리즈 경기 결과"})
 
@@ -233,12 +247,10 @@ def test_lookup_marks_pending_source_with_limitation(monkeypatch):
 
 def test_lookup_non_timeline_query_keeps_evidence(monkeypatch):
     """비일정 질문은 timeline 검증을 참고용으로만 두고 evidence는 유지한다."""
-    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
-    monkeypatch.setattr(
-        realtime_lookup,
-        "fetch_text",
-        lambda url: ("서울의 오늘 날씨는 맑고 기온은 25도입니다." * 5, []),
-    )
+    async def fake_collect_sources(**_kwargs):
+        return [_document_source("서울의 오늘 날씨는 맑고 기온은 25도입니다." * 5)], []
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
 
     result = realtime_lookup.lookup({"query": "서울 날씨 어때?"})
 
@@ -248,88 +260,85 @@ def test_lookup_non_timeline_query_keeps_evidence(monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# multi-source 본문 추출 (검색 품질)
+# structured facts / usable evidence
 # ----------------------------------------------------------------------
 
 
-def test_extract_result_links_decodes_ddg_and_filters_assets():
-    """DuckDuckGo HTML 결과에서 redirect URL을 복원하고 자산/내부 링크는 제외한다."""
-    ddg_html = """
-    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.a.com%2Fp1&amp;rut=x">기사1</a>
-    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcdn.example.com%2Fapp.js">script</a>
-    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.b.com%2Fp2&amp;rut=y">기사2</a>
-    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnews.a.com%2Fp1">중복</a>
-    <a href="https://other.site/nav">non-result anchor</a>
-    """
-
-    links = realtime_lookup.extract_result_links(ddg_html, limit=5)
-
-    assert "https://news.a.com/p1" in links
-    assert "https://news.b.com/p2" in links
-    # 정적 자산(.js)·result__a 아닌 내비 앵커는 제외.
-    assert "https://cdn.example.com/app.js" not in links
-    assert "https://other.site/nav" not in links
-    # 중복은 순서를 보존하며 한 번만 남는다.
-    assert links.count("https://news.a.com/p1") == 1
-
-
-def test_gather_evidence_follows_links_to_article_bodies(monkeypatch):
-    """결과 링크를 따라 각 기사 본문을 개별 출처로 회수한다."""
-    monkeypatch.setattr(
-        realtime_lookup,
-        "discover_result_links",
-        lambda query, limit=2: (
-            ["https://news.a.com/p1", "https://news.b.com/p2"],
-            [],
-        ),
-    )
-    bodies = {
-        "https://news.a.com/p1": ("A 기사 본문 " * 30, []),
-        "https://news.b.com/p2": ("B 기사 본문 " * 30, []),
-    }
-    monkeypatch.setattr(realtime_lookup, "fetch_text", lambda url: bodies[url])
-
-    sources, limitations = realtime_lookup.gather_evidence("최신 뉴스", "news")
-
-    assert [s["url"] for s in sources] == [
-        "https://news.a.com/p1",
-        "https://news.b.com/p2",
-    ]
-    assert sources[0]["source"] == "news.a.com"
-    assert not limitations
-
-
 def test_lookup_multi_source_yields_high_confidence(monkeypatch):
-    """두 출처 본문을 확보하고 한계가 없으면 confidence가 high로 올라간다."""
-    monkeypatch.setattr(
-        realtime_lookup,
-        "discover_result_links",
-        lambda query, limit=2: (["https://a.com/x", "https://b.com/y"], []),
-    )
-    monkeypatch.setattr(
-        realtime_lookup,
-        "fetch_text",
-        lambda url: ("이정후 타율 0.332 시즌 기록 정리. " * 20, []),
-    )
+    """검증된 원문 두 건은 structured source facts와 high confidence를 만든다."""
+    async def fake_collect_sources(**_kwargs):
+        first = _document_source("A 기사 본문 " * 50)
+        second = SourceDocument(
+            source="Other News",
+            url="https://other.example/article",
+            text="B 기사 본문 " * 50,
+            source_kind="news_article",
+            title="다른 검증 기사",
+            published_at="2026-06-26T08:30:00+00:00",
+        )
+        return [first, second], []
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
 
     result = realtime_lookup.lookup({"query": "이정후 시즌 타율"})
 
     assert len(result["evidence"]) == 2
     assert result["confidence"] == "high"
-    assert result["facts"][0]["source"] == "a.com, b.com"
+    assert [fact["type"] for fact in result["facts"]] == [
+        "source_excerpt",
+        "source_excerpt",
+    ]
+    assert realtime_lookup.has_usable_realtime_evidence(result) is True
 
 
-def test_gather_evidence_falls_back_to_serp_text_when_no_links(monkeypatch):
-    """결과 링크가 없으면 SERP 추출 텍스트로 폴백해 최소 동작을 보장한다."""
-    monkeypatch.setattr(realtime_lookup, "discover_result_links", lambda query, limit=2: ([], []))
-    monkeypatch.setattr(
-        realtime_lookup, "fetch_text", lambda url: ("SERP 본문 텍스트 " * 20, [])
+def test_lookup_sports_score_fact_keeps_all_values_together(monkeypatch):
+    """스포츠 팀·점수·상태·승패·일자는 한 sports_score fact에 함께 있어야 한다."""
+    fact = SportsGameFact(
+        league="KBO",
+        event_date="2026-07-24",
+        status="final",
+        away_team="kt wiz",
+        away_score=5,
+        home_team="롯데 자이언츠",
+        home_score=4,
+        winner="kt wiz",
+        source="Naver Sports Game Card",
+        source_url="https://search.naver.com/dated-game",
     )
 
-    sources, _ = realtime_lookup.gather_evidence("오늘 뉴스", "news")
+    async def fake_collect_sources(**_kwargs):
+        return [
+            SourceDocument(
+                source=fact.source,
+                url=fact.source_url,
+                text="2026-07-24 kt wiz 5 : 4 롯데 자이언츠 경기종료 최종 final",
+                source_kind="sports_page",
+                event_date=fact.event_date,
+                sports_fact=fact,
+            )
+        ], []
 
-    assert len(sources) == 1
-    assert sources[0]["source"] == "Naver Search"
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    result = realtime_lookup.lookup(
+        {"query": "롯데 야구 어케 되었나?", "as_of_kst": "2026-07-24T22:18:43+09:00"}
+    )
+
+    assert result["facts"] == [{"type": "sports_score", **fact.__dict__}]
+    assert result["timeline_validation"]["status"] == "final"
+    assert result["confidence"] == "high"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"confidence": "low", "facts": [{"type": "sports_score"}]},
+        {"confidence": "medium", "facts": []},
+        {"confidence": "high", "facts": []},
+        "not-json",
+    ],
+)
+def test_low_or_empty_structured_evidence_is_not_usable(result):
+    assert realtime_lookup.has_usable_realtime_evidence(result) is False
 
 
 def test_html_to_text_strips_chrome_blocks():

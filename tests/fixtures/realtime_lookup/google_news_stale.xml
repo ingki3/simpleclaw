@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Google News - stale fixture</title>
+    <item>
+      <title>오래된 기사 - Old News</title>
+      <link>https://publisher.example/article-stale</link>
+      <guid>stale-1</guid>
+      <pubDate>Wed, 15 Jul 2026 03:00:00 GMT</pubDate>
+      <source url="https://publisher.example/">Old News</source>
+    </item>
+  </channel>
+</rss>

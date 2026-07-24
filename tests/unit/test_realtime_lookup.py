@@ -7,6 +7,9 @@ system context로 주입하는 방식이어야 한다.
 
 from __future__ import annotations
 
+import base64
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -165,7 +168,11 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
-        return_value='{"kind":"news","facts":[{"claim":"AI 뉴스 근거"}]}'
+        return_value=(
+            '{"kind":"news","confidence":"medium",'
+            '"facts":[{"type":"source_document","source":"Example",'
+            '"url":"https://example.com","title":"AI 뉴스 근거"}]}'
+        )
     )
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(return_value=_text_response("근거 기반 답변"))
@@ -192,6 +199,125 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        '{"kind":"sports","confidence":"low","facts":[{"type":"sports_score"}]}',
+        '{"kind":"sports","confidence":"medium","facts":[]}',
+    ],
+)
+async def test_low_or_empty_realtime_evidence_blocks_unsupported_score(
+    config_file,
+    tmp_path,
+    evidence,
+):
+    """low/empty evidence는 2:1 승리·LIVE 같은 exact sports 문구를 허용하지 않는다."""
+    orchestrator = AgentOrchestrator(config_file)
+    _register_realtime_skill(orchestrator, tmp_path)
+    orchestrator._execute_skill = AsyncMock(return_value=evidence)
+    orchestrator._router = MagicMock()
+    orchestrator._router.send = AsyncMock(
+        return_value=_text_response("롯데가 2:1로 승리했고 현재 LIVE입니다.")
+    )
+
+    result = await orchestrator.process_message("롯데 야구 어케 되었나?", 1, 1)
+
+    assert "확인하지 못" in result
+    assert "2:1" not in result
+    assert "LIVE" not in result
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
+async def test_one_sports_score_fact_allows_only_its_exact_result(
+    config_file,
+    tmp_path,
+):
+    """완결된 sports_score fact는 exact score final 답변의 usable evidence다."""
+    orchestrator = AgentOrchestrator(config_file)
+    _register_realtime_skill(orchestrator, tmp_path)
+    orchestrator._execute_skill = AsyncMock(
+        return_value=json.dumps(
+            {
+                "kind": "sports",
+                "confidence": "high",
+                "facts": [
+                    {
+                        "type": "sports_score",
+                        "league": "KBO",
+                        "event_date": "2026-07-24",
+                        "status": "final",
+                        "away_team": "kt wiz",
+                        "away_score": 5,
+                        "home_team": "롯데 자이언츠",
+                        "home_score": 4,
+                        "winner": "kt wiz",
+                        "source": "Naver Sports Game Card",
+                        "source_url": "https://search.naver.com/dated-game",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+    orchestrator._router = MagicMock()
+    orchestrator._router.send = AsyncMock(
+        return_value=_text_response("KT가 롯데를 5:4로 이겼고 경기는 종료됐습니다.")
+    )
+
+    result = await orchestrator.process_message("롯데 야구 어케 되었나?", 1, 1)
+
+    assert result == "KT가 롯데를 5:4로 이겼고 경기는 종료됐습니다."
+    request = orchestrator._router.send.call_args_list[0][0][0]
+    assert "same `type: sports_score` fact" in request.system_prompt
+    assert "Never merge values across snippets" in request.system_prompt
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
+async def test_runtime_realtime_source_reuses_builtin_web_fetch_policy(
+    config_file,
+    monkeypatch,
+):
+    """production realtime source fetch는 SSRF/redirect/headless web-fetch handler를 탄다."""
+    orchestrator = AgentOrchestrator(config_file)
+    fixture = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "realtime_lookup"
+        / "naver_kbo_final.html"
+    ).read_text(encoding="utf-8")
+    fetched: list[str] = []
+
+    async def fake_handle_web_fetch(routing, *, headless_binary=None):
+        fetched.append(routing["url"])
+        return fixture
+
+    from simpleclaw.agent import builtin_tools
+
+    monkeypatch.setattr(builtin_tools, "handle_web_fetch", fake_handle_web_fetch)
+    raw = json.dumps(
+        {
+            "query": "롯데 야구 어케 되었나?",
+            "as_of_kst": "2026-07-24T22:18:43+09:00",
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    token = base64.urlsafe_b64encode(raw).decode("ascii")
+
+    output = await orchestrator._execute_skill("realtime-lookup-skill", token)
+    result = json.loads(output or "{}")
+
+    assert len(fetched) == 1
+    assert "2026" in fetched[0]
+    assert "duckduckgo.com" not in fetched[0]
+    assert result["facts"][0]["type"] == "sports_score"
+    assert result["facts"][0]["away_score"] == 5
+    assert result["facts"][0]["home_score"] == 4
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
 async def test_market_impact_question_triggers_realtime_lookup(
     config_file,
     tmp_path,
@@ -204,7 +330,11 @@ async def test_market_impact_question_triggers_realtime_lookup(
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
-        return_value='{"kind":"market","facts":[{"claim":"증시 영향 근거"}]}'
+        return_value=(
+            '{"kind":"market","confidence":"medium",'
+            '"facts":[{"type":"source_document","source":"Example",'
+            '"url":"https://example.com","title":"증시 영향 근거"}]}'
+        )
     )
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(return_value=_text_response("근거 기반 답변"))
@@ -255,7 +385,11 @@ async def test_internal_realtime_skill_not_exposed_as_llm_callable(
     _register_realtime_skill(orchestrator, tmp_path)
     normal = _register_normal_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
-        return_value='{"kind":"news","facts":[{"claim":"근거"}]}'
+        return_value=(
+            '{"kind":"news","confidence":"medium",'
+            '"facts":[{"type":"source_document","source":"Example",'
+            '"url":"https://example.com","title":"근거"}]}'
+        )
     )
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(return_value=_text_response("답변"))

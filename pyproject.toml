@@ -93,6 +93,7 @@ dev = [
 "src/simpleclaw/skills/materializer.py" = ["DTZ005"]
 "src/simpleclaw/skills/mcp_client.py" = ["BLE001"]
 "src/simpleclaw/skills/realtime_lookup.py" = ["S110"]
+"src/simpleclaw/skills/realtime_sources.py" = ["DTZ007"]
 "src/simpleclaw/voice/stt.py" = ["ASYNC230"]
 "tests/test_e2e_user_scenarios.py" = ["DTZ005"]
 "tests/test_prd_scenarios.py" = ["DTZ005"]

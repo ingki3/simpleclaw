@@ -16,23 +16,27 @@ base64 오류 없이 query payload로 처리되도록 fallback parser를 둔다.
 
 from __future__ import annotations
 
+import asyncio
 import base64
-import html
 import json
 import re
 import sys
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, urlparse
 from urllib.request import Request, urlopen
+
+from simpleclaw.skills.realtime_sources import (
+    FetchPage,
+    SourceDocument,
+    collect_sources,
+    html_to_visible_text,
+)
 
 _SEARCH_TIMEOUT_SECONDS = 8
 # SERP chrome 한 덩어리를 통째로 쓰던 시절의 보수적 cap. 폴백 경로에서만 쓴다.
-_MAX_SNIPPET_CHARS = 1800
 # 결과 기사 본문을 직접 추출할 때 허용하는 소스별 최대 길이.
 _MAX_SOURCE_CHARS = 2200
-# 한 질의에서 본문까지 회수할 최대 출처 수(교차검증용, 지연·타임아웃 균형).
-_MAX_SOURCES = 2
 # 읽을 만한 본문으로 인정하는 최소 길이(이 미만이면 chrome/차단 페이지로 간주).
 _MIN_READABLE_CHARS = 120
 _USER_AGENT = (
@@ -122,12 +126,6 @@ def classify_query(query: str) -> str:
     return "general"
 
 
-def build_search_url(query: str, kind: str) -> str:
-    """도메인에 맞는 보수적 검색 URL을 만든다."""
-    where = "news" if kind == "news" else "nexearch"
-    return f"https://search.naver.com/search.naver?where={where}&query={quote_plus(query)}"
-
-
 def _html_to_text(body: str, limit: int = _MAX_SOURCE_CHARS) -> str:
     """HTML에서 스크립트/페이지 chrome/태그를 제거해 본문 위주 텍스트로 축약한다.
 
@@ -135,13 +133,7 @@ def _html_to_text(body: str, limit: int = _MAX_SOURCE_CHARS) -> str:
     로그인 안내 같은 노이즈를 잔뜩 담는다. 이런 chrome 블록을 먼저 제거해 실제
     기사·데이터 텍스트 비중을 높인 뒤 태그를 벗긴다.
     """
-    body = re.sub(r"(?is)<script.*?</script>", " ", body)
-    body = re.sub(r"(?is)<style.*?</style>", " ", body)
-    body = re.sub(r"(?is)<(nav|header|footer|aside|form)\b.*?</\1>", " ", body)
-    body = re.sub(r"(?is)<[^>]+>", " ", body)
-    body = html.unescape(body)
-    body = re.sub(r"\s+", " ", body).strip()
-    return body[:limit]
+    return html_to_visible_text(body, limit=limit)
 
 
 def _fetch_raw(url: str) -> tuple[str, list[str]]:
@@ -166,106 +158,10 @@ def fetch_text(url: str) -> tuple[str, list[str]]:
     return text, []
 
 
-# 결과 링크는 DuckDuckGo HTML 엔드포인트로 발견한다. 네이버 SERP 정적 HTML에는
-# 실제 결과 기사 링크가 JS 렌더링돼 들어있지 않아(자산/트래커 링크만 노출) 본문
-# 추적이 불가능한 반면, DuckDuckGo HTML은 정적으로 실제 목적지 URL을 돌려준다.
-_DUCKDUCKGO_ENDPOINT = "https://html.duckduckgo.com/html/"
-_DDG_RESULT_RE = re.compile(
-    r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"', re.IGNORECASE
-)
-_STATIC_ASSET_SUFFIXES = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".xml")
-
-
-def _source_label(url: str) -> str:
-    """URL에서 사람이 읽을 출처 호스트 라벨을 만든다."""
-    host = urlparse(url).netloc
-    return re.sub(r"^www\.", "", host) or "Web"
-
-
-def _decode_ddg_href(href: str) -> str:
-    """DuckDuckGo redirect href(`/l/?uddg=...`)에서 실제 목적지 URL을 복원한다."""
-    href = html.unescape(href)
-    if href.startswith("//"):
-        href = "https:" + href
-    parsed = urlparse(href)
-    query = parse_qs(parsed.query)
-    if query.get("uddg"):
-        return query["uddg"][0]
-    return href
-
-
-def extract_result_links(serp_html: str, limit: int = _MAX_SOURCES) -> list[str]:
-    """DuckDuckGo HTML 결과에서 실제 콘텐츠 출처 URL을 순서대로 추출한다.
-
-    SERP를 통째로 텍스트화하면 메뉴·광고 chrome만 남으므로, 결과 링크를 따라가
-    기사 본문을 직접 회수하기 위한 후보 URL을 모은다. 검색엔진 내부 링크·정적 자원
-    링크는 제외하고, 중복은 순서를 보존하며 제거한다.
-    """
-    links: list[str] = []
-    for raw in _DDG_RESULT_RE.findall(serp_html):
-        url = _decode_ddg_href(raw)
-        lowered = url.lower()
-        if not lowered.startswith(("http://", "https://")):
-            continue
-        if "duckduckgo.com" in lowered:
-            continue
-        if urlparse(lowered).path.endswith(_STATIC_ASSET_SUFFIXES):
-            continue
-        if url not in links:
-            links.append(url)
-        if len(links) >= limit:
-            break
-    return links
-
-
-def discover_result_links(
-    query: str,
-    limit: int = _MAX_SOURCES,
-) -> tuple[list[str], list[str]]:
-    """질의어로 DuckDuckGo HTML을 조회해 결과 링크 후보와 limitation을 반환한다."""
-    url = f"{_DUCKDUCKGO_ENDPOINT}?q={quote_plus(query)}"
-    body, limitations = _fetch_raw(url)
-    if not body:
-        return [], limitations
-    return extract_result_links(body, limit=limit), []
-
-
-def gather_evidence(
-    query: str,
-    kind: str,
-    max_sources: int = _MAX_SOURCES,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """검색 결과 링크를 따라 여러 출처의 본문을 회수해 evidence 소스 목록을 만든다.
-
-    1) SERP에서 결과 링크 후보를 뽑고, 2) 상위 N개의 실제 기사 본문을 추출한다.
-    링크를 못 얻거나 본문 회수에 모두 실패하면 SERP 추출 텍스트로 폴백해 최소한
-    기존 동작 수준은 보장한다.
-
-    Returns:
-        ``(sources, limitations)`` — ``sources`` 는 ``{source, url, text}`` dict 목록.
-    """
-    limitations: list[str] = []
-    links, link_lims = discover_result_links(query, limit=max_sources)
-    limitations.extend(link_lims)
-
-    sources: list[dict[str, Any]] = []
-    for url in links[:max_sources]:
-        text, lims = fetch_text(url)
-        if text and len(text) >= _MIN_READABLE_CHARS:
-            sources.append({"source": _source_label(url), "url": url, "text": text})
-        else:
-            limitations.extend(lims)
-
-    # 결과 링크에서 본문을 한 건도 못 얻으면 네이버 SERP 추출 텍스트로 폴백한다.
-    if not sources:
-        serp_url = build_search_url(query, kind)
-        text, lims = fetch_text(serp_url)
-        if text:
-            sources.append({"source": "Naver Search", "url": serp_url, "text": text})
-        else:
-            limitations.extend(lims)
-
-    return sources, limitations
+async def _default_fetch_page(url: str) -> str:
+    """CLI wrapper용 stdlib fetch callback (production은 내장 web_fetch를 주입)."""
+    body, _limitations = await asyncio.to_thread(_fetch_raw, url)
+    return body
 
 
 # 질문 자체가 "일정/상태/결과의 시점"에 민감한지 판정하는 cue.
@@ -510,61 +406,178 @@ def _timeline_notes(status: str, is_sensitive: bool) -> list[str]:
     return [mapping.get(status, mapping["unknown"])]
 
 
-def lookup(payload: dict[str, Any]) -> dict[str, Any]:
+def _fact_from_source(source: SourceDocument) -> dict[str, Any]:
+    """검증된 source를 최종 모델이 판별 가능한 구조화 fact로 변환한다."""
+    if source.sports_fact is not None:
+        return {
+            "type": "sports_score",
+            **asdict(source.sports_fact),
+        }
+    # RSS metadata/title만 fact로 만들지 않는다. 최소 길이 검증을 통과해 실제로
+    # fetch한 publisher 원문 발췌만 claim으로 노출한다.
+    return {
+        "type": "source_excerpt",
+        "claim": source.text[:600],
+        "source": source.source,
+        "source_url": source.url,
+        "published_at": source.published_at,
+    }
+
+
+def _parsed_result(value: object) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _expected_event_date(
+    result: dict[str, Any], payload: dict[str, Any] | None
+) -> str | None:
+    raw = payload.get("as_of_kst") if payload is not None else None
+    freshness = result.get("freshness")
+    if raw is None and isinstance(freshness, dict):
+        raw = freshness.get("as_of_kst")
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw)).date().isoformat()
+    except ValueError:
+        return None
+
+
+def is_usable_realtime_evidence(
+    result: object,
+    payload: dict[str, Any] | None = None,
+) -> bool:
+    """live-fact final을 허용할 수 있는 구조화 realtime result인지 판정한다."""
+    parsed = _parsed_result(result)
+    if parsed is None or parsed.get("confidence") not in {"medium", "high"}:
+        return False
+    facts = parsed.get("facts")
+    if not isinstance(facts, list) or not facts or not all(
+        isinstance(fact, dict) for fact in facts
+    ):
+        return False
+
+    # source 일부 실패나 live/partial 설명 같은 limitation은 허용한다. confidence가
+    # low인 실패 envelope는 위에서 이미 차단하므로 raw context bool로 판정하지 않는다.
+    if parsed.get("kind") != "sports":
+        return True
+
+    sports_facts = [fact for fact in facts if fact.get("type") == "sports_score"]
+    if len(sports_facts) != 1 or len(facts) != 1:
+        return False
+    fact = sports_facts[0]
+    required = (
+        "league",
+        "event_date",
+        "away_team",
+        "away_score",
+        "home_team",
+        "home_score",
+        "status",
+        "winner",
+        "source",
+        "source_url",
+    )
+    if any(field not in fact for field in required):
+        return False
+    if not all(fact[field] for field in ("league", "away_team", "home_team", "source", "source_url")):
+        return False
+    if not isinstance(fact["away_score"], int) or not isinstance(fact["home_score"], int):
+        return False
+    if fact["status"] not in {"final", "live"}:
+        return False
+    if fact["status"] == "live" and fact["winner"] is not None:
+        return False
+    if fact["status"] == "final" and fact["winner"] not in {
+        fact["away_team"],
+        fact["home_team"],
+        None,
+    }:
+        return False
+    expected_date = _expected_event_date(parsed, payload)
+    return expected_date is not None and fact["event_date"] == expected_date
+
+
+# 이전 내부 import를 깨지 않되 production은 명시적인 이름을 사용한다.
+has_usable_realtime_evidence = is_usable_realtime_evidence
+
+
+async def lookup_async(
+    payload: dict[str, Any],
+    fetch_page: FetchPage,
+) -> dict[str, Any]:
     """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
 
-    검색 품질을 위해 SERP chrome 한 덩어리 대신 결과 링크를 따라 여러 출처의 실제
-    본문을 회수하고, 각 출처를 개별 evidence로 노출해 최종 답변이 교차검증할 수
-    있게 한다. 본문 전체를 합쳐 timeline 검증과 confidence 산정에 쓴다.
+    뉴스/일반은 Google News RSS로 후보를 찾은 뒤 원문을 읽고, 스포츠는 기준일이
+    포함된 경기정보 페이지에서 한 경기 card의 값만 구조화한다. production에서는
+    오케스트레이터가 SSRF/redirect/headless 정책을 적용한 ``fetch_page``를 주입한다.
     """
     query = str(payload.get("query") or "").strip() or "실시간 정보"
     kind = classify_query(query)
-    sources, limitations = gather_evidence(query, kind)
+    as_of_kst = payload.get("as_of_kst")
+    sources, limitations = await collect_sources(
+        query=query,
+        kind=kind,
+        as_of_kst=as_of_kst,
+        fetch_page=fetch_page,
+    )
     limitations = list(limitations)
     now_utc = datetime.now(UTC).isoformat()
-    as_of_kst = payload.get("as_of_kst")
 
-    combined_text = "\n".join(source["text"] for source in sources)
+    combined_text = "\n".join(source.text for source in sources)
 
     # BIZ-383: 일정/상태성 질문이면 출처 본문이 어느 이벤트까지 반영했는지 검증한다.
-    is_sensitive = is_timeline_sensitive_query(query)
+    is_sensitive = kind == "sports" or is_timeline_sensitive_query(query)
     timeline_validation = validate_timeline(combined_text, is_sensitive, as_of_kst)
     status = timeline_validation["status"]
 
     evidence = []
     for source in sources:
         # 출처별로 시간 cue를 따로 분류해, 어떤 소스가 stale/partial인지 드러낸다.
-        source_signals = extract_time_signals(source["text"])
+        source_signals = extract_time_signals(source.text)
         source_status = classify_timeline_status(source_signals, has_text=True)
-        evidence.append(
-            {
-                "source": source["source"],
-                "url": source["url"],
-                "retrieved_at_utc": now_utc,
-                "snippet": source["text"],
-                "timeline_status": source_status,
-            }
-        )
+        structured_fact = _fact_from_source(source)
+        entry = {
+            "source": source.source,
+            "url": source.url,
+            "source_url": source.url,
+            "retrieved_at_utc": now_utc,
+            "snippet": source.text,
+            "source_kind": source.source_kind,
+            "published_at": source.published_at,
+            "event_date": source.event_date,
+            "timeline_status": source_status,
+            "structured_fact": structured_fact,
+        }
+        if structured_fact.get("type") == "sports_score":
+            # 스포츠 evidence와 fact 양쪽에 동일 카드의 전체 필드를 평탄화한다.
+            entry.update(structured_fact)
+        evidence.append(entry)
 
-    facts = []
-    if sources:
-        facts.append(
-            {
-                "claim": f"{len(sources)}개 출처에서 최신 정보 본문을 확보했습니다.",
-                "source": ", ".join(source["source"] for source in sources),
-            }
-        )
+    facts = [_fact_from_source(source) for source in sources]
 
-    # 멀티소스 + 한계 없음이면 교차검증이 가능하므로 high, 단일 출처면 medium,
-    # 회수 본문이 없으면 low. 이후 timeline 검증 결과로 한 번 더 보수 조정한다.
-    if not combined_text:
+    # confidence는 단순 URL 개수가 아니라 검증된 structured fact와 freshness를
+    # 기준으로 산정한다. 완결된 sports_score는 단일 페이지여도 high다.
+    sports_facts = [fact for fact in facts if fact.get("type") == "sports_score"]
+    if not facts:
         confidence = "low"
-    elif not limitations and len(sources) >= 2:
+    elif sports_facts and sports_facts[0].get("status") == "final":
         confidence = "high"
-    elif not limitations:
+    elif sports_facts:
         confidence = "medium"
+    elif not limitations and len(facts) >= 2:
+        confidence = "high"
     else:
-        confidence = "low"
+        # 일부 후보 fetch 실패 limitation이 있어도 검증된 원문 한 건은 medium이다.
+        confidence = "medium"
 
     # 일정/상태성 질문에서 출처가 미확정/부분 반영이면 confidence를 보수적으로 낮추고
     # 한계를 명시해 최종 답변이 stale 전망을 확정처럼 말하지 않도록 한다.
@@ -573,7 +586,11 @@ def lookup(payload: dict[str, Any]) -> dict[str, Any]:
             confidence = "low"
             limitations.append(timeline_validation["notes"][0])
         elif status in ("current_pending", "partial"):
-            confidence = "low" if confidence in ("medium", "high") else confidence
+            is_live_sports = bool(
+                sports_facts and sports_facts[0].get("status") == "live"
+            )
+            if not is_live_sports:
+                confidence = "low"
             limitations.append(timeline_validation["notes"][0])
 
     return {
@@ -590,6 +607,15 @@ def lookup(payload: dict[str, Any]) -> dict[str, Any]:
         "timeline_validation": timeline_validation,
         "limitations": limitations,
     }
+
+
+def lookup(
+    payload: dict[str, Any],
+    *,
+    fetch_page: FetchPage = _default_fetch_page,
+) -> dict[str, Any]:
+    """동기 CLI/테스트 호환 wrapper. async runtime은 ``lookup_async``를 사용한다."""
+    return asyncio.run(lookup_async(payload, fetch_page=fetch_page))
 
 
 def main(argv: list[str] | None = None) -> int:
