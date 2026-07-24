@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from simpleclaw.llm.models import LLMProviderError
-from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 from simpleclaw.llm.profiles import get_provider_profile
+from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 
 
 def test_openai_provider_passes_base_url_and_default_headers(monkeypatch):

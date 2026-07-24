@@ -90,8 +90,8 @@ class TestGenericSecretSuffixScrub:
 class TestBaselineAndPassthrough:
     def test_baseline_keys_survive(self):
         result = _filtered(ANTHROPIC_API_KEY="sk-ant-x")
-        for key in _BASELINE:
-            assert result[key] == _BASELINE[key]
+        for key, value in _BASELINE.items():
+            assert result[key] == value
         assert "ANTHROPIC_API_KEY" not in result
 
     def test_passthrough_allowlist_wins_over_blocklist(self):

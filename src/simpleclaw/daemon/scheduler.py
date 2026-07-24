@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -29,8 +29,8 @@ from simpleclaw.daemon.models import (
     ExecutionStatus,
 )
 from simpleclaw.daemon.store import DaemonStore
-from simpleclaw.recipes.models import StepType
 from simpleclaw.proactive.event_detector import EventDetector
+from simpleclaw.recipes.models import StepType
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _translate_cron_dow_to_apscheduler(field: str) -> str:
             a, b = int(a_s), int(b_s)
             if not (0 <= a <= 7 and 0 <= b <= 7):
                 return token
-            days = range(a, b + 1) if a <= b else list(range(a, 8)) + list(range(0, b + 1))
+            days = range(a, b + 1) if a <= b else list(range(a, 8)) + list(range(b + 1))
             mapped = sorted({(d - 1) % 7 for d in days})
             return ",".join(str(m) for m in mapped)
         if token.isdigit():
@@ -396,9 +396,7 @@ class CronScheduler:
         now = now or datetime.now()
         if job.expires_at is not None and job.expires_at <= now:
             return True
-        if job.max_runs is not None and int(job.run_count or 0) >= int(job.max_runs):
-            return True
-        return False
+        return bool(job.max_runs is not None and int(job.run_count or 0) >= int(job.max_runs))
 
     def _cleanup_one_shot_if_needed(self, job: CronJob) -> None:
         """성공 실행 후 run_count를 올리고 one-shot/max_runs job을 비활성화한다."""
@@ -517,7 +515,7 @@ class CronScheduler:
                     "enabled": job.enabled,
                 },
             )
-        except Exception:  # noqa: BLE001 — proactive hook 실패가 cron 실행/기록을 깨면 안 된다.
+        except Exception:
             logger.exception("Cron proactive event hook failed for '%s'", job.name)
 
     async def _run_action(self, job: CronJob) -> str:
@@ -568,8 +566,8 @@ class CronScheduler:
           no-op 재발 방지).
         """
         if job.action_type == ActionType.RECIPE:
-            from simpleclaw.recipes.loader import load_recipe
             from simpleclaw.recipes.executor import execute_recipe
+            from simpleclaw.recipes.loader import load_recipe
 
             # action_reference가 파일 경로 또는 레시피 이름일 수 있음
             ref_path = Path(job.action_reference)

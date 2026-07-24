@@ -16,7 +16,6 @@ from simpleclaw.agent.turn_analysis import (
 )
 from simpleclaw.llm.models import LLMResponse
 
-
 # ----------------------------------------------------------------------
 # parse_turn_analysis_payload
 # ----------------------------------------------------------------------

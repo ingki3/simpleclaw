@@ -69,7 +69,7 @@ class SecretReference:
     name: str
 
     @classmethod
-    def parse(cls, value: str) -> "SecretReference | None":
+    def parse(cls, value: str) -> SecretReference | None:
         """문자열에서 참조를 파싱한다.
 
         스킴 접두어가 없거나 지원하지 않는 스킴이면 ``None``을 반환한다 —
@@ -179,7 +179,7 @@ class KeyringBackend:
             self._module().set_password(self._service, key, value)
         except SecretsError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise SecretsError(
                 f"keyring에 시크릿을 저장할 수 없습니다 ({key}): {exc}"
             ) from exc

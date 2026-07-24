@@ -25,7 +25,7 @@ import hashlib
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from simpleclaw.study.interest_signals import InterestSignal
 from simpleclaw.study.source_planner import TopicKind
@@ -177,7 +177,7 @@ def interest_signal_to_topic_signal(
     general_news 로 남고, interest_signals 의 가중치 상한(0.3 미만)과 합쳐져
     active 승격이 구조적으로 막힌다.
     """
-    at = now or datetime.now(timezone.utc)
+    at = now or datetime.now(UTC)
     hint = signal.topic_hint.strip()
     category = _category_for_hint(hint)
     return TopicSignal(
@@ -203,7 +203,7 @@ def apply_interest_signals(
     신호 반영 후 :meth:`EvolvingTopicRegistry.evolve` 를 호출해 이번 run 에서
     신호를 받지 못한 topic 의 시간 기반 감쇠(cooling/archive)까지 함께 수행한다.
     """
-    at = now or datetime.now(timezone.utc)
+    at = now or datetime.now(UTC)
     created: list[str] = []
     updated: list[str] = []
     promoted: list[str] = []
@@ -271,7 +271,7 @@ def _parse_datetime(value: str | None, fallback: datetime) -> datetime:
     except (TypeError, ValueError):
         return fallback
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -402,7 +402,7 @@ def merge_registry_into_raw_topics(
     Returns:
         병합된 새 raw dict 목록(입력 순서 보존, 신규 topic 은 뒤에 추가).
     """
-    at = now or datetime.now(timezone.utc)
+    at = now or datetime.now(UTC)
     audits_by_topic: dict[str, list[dict]] = {}
     for signal in signals:
         topic_id = slugify_topic_id(signal.topic_hint.strip())
@@ -485,7 +485,7 @@ def _raw_has_id(raw_topics: Sequence[dict], topic_id: str) -> bool:
 
 def _default_now() -> datetime:
     """기본 now 제공자(UTC aware)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _coerce_int(value: object, *, default: int) -> int:

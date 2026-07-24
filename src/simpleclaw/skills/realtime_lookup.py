@@ -22,7 +22,7 @@ import json
 import re
 import sys
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -446,7 +446,7 @@ def _expected_event_date(
     if raw is None:
         return None
     try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date().isoformat()
+        return datetime.fromisoformat(str(raw)).date().isoformat()
     except ValueError:
         return None
 
@@ -530,7 +530,7 @@ async def lookup_async(
         fetch_page=fetch_page,
     )
     limitations = list(limitations)
-    now_utc = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(UTC).isoformat()
 
     combined_text = "\n".join(source.text for source in sources)
 

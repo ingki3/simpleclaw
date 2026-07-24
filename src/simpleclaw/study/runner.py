@@ -39,7 +39,7 @@ import logging
 import sqlite3
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -126,7 +126,7 @@ class StudyTopicRecord:
 
 def _utcnow() -> datetime:
     """기본 now 제공자 — 테스트는 runner 에 now 콜백을 주입해 고정한다."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _confidence_grade(score: float) -> str:
@@ -501,8 +501,7 @@ class StudyRunner:
             url = result.url.strip() or result.source.strip()
             if url:
                 sources.append(url)
-            for lim in result.limitations:
-                cautions.append(lim)
+            cautions.extend(result.limitations)
             min_confidence = min(min_confidence, result.confidence)
 
         merged = merge_study_update(

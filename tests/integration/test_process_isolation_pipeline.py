@@ -15,7 +15,7 @@ import textwrap
 
 import pytest
 
-from simpleclaw.security.process import KillResult, kill_process_group, _is_group_alive
+from simpleclaw.security.process import KillResult, _is_group_alive, kill_process_group
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="setsid/killpg는 Unix 전용"

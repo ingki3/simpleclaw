@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-
 import pytest
 import pytest_asyncio
 import yaml
@@ -24,9 +23,9 @@ from simpleclaw.channels.admin_policy import (
     classify_keys,
     validate_patch,
 )
-from simpleclaw.security.secrets import SecretsManager
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
+from simpleclaw.security.secrets import SecretsManager
 
 
 class _InMemoryBackend:
@@ -1234,7 +1233,7 @@ class TestSuggestionQueue:
         self, suggestion_client
     ):
         """accept → writer 호출, 행 status=accepted, 재호출 시 409."""
-        client, sugg_store, _, applied, s1_id, _, _ = suggestion_client
+        client, _sugg_store, _, applied, s1_id, _, _ = suggestion_client
         resp = await client.post(
             f"/admin/v1/memory/suggestions/{s1_id}/accept", headers=HEADERS
         )
@@ -1660,6 +1659,7 @@ class TestInsightsList:
     async def insights_client(self, tmp_state, tmp_path, aiohttp_client):
         """active 2건 + archived 1건이 적재된 InsightStore 를 주입한 클라이언트."""
         from datetime import datetime, timedelta
+
         from simpleclaw.memory.insights import InsightMeta, InsightStore
 
         sidecar = tmp_path / "insights.jsonl"
@@ -1768,6 +1768,7 @@ class TestBlocklistList:
         """blocked_at 내림차순 정렬 — 가장 최근 거절 결정이 위로."""
         import json as _json
         from datetime import datetime, timedelta
+
         from simpleclaw.memory.suggestions import BlocklistStore
 
         bl_path = tmp_path / "bl.jsonl"

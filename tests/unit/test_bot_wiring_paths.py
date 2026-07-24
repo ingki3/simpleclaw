@@ -36,10 +36,12 @@ from simpleclaw.config import (
     _DAEMON_DEFAULTS,
     _MEMORY_DEFAULTS,
     _RECIPES_DEFAULTS,
-    _DEFAULTS as _PERSONA_DEFAULTS,
     load_agent_config,
     load_daemon_config,
     load_persona_config,
+)
+from simpleclaw.config import (
+    _DEFAULTS as _PERSONA_DEFAULTS,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

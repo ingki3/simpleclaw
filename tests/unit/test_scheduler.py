@@ -1,17 +1,17 @@
 """Tests for the cron scheduler."""
 
-import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from simpleclaw.daemon import scheduler as scheduler_module
 from simpleclaw.daemon.models import (
     ActionType,
     BackoffStrategy,
     CronJobNotFoundError,
     ExecutionStatus,
 )
-from simpleclaw.daemon import scheduler as scheduler_module
 from simpleclaw.daemon.scheduler import (
     CronScheduler,
     _compute_backoff,
@@ -281,7 +281,7 @@ class TestRetryAndCircuitBreak:
 
     @pytest.mark.asyncio
     async def test_max_attempts_one_means_no_retry(self, setup):
-        store, _, scheduler = setup
+        _store, _, scheduler = setup
         scheduler.add_job(
             "no-retry", "0 9 * * *", ActionType.PROMPT, "x",
             max_attempts=1,
@@ -587,7 +587,9 @@ class TestRecipeCronInvokesLLM:
         executor 에 넘기는 다른 호출자가 같은 함정에 빠지는 것을 대비한 안전망.
         """
         from simpleclaw.recipes.models import (
-            RecipeDefinition, RecipeStep, StepType,
+            RecipeDefinition,
+            RecipeStep,
+            StepType,
         )
 
         store, apscheduler, tmp_path, CronJob = setup
@@ -617,7 +619,9 @@ class TestRecipeCronInvokesLLM:
 
         async def fake_exec(recipe, **_kwargs):
             from simpleclaw.recipes.models import (
-                RecipeResult, StepResult, StepStatus,
+                RecipeResult,
+                StepResult,
+                StepStatus,
             )
             return RecipeResult(
                 recipe_name=recipe.name,
@@ -632,8 +636,8 @@ class TestRecipeCronInvokesLLM:
             )
 
         # 패치 — scheduler 내부의 lazy import 를 가로채서 합성 레시피를 흘려 넣는다.
-        import simpleclaw.recipes.loader as loader_mod
         import simpleclaw.recipes.executor as executor_mod
+        import simpleclaw.recipes.loader as loader_mod
         original_load = loader_mod.load_recipe
         original_exec = executor_mod.execute_recipe
 
@@ -707,7 +711,9 @@ class TestRecipeCronTimeoutPropagation:
 
         import simpleclaw.recipes.executor as executor_mod
         from simpleclaw.recipes.models import (
-            RecipeResult, StepResult, StepStatus,
+            RecipeResult,
+            StepResult,
+            StepStatus,
         )
         captured: dict = {}
 

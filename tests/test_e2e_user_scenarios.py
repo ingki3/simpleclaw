@@ -21,7 +21,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ──────────────────────────────────────────────────────────
 # Fixtures: Build a realistic workspace
 # ──────────────────────────────────────────────────────────
@@ -195,7 +194,7 @@ class TestScenario_NormalConversation:
     @pytest.mark.asyncio
     async def test_first_message(self, workspace):
         """첫 메시지: 페르소나 로드, LLM 호출, 응답 반환."""
-        tmp_path, config = workspace
+        _tmp_path, config = workspace
         from simpleclaw.agent import AgentOrchestrator
 
         orch = AgentOrchestrator(config)
@@ -227,7 +226,7 @@ class TestScenario_NormalConversation:
     @pytest.mark.asyncio
     async def test_multi_turn_conversation(self, workspace):
         """연속 대화: 이전 맥락이 LLM에 전달되는지 확인."""
-        tmp_path, config = workspace
+        _tmp_path, config = workspace
         from simpleclaw.agent import AgentOrchestrator
 
         orch = AgentOrchestrator(config)
@@ -313,7 +312,7 @@ class TestScenario_SkillExecution:
     @pytest.mark.asyncio
     async def test_skill_not_needed(self, workspace):
         """일반 질문 → 스킬 라우터가 use_skill: false 반환."""
-        tmp_path, config = workspace
+        _tmp_path, config = workspace
         from simpleclaw.agent import AgentOrchestrator
 
         orch = AgentOrchestrator(config)
@@ -410,7 +409,7 @@ class TestScenario_DaemonCron:
     @pytest.mark.asyncio
     async def test_cron_job_survives_restart(self, workspace):
         """Cron Job이 데몬 재시작 후에도 유지."""
-        tmp_path, config = workspace
+        _tmp_path, config = workspace
         from simpleclaw.daemon.daemon import AgentDaemon
         from simpleclaw.daemon.models import ActionType
 
@@ -431,7 +430,7 @@ class TestScenario_DaemonCron:
     @pytest.mark.asyncio
     async def test_heartbeat_ticks_multiple(self, workspace):
         """여러 번의 Heartbeat 틱이 정상 실행."""
-        tmp_path, config = workspace
+        _tmp_path, config = workspace
         from simpleclaw.daemon.daemon import AgentDaemon
 
         daemon = AgentDaemon(config)
@@ -465,8 +464,11 @@ class TestScenario_Dreaming:
     @pytest.mark.asyncio
     async def test_dreaming_auto_trigger(self, workspace):
         """조건 충족 시 드리밍 자동 트리거 + MEMORY.md 업데이트."""
-        tmp_path, config = workspace
-        from simpleclaw.daemon.dreaming_trigger import DreamingTrigger, LAST_DREAMING_KEY
+        tmp_path, _config = workspace
+        from simpleclaw.daemon.dreaming_trigger import (
+            LAST_DREAMING_KEY,
+            DreamingTrigger,
+        )
         from simpleclaw.daemon.store import DaemonStore
         from simpleclaw.memory.conversation_store import ConversationStore
         from simpleclaw.memory.dreaming import DreamingPipeline
@@ -536,7 +538,7 @@ class TestScenario_SubAgent:
     @pytest.mark.asyncio
     async def test_real_subprocess_spawn(self, workspace):
         """실제 Python 서브프로세스 스폰 → JSON 결과."""
-        tmp_path, config = workspace
+        tmp_path, _config = workspace
         from simpleclaw.agents.spawner import SubAgentSpawner
 
         script = tmp_path / "agent_task.py"
@@ -572,7 +574,7 @@ class TestScenario_SubAgent:
     @pytest.mark.asyncio
     async def test_concurrent_limit_enforced(self, workspace):
         """동시 3개 서브 에이전트 제한 실제 검증."""
-        tmp_path, config = workspace
+        tmp_path, _config = workspace
         from simpleclaw.agents.spawner import SubAgentSpawner
 
         script = tmp_path / "slow_agent.py"
@@ -605,7 +607,7 @@ class TestScenario_SubAgent:
     @pytest.mark.asyncio
     async def test_timeout_kills_subprocess(self, workspace):
         """타임아웃 시 서브프로세스 강제 종료."""
-        tmp_path, config = workspace
+        tmp_path, _config = workspace
         from simpleclaw.agents.spawner import SubAgentSpawner
 
         script = tmp_path / "hang.py"
@@ -639,9 +641,9 @@ class TestScenario_Recipe:
     @pytest.mark.asyncio
     async def test_recipe_with_variables(self, workspace):
         """변수 치환이 포함된 다단계 레시피 실행."""
-        tmp_path, config = workspace
-        from simpleclaw.recipes.loader import load_recipe
+        tmp_path, _config = workspace
         from simpleclaw.recipes.executor import execute_recipe
+        from simpleclaw.recipes.loader import load_recipe
 
         recipe_dir = tmp_path / ".agent" / "recipes" / "multi-step"
         recipe_dir.mkdir(parents=True)
@@ -686,6 +688,7 @@ class TestScenario_Webhook:
     async def test_webhook_full_flow(self, workspace, aiohttp_client):
         """Webhook: 인증 → 이벤트 수신 → 로깅."""
         from aiohttp import web
+
         from simpleclaw.channels.webhook_server import WebhookServer
 
         server = WebhookServer(auth_token="secret-123")
@@ -861,8 +864,8 @@ class TestScenario_WaitState:
     def test_full_wait_lifecycle(self, workspace):
         """등록 → 대기 → 해제 전체 수명주기."""
         tmp_path, _ = workspace
-        from simpleclaw.daemon.wait_states import WaitStateManager
         from simpleclaw.daemon.store import DaemonStore
+        from simpleclaw.daemon.wait_states import WaitStateManager
 
         store = DaemonStore(tmp_path / ".agent" / "wait_test.db")
         mgr = WaitStateManager(store, default_timeout=300)
@@ -894,9 +897,9 @@ class TestScenario_WaitState:
     def test_timeout_auto_cleanup(self, workspace):
         """타임아웃 초과 시 자동 정리."""
         tmp_path, _ = workspace
-        from simpleclaw.daemon.wait_states import WaitStateManager
-        from simpleclaw.daemon.store import DaemonStore
         from simpleclaw.daemon.models import WaitState
+        from simpleclaw.daemon.store import DaemonStore
+        from simpleclaw.daemon.wait_states import WaitStateManager
 
         store = DaemonStore(tmp_path / ".agent" / "wait_to.db")
         mgr = WaitStateManager(store, default_timeout=1)

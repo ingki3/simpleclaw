@@ -33,8 +33,8 @@ class TestPRD_3_1_PersonaMemory:
 
     def test_persona_files_parsed(self, tmp_path):
         """AGENT.md, USER.md, MEMORY.md를 파싱하여 섹션 추출."""
-        from simpleclaw.persona.parser import parse_markdown
         from simpleclaw.persona.models import FileType
+        from simpleclaw.persona.parser import parse_markdown
 
         agent_md = tmp_path / "AGENT.md"
         agent_md.write_text("# Agent\n\nI am SimpleClaw.\n\n## Tone\n\nFriendly.")
@@ -45,9 +45,12 @@ class TestPRD_3_1_PersonaMemory:
     def test_persona_assembly_order(self, tmp_path):
         """프롬프트 어셈블리 순서: AGENT → USER → MEMORY."""
         from simpleclaw.persona.assembler import assemble_prompt
-        from simpleclaw.persona.models import FileType, PersonaFile, Section
-
-        from simpleclaw.persona.models import SourceScope
+        from simpleclaw.persona.models import (
+            FileType,
+            PersonaFile,
+            Section,
+            SourceScope,
+        )
         files = [
             PersonaFile(
                 file_type=FileType.MEMORY, source_path="", source_scope=SourceScope.LOCAL,
@@ -71,9 +74,12 @@ class TestPRD_3_1_PersonaMemory:
     def test_token_budget_truncation(self, tmp_path):
         """토큰 예산 초과 시 MEMORY부터 절삭."""
         from simpleclaw.persona.assembler import assemble_prompt
-        from simpleclaw.persona.models import FileType, PersonaFile, Section
-
-        from simpleclaw.persona.models import SourceScope
+        from simpleclaw.persona.models import (
+            FileType,
+            PersonaFile,
+            Section,
+            SourceScope,
+        )
         files = [
             PersonaFile(
                 file_type=FileType.AGENT, source_path="", source_scope=SourceScope.LOCAL,
@@ -101,7 +107,7 @@ class TestPRD_3_1_PersonaMemory:
         (global_ / "AGENT.md").write_text("# Global Agent")
 
         files = resolve_persona_files(local, global_)
-        agent = [f for f in files if f.file_type.value == "agent"][0]
+        agent = next(f for f in files if f.file_type.value == "agent")
         assert "Local" in agent.sections[0].title
 
     def test_conversation_store_sqlite(self, tmp_path):
@@ -288,8 +294,8 @@ class TestPRD_3_3_SubAgent:
     @pytest.mark.asyncio
     async def test_permission_scope_injection(self, tmp_path):
         """서브 에이전트에 권한 스코프(allowed_paths, network) 주입."""
-        from simpleclaw.agents.spawner import SubAgentSpawner
         from simpleclaw.agents.models import PermissionScope
+        from simpleclaw.agents.spawner import SubAgentSpawner
 
         script = tmp_path / "scope.py"
         script.write_text(textwrap.dedent('''
@@ -359,8 +365,8 @@ class TestPRD_3_4_Recipes:
     @pytest.mark.asyncio
     async def test_recipe_execution(self, tmp_path):
         """레시피 실행: 변수 치환 → 명령어 실행 → 결과 수집."""
-        from simpleclaw.recipes.loader import load_recipe
         from simpleclaw.recipes.executor import execute_recipe
+        from simpleclaw.recipes.loader import load_recipe
 
         recipe_dir = tmp_path / "recipes" / "test"
         recipe_dir.mkdir(parents=True)
@@ -426,10 +432,12 @@ class TestPRD_3_5_SchedulingEvents:
     def test_cron_job_crud(self, tmp_path):
         """Cron Job CRUD: 생성 → 조회 → 수정 → 삭제."""
         from unittest.mock import MagicMock
+
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from simpleclaw.daemon.models import ActionType
         from simpleclaw.daemon.scheduler import CronScheduler
         from simpleclaw.daemon.store import DaemonStore
-        from simpleclaw.daemon.models import ActionType
 
         store = DaemonStore(tmp_path / "d.db")
         sched = CronScheduler(store, MagicMock(spec=AsyncIOScheduler))
@@ -447,10 +455,12 @@ class TestPRD_3_5_SchedulingEvents:
     def test_cron_job_persistence(self, tmp_path):
         """Cron Job이 데몬 재시작 후에도 유지."""
         from unittest.mock import MagicMock
+
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from simpleclaw.daemon.models import ActionType
         from simpleclaw.daemon.scheduler import CronScheduler
         from simpleclaw.daemon.store import DaemonStore
-        from simpleclaw.daemon.models import ActionType
 
         db_path = tmp_path / "d.db"
         store1 = DaemonStore(db_path)
@@ -491,8 +501,8 @@ class TestPRD_3_5_SchedulingEvents:
 
     def test_wait_state_register_resolve(self, tmp_path):
         """비동기 대기 상태: 등록 → 해제."""
-        from simpleclaw.daemon.wait_states import WaitStateManager
         from simpleclaw.daemon.store import DaemonStore
+        from simpleclaw.daemon.wait_states import WaitStateManager
 
         store = DaemonStore(tmp_path / "d.db")
         mgr = WaitStateManager(store)
@@ -505,9 +515,9 @@ class TestPRD_3_5_SchedulingEvents:
 
     def test_wait_state_timeout(self, tmp_path):
         """대기 상태 타임아웃 감지."""
-        from simpleclaw.daemon.wait_states import WaitStateManager
-        from simpleclaw.daemon.store import DaemonStore
         from simpleclaw.daemon.models import WaitState
+        from simpleclaw.daemon.store import DaemonStore
+        from simpleclaw.daemon.wait_states import WaitStateManager
 
         store = DaemonStore(tmp_path / "d.db")
         mgr = WaitStateManager(store, default_timeout=1)
@@ -565,6 +575,7 @@ class TestPRD_3_6_ChannelsVoiceLLM:
     async def test_webhook_bearer_auth(self, aiohttp_client):
         """Webhook 베어러 토큰 인증."""
         from aiohttp import web
+
         from simpleclaw.channels.webhook_server import WebhookServer
 
         server = WebhookServer(auth_token="secret")
@@ -588,6 +599,7 @@ class TestPRD_3_6_ChannelsVoiceLLM:
     async def test_webhook_event_processing(self, aiohttp_client):
         """Webhook 이벤트 수신 및 처리."""
         from aiohttp import web
+
         from simpleclaw.channels.webhook_server import WebhookServer
 
         server = WebhookServer(auth_token="")
@@ -606,8 +618,8 @@ class TestPRD_3_6_ChannelsVoiceLLM:
     @pytest.mark.asyncio
     async def test_stt_format_validation(self, tmp_path):
         """STT: 지원 포맷 검증 (WAV, MP3, OGG 지원 / 비지원 거부)."""
-        from simpleclaw.voice.stt import STTProcessor
         from simpleclaw.voice.models import UnsupportedFormatError
+        from simpleclaw.voice.stt import STTProcessor
 
         stt = STTProcessor()
         bad = tmp_path / "test.xyz"
@@ -734,6 +746,7 @@ class TestPRD_4_3_TechnicalSpecs:
     async def test_dashboard_metrics_api(self, tmp_path, aiohttp_client):
         """웹 대시보드 /api/metrics 엔드포인트."""
         from aiohttp import web
+
         from simpleclaw.logging.dashboard import DashboardServer
         from simpleclaw.logging.metrics import MetricsCollector
         from simpleclaw.logging.structured_logger import StructuredLogger

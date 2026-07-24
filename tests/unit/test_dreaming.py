@@ -300,7 +300,7 @@ class TestDreamingPipeline:
     @pytest.mark.asyncio
     async def test_backup_both_files(self, setup):
         """Both MEMORY.md and USER.md are backed up."""
-        store, pipeline, memory_file, user_file = setup
+        store, pipeline, memory_file, _user_file = setup
         store.add_message(ConversationMessage(
             role=MessageRole.USER, content="test"
         ))

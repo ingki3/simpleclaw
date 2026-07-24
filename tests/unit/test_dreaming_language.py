@@ -35,7 +35,6 @@ from simpleclaw.memory.language_policy import (
 )
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
-
 # ----------------------------------------------------------------------
 # Section 1 — language_policy 모듈 단위 테스트
 # ----------------------------------------------------------------------
@@ -189,7 +188,7 @@ class TestFilterMetaItems:
     def test_skips_non_dict_entries(self):
         # 잘못된 형식은 silently drop (kept 에서 제외, dropped 에도 안 들어감).
         items = ["not a dict", {"topic": "정치뉴스", "text": "관심"}]
-        kept, dropped = filter_meta_items(items, "ko")
+        kept, _dropped = filter_meta_items(items, "ko")
         assert len(kept) == 1
         assert kept[0]["topic"] == "정치뉴스"
 

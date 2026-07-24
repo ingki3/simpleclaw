@@ -29,17 +29,17 @@ import logging
 import math
 import time
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Awaitable, Callable, Deque
 
 from aiohttp import web
 
 from simpleclaw.channels.models import (
     AccessAttempt,
     EventActionType,
-    WebhookEvent,
     WebhookError,
+    WebhookEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,11 +131,11 @@ class WebhookServer:
         self._access_log: list[AccessAttempt] = []
 
         # 슬라이딩 윈도우 rate limit — key(token 또는 ip) → 타임스탬프 deque.
-        self._rate_buckets: dict[str, Deque[float]] = defaultdict(deque)
+        self._rate_buckets: dict[str, deque[float]] = defaultdict(deque)
         # 비정상 추적 — 연속 차단 카운터(차단 시 +1, 정상 통과 시 0으로 리셋)와
         # IP별 burst 윈도우(짧은 시간에 다수 요청 감지).
         self._consecutive_blocks: dict[str, int] = defaultdict(int)
-        self._burst_windows: dict[str, Deque[float]] = defaultdict(deque)
+        self._burst_windows: dict[str, deque[float]] = defaultdict(deque)
         # 알림 쿨다운 — alert key → 마지막 발신 시각(monotonic).
         self._alert_last_sent: dict[str, float] = {}
 
@@ -269,7 +269,7 @@ class WebhookServer:
         if self._drain_checker is not None:
             try:
                 draining = bool(self._drain_checker())
-            except Exception:  # noqa: BLE001 — drain 판정 실패가 intake 를 막으면 안 됨
+            except Exception:
                 logger.exception("drain_checker failed")
                 draining = False
             if draining:
@@ -447,7 +447,7 @@ class WebhookServer:
         if len(bucket) >= self._rate_limit:
             # 가장 오래된 항목이 윈도우를 벗어날 때까지 대기 시간 산출(올림).
             wait_seconds = (bucket[0] + self._rate_limit_window) - now
-            return max(1, int(math.ceil(wait_seconds)))
+            return max(1, math.ceil(wait_seconds))
 
         bucket.append(now)
         return None
@@ -580,4 +580,4 @@ class WebhookServer:
         )
 
 
-__all__ = ["WebhookServer", "WebhookMetrics", "WebhookError"]
+__all__ = ["WebhookError", "WebhookMetrics", "WebhookServer"]

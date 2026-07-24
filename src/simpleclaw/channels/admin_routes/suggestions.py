@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 # ruff: noqa: F401
-
 import copy
 import json
 import logging
@@ -18,12 +17,9 @@ from typing import Any
 import yaml
 from aiohttp import web
 
-from simpleclaw.channels.admin_audit import AuditEntry
-from simpleclaw.channels.admin_policy import HOT, PROCESS_RESTART, classify_keys, validate_patch
 from simpleclaw.channels.admin_api import (
-    AREA_TO_YAML_KEY,
     _BACKEND_LABELS,
-    _RevealEntry,
+    AREA_TO_YAML_KEY,
     _actor_from,
     _audit_to_dict,
     _deep_merge,
@@ -42,10 +38,18 @@ from simpleclaw.channels.admin_api import (
     _policy_to_dict,
     _project,
     _project_subtree,
+    _RevealEntry,
     _rotate_master_key,
     _save_pending,
     _set_dotted,
     _truthy_query,
+)
+from simpleclaw.channels.admin_audit import AuditEntry
+from simpleclaw.channels.admin_policy import (
+    HOT,
+    PROCESS_RESTART,
+    classify_keys,
+    validate_patch,
 )
 from simpleclaw.memory.memory_items_sync import sync_suggestion_to_memory_item
 from simpleclaw.memory.suggestions import TERMINAL_STATUSES
@@ -222,7 +226,7 @@ def _audit_suggestion(
             actor_id=_actor_from(request),
             undoable=False,  # USER.md append/blocklist add 는 단방향 액션
         )
-    except Exception:  # noqa: BLE001 — 감사 실패가 핸들러 응답을 막지 않도록.
+    except Exception:
         logger.exception("Failed to write suggestion audit entry")
 
 def _safe_sync_suggestion_memory_item(self, suggestion) -> None:
@@ -231,7 +235,7 @@ def _safe_sync_suggestion_memory_item(self, suggestion) -> None:
         return
     try:
         sync_suggestion_to_memory_item(self._conversation_store, suggestion)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "memory_items sync failed for suggestion %s; continuing",
             getattr(suggestion, "id", ""),
@@ -262,7 +266,7 @@ async def _handle_accept_suggestion(
 
     try:
         self._suggestion_writer(s.text)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Failed to write accepted suggestion")
         return _json_error(500, f"Failed to apply suggestion: {exc}")
 
@@ -304,7 +308,7 @@ async def _handle_edit_suggestion(
 
     try:
         self._suggestion_writer(edited_text)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("Failed to write edited suggestion")
         return _json_error(500, f"Failed to apply suggestion: {exc}")
 

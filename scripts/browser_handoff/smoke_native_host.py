@@ -6,7 +6,10 @@ import json
 import subprocess
 import sys
 
-from simpleclaw.browser_handoff.native_host import decode_native_message, encode_native_message
+from simpleclaw.browser_handoff.native_host import (
+    decode_native_message,
+    encode_native_message,
+)
 
 
 def main() -> int:
@@ -20,8 +23,7 @@ def main() -> int:
     proc = subprocess.run(
         [sys.executable, "-m", "simpleclaw.browser_handoff.native_host"],
         input=encode_native_message(payload),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     response = decode_native_message(proc.stdout)

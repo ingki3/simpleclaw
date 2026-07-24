@@ -5,7 +5,7 @@ import textwrap
 
 import pytest
 
-from simpleclaw.agents import SubAgentSpawner, PermissionScope
+from simpleclaw.agents import PermissionScope, SubAgentSpawner
 from simpleclaw.config import load_sub_agents_config
 
 

@@ -26,7 +26,6 @@ from simpleclaw.security.secrets import (
     set_default_manager,
 )
 
-
 # ---------------------------------------------------------------------------
 # 참조 파서
 # ---------------------------------------------------------------------------
@@ -201,7 +200,7 @@ class TestEncryptedFileBackend:
         assert backend.get("k") == "v"
         # env에 없는 상태로 다시 시도하면 파일에서 읽지 못하므로 실패해야 함.
         monkeypatch.delenv(secrets.MASTER_KEY_ENV)
-        with pytest.raises(Exception):
+        with pytest.raises(SecretsError):
             EncryptedFileBackend(
                 vault_path=tmp_path / "v.enc",
                 master_key_path=tmp_path / "nonexistent" / "m.key",
