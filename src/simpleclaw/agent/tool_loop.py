@@ -31,6 +31,7 @@ from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_prog
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.security.sanitize import sanitize_tool_output
+from simpleclaw.skills.realtime_lookup import has_usable_realtime_evidence
 
 logger = logging.getLogger("simpleclaw.agent.orchestrator")
 
@@ -254,6 +255,14 @@ def _tool_result_provides_usable_live_evidence(content: str) -> bool:
     )
     if any(marker in lowered for marker in blocked_markers):
         return False
+    try:
+        structured = json.loads(stripped)
+    except json.JSONDecodeError:
+        structured = None
+    if isinstance(structured, dict) and (
+        "confidence" in structured or "facts" in structured
+    ):
+        return has_usable_realtime_evidence(structured)
     if _tool_result_looks_like_explicit_error(stripped):
         return False
     if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS):
@@ -799,4 +808,3 @@ class ToolLoopRunner:
                 iterations=self._orchestrator._max_tool_iterations,
             )
         )
-
