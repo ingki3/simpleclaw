@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import re
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 DEFAULT_LOG_PATH = Path("/Users/simplist/.simpleclaw-agent/default/bot.log")
 

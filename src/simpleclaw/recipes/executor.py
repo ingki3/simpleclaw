@@ -34,7 +34,11 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.recipes.models import (
     OnErrorPolicy,
     RecipeDefinition,
@@ -335,7 +339,7 @@ def render_instructions(
     Returns:
         변수 치환이 완료된 instructions 텍스트
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
 
     kst = timezone(timedelta(hours=9))
     now = datetime.now(kst)
@@ -430,7 +434,7 @@ async def _execute_command(
         stdout, stderr = await asyncio.wait_for(
             process.communicate(), timeout=timeout
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         await kill_process_group(process, metrics=metrics)
         return StepResult(
             step_name=name,

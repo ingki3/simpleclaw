@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,7 +30,7 @@ class FakeClock:
     """테스트에서 결정적으로 시간을 진행시키는 now 콜백."""
 
     def __init__(self) -> None:
-        self.now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+        self.now = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
     def __call__(self) -> datetime:
         return self.now
@@ -150,9 +150,8 @@ class TestActiveOperations:
 
     def test_operation_decrements_on_exception(self, state_file):
         controller = DrainController(state_file)
-        with pytest.raises(RuntimeError):
-            with controller.operation("message_turn"):
-                raise RuntimeError("boom")
+        with pytest.raises(RuntimeError), controller.operation("message_turn"):
+            raise RuntimeError("boom")
         assert controller.active_operations() == 0
 
 

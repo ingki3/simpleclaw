@@ -26,8 +26,8 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 logger = logging.getLogger(__name__)
 

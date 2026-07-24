@@ -49,7 +49,7 @@ _DEFAULT_SECTIONS: dict[str, Any] = {
     "admin_api": _ADMIN_API_DEFAULTS,
     "security": {},
 }
-_SECRET_KEY_RE = re.compile(r"(token|secret|password|api[_-]?key|master[_-]?key)", re.I)
+_SECRET_KEY_RE = re.compile(r"(token|secret|password|api[_-]?key|master[_-]?key)", re.IGNORECASE)
 _SECRET_REF_RE = re.compile(r"^(env|file|keyring):[A-Za-z0-9_.:/@-]+$")
 _SECRET_VALUE_RE = re.compile(
     r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+|"

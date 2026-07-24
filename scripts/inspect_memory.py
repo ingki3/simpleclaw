@@ -28,8 +28,8 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from simpleclaw.memory.conversation_store import ConversationStore  # noqa: E402
-from simpleclaw.memory.stats import (  # noqa: E402
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.stats import (
     MemoryDistributionStats,
     RagAnalysisResult,
     analyze_rag_logs,

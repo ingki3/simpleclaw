@@ -27,7 +27,6 @@ from simpleclaw.memory.insights import (
     normalize_topic,
 )
 
-
 # ----------------------------------------------------------------------
 # normalize_topic
 # ----------------------------------------------------------------------
@@ -305,7 +304,7 @@ class TestMigrationScript:
         ]
         insights = build_insights(bullets, promotion_threshold=3)
         assert len(insights) == 1
-        meta = list(insights.values())[0]
+        meta = next(iter(insights.values()))
         # 같은 topic 3회 누적 → 승격선 도달.
         assert meta.evidence_count == 3
         assert meta.confidence == 0.7
@@ -322,7 +321,7 @@ class TestMigrationScript:
             (datetime(2026, 4, 28), "정치 뉴스 관심"),
         ]
         insights = build_insights(bullets, promotion_threshold=3)
-        meta = list(insights.values())[0]
+        meta = next(iter(insights.values()))
         assert meta.evidence_count == 1
         assert meta.confidence == 0.4
 

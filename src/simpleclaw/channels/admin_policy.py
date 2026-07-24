@@ -192,7 +192,7 @@ def classify_keys(area: str, patch: dict) -> PolicyResult:
             matched.append(path)
             continue
         candidates.sort(key=lambda c: -len(c[0].split(".")))
-        pat, lvl, mods = candidates[0]
+        _pat, lvl, mods = candidates[0]
         level = _max_level(level, lvl)
         for m in mods:
             if m not in modules:
@@ -294,11 +294,10 @@ def validate_patch(area: str, patch: dict) -> list[str]:
         token = patch.get("bot_token")
         if isinstance(token, str) and token and not token.startswith(
             ("env:", "keyring:", "file:", "plain:")
-        ):
-            if not _TELEGRAM_TOKEN_RE.match(token):
-                errors.append(
-                    "telegram.bot_token: 정규식 ^\\d+:[\\w-]{20,}$를 만족해야 합니다"
-                )
+        ) and not _TELEGRAM_TOKEN_RE.match(token):
+            errors.append(
+                "telegram.bot_token: 정규식 ^\\d+:[\\w-]{20,}$를 만족해야 합니다"
+            )
         whitelist = patch.get("whitelist", {})
         if isinstance(whitelist, dict):
             for key in ("user_ids", "chat_ids"):
@@ -429,9 +428,9 @@ def validate_patch(area: str, patch: dict) -> list[str]:
 
 __all__ = [
     "HOT",
-    "SERVICE_RESTART",
-    "PROCESS_RESTART",
     "POLICY_CATALOG",
+    "PROCESS_RESTART",
+    "SERVICE_RESTART",
     "PolicyResult",
     "classify_keys",
     "validate_patch",

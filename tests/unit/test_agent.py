@@ -1,12 +1,11 @@
 """Tests for the agent orchestrator."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent.commands import try_cron_command
 from simpleclaw.agent.builtin_tools import (
     handle_cron_action,
     handle_file_manage,
@@ -16,6 +15,7 @@ from simpleclaw.agent.builtin_tools import (
     handle_web_fetch,
     resolve_safe_path,
 )
+from simpleclaw.agent.commands import try_cron_command
 from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
@@ -405,8 +405,9 @@ class TestCronCommands:
         assert "없습니다" in result
 
     def test_cron_list_with_jobs(self):
-        from simpleclaw.daemon.models import ActionType, CronJob
         from datetime import datetime
+
+        from simpleclaw.daemon.models import ActionType, CronJob
 
         mock_scheduler = MagicMock()
         mock_scheduler.list_jobs.return_value = [
@@ -425,8 +426,9 @@ class TestCronCommands:
         assert "15 7 * * *" in result
 
     def test_cron_add(self):
-        from simpleclaw.daemon.models import ActionType, CronJob
         from datetime import datetime
+
+        from simpleclaw.daemon.models import ActionType, CronJob
 
         mock_scheduler = MagicMock()
         mock_scheduler.get_job.return_value = None
@@ -485,8 +487,9 @@ class TestCronToolIntegration:
     """Tests for cron as a built-in tool via _dispatch_tool_call."""
 
     def test_handle_cron_action_add(self):
-        from simpleclaw.daemon.models import ActionType, CronJob
         from datetime import datetime
+
+        from simpleclaw.daemon.models import ActionType, CronJob
 
         mock_scheduler = MagicMock()
         mock_scheduler.get_job.return_value = None
@@ -515,7 +518,7 @@ class TestCronToolIntegration:
     def test_handle_cron_action_add_passes_one_shot_metadata(self):
         from simpleclaw.daemon.models import ActionType, CronJob
 
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        expires_at = datetime.now(UTC) + timedelta(hours=1)
         mock_scheduler = MagicMock()
         mock_scheduler.get_job.return_value = None
         mock_scheduler.add_job.return_value = CronJob(
@@ -707,8 +710,9 @@ class TestCronToolIntegration:
         assert "not allowed" in tool_messages[-1]["content"]
 
     def test_handle_cron_action_recipe_type(self):
-        from simpleclaw.daemon.models import ActionType, CronJob
         from datetime import datetime
+
+        from simpleclaw.daemon.models import ActionType, CronJob
 
         mock_scheduler = MagicMock()
         mock_scheduler.get_job.return_value = None
@@ -1182,9 +1186,10 @@ class TestFetchHeadlessWaitStrategy:
     @pytest.mark.asyncio
     async def test_wait_timeout_does_not_block_text_retrieval(self, tmp_path):
         """``wait`` 가 timeout 으로 죽어도 ``get text body`` 가 호출돼 부분 결과 회수."""
+        import asyncio as _asyncio
+
         from simpleclaw.agent import builtin_tools
         from simpleclaw.agent.builtin_tools import _fetch_headless
-        import asyncio as _asyncio
 
         stub = tmp_path / "agent-browser-stub"
         stub.write_text("#!/bin/sh\nexit 0\n")

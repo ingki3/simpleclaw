@@ -146,8 +146,10 @@ class MCPManager:
             loaded_tools = 0
             scope = str(config.get("scope") or "operator")
 
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
+            async with (
+                stdio_client(server_params) as (read, write),
+                ClientSession(read, write) as session,
+            ):
                     try:
                         initialize_result = await session.initialize()
                     except Exception as e:
@@ -287,7 +289,7 @@ class MCPManager:
             )
         except MCPConnectionError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise MCPConnectionError(
                 f"MCP tool '{server_name}.{tool_name}' timed out after {call_timeout}s"
             ) from e
@@ -318,8 +320,10 @@ class MCPManager:
             env=self._build_subprocess_env(server_conf.get("env")),
         )
 
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
+        async with (
+            stdio_client(server_params) as (read, write),
+            ClientSession(read, write) as session,
+        ):
                 await session.initialize()
                 result = await session.call_tool(
                     tool_name, arguments=arguments or {}

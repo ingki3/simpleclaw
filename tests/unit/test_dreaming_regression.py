@@ -38,7 +38,6 @@ from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.insights import InsightStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
-
 # ──────────────────────────────────────────────────────────
 # 픽스처 로딩 헬퍼
 # ──────────────────────────────────────────────────────────

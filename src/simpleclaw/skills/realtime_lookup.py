@@ -21,7 +21,7 @@ import html
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote_plus, urlparse
 from urllib.request import Request, urlopen
@@ -521,7 +521,7 @@ def lookup(payload: dict[str, Any]) -> dict[str, Any]:
     kind = classify_query(query)
     sources, limitations = gather_evidence(query, kind)
     limitations = list(limitations)
-    now_utc = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(UTC).isoformat()
     as_of_kst = payload.get("as_of_kst")
 
     combined_text = "\n".join(source["text"] for source in sources)

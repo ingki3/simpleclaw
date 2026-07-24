@@ -13,9 +13,9 @@ from datetime import datetime
 from pathlib import Path
 
 from simpleclaw.proactive.models import (
+    TERMINAL_STATUSES,
     OpportunityStatus,
     ProactiveOpportunity,
-    TERMINAL_STATUSES,
 )
 
 logger = logging.getLogger(__name__)

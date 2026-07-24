@@ -2,7 +2,7 @@
 
 import pytest
 
-from simpleclaw.voice.models import UnsupportedFormatError, SUPPORTED_FORMATS
+from simpleclaw.voice.models import SUPPORTED_FORMATS, UnsupportedFormatError
 from simpleclaw.voice.stt import STTProcessor
 
 

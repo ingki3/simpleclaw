@@ -27,7 +27,11 @@ from simpleclaw.agent.clarify import (
     normalize_options,
 )
 from simpleclaw.agent.file_mutation_tracker import format_footer
-from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.security.sanitize import sanitize_tool_output
@@ -256,9 +260,7 @@ def _tool_result_provides_usable_live_evidence(content: str) -> bool:
         return False
     if _tool_result_looks_like_explicit_error(stripped):
         return False
-    if any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS):
-        return False
-    return True
+    return not any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS)
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -638,7 +640,7 @@ class ToolLoopRunner:
                         # 기존 테스트/플러그인이 _dispatch_tool_call(tc) 형태로
                         # monkeypatch한 경우를 보존한다.
                         result = await dispatch(tc)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     await emit_progress_event(
                         state.on_progress,
                         ProgressEvent(progress_kind, progress_name, "fail", str(exc)),
@@ -771,7 +773,7 @@ class ToolLoopRunner:
                 final_send,
                 timeout=_compat_constant("_FORCED_FINAL_ANSWER_TIMEOUT_SECONDS", _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(
                 "Tool loop final generation timeout after %ss",
                 _FORCED_FINAL_ANSWER_TIMEOUT_SECONDS,

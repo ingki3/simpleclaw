@@ -25,7 +25,6 @@ from simpleclaw.memory.dreaming_runs import DreamingRunStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.memory.safety_backup import SafetyBackupManager
 
-
 # ────────────────────────────────────────────────────────────────────
 # 헬퍼 — managed 마커가 들어 있는 starter 파일
 # ────────────────────────────────────────────────────────────────────

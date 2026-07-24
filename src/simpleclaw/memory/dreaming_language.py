@@ -1,4 +1,3 @@
-# ruff: noqa: F401,F403,F405
 """DreamingPipeline에서 분리한 단계별 service 함수.
 
 이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드로 바인딩된다.
@@ -8,8 +7,8 @@
 
 from __future__ import annotations
 
-from simpleclaw.memory.dreaming import *  # noqa: F403
 from simpleclaw.memory import dreaming as _dreaming
+from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -293,8 +292,7 @@ def _extract_json_object(raw: str) -> dict | None:
         parts = text.split("```")
         if len(parts) >= 2:
             text = parts[1]
-            if text.startswith("json"):
-                text = text[4:]
+            text = text.removeprefix("json")
             text = text.strip()
     try:
         obj = json.loads(text)

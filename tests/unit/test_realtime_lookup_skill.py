@@ -18,7 +18,6 @@ import pytest
 
 from simpleclaw.skills import realtime_lookup
 
-
 # ----------------------------------------------------------------------
 # raw query fallback parser
 # ----------------------------------------------------------------------

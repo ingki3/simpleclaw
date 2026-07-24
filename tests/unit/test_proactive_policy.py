@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from simpleclaw.config import load_daemon_config
 from simpleclaw.proactive import (
     OpportunityType,
     PolicyDecisionAction,
@@ -11,7 +12,6 @@ from simpleclaw.proactive import (
     TPOContext,
     TPOPolicyEngine,
 )
-from simpleclaw.config import load_daemon_config
 
 
 def _context(**overrides: object) -> TPOContext:

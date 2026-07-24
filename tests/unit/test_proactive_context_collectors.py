@@ -12,7 +12,6 @@ from simpleclaw.proactive.context_collectors import (
     MailContextCollector,
 )
 
-
 NOW = datetime(2026, 6, 6, 9, 0, 0)
 
 

@@ -30,11 +30,12 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class SubagentLedgerError(Exception):
 
 def _utcnow() -> datetime:
     """기본 now 제공자 — 테스트는 ledger 에 now 콜백을 주입해 고정한다."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -83,7 +84,7 @@ def _parse_iso(value: object) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -120,7 +121,7 @@ class SubagentReviewRecord:
         deadline_at: str | None = None,
         source_metadata: dict[str, Any] | None = None,
         now: NowFn | None = None,
-    ) -> "SubagentReviewRecord":
+    ) -> SubagentReviewRecord:
         """새 review record 를 만든다.
 
         merge_blocking 은 여기서 gate_kind 로부터 한 번만 파생한다 — required
@@ -181,7 +182,7 @@ class SubagentReviewRecord:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "SubagentReviewRecord":
+    def from_dict(cls, raw: dict[str, Any]) -> SubagentReviewRecord:
         """저장분을 관대하게 복원한다 — 알 수 없는 값은 안전한 기본으로 정규화."""
         try:
             kind = ReviewGateKind(str(raw.get("gate_kind") or "optional"))

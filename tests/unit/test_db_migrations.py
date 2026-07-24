@@ -295,12 +295,13 @@ class TestBackupAndRollback:
         # shutil.copy2 를 가로채 *.db-wal/*.db-shm 사본 호출 시
         # 항상 FileNotFoundError 를 raise — exists() 검사 직후 사라진 케이스.
         import shutil as _shutil
+
         from simpleclaw.db import migrations as _migrations_mod
         original_copy2 = _shutil.copy2
 
         def _raise_for_sidecar(src, dst, *args, **kwargs):
             src_str = str(src)
-            if src_str.endswith("-wal") or src_str.endswith("-shm"):
+            if src_str.endswith(("-wal", "-shm")):
                 raise FileNotFoundError(2, "vanished mid-copy", src_str)
             return original_copy2(src, dst, *args, **kwargs)
 

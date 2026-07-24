@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.llm.models import LLMRequest, LLMResponse, ToolCall, ToolDefinition
+from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.providers.openai_provider import _sanitize_json_schema_for_openai
-from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.router import LLMRouter
 
 

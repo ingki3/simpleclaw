@@ -208,5 +208,5 @@ def _run_json_list(skill_path: Path, args: list[str], code: str) -> list[dict[st
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"invalid provider json: {exc}") from exc
     if not isinstance(payload, list):
-        raise RuntimeError("provider returned non-list json")
+        raise TypeError("provider returned non-list json")
     return [item for item in payload if isinstance(item, dict)]

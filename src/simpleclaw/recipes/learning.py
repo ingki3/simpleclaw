@@ -32,11 +32,11 @@ import yaml
 # skill learning과 공유하는 trace snapshot/redaction/risk 정화 helper — 후보 큐는
 # 분리해도 원본 민감값을 저장하지 않는 redaction/allowlist 정책은 한 소스로 유지한다.
 from simpleclaw.skills.learning import (
+    _RISK_KEYWORDS,
     RISK_FLAG_ALLOWLIST,
     SkillTraceStepSnapshot,
     _contains_secret_like,
     _redact_text,
-    _RISK_KEYWORDS,
     detect_risk_flags,
     normalize_risk_flags,
 )
@@ -240,7 +240,7 @@ class RecipeSuggestion:
         trace: list[SkillTraceStepSnapshot] | None = None,
         risk_flags: list[str] | None = None,
         validation_errors: list[str] | None = None,
-    ) -> "RecipeSuggestion":
+    ) -> RecipeSuggestion:
         now = datetime.now()
         return cls(
             uuid.uuid4().hex,
@@ -271,7 +271,7 @@ class RecipeSuggestion:
         return data
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "RecipeSuggestion":
+    def from_dict(cls, raw: dict[str, Any]) -> RecipeSuggestion:
         created, updated = raw.get("created_at"), raw.get("updated_at")
         trace_raw = raw.get("trace") if isinstance(raw.get("trace"), list) else []
         params_raw = (
@@ -597,9 +597,9 @@ class RecipeSuggestionStore:
 __all__ = [
     "RECIPE_RISK_FLAG_ALLOWLIST",
     "RECIPE_SUGGESTION_RESPONSE_SCHEMA",
+    "VALID_RECIPE_SUGGESTION_STATUSES",
     "RecipeSuggestion",
     "RecipeSuggestionStore",
-    "VALID_RECIPE_SUGGESTION_STATUSES",
     "build_recipe_candidate_prompt",
     "detect_trace_risk_flags",
     "normalize_recipe_name",

@@ -1,8 +1,8 @@
 """Structured logging and metrics collection."""
 
-from simpleclaw.logging.structured_logger import StructuredLogger, LogEntry
-from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
+from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.structured_logger import LogEntry, StructuredLogger
 from simpleclaw.logging.trace_context import (
     TRACE_ID_ENV_VAR,
     adopt_env_trace_id,
@@ -14,11 +14,11 @@ from simpleclaw.logging.trace_context import (
 )
 
 __all__ = [
+    "TRACE_ID_ENV_VAR",
     "DashboardServer",
     "LogEntry",
     "MetricsCollector",
     "StructuredLogger",
-    "TRACE_ID_ENV_VAR",
     "adopt_env_trace_id",
     "get_trace_id",
     "inject_trace_id_env",

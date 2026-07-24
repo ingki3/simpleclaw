@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 RUN_BOT_PATH = Path(__file__).parents[2] / "scripts" / "run_bot.py"
 
 

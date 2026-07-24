@@ -23,72 +23,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from simpleclaw.config import (
-    load_agent_config,
-    load_asset_selection_config,
-    load_daemon_config,
-    load_mcp_config,
-    load_memory_config,
-    load_persona_config,
-    load_recipe_learning_config,
-    load_recipes_config,
-    load_security_config,
-    load_skills_learning_config,
-    load_study_config,
-)
-from simpleclaw.llm.models import (
-    LLMRequest,
-    MultimodalAttachment,
-    SystemBlock,
-    ToolCall,
-)
-from simpleclaw.daemon.drain import (
-    DRAIN_CRON_SKIPPED_MESSAGE,
-    DRAIN_MAINTENANCE_MESSAGE,
-    DrainController,
-)
-from simpleclaw.llm.providers.base import TextDeltaCallback
-from simpleclaw.llm.router import create_router
-from simpleclaw.logging.trace_context import trace_scope
-from simpleclaw.memory.conversation_store import ConversationStore
-from simpleclaw.memory.embedding_service import EmbeddingService
-from simpleclaw.memory.models import (
-    CHANNEL_CRON_ADMIN,
-    CHANNEL_GOAL_PREFIX,
-    CHANNEL_RECIPE_PREFIX,
-    ConversationMessage,
-    MessageRole,
-)
-from simpleclaw.persona.assembler import assemble_prompt
-from simpleclaw.persona.resolver import resolve_persona_files
-from simpleclaw.proactive.conversation_detector import ConversationEndDetector
-from simpleclaw.proactive.store import OpportunityStore
-from simpleclaw.security import CommandGuard
-from simpleclaw.security.secrets import default_manager
-from simpleclaw.security.sanitize import sanitize_tool_output
-from simpleclaw.recipes.learning import (
-    RECIPE_SUGGESTION_RESPONSE_SCHEMA,
-    RecipeSuggestion,
-    RecipeSuggestionStore,
-    build_recipe_candidate_prompt,
-    suggestion_from_recipe_payload,
-)
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.recipes.models import RecipeDefinition
-from simpleclaw.skills.discovery import discover_skills
-from simpleclaw.skills.learning import (
-    SKILL_SUGGESTION_RESPONSE_SCHEMA,
-    SkillSuggestion,
-    SkillSuggestionStore,
-    build_skill_candidate_prompt,
-    is_complex_successful_trace,
-    snapshots_from_trace,
-    suggestion_from_candidate_payload,
-    trace_fingerprint,
-)
-from simpleclaw.skills.mcp_client import MCPManager
-from simpleclaw.skills.models import SkillDefinition
-
 from simpleclaw.agent import (
     command_dispatch,
     memory_search,
@@ -117,33 +51,98 @@ from simpleclaw.agent.commands import (
     try_cron_command,
     try_recipe_command,
 )
-from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.file_mutation_tracker import (
+    FileMutationTracker,
+    TrackedRoot,
+)
+from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.response_router import (
     ResponseRoute,
     classify_response_route,
 )
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
     ToolLoopState,
-)
-from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
-from simpleclaw.agent.turn_frame import build_turn_frame
-from simpleclaw.agent.file_mutation_tracker import (
-    FileMutationTracker,
-    TrackedRoot,
 )
 from simpleclaw.agent.tool_schemas import (
     ToolScope,
     build_tool_definitions,
     validate_dispatch_tool_names,
 )
-from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
+from simpleclaw.agent.turn_frame import build_turn_frame
+from simpleclaw.config import (
+    load_agent_config,
+    load_asset_selection_config,
+    load_daemon_config,
+    load_mcp_config,
+    load_memory_config,
+    load_persona_config,
+    load_recipe_learning_config,
+    load_recipes_config,
+    load_security_config,
+    load_skills_learning_config,
+    load_study_config,
+)
+from simpleclaw.daemon.drain import (
+    DRAIN_CRON_SKIPPED_MESSAGE,
+    DRAIN_MAINTENANCE_MESSAGE,
+    DrainController,
+)
+from simpleclaw.llm.models import (
+    LLMRequest,
+    MultimodalAttachment,
+    SystemBlock,
+    ToolCall,
+)
+from simpleclaw.llm.providers.base import TextDeltaCallback
+from simpleclaw.llm.router import create_router
+from simpleclaw.logging.trace_context import trace_scope
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.embedding_service import EmbeddingService
+from simpleclaw.memory.models import (
+    CHANNEL_CRON_ADMIN,
+    CHANNEL_GOAL_PREFIX,
+    CHANNEL_RECIPE_PREFIX,
+    ConversationMessage,
+    MessageRole,
+)
+from simpleclaw.persona.assembler import assemble_prompt
+from simpleclaw.persona.resolver import resolve_persona_files
+from simpleclaw.proactive.conversation_detector import ConversationEndDetector
+from simpleclaw.proactive.store import OpportunityStore
+from simpleclaw.recipes.learning import (
+    RECIPE_SUGGESTION_RESPONSE_SCHEMA,
+    RecipeSuggestion,
+    RecipeSuggestionStore,
+    build_recipe_candidate_prompt,
+    suggestion_from_recipe_payload,
+)
+from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.recipes.models import RecipeDefinition
+from simpleclaw.security import CommandGuard
+from simpleclaw.security.sanitize import sanitize_tool_output
+from simpleclaw.security.secrets import default_manager
+from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills.learning import (
+    SKILL_SUGGESTION_RESPONSE_SCHEMA,
+    SkillSuggestion,
+    SkillSuggestionStore,
+    build_skill_candidate_prompt,
+    is_complex_successful_trace,
+    snapshots_from_trace,
+    suggestion_from_candidate_payload,
+    trace_fingerprint,
+)
+from simpleclaw.skills.mcp_client import MCPManager
+from simpleclaw.skills.models import SkillDefinition
 from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
 
 if TYPE_CHECKING:
@@ -438,19 +437,19 @@ def _format_realtime_lookup_context(evidence: str) -> str:
     return "\n".join(
         [
             _REALTIME_LOOKUP_CONTEXT_HEADER,
-            "Use only the evidence below for live/current facts. "
+            ("Use only the evidence below for live/current facts. "
             "Do not invent numbers, dates, sources, winners, prices, or news not present here. "
-            "If the evidence says it is limited, say so explicitly.",
+            "If the evidence says it is limited, say so explicitly."),
             # BIZ-383: 일정/상태성 질문은 timeline_validation 으로 출처의 시점 반영
             # 범위를 검증한다. status 를 그대로 신뢰해 stale 전망을 확정처럼 말하지 말 것.
-            "If the evidence contains a `timeline_validation` object, respect its `status`: "
+            ("If the evidence contains a `timeline_validation` object, respect its `status`: "
             "`stale_or_pre_event` means the source only describes a future/scheduled event — "
             "answer as a forecast, never as a confirmed result; "
             "`current_pending` means some events finished while others remain — separate the "
             "confirmed part from the pending part; "
             "`partial` means results may be only partially reflected — flag the partiality; "
             "`final` means a confirmed result — still state the as-of/source time; "
-            "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly.",
+            "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly."),
             evidence.strip() or "{}",
         ]
     )
@@ -466,10 +465,10 @@ def _format_attachment_context_note(
     lines = [
         f"## {_ATTACHMENT_CONTEXT_HEADER}",
         "첨부 내용을 직접 분석해 주세요. 불가능하면 이유와 필요한 조치를 설명해 주세요.",
-        "현재 turn의 첨부는 `이거`, `몇 알`, `이 제품` 같은 지시어를 해석할 때 "
-        "1차 근거입니다. 이전 대화보다 먼저 첨부를 분석해 주세요.",
-        "사용자가 최신 확인이나 검색을 명시적으로 요청하지 않았다면, 이전 대화만을 "
-        "근거로 첨부와 무관한 웹 검색이나 현재 사실 조회로 확장하지 마세요.",
+        ("현재 turn의 첨부는 `이거`, `몇 알`, `이 제품` 같은 지시어를 해석할 때 "
+        "1차 근거입니다. 이전 대화보다 먼저 첨부를 분석해 주세요."),
+        ("사용자가 최신 확인이나 검색을 명시적으로 요청하지 않았다면, 이전 대화만을 "
+        "근거로 첨부와 무관한 웹 검색이나 현재 사실 조회로 확장하지 마세요."),
     ]
     for index, attachment in enumerate(attachments, start=1):
         name = attachment.name or f"attachment-{index}"
@@ -511,7 +510,7 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
         return False
 
     lowered = stripped.lower()
-    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
+    if lowered.startswith(('{"error"', "{'error'")):
         return True
 
     for line in stripped.splitlines()[:3]:
@@ -519,9 +518,7 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
         if not header:
             continue
         return any(
-            header == prefix
-            or header.startswith(f"{prefix}:")
-            or header.startswith(f"{prefix} ")
+            header == prefix or header.startswith((f"{prefix}:", f"{prefix} "))
             for prefix in _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES
         )
     return False
@@ -916,7 +913,7 @@ class AgentOrchestrator:
         # 경로만 비우고 main 응답은 기존 스킬 경로로 계속 진행한다.
         try:
             self._recipes = discover_recipes(self._recipes_dir)
-        except Exception as exc:  # noqa: BLE001 — recipe 스캔 실패는 응답을 막지 않음
+        except Exception as exc:
             logger.warning("Recipe discovery failed during dynamic reload: %s", exc)
             self._recipes = []
 
@@ -1428,7 +1425,7 @@ class AgentOrchestrator:
                 assistant_text=assistant_text,
                 source_msg_ids=source_msg_ids,
             )
-        except Exception:  # noqa: BLE001 — proactive 후보 실패가 사용자 응답을 깨면 안 된다.
+        except Exception:
             logger.exception("Conversation-end proactive hook failed")
 
     async def _capture_skill_learning_candidate(
@@ -1468,7 +1465,7 @@ class AgentOrchestrator:
                 suggestion
             )
             await self._notify_skill_candidate_pending(stored)
-        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+        except Exception:
             logger.exception("Skill-learning candidate hook failed")
 
     async def _notify_skill_candidate_pending(self, suggestion: SkillSuggestion) -> None:
@@ -1494,7 +1491,7 @@ class AgentOrchestrator:
             result = notifier(suggestion)
             if inspect.isawaitable(result):
                 await result
-        except Exception:  # noqa: BLE001 — 알림 실패는 후보 적재와 무관하다.
+        except Exception:
             logger.exception("Skill candidate notification hook failed")
 
     async def _draft_skill_suggestion(
@@ -1529,14 +1526,14 @@ class AgentOrchestrator:
             response = await self._router.send(request)
             payload = json.loads((response.text or "{}").strip())
             if not isinstance(payload, dict):
-                raise ValueError("Skill candidate response must be a JSON object")
+                raise TypeError("Skill candidate response must be a JSON object")
             return suggestion_from_candidate_payload(
                 payload,
                 trace_fingerprint_value=fp,
                 source_msg_ids=source_msg_ids,
                 trace=snapshots,
             )
-        except Exception as exc:  # noqa: BLE001 — 후보 실패는 turn 을 막지 않는다.
+        except Exception as exc:
             # raw 전문에는 사용자 발화/도구 관측이 섞일 수 있어 로그에 남기지 않는다.
             raw_len = len(getattr(response, "text", "") or "")
             logger.warning(
@@ -1589,7 +1586,7 @@ class AgentOrchestrator:
             if suggestion is None:
                 return
             RecipeSuggestionStore(cfg["suggestions_file"]).upsert_pending(suggestion)
-        except Exception:  # noqa: BLE001 — 학습 후보 실패가 사용자 응답을 깨면 안 된다.
+        except Exception:
             logger.exception("Recipe-learning candidate hook failed")
 
     async def _draft_recipe_suggestion(
@@ -1625,14 +1622,14 @@ class AgentOrchestrator:
             response = await self._router.send(request)
             payload = json.loads((response.text or "{}").strip())
             if not isinstance(payload, dict):
-                raise ValueError("Recipe candidate response must be a JSON object")
+                raise TypeError("Recipe candidate response must be a JSON object")
             return suggestion_from_recipe_payload(
                 payload,
                 trace_fingerprint_value=fp,
                 source_msg_ids=source_msg_ids,
                 trace=snapshots,
             )
-        except Exception as exc:  # noqa: BLE001 — 후보 실패는 turn 을 막지 않는다.
+        except Exception as exc:
             # raw 전문/exception 메시지에는 사용자 발화·도구 관측·provider 응답이
             # 섞일 수 있어 클래스 이름과 길이 진단만 남긴다.
             raw_len = len(getattr(response, "text", "") or "")
@@ -1717,7 +1714,7 @@ class AgentOrchestrator:
             self._mcp_manager = MCPManager(secret_resolver=self._resolve_mcp_secret)
         try:
             await self._mcp_manager.connect_servers(self._mcp_config)
-        except Exception as exc:  # noqa: BLE001 — MCP 연결 실패가 turn 전체를 죽이지 않음
+        except Exception as exc:
             logger.warning("MCP server discovery failed: %s", exc)
 
     def _mcp_call_available(self, *, operator_tools: bool) -> bool:
@@ -1757,7 +1754,7 @@ class AgentOrchestrator:
         생성 경로는 기존 tool loop 로 유지).
         """
         # 현재 시각을 KST로 주입
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
         kst = timezone(timedelta(hours=9))
         now_kst = datetime.now(kst)
         datetime_context = now_kst.strftime(
@@ -1899,7 +1896,7 @@ class AgentOrchestrator:
                     "BIZ-359: realtime lookup skill evidence injected (%d chars)",
                     len(realtime_lookup_context),
                 )
-            except Exception as exc:  # noqa: BLE001 — evidence 조회 실패가 turn 전체를 죽이지 않음
+            except Exception as exc:
                 realtime_lookup_context = _format_realtime_lookup_context(
                     json.dumps(
                         {
@@ -2084,7 +2081,7 @@ class AgentOrchestrator:
                 top_k=int(cfg["skill_top_k"]) + int(cfg["recipe_top_k"]),
                 min_confidence=float(cfg["min_confidence"]),
             )
-        except Exception as exc:  # noqa: BLE001 — selector 실패는 main 응답을 막지 않음
+        except Exception as exc:
             logger.warning("Asset selector failed; falling back to capped assets: %s", exc)
             return AssetSelectionResult(
                 fallback_required=True,

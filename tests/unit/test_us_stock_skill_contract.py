@@ -10,7 +10,6 @@ import pytest
 
 from simpleclaw.recipes.loader import load_recipe
 
-
 SKILL_DIR = Path("/Users/simplist/.agents/skills/us-stock-skill")
 SCRIPT = SKILL_DIR / "scripts" / "us_stock.py"
 PYTHON = SKILL_DIR / "scripts" / "venv" / "bin" / "python"

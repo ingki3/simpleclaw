@@ -1,5 +1,6 @@
 """LLM routing layer with multi-provider support and CLI wrapping."""
 
+from simpleclaw.llm.capabilities import LLMCapabilities
 from simpleclaw.llm.models import (
     BackendType,
     LLMAuthError,
@@ -12,15 +13,14 @@ from simpleclaw.llm.models import (
     LLMResponse,
     LLMTimeoutError,
 )
-from simpleclaw.llm.capabilities import LLMCapabilities
 from simpleclaw.llm.profiles import ProviderProfile
 
 __all__ = [
     "BackendType",
-    "LLMCapabilities",
     "LLMAuthError",
     "LLMBackend",
     "LLMCLINotFoundError",
+    "LLMCapabilities",
     "LLMConfigError",
     "LLMError",
     "LLMProviderError",

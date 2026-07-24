@@ -9,7 +9,12 @@ from datetime import datetime, timedelta
 from simpleclaw.memory.active_projects import ActiveProject, normalize_name
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.insights import InsightMeta, is_promoted, normalize_topic
-from simpleclaw.memory.models import ClusterRecord, MemoryItem, MemoryItemStatus, MemoryItemType
+from simpleclaw.memory.models import (
+    ClusterRecord,
+    MemoryItem,
+    MemoryItemStatus,
+    MemoryItemType,
+)
 from simpleclaw.memory.suggestions import SuggestionMeta
 from simpleclaw.memory.supersession import is_expired_event_memory
 

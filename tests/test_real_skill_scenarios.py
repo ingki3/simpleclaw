@@ -37,7 +37,6 @@ import pytest
 
 from simpleclaw.channels.telegram_bot import TelegramBot
 
-
 USER_ID = 123456
 CHAT_ID = 789012
 
@@ -278,7 +277,7 @@ class TestCmd_CheckEmail:
 
     @pytest.mark.asyncio
     async def test_check_email(self, real_env):
-        bot, orch, agent_dir = real_env
+        bot, orch, _agent_dir = real_env
 
         skill_path = SKILLS_DIR / "gmail-skill"
         script = f"{skill_path}/scripts/venv/bin/python {skill_path}/scripts/gmail.py"
@@ -324,7 +323,7 @@ class TestCmd_NewsSearch:
 
     @pytest.mark.asyncio
     async def test_news_search(self, real_env):
-        bot, orch, agent_dir = real_env
+        bot, orch, _agent_dir = real_env
 
         skill_path = SKILLS_DIR / "news-search-skill"
         script = f"{skill_path}/scripts/venv/bin/python {skill_path}/scripts/news_search.py"
@@ -369,7 +368,7 @@ class TestCmd_StockInfo:
 
     @pytest.mark.asyncio
     async def test_stock_info(self, real_env):
-        bot, orch, agent_dir = real_env
+        bot, orch, _agent_dir = real_env
 
         skill_path = SKILLS_DIR / "us-stock-skill"
         script = f"{skill_path}/scripts/venv/bin/python {skill_path}/scripts/us_stock.py"
@@ -481,7 +480,7 @@ class TestCmd_RouteQuery:
 
     @pytest.mark.asyncio
     async def test_route_query(self, real_env):
-        bot, orch, agent_dir = real_env
+        bot, orch, _agent_dir = real_env
 
         skill_path = SKILLS_DIR / "local-route-skill"
         script = f"{skill_path}/scripts/venv/bin/python {skill_path}/scripts/search_and_route.py"

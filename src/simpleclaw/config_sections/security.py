@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+
 def load_security_config(config_path: str | Path) -> dict:
     """config.yaml에서 security 섹션을 로드한다.
 

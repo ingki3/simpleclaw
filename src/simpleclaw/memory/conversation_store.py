@@ -36,6 +36,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Self
 
 import numpy as np
 
@@ -80,7 +81,7 @@ class ConversationStore:
         일관되게 사용할 수 있도록 idempotent no-op으로 명시한다.
         """
 
-    def __enter__(self) -> "ConversationStore":
+    def __enter__(self) -> Self:
         """``with ConversationStore(...)`` 패턴에서 저장소 자신을 반환한다."""
         return self
 

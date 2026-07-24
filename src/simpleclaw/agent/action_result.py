@@ -150,7 +150,7 @@ def looks_like_explicit_error_header(text: str) -> bool:
     are normal ..." 같은 정상 첫 문장을 오류로 넓히지 않는다.
     """
     lowered = text.strip().lower()
-    if lowered.startswith('{"error"') or lowered.startswith("{'error'"):
+    if lowered.startswith(('{"error"', "{'error'")):
         return True
     for line in text.splitlines()[:3]:
         header = line.strip().lower()
@@ -259,18 +259,17 @@ def infer_action_result(
     # plain-text 성공 인정은 좁은 조건으로 한정한다: execute_skill +
     # google-calendar-skill + 명시적 성공 문구. broad keyword 성공 판정은
     # 인용/transcript 오분류(overclaim) 위험 때문에 금지한다.
-    if tool_name == "execute_skill" and skill_name == "google-calendar-skill":
-        if (
-            "Event created successfully" in sanitized_output
-            or "Event ID:" in sanitized_output
-        ):
-            base.status = "success"
-            base.side_effect = True
-            base.action = "calendar_event_create"
-            match = _EVENT_ID_RE.search(sanitized_output)
-            if match:
-                base.data["event_id"] = match.group(1)
-            return base
+    if tool_name == "execute_skill" and skill_name == "google-calendar-skill" and (
+        "Event created successfully" in sanitized_output
+        or "Event ID:" in sanitized_output
+    ):
+        base.status = "success"
+        base.side_effect = True
+        base.action = "calendar_event_create"
+        match = _EVENT_ID_RE.search(sanitized_output)
+        if match:
+            base.data["event_id"] = match.group(1)
+        return base
 
     return base
 

@@ -35,8 +35,8 @@ from google.auth.exceptions import GoogleAuthError
 from google.oauth2 import service_account
 
 from simpleclaw.llm.models import LLMAuthError, LLMProviderError
-from simpleclaw.llm.providers.gemini import GeminiProvider
 from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
+from simpleclaw.llm.providers.gemini import GeminiProvider
 
 # service account 토큰에 부여할 OAuth scope — Vertex AI 호출의 표준 scope.
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"

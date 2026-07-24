@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -231,8 +231,7 @@ def compute_confidence(evidence_count: int, promotion_threshold: int) -> float:
     """
     if evidence_count <= 0:
         return 0.0
-    if promotion_threshold < 1:
-        promotion_threshold = 1
+    promotion_threshold = max(promotion_threshold, 1)
 
     # 단일 관측 — DoD 의 핵심 가드: 1회만 본 인사이트는 절대 0.4 를 넘지 않는다.
     if evidence_count == 1:

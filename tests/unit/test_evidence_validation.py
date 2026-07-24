@@ -1,5 +1,10 @@
 from simpleclaw.agent.evidence_validation import validate_slot_evidence
-from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem, EvidenceSlot, SlotStatus
+from simpleclaw.agent.fact_types import (
+    EvidenceCoverage,
+    EvidenceItem,
+    EvidenceSlot,
+    SlotStatus,
+)
 
 
 def test_required_fresh_slot_rejects_pre_event_evidence():

@@ -331,7 +331,6 @@ async def test_llm_intents_reach_capability_router(config_file, monkeypatch):
     def fake_select(route_input, **kwargs):
         captured["explicit_intents"] = kwargs.get("explicit_intents")
         captured["explicit_domains"] = kwargs.get("explicit_domains")
-        return None
 
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.select_capability", fake_select

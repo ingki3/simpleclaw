@@ -1,4 +1,3 @@
-# ruff: noqa: F401,F403,F405
 """DreamingPipeline에서 분리한 단계별 service 함수.
 
 이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드로 바인딩된다.
@@ -8,8 +7,8 @@
 
 from __future__ import annotations
 
-from simpleclaw.memory.dreaming import *  # noqa: F403
 from simpleclaw.memory import dreaming as _dreaming
+from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -143,7 +142,7 @@ def _apply_auto_trigger_filter(self, items, key):
 
     # stride 가 클수록 적게 남는다. weight=0.3 → stride=3 (1/3 보존).
     # round 가 0 을 만들 수 없도록 max(2, ...). 분수 나눗셈은 round 로 안정화.
-    stride = max(2, int(round(1.0 / self._auto_trigger_weight)))
+    stride = max(2, round(1.0 / self._auto_trigger_weight))
     sampled_auto = auto[::stride]
 
     # 시간순 보존을 위해 원본 인덱스로 재정렬. items 는 시간순 입력 가정.

@@ -7,7 +7,7 @@ daily run 이 그 topic 을 공부 → topics.yaml/topic page/daily note 반영.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -21,7 +21,7 @@ from simpleclaw.study.interest_signals import InterestSignal
 from simpleclaw.study.runner import StudyRunner
 from simpleclaw.study.signal_provider import StaticStudySignalProvider
 
-FIXED_NOW = datetime(2026, 7, 12, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 7, 12, tzinfo=UTC)
 
 
 class EchoCollector:
