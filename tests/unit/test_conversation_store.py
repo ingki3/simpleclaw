@@ -55,6 +55,23 @@ class TestConversationStore:
         assert recent[0].content == "Message 2"
         assert recent[2].content == "Message 4"
 
+    def test_recent_with_ids_returns_row_ids_in_chronological_order(self, store):
+        inserted_ids = [
+            store.add_message(
+                ConversationMessage(role=MessageRole.USER, content=f"Message {i}")
+            )
+            for i in range(5)
+        ]
+
+        recent = store.get_recent_with_ids(limit=3)
+
+        assert [row_id for row_id, _ in recent] == inserted_ids[-3:]
+        assert [message.content for _, message in recent] == [
+            "Message 2",
+            "Message 3",
+            "Message 4",
+        ]
+
     def test_count(self, store):
         assert store.count() == 0
         store.add_message(ConversationMessage(
@@ -82,15 +99,27 @@ class TestConversationStore:
         assert store.count() == 0
 
     def test_hide_recent_user_turn_excludes_user_assistant_pair_from_context(self, store):
-        store.add_message(ConversationMessage(role=MessageRole.USER, content="u1"))
-        store.add_message(ConversationMessage(role=MessageRole.ASSISTANT, content="a1"))
+        user_id = store.add_message(
+            ConversationMessage(role=MessageRole.USER, content="u1")
+        )
+        assistant_id = store.add_message(
+            ConversationMessage(role=MessageRole.ASSISTANT, content="a1")
+        )
         hidden_user_turns = store.hide_recent_user_turns(1)
 
         assert hidden_user_turns == 1
         assert store.get_recent(limit=10) == []
+        assert store.get_recent_with_ids(limit=10) == []
 
         audit_messages = store.get_recent(limit=10, include_deleted=True)
         assert [msg.content for msg in audit_messages] == ["u1", "a1"]
+        assert [
+            (row_id, message.content)
+            for row_id, message in store.get_recent_with_ids(
+                limit=10,
+                include_deleted=True,
+            )
+        ] == [(user_id, "u1"), (assistant_id, "a1")]
         assert store.count() == 2
 
     def test_hide_recent_two_user_turns_preserves_older_context(self, store):
