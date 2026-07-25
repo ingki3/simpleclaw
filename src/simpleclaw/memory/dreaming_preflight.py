@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
+AUTO_TRIGGER_MODE_INCLUDE = _dreaming.AUTO_TRIGGER_MODE_INCLUDE
 _CLUSTER_MARKER_END = _dreaming._CLUSTER_MARKER_END
 _CLUSTER_MARKER_START = _dreaming._CLUSTER_MARKER_START
 _CLUSTER_SECTION_RE = _dreaming._CLUSTER_SECTION_RE
@@ -24,6 +24,17 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+BlocklistStore = _dreaming.BlocklistStore
+ConversationMessage = _dreaming.ConversationMessage
+DreamingRunStore = _dreaming.DreamingRunStore
+InsightStore = _dreaming.InsightStore
+Path = _dreaming.Path
+ProtectedSectionMissing = _dreaming.ProtectedSectionMissing
+SuggestionStore = _dreaming.SuggestionStore
+append_to_section = _dreaming.append_to_section
+find_legacy_memory_backup = _dreaming.find_legacy_memory_backup
+get_section_body = _dreaming.get_section_body
+is_auto_trigger_channel = _dreaming.is_auto_trigger_channel
 
 def create_backup(self, file_path: Path, max_backups: int = 3) -> Path | None:
     """파일 수정 전 타임스탬프가 포함된 .bak 백업을 생성한다.
@@ -405,4 +416,3 @@ def _restore_from_backups(backups: list[tuple[Path, Path | None]]) -> None:
                 original,
                 backup,
             )
-
