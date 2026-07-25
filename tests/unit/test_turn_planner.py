@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -13,13 +14,14 @@ from simpleclaw.agent.context_candidates import (
     ContextCandidateSet,
     ContextTrust,
 )
-from simpleclaw.agent.planner_catalog import PlannerCatalog
+from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
     UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
     ExecutionMode,
 )
 from simpleclaw.agent.turn_planner import (
+    PlannerUnavailable,
     build_turn_planner_user_prompt,
     plan_turn_with_llm,
 )
@@ -105,6 +107,55 @@ def _candidates() -> ContextCandidateSet:
     )
 
 
+def _catalog(
+    *,
+    side_effecting_skill: bool = False,
+    skill_runtime_visible: bool = True,
+) -> PlannerCatalog:
+    """성공·side-effect·internal 경계를 표현하는 compact catalog를 만든다."""
+    skill = PlannerAsset(
+        asset_type="skill",
+        name="realtime-lookup-skill",
+        description="현재 사실 조회",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=not side_effecting_skill,
+        side_effects=side_effecting_skill,
+        freshness_sensitive=True,
+        direct_answer=True,
+        requires_confirmation=side_effecting_skill,
+        output_contract=None,
+        declared=True,
+        runtime_visible=skill_runtime_visible,
+    )
+    execute_skill = PlannerAsset(
+        asset_type="native_tool",
+        name="execute_skill",
+        description="선택 skill 실행",
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+    )
+    return PlannerCatalog(
+        assets=(execute_skill, skill),
+        fingerprint="fingerprint-123",
+    )
+
+
+def _response_data() -> dict[str, object]:
+    """성공 응답 JSON을 trust-boundary 변형 가능한 dict로 반환한다."""
+    data = json.loads(_response_payload())
+    assert isinstance(data, dict)
+    return data
+
+
 def test_prompt_yaml_contains_required_semantic_guards() -> None:
     """YAML SoT가 문맥·evidence·single mode·catalog·CoT 금지 지시를 포함한다."""
     prompt = load_system_prompt("unified_turn_planner", refresh=True).system_prompt
@@ -141,7 +192,7 @@ async def test_planner_sends_one_structured_request() -> None:
     """성공 경로는 context/fact/execution을 한 번의 schema 요청으로 반환한다."""
     router = AsyncMock()
     router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
-    catalog = PlannerCatalog(assets=(), fingerprint="fingerprint-123")
+    catalog = _catalog()
 
     plan = await plan_turn_with_llm(
         "오늘 있었던 발표야. 체크해봐",
@@ -167,7 +218,7 @@ async def test_reasoning_hint_is_forwarded_only_when_enabled() -> None:
     """provider-neutral reasoning 설정은 명시적으로 켠 경우에만 요청에 포함한다."""
     router = AsyncMock()
     router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
-    catalog = PlannerCatalog(assets=(), fingerprint="fingerprint-123")
+    catalog = _catalog()
 
     await plan_turn_with_llm(
         "질문",
@@ -179,3 +230,120 @@ async def test_reasoning_hint_is_forwarded_only_when_enabled() -> None:
 
     request = router.send.await_args.args[0]
     assert request.reasoning == {"enabled": True, "effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_empty_boundaries_reject_hallucinated_ids_assets_and_tools(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """빈 후보/catalog에서는 모델이 만든 ID·asset·tool을 모두 fail-closed한다."""
+    data = _response_data()
+    data["context"]["selected_turn_ids"] = ["invented-turn-id"]
+    data["execution"] = {
+        "mode": "execute_asset",
+        "primary_asset": {
+            "asset_type": "skill",
+            "asset_name": "invented-dangerous-skill",
+        },
+        "allowed_assets": [
+            {
+                "asset_type": "skill",
+                "asset_name": "invented-dangerous-skill",
+            }
+        ],
+        "allowed_tools": ["invented_tool"],
+        "requires_confirmation": False,
+        "reason": "hallucinated scope",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="simpleclaw.agent.turn_planner"),
+        pytest.raises(PlannerUnavailable),
+    ):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=ContextCandidateSet(
+                candidates=(),
+                total_chars=0,
+                truncated=False,
+            ),
+            catalog=PlannerCatalog(assets=(), fingerprint="empty"),
+            router=router,
+        )
+
+    assert "boundary_code=unknown_selected_turn_id" in caplog.text
+    assert "invented-turn-id" not in caplog.text
+    assert "invented-dangerous-skill" not in caplog.text
+    assert "invented_tool" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_primary_asset_must_also_be_in_allowed_assets() -> None:
+    """등록된 primary라도 allowed_assets에 없으면 allowlist 확장으로 거부한다."""
+    data = _response_data()
+    data["execution"]["allowed_assets"] = []
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_unknown_allowed_tool_is_rejected() -> None:
+    """runtime-visible native tool catalog에 없는 이름은 실행 scope에 들어오지 못한다."""
+    data = _response_data()
+    data["execution"]["allowed_tools"] = ["invented_tool"]
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_internal_asset_is_rejected() -> None:
+    """catalog snapshot에 있어도 runtime_visible=false인 자산은 선택할 수 없다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(skill_runtime_visible=False),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_side_effecting_asset_requires_confirmation() -> None:
+    """side-effect 또는 catalog confirmation gate가 있으면 plan도 확인을 요구해야 한다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(side_effecting_skill=True),
+            router=router,
+        )

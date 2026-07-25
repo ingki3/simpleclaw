@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
-from simpleclaw.agent.planner_catalog import PlannerCatalog
+from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import ExecutionMode
 from simpleclaw.agent.turn_planner import (
     PlannerUnavailable,
@@ -56,7 +56,12 @@ def _valid_payload(*, summary: str = "최신 사실을 확인한다.") -> str:
                     "asset_type": "skill",
                     "asset_name": "realtime-lookup-skill",
                 },
-                "allowed_assets": [],
+                "allowed_assets": [
+                    {
+                        "asset_type": "skill",
+                        "asset_name": "realtime-lookup-skill",
+                    }
+                ],
                 "allowed_tools": ["execute_skill"],
                 "requires_confirmation": False,
                 "reason": "날씨 조회",
@@ -71,6 +76,45 @@ def _valid_payload(*, summary: str = "최신 사실을 확인한다.") -> str:
 def _empty_candidates() -> ContextCandidateSet:
     """문맥 없는 planner 호출 fixture를 만든다."""
     return ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+
+
+def _catalog() -> PlannerCatalog:
+    """repair/retry 성공 응답이 참조하는 runtime-visible catalog를 만든다."""
+    return PlannerCatalog(
+        assets=(
+            PlannerAsset(
+                asset_type="native_tool",
+                name="execute_skill",
+                description="선택 skill 실행",
+                domains=(),
+                intents=(),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+            PlannerAsset(
+                asset_type="skill",
+                name="realtime-lookup-skill",
+                description="현재 사실 조회",
+                domains=("weather",),
+                intents=("weather",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+        ),
+        fingerprint="catalog-v1",
+    )
 
 
 def test_repair_recovers_payload_cut_inside_decision_summary() -> None:
@@ -115,7 +159,7 @@ async def test_planner_repairs_truncated_tail_without_retry() -> None:
     plan = await plan_turn_with_llm(
         "내일 서울 날씨는?",
         candidates=_empty_candidates(),
-        catalog=PlannerCatalog(assets=(), fingerprint="catalog-v1"),
+        catalog=_catalog(),
         router=router,
     )
 
@@ -146,11 +190,57 @@ async def test_planner_retries_route_once_after_parse_and_repair_fail() -> None:
     plan = await plan_turn_with_llm(
         "내일 서울 날씨는?",
         candidates=_empty_candidates(),
-        catalog=PlannerCatalog(assets=(), fingerprint="catalog-v1"),
+        catalog=_catalog(),
         router=router,
     )
 
     assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    primary.send.assert_awaited_once()
+    retry.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_semantic_boundary_failure_consumes_route_retry() -> None:
+    """shape-valid hallucinated asset도 validation 실패 후 route retry로 복구한다."""
+    invalid = json.loads(_valid_payload())
+    invalid["execution"]["primary_asset"] = {
+        "asset_type": "skill",
+        "asset_name": "invented-skill",
+    }
+    invalid["execution"]["allowed_assets"] = [
+        {
+            "asset_type": "skill",
+            "asset_name": "invented-skill",
+        }
+    ]
+    primary = AsyncMock()
+    primary.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(invalid, ensure_ascii=False))
+    )
+    retry = AsyncMock()
+    retry.send = AsyncMock(return_value=LLMResponse(text=_valid_payload()))
+    router = LLMRouter(
+        backends={},
+        providers={"primary": primary, "retry": retry},
+        default_backend="primary",
+        routes={
+            "turn_analysis": LLMRoute(
+                "turn_analysis",
+                "primary",
+                "retry",
+            )
+        },
+    )
+
+    plan = await plan_turn_with_llm(
+        "내일 서울 날씨는?",
+        candidates=_empty_candidates(),
+        catalog=_catalog(),
+        router=router,
+    )
+
+    assert plan.execution.primary_asset is not None
+    assert plan.execution.primary_asset.name == "realtime-lookup-skill"
     primary.send.assert_awaited_once()
     retry.send.assert_awaited_once()
 
@@ -187,7 +277,7 @@ async def test_planner_raises_unavailable_after_retry_without_semantic_fallback(
         await plan_turn_with_llm(
             user_marker,
             candidates=_empty_candidates(),
-            catalog=PlannerCatalog(assets=(), fingerprint="catalog-v1"),
+            catalog=_catalog(),
             router=router,
         )
 
@@ -209,7 +299,7 @@ async def test_lightweight_router_failure_is_fail_closed_without_keyword_fallbac
         await plan_turn_with_llm(
             "현재 삼성전자 주가는?",
             candidates=_empty_candidates(),
-            catalog=PlannerCatalog(assets=(), fingerprint="catalog-v1"),
+            catalog=_catalog(),
             router=router,
         )
 

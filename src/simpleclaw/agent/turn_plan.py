@@ -458,14 +458,20 @@ def parse_turn_plan_payload(
     catalog_fingerprint: str = "",
 ) -> UnifiedTurnPlan:
     """JSON 문자열을 파싱해 semantic clamp가 적용된 UnifiedTurnPlan을 만든다."""
-    data = json.loads(_strip_json_fence(payload))
-    if not isinstance(data, dict):
-        raise TypeError("unified turn plan payload must be a JSON object")
+    data = decode_turn_plan_payload(payload)
     return parse_turn_plan_data(
         data,
         original_text=original_text,
         catalog_fingerprint=catalog_fingerprint,
     )
+
+
+def decode_turn_plan_payload(payload: str) -> dict[str, Any]:
+    """structured JSON을 raw boundary 검증에 사용할 object로 디코딩한다."""
+    data = json.loads(_strip_json_fence(payload))
+    if not isinstance(data, dict):
+        raise TypeError("unified turn plan payload must be a JSON object")
+    return data
 
 
 def parse_turn_plan_data(
@@ -558,16 +564,14 @@ def parse_turn_plan_data(
         mode = ExecutionMode.CLARIFY
 
     primary_asset = _asset_ref(execution_data.get("primary_asset"))
-    allowed_assets = list(_asset_refs(execution_data.get("allowed_assets")))
-    if primary_asset is not None and primary_asset not in allowed_assets:
-        allowed_assets.insert(0, primary_asset)
+    allowed_assets = _asset_refs(execution_data.get("allowed_assets"))
     if mode in {ExecutionMode.CLARIFY, ExecutionMode.DIRECT_ANSWER}:
         primary_asset = None
 
     execution = ExecutionPlan(
         mode=mode,
         primary_asset=primary_asset,
-        allowed_assets=tuple(allowed_assets[:_MAX_ALLOWED_ASSETS]),
+        allowed_assets=allowed_assets,
         allowed_tools=_string_tuple(
             execution_data.get("allowed_tools"),
             limit=_MAX_ALLOWED_TOOLS,
