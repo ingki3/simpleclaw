@@ -140,7 +140,12 @@ def find_venv_python(script_path: Path) -> Path | None:
     return None
 
 
-async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
+async def dispatch_external_skill(
+    orchestrator: Any,
+    args: dict,
+    *,
+    allowed_skill_names: frozenset[str] | None = None,
+) -> str:
     """execute_skill 도구 호출을 처리한다.
 
     BIZ-363: ``skill_name`` 이 등록 스킬을 가리키면 raw ``command`` 보다
@@ -150,11 +155,26 @@ async def dispatch_external_skill(orchestrator: Any, args: dict) -> str:
     skill_name = str(args.get("skill_name", "") or "").strip()
     command = str(args.get("command", "") or "").strip()
     skill_args = str(args.get("args", "") or "")
-    if skill_name and orchestrator._resolve_skill_name(skill_name) is not None:
+    exact_scope = allowed_skill_names is not None
+    if exact_scope and skill_name not in allowed_skill_names:
+        return f"[Skill '{skill_name}' is not allowed in this planned turn.]"
+    resolved = (
+        getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
+        if exact_scope
+        else orchestrator._resolve_skill_name(skill_name)
+    )
+    if skill_name and resolved is not None:
         if not skill_args and command:
             skill_args = _extract_registered_skill_args_from_command(skill_name, command)
-        result = await execute_registered_skill(orchestrator, skill_name, skill_args)
+        result = await execute_registered_skill(
+            orchestrator,
+            skill_name,
+            skill_args,
+            exact=exact_scope,
+        )
         return result or "[no output]"
+    if exact_scope:
+        return f"[Skill '{skill_name}' not found in the exact planned registry.]"
     if command:
         try:
             command_parts = shlex.split(command)
@@ -210,9 +230,19 @@ def _extract_registered_skill_args_from_command(skill_name: str, command: str) -
     return stripped
 
 
-async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str: str) -> str | None:
-    """이름으로 스킬을 찾아 실행하고 출력을 반환한다."""
-    skill = orchestrator._resolve_skill_name(skill_name)
+async def execute_registered_skill(
+    orchestrator: Any,
+    skill_name: str,
+    args_str: str,
+    *,
+    exact: bool = False,
+) -> str | None:
+    """계획 경로는 exact, legacy 경로는 기존 fuzzy 이름으로 스킬을 찾는다."""
+    skill = (
+        getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
+        if exact
+        else orchestrator._resolve_skill_name(skill_name)
+    )
     if skill is None:
         logger.warning("Skill '%s' not found in registry", skill_name)
         return f"[Skill '{skill_name}' not found. Available: {', '.join(orchestrator._skills_by_name.keys())}]"
@@ -238,4 +268,3 @@ async def execute_registered_skill(orchestrator: Any, skill_name: str, args_str:
     except Exception as exc:  # noqa: BLE001 — tool loop를 죽이지 않고 오류 문자열 반환.
         logger.error("Skill '%s' execution failed: %s", skill_name, exc)
         return f"Error executing skill {skill_name}: {str(exc)[:200]}"
-

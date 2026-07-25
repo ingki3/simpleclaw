@@ -14,6 +14,7 @@ import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.response_router import ResponseRoute
+from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.agent.turn_analysis import TurnAnalysis
 from simpleclaw.llm.models import LLMResponse, MultimodalAttachment
 from simpleclaw.memory.models import ConversationMessage, MessageRole
@@ -448,6 +449,33 @@ async def test_unified_turn_planner_default_off_does_not_schedule_shadow(
     analyzer.assert_awaited_once()
     shadow.assert_not_awaited()
     execution_router_builder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unified_turn_planner_primary_skips_legacy_turn_analysis(
+    config_file, monkeypatch
+):
+    """BIZ-495 — primary feature flag는 기존 TurnAnalysis semantic path를 우회한다."""
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "turn_analysis:\n    enabled: true",
+            "unified_turn_planner:\n    mode: primary\n  turn_analysis:\n    enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(side_effect=AssertionError("legacy analyzer called"))
+    primary = AsyncMock(return_value=ToolLoopResult("primary 답변"))
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    monkeypatch.setattr(orch, "_run_unified_turn_planner_primary", primary)
+
+    result = await orch.process_message("안녕", user_id=1, chat_id=1)
+
+    assert result == "primary 답변"
+    primary.assert_awaited_once()
+    analyzer.assert_not_awaited()
 
 
 @pytest.mark.asyncio

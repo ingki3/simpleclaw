@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from simpleclaw.agent.asset_inventory import handle_asset_inventory
@@ -29,6 +30,11 @@ from simpleclaw.agent.runtime_status import handle_runtime_status
 from simpleclaw.agent.skill_learning_tool import handle_skill_learning
 from simpleclaw.agent.skill_validate import handle_skill_validate
 from simpleclaw.agent.study_status import handle_study_status
+from simpleclaw.agent.tool_gate import (
+    ToolCallRejected,
+    ToolExecutionScope,
+    ToolGate,
+)
 from simpleclaw.agent.verification_evidence_tool import (
     handle_verification_evidence,
 )
@@ -72,13 +78,38 @@ async def dispatch_tool_call(
     *,
     operator_tools: bool = False,
     allow_cron_mutation: bool = True,
+    execution_scope: ToolExecutionScope | None = None,
 ) -> str:
-    """ToolCall을 적절한 핸들러로 라우팅하여 실행 결과를 반환한다."""
+    """ToolGate를 통과한 ToolCall만 기존 핸들러로 전달한다."""
     name = tool_call.name
     args = tool_call.arguments
 
+    if execution_scope is not None:
+        try:
+            ToolGate().authorize(tool_call, execution_scope)
+        except ToolCallRejected as exc:
+            return json.dumps(
+                {
+                    "error": {
+                        "code": exc.code,
+                        "message": "Tool call blocked by the planned execution scope.",
+                    }
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
     if name == "execute_skill":
-        return await orchestrator._dispatch_external_skill(args)
+        if execution_scope is None:
+            return await orchestrator._dispatch_external_skill(args)
+        allowed_skill_names = frozenset(
+            asset_name
+            for asset_type, asset_name in execution_scope.allowed_assets
+            if asset_type == "skill"
+        )
+        return await orchestrator._dispatch_external_skill(
+            args, allowed_skill_names=allowed_skill_names
+        )
     if name == "cli":
         cmd = args.get("command", "")
         if not cmd:

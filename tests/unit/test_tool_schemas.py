@@ -18,6 +18,7 @@ from simpleclaw.agent.tool_schemas import (
     ToolScope,
     build_native_tool_registry,
     build_tool_definitions,
+    filter_tool_definitions,
 )
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
@@ -90,6 +91,20 @@ class TestExecuteSkill:
         skills = [_make_skill()]
         tools = build_tool_definitions(skills=skills, cron_available=True)
         assert len(tools) == 11
+
+    def test_planned_allowlist_filters_tools_in_registry_order(self):
+        """Planner tool allowlist 밖 정의는 LLM schema에서 제거한다."""
+        tools = build_tool_definitions(
+            skills=[_make_skill("alpha")],
+            cron_available=True,
+        )
+
+        filtered = filter_tool_definitions(
+            tools,
+            allowed_names=("execute_skill", "web_fetch"),
+        )
+
+        assert [tool.name for tool in filtered] == ["web_fetch", "execute_skill"]
 
 class TestBrowserHandoffSchema:
     """BIZ-417 — browser_handoff 도구 스키마를 검증한다."""
