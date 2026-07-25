@@ -85,9 +85,22 @@ def test_skill_recipe_and_native_tool_share_compact_shape():
     assets = {(item["type"], item["name"]): item for item in payload}
 
     assert set(assets) == {
+        ("native_tool", "execute_skill"),
         ("native_tool", "web_search"),
         ("recipe", "market-close"),
         ("skill", "kr-stock-skill"),
+    }
+    assert assets[("native_tool", "execute_skill")] == {
+        "type": "native_tool",
+        "name": "execute_skill",
+        "description": (
+            "Execute one exact allowed skill; the selected skill metadata "
+            "determines safety."
+        ),
+        "read_only": True,
+        "side_effects": False,
+        "requires_confirmation": False,
+        "declared": True,
     }
     assert assets[("skill", "kr-stock-skill")] == {
         "type": "skill",
@@ -117,6 +130,8 @@ def test_undeclared_assets_keep_conservative_capability_defaults():
     catalog = build_planner_catalog(skills=[skill], recipes=[recipe], native_specs=[])
 
     for asset in catalog.assets:
+        if asset.asset_type == "native_tool":
+            continue
         assert asset.declared is False
         assert asset.read_only is False
         assert asset.side_effects is True
@@ -406,7 +421,7 @@ def test_51_asset_prompt_report_stays_below_prototype_token_budget():
 
     metrics = catalog_prompt_metrics(catalog)
 
-    assert metrics["asset_count"] == 51
+    assert metrics["asset_count"] == 52
     assert metrics["character_count"] == len(catalog.to_prompt_json())
     assert metrics["estimated_tokens"] < 3850
 

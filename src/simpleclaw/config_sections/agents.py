@@ -149,8 +149,8 @@ _AGENT_DEFAULTS: dict = {
         },
         "fallback_mode": "conservative_original",
     },
-    # BIZ-493: production 응답과 독립적으로 Unified TurnPlanner를 관측한다.
-    # 초기 default는 반드시 off이며, primary wiring은 후속 이슈가 담당한다.
+    # BIZ-493/BIZ-495: default off, shadow는 관측 전용, primary는 계획된
+    # context/tool scope를 production 응답에 연결한다.
     "unified_turn_planner": {
         "mode": "off",
         "sample_rate": 0.0,
