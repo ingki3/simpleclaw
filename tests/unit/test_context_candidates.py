@@ -1,7 +1,7 @@
 """Tests for bounded, ID-bearing planner context candidates."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,8 @@ def _message(
     return ConversationMessage(
         role=role,
         content=content,
-        timestamp=datetime(2026, 7, 25, 12, 0, 0) + timedelta(minutes=offset),
+        timestamp=datetime(2026, 7, 25, 12, 0, 0, tzinfo=UTC)
+        + timedelta(minutes=offset),
     )
 
 

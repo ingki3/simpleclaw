@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any
 
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
