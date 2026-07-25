@@ -472,9 +472,13 @@ def test_repository_fixture_has_required_coverage() -> None:
     for fixture in fixtures:
         relation = fixture.gold.context_relation
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
+    long_history = [
+        fixture for fixture in fixtures if len(fixture.history) >= 8
+    ]
 
     assert len(fixtures) >= 30
     assert sum(fixture.critical and fixture.id.startswith("sk-nvidia") for fixture in fixtures) >= 2
+    assert long_history
     assert all(
         relation_counts.get(relation, 0) >= 3
         for relation in (
@@ -485,6 +489,83 @@ def test_repository_fixture_has_required_coverage() -> None:
             "unclear",
         )
     )
+
+
+def test_long_history_gold_selects_only_non_adjacent_user_context() -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "unified_turn_planner_cases.jsonl"
+    )
+    fixture = next(
+        fixture
+        for fixture in load_fixtures(fixture_path)
+        if fixture.id == "same-thread-long-history-correction"
+    )
+    history_by_id = {
+        message.id: (index, message)
+        for index, message in enumerate(fixture.history)
+    }
+    selected = fixture.gold.selected_turn_ids
+
+    assert len(fixture.history) == 9
+    assert selected == ("m601", "m607")
+    assert all(history_by_id[message_id][1].role == "user" for message_id in selected)
+    assert history_by_id[selected[1]][0] - history_by_id[selected[0]][0] > 1
+    assert "m602" not in selected
+    assert fixture.history[-1].id == "m609"
+    assert fixture.history[-1].id not in selected
+
+
+def test_long_history_replay_has_exact_selection_and_context_reduction() -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "unified_turn_planner_cases.jsonl"
+    )
+    fixture = next(
+        fixture
+        for fixture in load_fixtures(fixture_path)
+        if fixture.id == "same-thread-long-history-correction"
+    )
+
+    result = score_prediction(fixture, fixture.prediction)
+    all_history_chars = sum(len(message.content) for message in fixture.history)
+    selected_history_chars = sum(
+        len(message.content)
+        for message in fixture.history
+        if message.id in fixture.gold.selected_turn_ids
+    )
+    expected_reduction = 1 - (selected_history_chars / all_history_chars)
+
+    assert result.selected_turn_precision == 1.0
+    assert result.selected_turn_recall == 1.0
+    assert result.checks["context_selection"] is True
+    assert result.context_reduction_rate == expected_reduction
+    assert result.passed is True
+
+
+def test_long_history_recent_irrelevant_selection_fails_context_gate() -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "unified_turn_planner_cases.jsonl"
+    )
+    fixture = next(
+        fixture
+        for fixture in load_fixtures(fixture_path)
+        if fixture.id == "same-thread-long-history-correction"
+    )
+    prediction = copy.deepcopy(fixture.prediction)
+    prediction["context"]["selected_turn_ids"].append("m609")
+
+    result = score_prediction(fixture, prediction)
+
+    assert result.schema_valid is True
+    assert result.selected_turn_precision == pytest.approx(2 / 3)
+    assert result.selected_turn_recall == 1.0
+    assert result.checks["context_selection"] is False
+    assert result.passed is False
 
 
 def test_evaluate_fixture_replays_uses_same_report_schema_for_baselines(

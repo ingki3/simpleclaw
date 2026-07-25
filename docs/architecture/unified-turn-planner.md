@@ -170,6 +170,11 @@ Fixed-gold gate:
 - SK–NVIDIA initial/follow-up critical fixture 포함
 - `standalone`, `same_thread`, `related_reference`, `topic_shift`, `unclear`
   관계별 3개 이상
+- history 8개 이상인 case 최소 1개와 비인접 관련 user/correction 선택 포함
+- long-history gold는 과거 assistant claim과 최신 무관 turn을 제외하며, 무관 ID
+  주입 시 context-selection gate 실패
+- long-history context reduction은 선택 history 문자 수 / 전체 후보 history 문자 수로
+  결정론적으로 계산
 - schema success 100%
 - critical case pass 100%
 - topic shift의 과거 문맥 선택 0건
