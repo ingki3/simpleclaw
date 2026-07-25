@@ -1,4 +1,4 @@
-"""Bounded, ID-bearing conversation context for the Unified TurnPlanner."""
+"""Unified TurnPlanner에 전달할 ID 기반 대화 문맥 후보를 예산 안에서 구성한다."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _DEFAULT_MAX_CHARS_PER_TURN = 2400
 
 
 class ContextTrust(str, Enum):
-    """How a planner may treat a context candidate."""
+    """Planner가 문맥 후보를 신뢰하고 사용할 수 있는 범위를 구분한다."""
 
     USER_INPUT = "user_input"
     ASSISTANT_CONTEXT_ONLY = "assistant_context_only"
@@ -24,7 +24,7 @@ class ContextTrust(str, Enum):
 
 @dataclass(frozen=True)
 class ContextCandidate:
-    """A stable conversation row prepared for planner context selection."""
+    """Planner의 문맥 선택에 사용할 안정적인 대화 행을 표현한다."""
 
     turn_id: str
     role: str
@@ -34,7 +34,7 @@ class ContextCandidate:
     evidence_eligible: bool = False
 
     def to_prompt_payload(self) -> dict[str, Any]:
-        """Return the compact, deterministic shape sent to a planner."""
+        """Planner 입력의 필드 순서를 고정하기 위해 간결한 payload를 반환한다."""
         return {
             "id": self.turn_id,
             "role": self.role,
@@ -47,14 +47,14 @@ class ContextCandidate:
 
 @dataclass(frozen=True)
 class ContextCandidateSet:
-    """A chronological collection of context candidates and budget metadata."""
+    """시간순 문맥 후보와 예산 적용 결과를 함께 보관한다."""
 
     candidates: tuple[ContextCandidate, ...]
     total_chars: int
     truncated: bool
 
     def to_prompt_json(self) -> str:
-        """Serialize candidates in their stable chronological order."""
+        """후보 순서를 안정적으로 유지해 JSON으로 직렬화한다."""
         return json.dumps(
             [candidate.to_prompt_payload() for candidate in self.candidates],
             ensure_ascii=False,
@@ -63,7 +63,7 @@ class ContextCandidateSet:
 
 
 class ContextCandidateBuilder:
-    """Build recent planner candidates under deterministic turn/char budgets."""
+    """결정적인 turn·문자 예산 안에서 최신 Planner 후보를 구성한다."""
 
     def __init__(
         self,
@@ -72,6 +72,7 @@ class ContextCandidateBuilder:
         max_chars: int = 6000,
         max_chars_per_turn: int = _DEFAULT_MAX_CHARS_PER_TURN,
     ) -> None:
+        """후보 집합마다 동일한 예산 정책을 적용하도록 한도를 검증해 저장한다."""
         if max_turns <= 0:
             raise ValueError("max_turns must be greater than zero")
         if max_chars <= 0:
@@ -86,7 +87,7 @@ class ContextCandidateBuilder:
         self,
         rows: Sequence[tuple[int, ConversationMessage]],
     ) -> ContextCandidateSet:
-        """Return newest bounded rows while preserving oldest-to-newest order."""
+        """최신 행부터 예산을 배분한 뒤 오래된 순서로 복원해 반환한다."""
         window = rows[-self._max_turns :]
         selected: list[ContextCandidate] = []
         used = 0
@@ -125,6 +126,7 @@ class ContextCandidateBuilder:
 
 
 def _trust_for_role(role: MessageRole) -> ContextTrust:
+    """메시지 역할별 허용 범위를 고정해 과거 응답의 근거 승격을 막는다."""
     if role is MessageRole.USER:
         return ContextTrust.USER_INPUT
     if role is MessageRole.ASSISTANT:

@@ -1,4 +1,4 @@
-"""Tests for bounded, ID-bearing planner context candidates."""
+"""ID 기반 Planner 문맥 후보의 예산·순서·신뢰 계약을 검증한다."""
 
 import json
 from datetime import UTC, datetime, timedelta
