@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -211,6 +212,156 @@ def test_schema_errors_are_sanitized() -> None:
     assert result.schema_valid is False
     assert "missing:context" in result.error_codes
     assert "do-not-report" not in serialized
+
+
+def test_stage_d_malformed_prediction_fails_closed() -> None:
+    fixture = load_fixtures_from_rows([_fixture_row()])[0]
+    prediction = {
+        "context": {
+            "relation": "same_thread",
+            "selected_turn_ids": ["m101"],
+            "standalone_question": "SK와 NVIDIA 발표를 확인해줘",
+        },
+        "clarification": {"required": False},
+        "domains": "news",
+        "fact_check": {
+            "required": True,
+            "domain": "news",
+            "entities": "SK,NVIDIA",
+            "search_query": "SK NVIDIA 발표",
+        },
+        "execution": {
+            "mode": "fact_check",
+            "primary_asset": {
+                "asset_type": "skill",
+                "asset_name": "realtime-lookup-skill",
+            },
+        },
+    }
+
+    result = score_prediction(fixture, prediction)
+
+    assert result.schema_valid is False
+    assert result.passed is False
+    assert result.error_codes == (
+        "invalid:domains",
+        "invalid:fact_check.entities",
+        "invalid:execution.primary_asset",
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "error_code"),
+    [
+        (("context", "selected_turn_ids"), ["m999"], "invalid:context.selected_turn_ids"),
+        (("domains",), ["news", 7], "invalid:domains"),
+        (("fact_check", "domain"), None, "invalid:fact_check.domain"),
+        (("fact_check", "entities"), {"SK": True}, "invalid:fact_check.entities"),
+        (("fact_check", "search_query"), None, "invalid:fact_check.search_query"),
+        (("execution", "primary_asset"), 7, "invalid:execution.primary_asset"),
+        (
+            ("execution", "primary_asset"),
+            {"asset_type": "tool", "name": "search"},
+            "invalid:execution.primary_asset",
+        ),
+        (
+            ("execution", "primary_asset"),
+            {"asset_type": "skill", "name": "search", "secret": "credential"},
+            "invalid:execution.primary_asset",
+        ),
+    ],
+)
+def test_prediction_nested_shape_violations_fail_closed(
+    path: tuple[str, ...],
+    value: object,
+    error_code: str,
+) -> None:
+    fixture = load_fixtures_from_rows([_fixture_row()])[0]
+    prediction = copy.deepcopy(fixture.prediction)
+    target = prediction
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    result = score_prediction(fixture, prediction)
+
+    assert result.schema_valid is False
+    assert result.passed is False
+    assert error_code in result.error_codes
+
+
+def test_non_fact_search_query_must_still_be_a_string() -> None:
+    row = _fixture_row()
+    row["gold"] = {
+        **row["gold"],
+        "fact_required": False,
+        "execution_mode": "direct_answer",
+        "acceptable_assets": [],
+    }
+    prediction = copy.deepcopy(row["prediction"])
+    prediction["fact_check"] = {
+        "required": False,
+        "domain": "none",
+        "entities": [],
+        "search_query": None,
+    }
+    prediction["execution"] = {
+        "mode": "direct_answer",
+        "primary_asset": None,
+    }
+    row["prediction"] = prediction
+    fixture = load_fixtures_from_rows([row])[0]
+
+    result = score_prediction(fixture, prediction)
+
+    assert result.schema_valid is False
+    assert result.error_codes == ("invalid:fact_check.search_query",)
+
+
+@pytest.mark.parametrize(
+    "primary_asset",
+    [
+        None,
+        "__none__",
+        {"asset_type": "skill", "name": "realtime-lookup-skill"},
+        {"asset_type": "recipe", "name": "ai-report"},
+    ],
+)
+def test_valid_primary_asset_shapes_preserve_scoring(
+    primary_asset: object,
+) -> None:
+    row = _fixture_row()
+    prediction = copy.deepcopy(row["prediction"])
+    prediction["execution"]["primary_asset"] = primary_asset
+    if primary_asset in (None, "__none__"):
+        row["gold"] = {**row["gold"], "acceptable_assets": []}
+    elif primary_asset["asset_type"] == "recipe":
+        row["gold"] = {**row["gold"], "acceptable_assets": ["ai-report"]}
+    row["prediction"] = prediction
+    fixture = load_fixtures_from_rows([row])[0]
+
+    result = score_prediction(fixture, prediction)
+
+    assert result.schema_valid is True
+    assert result.checks["asset"] is True
+
+
+def test_malformed_nested_payload_values_are_not_reported() -> None:
+    fixture = load_fixtures_from_rows([_fixture_row()])[0]
+    prediction = copy.deepcopy(fixture.prediction)
+    prediction["domains"] = ["news", {"API_KEY": "raw-credential"}]
+    prediction["execution"]["primary_asset"] = {
+        "asset_type": "skill",
+        "name": "realtime-lookup-skill",
+        "credential": "raw-credential",
+    }
+
+    result = score_prediction(fixture, prediction)
+    serialized = json.dumps(result.to_report(), ensure_ascii=False)
+
+    assert result.schema_valid is False
+    assert "raw-credential" not in serialized
+    assert "API_KEY" not in serialized
 
 
 def load_fixtures_from_rows(rows: list[dict[str, object]]):

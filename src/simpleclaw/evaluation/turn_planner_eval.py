@@ -447,8 +447,33 @@ def load_fixtures(path: str | Path) -> list[TurnPlannerFixture]:
     return fixtures
 
 
-def _prediction_shape_errors(prediction: Mapping[str, Any]) -> tuple[str, ...]:
-    """UnifiedTurnPlan 외부 payload의 최소 schema/semantic shape를 검사한다."""
+def _is_string_array(value: object) -> bool:
+    """빈 배열을 허용하는 non-empty string array인지 반환한다."""
+    return isinstance(value, list) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
+def _is_primary_asset(value: object) -> bool:
+    """no-asset 또는 exact skill/recipe asset object인지 반환한다."""
+    if value is None or value == "__none__":
+        return True
+    if not isinstance(value, Mapping):
+        return False
+    return (
+        set(value) == {"asset_type", "name"}
+        and value.get("asset_type") in {"skill", "recipe"}
+        and isinstance(value.get("name"), str)
+        and bool(value["name"].strip())
+    )
+
+
+def _prediction_shape_errors(
+    prediction: Mapping[str, Any],
+    *,
+    history_ids: frozenset[str],
+) -> tuple[str, ...]:
+    """UnifiedTurnPlan의 evaluator 소비 필드를 fail-closed 검증한다."""
     errors: list[str] = []
     for field_name in ("context", "clarification", "fact_check", "execution"):
         if not isinstance(prediction.get(field_name), Mapping):
@@ -463,8 +488,9 @@ def _prediction_shape_errors(prediction: Mapping[str, Any]) -> tuple[str, ...]:
     if relation not in _CONTEXT_RELATIONS:
         errors.append("invalid:context.relation")
     selected_ids = context.get("selected_turn_ids")
-    if not isinstance(selected_ids, list) or not all(
-        isinstance(item, str) for item in selected_ids
+    if (
+        not _is_string_array(selected_ids)
+        or not set(selected_ids).issubset(history_ids)
     ):
         errors.append("invalid:context.selected_turn_ids")
     standalone = context.get("standalone_question")
@@ -472,14 +498,23 @@ def _prediction_shape_errors(prediction: Mapping[str, Any]) -> tuple[str, ...]:
         errors.append("invalid:context.standalone_question")
     if not isinstance(clarification.get("required"), bool):
         errors.append("invalid:clarification.required")
-    if execution.get("mode") not in _EXECUTION_MODES:
-        errors.append("invalid:execution.mode")
+    if not _is_string_array(prediction.get("domains")):
+        errors.append("invalid:domains")
     if not isinstance(fact_check.get("required"), bool):
         errors.append("invalid:fact_check.required")
-    if fact_check.get("required") and not isinstance(
-        fact_check.get("search_query"), str
+    if (
+        not isinstance(fact_check.get("domain"), str)
+        or not fact_check["domain"].strip()
     ):
+        errors.append("invalid:fact_check.domain")
+    if not _is_string_array(fact_check.get("entities")):
+        errors.append("invalid:fact_check.entities")
+    if not isinstance(fact_check.get("search_query"), str):
         errors.append("invalid:fact_check.search_query")
+    if execution.get("mode") not in _EXECUTION_MODES:
+        errors.append("invalid:execution.mode")
+    if not _is_primary_asset(execution.get("primary_asset")):
+        errors.append("invalid:execution.primary_asset")
     return tuple(errors)
 
 
@@ -513,15 +548,12 @@ def _selected_metrics(
 
 
 def _asset_name(execution: Mapping[str, Any]) -> str:
-    """primary_asset object/sentinel에서 이름만 안전하게 추출한다."""
+    """검증된 primary_asset object/sentinel에서 이름을 추출한다."""
     primary = execution.get("primary_asset")
     if primary in (None, "__none__"):
         return ""
-    if isinstance(primary, str):
-        return "" if primary == "__none__" else primary
     if isinstance(primary, Mapping):
-        name = primary.get("name", primary.get("asset_name", ""))
-        return "" if name == "__none__" else str(name or "")
+        return str(primary["name"])
     return ""
 
 
@@ -552,7 +584,10 @@ def score_prediction(
     repeat_index: int = 1,
 ) -> CaseEvaluation:
     """한 planner prediction을 gold와 비교하고 redacted 결과만 반환한다."""
-    errors = _prediction_shape_errors(prediction)
+    errors = _prediction_shape_errors(
+        prediction,
+        history_ids=frozenset(message.id for message in fixture.history),
+    )
     if errors:
         return CaseEvaluation(
             case_id=fixture.id,

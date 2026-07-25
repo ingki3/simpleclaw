@@ -98,6 +98,29 @@ object이며 최소한 다음 필드를 가진다.
 고정 replay다. production planner가 도입되면 live/shadow 결과를
 `score_prediction()`에 전달한다. gold와 replay는 report에 직렬화하지 않는다.
 
+### Prediction fail-closed 경계
+
+Evaluator는 score 계산 전에 자신이 소비하는 전체 prediction shape를 검증한다.
+다음 필드가 누락되거나 타입이 다르면 semantic score를 계산하지 않고
+`schema_valid=false`, `passed=false`로 종료한다.
+
+- `context`: enum `relation`, history 후보에 속하는 string array
+  `selected_turn_ids`, non-empty string `standalone_question`
+- `clarification.required`: boolean
+- `domains`: string array
+- `fact_check`: boolean `required`, non-empty string `domain`, string array
+  `entities`, string `search_query`
+- `execution`: enum `mode`, `primary_asset`
+
+`fact_check.required=false`여도 `entities`와 `search_query`의 container/type은
+동일하게 강제한다. `execution.primary_asset`은 `null`, `"__none__"`, 또는
+정확히 `{"asset_type": "skill"|"recipe", "name": "<non-empty>"}`인 object만
+허용한다. 알 수 없는 selected ID, asset object의 오타·추가 key, 다른 sentinel은
+모두 schema 오류다.
+
+오류에는 `invalid:<field>` 또는 `missing:<object>` 형식의 고정 code만 남긴다.
+잘못된 payload 값, 검색어, credential은 report나 오류에 포함하지 않는다.
+
 ## Report와 privacy
 
 모든 baseline은 `turn-planner-eval.v1` report schema를 공유한다.
