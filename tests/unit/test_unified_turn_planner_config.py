@@ -108,3 +108,22 @@ agent:
     assert result["selected_context_max_turns"] == 2
     assert result["selected_context_max_chars"] == 100
     assert result["telemetry"]["include_raw_text"] is False
+
+
+def test_unified_turn_planner_accepts_canary_mode(tmp_path):
+    """canary는 primary와 구분되는 명시적 rollout mode로 보존한다."""
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """\
+agent:
+  unified_turn_planner:
+    mode: CANARY
+    sample_rate: 0.05
+""",
+        encoding="utf-8",
+    )
+
+    result = load_agent_config(config)["unified_turn_planner"]
+
+    assert result["mode"] == "canary"
+    assert result["sample_rate"] == 0.05

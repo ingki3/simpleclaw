@@ -21,6 +21,10 @@ BIZ-425 — 일반 사용자 turn 의 입력 텍스트는 orchestrator 가 TurnF
 도메인별 route override(예: sports standings → guarded)는 여기 추가하지 않는다
 — 케이스별 처리는 skill/recipe capability metadata 와 capability router 가
 담당하고, 이 라우터는 구조적 cue 만 본다.
+
+BIZ-497 — Unified plan이 선택된 primary/canary 경로에서는 호출하지 않는다.
+이 keyword classifier는 rollback window의 legacy 경로 전용이며 신규 cue를
+추가하지 않는다.
 """
 
 from __future__ import annotations

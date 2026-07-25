@@ -13,6 +13,8 @@ metadata(intents/domains/read_only/side_effects)와 대조해 자동 실행 후�
 - 부작용 있는 recipe/skill 은 어떤 경우에도 자동 실행 후보로 반환하지 않는다.
 - metadata 없는 기존 자산은 후보가 되지 않고, 기존 asset selector 경로가
   그대로 fallback 으로 동작한다.
+- BIZ-497 — Unified plan이 선택된 primary/canary 경로에서는 호출하지 않는다.
+  keyword cue 추론은 rollback window의 legacy 경로에만 한정한다.
 """
 
 from __future__ import annotations

@@ -149,12 +149,14 @@ agent:
     retry_model: null
     retry_backend: null
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
-  # BIZ-493/BIZ-495 — Unified TurnPlanner rollout. `shadow`는 현재 응답 경로와
-  # 독립된 sampled 관측만 수행한다. `primary`는 selected context와 exact
-  # tool/asset scope를 응답 경로에 적용하므로 live 활성화에는 운영자 승인이 필요하다.
+  # BIZ-493/BIZ-497 — Unified TurnPlanner rollout. `shadow`는 현재 응답 경로와
+  # 독립된 sampled 관측만 수행한다. `canary`는 결정적 user/chat cohort에서
+  # direct answer와 선언된 read-only/no-side-effect 자산만 primary로 실행한다.
+  # `primary`는 모든 검증된 plan을 응답 경로에 적용하므로 canary/primary의
+  # live 활성화와 비율 확대에는 운영자 승인 및 runtime restart가 필요하다.
   unified_turn_planner:
-    mode: off                 # off | shadow | primary
-    sample_rate: 0.0          # 0.0~1.0; default 0%로 외부 호출 없음
+    mode: off                 # off | shadow | canary | primary
+    sample_rate: 0.0          # shadow/canary 0.0~1.0; off default는 외부 호출 없음
     max_tokens: 2048
     # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
     structured_output: true

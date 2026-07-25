@@ -5,8 +5,9 @@ schema가 강제한 JSON을 ``UnifiedTurnPlan``으로 검증한다. 문법 실�
 truncated-tail repair 후 route retry 한 번만 허용하며, 모두 실패하면 의미 기반
 keyword fallback 없이 ``PlannerUnavailable``로 fail-closed한다.
 
-현재 production orchestrator에는 연결하지 않는다. 후속 shadow/primary 전환 이슈가
-이 service를 주입하고 장애 시 응답 정책을 결정한다.
+BIZ-497부터 production orchestrator의 shadow/canary/primary 경로에 연결된다.
+sampled canary와 primary의 planner 장애는 legacy semantic fallback 없이
+fail-closed하며, off mode가 deterministic rollback을 제공한다.
 """
 
 from __future__ import annotations

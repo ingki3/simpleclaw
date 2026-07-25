@@ -18,7 +18,7 @@ from simpleclaw.agent.turn_plan import (
 from simpleclaw.llm.models import LLMResponse
 
 
-def _config(tmp_path):
+def _config(tmp_path, *, mode: str = "primary", sample_rate: float = 0.0):
     config = tmp_path / "config.yaml"
     config.write_text(
         f"""
@@ -32,7 +32,8 @@ llm:
 agent:
   db_path: "{tmp_path}/conversations.db"
   unified_turn_planner:
-    mode: primary
+    mode: {mode}
+    sample_rate: {sample_rate}
   complex_fact_workflow:
     source_claim_hardening_ready: true
     max_iterations: 3
@@ -93,6 +94,40 @@ def _plan(*, fingerprint: str, selected_ids: tuple[str, ...]) -> UnifiedTurnPlan
         ),
         confidence=0.96,
         decision_summary="complex corporate fact",
+        catalog_fingerprint=fingerprint,
+    )
+
+
+def _direct_plan(*, fingerprint: str) -> UnifiedTurnPlan:
+    """Phase 2 canary에서 허용되는 asset 없는 direct answer plan을 만든다."""
+    return UnifiedTurnPlan(
+        original_text="정적 설명을 해줘",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="정적 설명을 해줘",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=(),
+        intents=("explain",),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="none",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(
+            mode=ExecutionMode.DIRECT_ANSWER,
+            primary_asset=None,
+            allowed_assets=(),
+            allowed_tools=(),
+            requires_confirmation=False,
+            reason="static answer",
+        ),
+        confidence=0.96,
+        decision_summary="direct answer",
         catalog_fingerprint=fingerprint,
     )
 
@@ -163,3 +198,45 @@ async def test_sk_nvidia_initial_and_followup_use_one_plan_per_turn(
     assert followup == initial
     assert "2조원" not in initial + followup
     assert deltas == []
+
+
+@pytest.mark.asyncio
+async def test_canary_direct_answer_runs_plan_gate_and_primary_execution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """100% test cohort의 eligible direct plan이 legacy selector 없이 실행된다."""
+    orchestrator = AgentOrchestrator(
+        _config(tmp_path, mode="canary", sample_rate=1.0)
+    )
+    planner_calls = 0
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        nonlocal planner_calls
+        planner_calls += 1
+        return _direct_plan(fingerprint=catalog.fingerprint)
+
+    async def fake_send(_request):
+        return LLMResponse(text="정적 설명입니다.", model="test")
+
+    async def fail_legacy(*_args, **_kwargs):
+        raise AssertionError("legacy semantic path called")
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        fail_legacy,
+    )
+    orchestrator._router.send = fake_send
+
+    result = await orchestrator.process_message(
+        "정적 설명을 해줘",
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert result == "정적 설명입니다."
+    assert planner_calls == 1
