@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -24,6 +23,21 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+ActiveProject = _dreaming.ActiveProject
+ActiveProjectStore = _dreaming.ActiveProjectStore
+ConversationMessage = _dreaming.ConversationMessage
+InsightMeta = _dreaming.InsightMeta
+MemoryEntry = _dreaming.MemoryEntry
+Path = _dreaming.Path
+ProactiveOpportunity = _dreaming.ProactiveOpportunity
+ProtectedSectionError = _dreaming.ProtectedSectionError
+SKIP_EMPTY_RESULTS = _dreaming.SKIP_EMPTY_RESULTS
+SKIP_MIDWRITE_ABORTED = _dreaming.SKIP_MIDWRITE_ABORTED
+SKIP_NO_MESSAGES = _dreaming.SKIP_NO_MESSAGES
+SKIP_PREFLIGHT_FAILED = _dreaming.SKIP_PREFLIGHT_FAILED
+filter_agent_updates_with_stats = _dreaming.filter_agent_updates_with_stats
+sync_active_projects_to_memory_items = _dreaming.sync_active_projects_to_memory_items
+sync_insights_to_memory_items = _dreaming.sync_insights_to_memory_items
 
 async def run(self, last_dreaming: datetime | None = None) -> MemoryEntry | None:
     """전체 드리밍 파이프라인을 실행한다.
@@ -378,4 +392,3 @@ def _extract_and_store_proactive_opportunities(
                 getattr(opportunity, "cooldown_key", ""),
             )
     return stored
-
