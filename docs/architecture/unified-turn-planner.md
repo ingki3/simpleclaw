@@ -143,6 +143,48 @@ Report에는 다음 값을 기록하지 않는다.
 
 실패 메시지도 payload 값을 포함하지 않는 고정 error code로 제한한다.
 
+### Shadow telemetry와 acceptance report
+
+`agent.unified_turn_planner.mode=shadow`는 ordinary turn의 기존 응답 경로와
+독립된 sampled background task만 실행한다. default는 `off`,
+`sample_rate=0.0`이며 live shadow 활성화와 sample rate 변경은 별도 운영자
+승인을 받아야 한다. `primary`는 후속 production 전환을 위한 예약 값으로,
+현재 구현에서는 응답 route/tool/context를 바꾸지 않는다.
+
+structured log의 `action_type=unified_turn_plan_shadow` 항목은 다음처럼 evaluator
+지표에 대응한다.
+
+| Shadow field | Acceptance/evaluator mapping |
+|---|---|
+| `ok` | planner schema/service success count |
+| `relation` | relation별 sample 분포 |
+| `selected_turn_count` | 선택 ID 수; content는 기록하지 않음 |
+| `execution_mode`, `asset_count`, `fact_required` | mode/asset/fact 분포 |
+| `gate_status`, `violation_codes` | pass/clarify/confirmation/repair/reject와 unknown asset 등 stable gate code |
+| `latency_ms` | planner p50/p95 |
+| `input_tokens`, `output_tokens` | primary와 validated retry를 합친 token total/average |
+| `candidate_context_chars`, `selected_context_chars` | downstream 예상 history chars 감소율 |
+| `catalog_fingerprint` | 같은 runtime catalog snapshot 여부 |
+
+원문, selected turn content, standalone question, 검색 query, entity, tool argument,
+credential, user/chat ID는 event API에 필드가 없으며 기록하지 않는다. 실패도 예외
+본문 대신 `planner_unavailable` 같은 stable `error_code`만 기록한다.
+
+Acceptance report 생성 절차:
+
+1. 승인된 기간의 `execution_YYYYMMDD.log`에서
+   `action_type == "unified_turn_plan_shadow"` 항목만 선택한다.
+2. 각 log row의 `details`에 `event=action_type`,
+   `latency_ms=round(duration_ms)`를 합쳐
+   `TurnPlannerShadowEvent`로 복원한다.
+3. `aggregate_turn_planner_shadow_events(events)`를 호출해 sample 수,
+   gate/relation/mode 분포, p50/p95, token 합계/평균, context reduction을 만든다.
+4. 같은 catalog fingerprint의 fixed-gold report와 현재 two-stage live baseline을
+   대조한다. critical omission과 topic-shift 오사용은 gold 또는 승인된 label이
+   있는 평가 집합으로 판정하며, unlabeled shadow telemetry만으로 추정하지 않는다.
+5. sample 100개 이상과 아래 Shadow-to-primary gate를 모두 확인하고, event/report
+   JSON에 승인된 canary 원문·credential marker가 0건인지 별도 leak scan한다.
+
 ## 실행
 
 오프라인 replay는 외부 API나 runtime state를 사용하지 않는다.

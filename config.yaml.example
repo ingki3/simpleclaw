@@ -149,6 +149,26 @@ agent:
     retry_model: null
     retry_backend: null
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
+  # BIZ-493 — Unified TurnPlanner rollout. `shadow`는 현재 응답 경로와 독립된
+  # sampled background 관측만 수행하며, live 활성화에는 별도 운영자 승인이 필요하다.
+  # `primary`는 후속 production 전환용 예약 값으로 현재 응답 route를 바꾸지 않는다.
+  unified_turn_planner:
+    mode: off                 # off | shadow | primary
+    sample_rate: 0.0          # 0.0~1.0; default 0%로 외부 호출 없음
+    max_tokens: 2048
+    structured_output: true
+    reasoning:
+      enabled: true
+      effort: medium
+      budget_tokens: 512
+    context_candidate_limit: 8
+    context_candidate_max_chars: 6000
+    selected_context_max_turns: 3
+    selected_context_max_chars: 2400
+    repair_attempts: 1
+    telemetry:
+      enabled: true
+      include_raw_text: false  # true로 설정해도 loader가 false로 fail-closed
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``

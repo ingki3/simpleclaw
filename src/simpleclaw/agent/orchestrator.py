@@ -15,11 +15,15 @@ Hot-reload 정책:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import json
 import logging
 import os
+import random
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -55,11 +59,17 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.context_candidates import (
+    ContextCandidateBuilder,
+    ContextCandidateSet,
+)
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
+from simpleclaw.agent.plan_gate import PlanGate
+from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.response_router import (
     ResponseRoute,
@@ -72,12 +82,21 @@ from simpleclaw.agent.tool_loop import (
     ToolLoopState,
 )
 from simpleclaw.agent.tool_schemas import (
+    NativeToolSpec,
     ToolScope,
+    build_native_tool_registry,
     build_tool_definitions,
     validate_dispatch_tool_names,
 )
 from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
 from simpleclaw.agent.turn_frame import build_turn_frame
+from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.agent.turn_planner_telemetry import (
+    PlannerUsageCaptureRouter,
+    build_turn_planner_shadow_event,
+    build_turn_planner_shadow_failure_event,
+    emit_turn_planner_shadow_event,
+)
 from simpleclaw.config import (
     load_agent_config,
     load_asset_selection_config,
@@ -631,6 +650,34 @@ _FILE_MUTATING_TOOLS = frozenset(
 )
 
 
+def _planner_native_specs(
+    *,
+    cron_available: bool,
+    browser_handoff_available: bool,
+) -> tuple[NativeToolSpec, ...]:
+    """정적 native 설명의 slash 구분자를 path-free catalog 문장으로 정규화한다."""
+    specs = build_native_tool_registry(
+        cron_available=cron_available,
+        browser_handoff_available=browser_handoff_available,
+        scopes=(
+            ToolScope.RUNTIME,
+            ToolScope.OPERATOR,
+            ToolScope.DEVELOPMENT,
+        ),
+        operator_gate=True,
+    )
+    return tuple(
+        replace(
+            spec,
+            definition=replace(
+                spec.definition,
+                description=spec.definition.description.replace("/", "·"),
+            ),
+        )
+        for spec in specs
+    )
+
+
 class AgentOrchestrator:
     """페르소나 + 스킬 + 대화 이력 + LLM을 조합하는 중앙 오케스트레이터.
 
@@ -669,6 +716,11 @@ class AgentOrchestrator:
         # BIZ-426 — 일반 turn 앞단 LLM turn analysis 설정. 기본 활성이며,
         # 비활성/분석 실패 시에는 기존 결정적(keyword) 경로가 fallback 이다.
         self._turn_analysis_config = agent_config.get("turn_analysis", {}) or {}
+        # BIZ-493 — default off. shadow만 sampled background 관측을 수행하며
+        # primary 값은 후속 production wiring 전까지 응답 경로에 영향을 주지 않는다.
+        self._unified_turn_planner_config = (
+            agent_config.get("unified_turn_planner", {}) or {}
+        )
         self._runtime_paths_prompt = self._format_runtime_paths_for_prompt(
             self._config_path,
             persona_config=persona_config,
@@ -1149,10 +1201,30 @@ class AgentOrchestrator:
                 # JSON 판단 하나로 결정한다. 분석 비활성 또는 provider 장애 시에만
                 # 기존 결정적(keyword) 경로(BIZ-425 TurnFrame + response_router)로
                 # 내려간다. DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문 유지.
+                planner_candidate_limit = int(
+                    self._unified_turn_planner_config.get(
+                        "context_candidate_limit",
+                        8,
+                    )
+                )
+                recent_rows = self._store.get_recent_with_ids(
+                    limit=max(self._history_limit, planner_candidate_limit)
+                )
                 recent_for_analysis = [
                     {"role": msg.role.value, "content": msg.content}
-                    for msg in self._store.get_recent(limit=self._history_limit)
+                    for _row_id, msg in (
+                        recent_rows[-self._history_limit :]
+                        if self._history_limit > 0
+                        else ()
+                    )
                 ]
+                # BIZ-493 — 위 history snapshot을 sampled background task에
+                # 고정한다. task를 await하지 않으므로 planner latency/실패가 현재
+                # TurnAnalysis/route/tool 응답을 block하거나 변경하지 않는다.
+                self._schedule_unified_turn_planner_shadow(
+                    text,
+                    recent_rows=recent_rows,
+                )
                 turn_analysis = None
                 turn_analysis_cfg = self._turn_analysis_config
                 if bool(turn_analysis_cfg.get("enabled", True)):
@@ -1341,6 +1413,130 @@ class AgentOrchestrator:
                 return response_text
             finally:
                 clarify_chat_id_var.reset(clarify_token)
+
+    def _schedule_unified_turn_planner_shadow(
+        self,
+        text: str,
+        *,
+        recent_rows: list[tuple[int, ConversationMessage]] | None = None,
+    ) -> None:
+        """설정과 sampling을 통과한 ordinary turn만 background task로 예약한다."""
+        config = self._unified_turn_planner_config
+        if config.get("mode") != "shadow":
+            return
+        sample_rate = float(config.get("sample_rate", 0.0))
+        if sample_rate <= 0.0:
+            return
+        if sample_rate < 1.0 and random.random() >= sample_rate:
+            return
+
+        candidate_limit = int(config.get("context_candidate_limit", 8))
+        if recent_rows is None:
+            recent_rows = self._store.get_recent_with_ids(limit=candidate_limit)
+        task = asyncio.create_task(
+            self._run_unified_turn_planner_shadow(
+                text,
+                recent_rows=tuple(recent_rows[-candidate_limit:]),
+                skills=tuple(self._exposable_skills()),
+                recipes=tuple(getattr(self, "_recipes", ())),
+                cron_available=self._cron_scheduler is not None,
+                browser_handoff_available=bool(
+                    self._browser_handoff_config.get("enabled", False)
+                ),
+            )
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._finish_unified_turn_planner_shadow)
+
+    def _finish_unified_turn_planner_shadow(self, task: asyncio.Task) -> None:
+        """task를 강하게 참조한 set에서 제거하고 예외를 소비해 누출을 막는다."""
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except (asyncio.CancelledError, asyncio.InvalidStateError):
+            return
+        if error is not None:
+            logger.warning(
+                "Unified TurnPlanner shadow task isolated "
+                "(error_code=shadow_task_failed)"
+            )
+
+    async def _run_unified_turn_planner_shadow(
+        self,
+        text: str,
+        *,
+        recent_rows: tuple[tuple[int, ConversationMessage], ...],
+        skills: tuple[SkillDefinition, ...],
+        recipes: tuple[RecipeDefinition, ...],
+        cron_available: bool,
+        browser_handoff_available: bool,
+    ) -> None:
+        """Planner→PlanGate를 실행하고 redacted telemetry만 남긴다."""
+        config = self._unified_turn_planner_config
+        candidate_limit = int(config.get("context_candidate_limit", 8))
+        candidates = ContextCandidateSet((), 0, False)
+        catalog_fingerprint = ""
+        usage_router = PlannerUsageCaptureRouter(self._router)
+        started = time.perf_counter()
+        try:
+            candidates = ContextCandidateBuilder(
+                max_turns=candidate_limit,
+                max_chars=int(config.get("context_candidate_max_chars", 6000)),
+            ).build(recent_rows)
+            catalog = build_planner_catalog(
+                skills=skills,
+                recipes=recipes,
+                native_specs=_planner_native_specs(
+                    cron_available=cron_available,
+                    browser_handoff_available=browser_handoff_available,
+                ),
+            )
+            catalog_fingerprint = catalog.fingerprint
+            plan = await plan_turn_with_llm(
+                text,
+                candidates=candidates,
+                catalog=catalog,
+                router=usage_router,
+                max_tokens=int(config.get("max_tokens", 2048)),
+                reasoning=config.get("reasoning"),
+            )
+            gate_result = PlanGate(
+                selected_context_max_turns=int(
+                    config.get("selected_context_max_turns", 3)
+                ),
+                selected_context_max_chars=int(
+                    config.get("selected_context_max_chars", 2400)
+                ),
+            ).evaluate(plan, candidates=candidates, catalog=catalog)
+            event = build_turn_planner_shadow_event(
+                plan=plan,
+                gate_result=gate_result,
+                candidates=candidates,
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                input_tokens=usage_router.input_tokens,
+                output_tokens=usage_router.output_tokens,
+            )
+        except Exception:  # noqa: BLE001 — shadow는 모든 실패를 응답과 격리한다.
+            event = build_turn_planner_shadow_failure_event(
+                candidates=candidates,
+                catalog_fingerprint=catalog_fingerprint,
+                latency_ms=(time.perf_counter() - started) * 1000.0,
+                input_tokens=usage_router.input_tokens,
+                output_tokens=usage_router.output_tokens,
+            )
+            logger.warning(
+                "Unified TurnPlanner shadow failed "
+                "(error_code=planner_unavailable)"
+            )
+
+        telemetry = config.get("telemetry", {})
+        if isinstance(telemetry, dict) and telemetry.get("enabled", True):
+            emit_turn_planner_shadow_event(
+                event,
+                structured_logger=self._structured_logger,
+            )
 
     async def process_operator_message(
         self,

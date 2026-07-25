@@ -7,6 +7,7 @@ domains/route 를 결정하고, 분석 비활성·실패 시에만 기존 결정
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -414,6 +415,30 @@ async def test_disabled_turn_analysis_skips_llm_analyzer(config_file, monkeypatc
 
     assert result == "답변"
     analyzer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unified_turn_planner_default_off_does_not_schedule_shadow(
+    config_file, monkeypatch
+):
+    """BIZ-493 — 설정 미지정 default off는 기존 TurnAnalysis만 실행한다."""
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
+    )
+    shadow = AsyncMock()
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    monkeypatch.setattr(orch, "_run_unified_turn_planner_shadow", shadow)
+    orch._tool_loop = AsyncMock(return_value="안녕하세요")
+
+    result = await orch.process_message("안녕", user_id=1, chat_id=1)
+    await asyncio.sleep(0)
+
+    assert result == "안녕하세요"
+    analyzer.assert_awaited_once()
+    shadow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
