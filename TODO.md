@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [x] **BIZ-494: Unified plan 기반 ExecutionRouter core 도입** — `execution.mode` 7종을 정확히 하나의 async callback으로 전달하고 결과를 변형 없이 반환하는 순수 `ExecutionRouter`/불변 `ExecutionCallbacks` 계약을 추가했다. Router는 planner·PlanGate·asset 선택·tool loop 구현을 소유하지 않으며, orchestrator에는 PlanGate PASS 이후 후속 Issue 8/9가 사용할 callback 생성 경계만 준비했다. default-off 기존 경로에서는 router가 생성·호출되지 않음을 회귀 테스트로 고정했다. 검증: focused planner/router/gate/orchestrator 78 passed, 전체 `tests/unit/` 2946 passed·3 xfailed, `ruff check src/` 및 `git diff --check` clean. (2026-07-26)
+
 - [x] **BIZ-493: Unified TurnPlanner shadow 관측과 acceptance telemetry 연결** — default-off/sample 0의 background shadow planner, redacted aggregate event, fixed-gold 대비 acceptance 절차를 추가했다. Stage D 보강으로 structured row의 `trace_id=""`를 강제해 ordinary turn correlation을 차단하고 실제 JSONL 회귀 테스트를 추가했으며, strict planner compatibility 값인 `structured_output=true`·`repair_attempts=1`을 fail-closed 고정 계약으로 정규화했다. 검증: focused planner/config/gate/catalog/orchestrator 111 passed, 전체 `tests/unit/` 2937 passed·3 xfailed, Ruff 0.16 clean, `git diff --check` clean. (2026-07-26)
 
 - [x] **BIZ-484: Google News RSS redirect를 publisher 원문으로 안전하게 해석** — BIZ-480 Stage D late finding hotfix. 실제 RSS의 `news.google.com/rss/articles/...` 후보를 RSS source publisher 홈페이지에서 제목 일치 same-site 원문 URL로 안전하게 해석하고, 기존 static redirect SSRF 검사 + `handle_web_fetch` block/headless 정책으로 원문을 fetch하도록 수정. Google article URL 성공/fail-closed, 외부·private link 거부, production orchestrator wiring 테스트를 추가. 검증: focused 137 passed, 전체 `tests/unit/` 2790 passed·3 xfailed, ruff clean, live no-send `AI 뉴스` smoke에서 publisher fact 1건/Google URL 0건, Graphify 12,222 nodes / 23,694 edges.
