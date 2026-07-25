@@ -513,7 +513,10 @@ def _prediction_shape_errors(
         errors.append("invalid:fact_check.search_query")
     if execution.get("mode") not in _EXECUTION_MODES:
         errors.append("invalid:execution.mode")
-    if not _is_primary_asset(execution.get("primary_asset")):
+    if (
+        "primary_asset" not in execution
+        or not _is_primary_asset(execution["primary_asset"])
+    ):
         errors.append("invalid:execution.primary_asset")
     return tuple(errors)
 

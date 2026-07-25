@@ -318,6 +318,33 @@ def test_non_fact_search_query_must_still_be_a_string() -> None:
     assert result.error_codes == ("invalid:fact_check.search_query",)
 
 
+def test_missing_primary_asset_differs_from_explicit_null() -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "fixtures"
+        / "unified_turn_planner_cases.jsonl"
+    )
+    fixture = next(
+        fixture
+        for fixture in load_fixtures(fixture_path)
+        if fixture.id == "static-cap-theorem"
+    )
+    prediction = copy.deepcopy(fixture.prediction)
+
+    explicit_null_result = score_prediction(fixture, prediction)
+    missing_prediction = copy.deepcopy(prediction)
+    del missing_prediction["execution"]["primary_asset"]
+    missing_result = score_prediction(fixture, missing_prediction)
+
+    assert explicit_null_result.schema_valid is True
+    assert explicit_null_result.checks["asset"] is True
+    assert explicit_null_result.passed is True
+    assert explicit_null_result.error_codes == ()
+    assert missing_result.schema_valid is False
+    assert missing_result.passed is False
+    assert missing_result.error_codes == ("invalid:execution.primary_asset",)
+
+
 @pytest.mark.parametrize(
     "primary_asset",
     [
