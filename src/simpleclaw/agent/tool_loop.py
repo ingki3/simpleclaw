@@ -235,7 +235,7 @@ def _legacy_observation_text(tool_call: ToolCall, sanitized_result: str) -> str:
 
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
     """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
-    if tool_call.name == "web_fetch":
+    if tool_call.name in {"web_fetch", "web_search"}:
         return True
     if tool_call.name == "execute_skill":
         skill_name = str(tool_call.arguments.get("skill_name") or "")

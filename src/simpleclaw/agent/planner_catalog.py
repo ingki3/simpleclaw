@@ -27,6 +27,7 @@ from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.models import SkillDefinition
 
 DESCRIPTION_MAX_CHARS = 96
+_EXECUTE_SKILL_TOOL_NAME = "execute_skill"
 _ASSET_TYPES = frozenset({"native_tool", "skill", "recipe"})
 _ALL_NATIVE_SCOPES = (
     ToolScope.RUNTIME,
@@ -297,6 +298,28 @@ def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
     )
 
 
+def _execute_skill_adapter_asset() -> PlannerAsset:
+    """동적 skill registry와 planner tool 경계를 잇는 합성 실행 어댑터."""
+    return PlannerAsset(
+        asset_type="native_tool",
+        name=_EXECUTE_SKILL_TOOL_NAME,
+        description=(
+            "Execute one exact allowed skill; the selected skill metadata "
+            "determines safety."
+        ),
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+    )
+
+
 def _snapshot_payload(asset: PlannerAsset) -> dict[str, Any]:
     """fingerprint용 전체 compact shape."""
     return {
@@ -363,6 +386,7 @@ def build_planner_catalog(
     browser_handoff_available: bool = False,
 ) -> PlannerCatalog:
     """현재 runtime registry 입력에서 immutable Planner catalog를 만든다."""
+    skill_definitions = tuple(skills)
     specs = (
         _default_native_specs(
             cron_available=cron_available,
@@ -374,6 +398,11 @@ def build_planner_catalog(
     assets = [
         *(_asset_from_native_spec(spec) for spec in specs),
         *(
+            (_execute_skill_adapter_asset(),)
+            if skill_definitions
+            else ()
+        ),
+        *(
             _asset_from_capability(
                 asset_type="skill",
                 name=skill.name,
@@ -381,7 +410,7 @@ def build_planner_catalog(
                 capability=skill.capability,
                 runtime_visible=True,
             )
-            for skill in skills
+            for skill in skill_definitions
         ),
         *(
             _asset_from_capability(

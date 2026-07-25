@@ -14,6 +14,7 @@ from simpleclaw.agent.context_candidates import (
     ContextTrust,
 )
 from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_dispatch import dispatch_tool_call
 from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.agent.tool_loop import ToolLoopRunner
@@ -28,6 +29,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse, ToolCall
 from simpleclaw.memory.models import ConversationMessage, MessageRole
@@ -319,6 +321,122 @@ async def test_execute_asset_exposes_only_exact_primary_skill(primary_config):
 
 
 @pytest.mark.asyncio
+async def test_raw_planner_boundary_executes_exact_skill_from_production_catalog(
+    primary_config,
+    monkeypatch,
+):
+    """production catalog의 raw plan이 경계를 통과해 exact skill만 실행한다."""
+    orchestrator = AgentOrchestrator(primary_config)
+    safe_skill = _safe_skill("safe-skill")
+    orchestrator._skills = [safe_skill]
+    orchestrator._skills_by_name = {safe_skill.name: safe_skill}
+    catalog = build_planner_catalog(skills=[safe_skill], native_specs=[])
+    planner_payload = {
+        "context": {
+            "relation": "standalone",
+            "use_prior_context": False,
+            "selected_turn_ids": [],
+            "standalone_question": "safe skill로 조회해줘",
+            "unresolved_references": [],
+            "ignored_context_reason": "독립 요청",
+        },
+        "clarification": {
+            "required": False,
+            "question": "",
+            "options": [],
+            "reason": "",
+        },
+        "domains": ["sports"],
+        "intents": ["current_result"],
+        "fact_check": {
+            "required": False,
+            "owner": "none",
+            "domain": "none",
+            "entities": [],
+            "search_query": "",
+            "required_claims": [],
+            "freshness_required": False,
+            "reason": "",
+        },
+        "execution": {
+            "mode": "execute_asset",
+            "primary_asset": {
+                "asset_type": "skill",
+                "asset_name": "safe-skill",
+            },
+            "allowed_assets": [
+                {
+                    "asset_type": "skill",
+                    "asset_name": "safe-skill",
+                }
+            ],
+            "allowed_tools": ["execute_skill"],
+            "requires_confirmation": False,
+            "reason": "read-only exact skill",
+        },
+        "confidence": 0.96,
+        "decision_summary": "safe skill 하나만 실행한다.",
+    }
+    planner_router = AsyncMock()
+    planner_router.send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(planner_payload, ensure_ascii=False),
+            model="test",
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "safe skill로 조회해줘",
+        candidates=_candidate_set(),
+        catalog=catalog,
+        router=planner_router,
+    )
+    state = await orchestrator._prepare_tool_loop_state(
+        "safe skill로 조회해줘",
+        False,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        plan=plan,
+        candidates=_candidate_set(),
+    )
+    execute_registered = AsyncMock(return_value="safe skill result")
+    monkeypatch.setattr(
+        "simpleclaw.agent.skill_dispatch.execute_registered_skill",
+        execute_registered,
+    )
+    responses = [
+        LLMResponse(
+            text="",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="safe-call",
+                    name="execute_skill",
+                    arguments={"skill_name": "safe-skill"},
+                )
+            ],
+        ),
+        LLMResponse(text="safe skill 결과입니다", model="test"),
+    ]
+
+    async def fake_send(_request):
+        return responses.pop(0)
+
+    orchestrator._router.send = fake_send
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert result.text == "safe skill 결과입니다"
+    assert [tool.name for tool in state.tools] == ["execute_skill"]
+    execute_registered.assert_awaited_once_with(
+        orchestrator,
+        "safe-skill",
+        "",
+        exact=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_tool_gate_returns_structured_observation_before_dispatch():
     """allowlist 밖 native call은 handler를 실행하지 않고 stable code로 관찰된다."""
     orchestrator = AsyncMock()
@@ -452,6 +570,130 @@ async def test_selected_assistant_context_never_starts_as_live_evidence(
     assert state.messages[0]["role"] == "assistant"
     assert state.live_evidence_seen is False
     assert state.live_fact_requires_evidence is True
+
+
+@pytest.mark.asyncio
+async def test_web_search_usable_result_unlocks_live_fact_final(
+    primary_config,
+    monkeypatch,
+):
+    """허용된 web_search의 URL 포함 성공 결과는 최신 근거 gate를 연다."""
+    orchestrator = AgentOrchestrator(primary_config)
+    search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: '롯데 경기 결과' (1 results)\n"
+            "1. 공식 경기 결과\n"
+            "   URL: https://example.com/official-result\n"
+            "   Snippet: 롯데가 3대 2로 승리했습니다."
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        search,
+    )
+    plan = _plan(
+        fingerprint="unused",
+        standalone_question="롯데 오늘 경기 결과",
+        mode=ExecutionMode.FACT_CHECK,
+        allowed_assets=(AssetRef("native_tool", "web_search"),),
+        allowed_tools=("web_search",),
+        fact_required=True,
+    )
+    state = await orchestrator._prepare_tool_loop_state(
+        "롯데 오늘 경기 결과",
+        False,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        plan=plan,
+        candidates=_candidate_set(),
+    )
+    responses = [
+        LLMResponse(
+            text="",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="search-call",
+                    name="web_search",
+                    arguments={"query": "롯데 오늘 경기 결과"},
+                )
+            ],
+        ),
+        LLMResponse(text="공식 결과를 확인했습니다", model="test"),
+    ]
+
+    async def fake_send(_request):
+        return responses.pop(0)
+
+    orchestrator._router.send = fake_send
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert result.text == "공식 결과를 확인했습니다"
+    assert state.live_evidence_seen is True
+    search.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "search_result",
+    [
+        "",
+        "Error: web search backend unavailable",
+    ],
+)
+async def test_web_search_empty_or_error_result_keeps_live_fact_final_blocked(
+    primary_config,
+    monkeypatch,
+    search_result,
+):
+    """web_search가 빈 결과나 오류를 반환하면 최신 근거 gate를 열지 않는다."""
+    orchestrator = AgentOrchestrator(primary_config)
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        AsyncMock(return_value=search_result),
+    )
+    plan = _plan(
+        fingerprint="unused",
+        standalone_question="롯데 오늘 경기 결과",
+        mode=ExecutionMode.FACT_CHECK,
+        allowed_assets=(AssetRef("native_tool", "web_search"),),
+        allowed_tools=("web_search",),
+        fact_required=True,
+    )
+    state = await orchestrator._prepare_tool_loop_state(
+        "롯데 오늘 경기 결과",
+        False,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        plan=plan,
+        candidates=_candidate_set(),
+    )
+    responses = [
+        LLMResponse(
+            text="",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="search-call",
+                    name="web_search",
+                    arguments={"query": "롯데 오늘 경기 결과"},
+                )
+            ],
+        ),
+        LLMResponse(text="근거 없이 단정한 결과", model="test"),
+    ]
+
+    async def fake_send(_request):
+        return responses.pop(0)
+
+    orchestrator._router.send = fake_send
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert state.live_evidence_seen is False
+    assert "근거 없이 단정한 결과" not in result.text
+    assert "확인하지 못" in result.text
 
 
 @pytest.mark.asyncio
