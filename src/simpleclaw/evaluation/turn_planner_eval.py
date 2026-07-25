@@ -714,6 +714,7 @@ def aggregate_results(
     repeat: int,
     baseline: str,
     live: bool = False,
+    catalog_metrics: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """반복 run을 baseline 종류와 무관한 v1 JSON report로 집계한다."""
     ordered_results = list(results)
@@ -755,6 +756,73 @@ def aggregate_results(
         for result in ordered_results
         if not result.passed
     ]
+    summary: dict[str, Any] = {
+        "runs": len(ordered_results),
+        "unique_cases": len({result.case_id for result in ordered_results}),
+        "schema_success_rate": (
+            sum(result.schema_valid for result in ordered_results)
+            / len(ordered_results)
+            if ordered_results
+            else 0.0
+        ),
+        "pass_rate": (
+            sum(result.passed for result in ordered_results)
+            / len(ordered_results)
+            if ordered_results
+            else 0.0
+        ),
+        "macro_score": _mean(
+            [result.macro_score for result in ordered_results]
+        )
+        or 0.0,
+        "critical_pass_rate": (
+            sum(result.passed for result in critical) / len(critical)
+            if critical
+            else None
+        ),
+        "selected_turn_precision": _mean(
+            [result.selected_turn_precision for result in ordered_results]
+        ),
+        "selected_turn_recall": _mean(
+            [result.selected_turn_recall for result in ordered_results]
+        ),
+        "latency_ms": {
+            "avg": _mean(latencies),
+            "p50": percentile(latencies, 0.5),
+            "p95": percentile(latencies, 0.95),
+        },
+        "tokens": {
+            "input_total": sum(
+                result.input_tokens for result in ordered_results
+            ),
+            "output_total": sum(
+                result.output_tokens for result in ordered_results
+            ),
+            "input_avg": _mean(
+                [result.input_tokens for result in ordered_results]
+            ),
+            "output_avg": _mean(
+                [result.output_tokens for result in ordered_results]
+            ),
+        },
+        "context_reduction_rate": _mean(context_reductions),
+    }
+    if catalog_metrics is not None:
+        expected_keys = {"asset_count", "character_count", "estimated_tokens"}
+        if set(catalog_metrics) != expected_keys or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in catalog_metrics.values()
+        ):
+            raise ValueError(
+                "catalog_metrics must contain non-negative integer "
+                "asset_count, character_count, and estimated_tokens"
+            )
+        # 숫자 세 필드만 허용해 description/path/secret이 evaluator report로
+        # 우회 유입되지 않게 한다.
+        summary["catalog_payload"] = {
+            key: catalog_metrics[key] for key in sorted(expected_keys)
+        }
+
     return {
         "schema_version": "turn-planner-eval.v1",
         "benchmark": {
@@ -763,57 +831,7 @@ def aggregate_results(
             "repeat": repeat,
             "live": live,
         },
-        "summary": {
-            "runs": len(ordered_results),
-            "unique_cases": len({result.case_id for result in ordered_results}),
-            "schema_success_rate": (
-                sum(result.schema_valid for result in ordered_results)
-                / len(ordered_results)
-                if ordered_results
-                else 0.0
-            ),
-            "pass_rate": (
-                sum(result.passed for result in ordered_results)
-                / len(ordered_results)
-                if ordered_results
-                else 0.0
-            ),
-            "macro_score": _mean(
-                [result.macro_score for result in ordered_results]
-            )
-            or 0.0,
-            "critical_pass_rate": (
-                sum(result.passed for result in critical) / len(critical)
-                if critical
-                else None
-            ),
-            "selected_turn_precision": _mean(
-                [result.selected_turn_precision for result in ordered_results]
-            ),
-            "selected_turn_recall": _mean(
-                [result.selected_turn_recall for result in ordered_results]
-            ),
-            "latency_ms": {
-                "avg": _mean(latencies),
-                "p50": percentile(latencies, 0.5),
-                "p95": percentile(latencies, 0.95),
-            },
-            "tokens": {
-                "input_total": sum(
-                    result.input_tokens for result in ordered_results
-                ),
-                "output_total": sum(
-                    result.output_tokens for result in ordered_results
-                ),
-                "input_avg": _mean(
-                    [result.input_tokens for result in ordered_results]
-                ),
-                "output_avg": _mean(
-                    [result.output_tokens for result in ordered_results]
-                ),
-            },
-            "context_reduction_rate": _mean(context_reductions),
-        },
+        "summary": summary,
         "relations": relation_summary,
         "cases": [result.to_report() for result in ordered_results],
         "failures": failures,
@@ -826,6 +844,7 @@ def evaluate_fixture_replays(
     repeat: int,
     variant: str,
     baseline: str = "unified",
+    catalog_metrics: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """fixture에 저장된 prediction을 반복 평가해 오프라인 report를 만든다."""
     if repeat < 1:
@@ -857,4 +876,5 @@ def evaluate_fixture_replays(
         repeat=repeat,
         baseline=baseline,
         live=False,
+        catalog_metrics=catalog_metrics,
     )
