@@ -15,7 +15,6 @@ from simpleclaw.agent.asset_selector import (
 from simpleclaw.config import load_asset_selection_config
 from simpleclaw.llm.models import ToolCall
 
-
 KNOWN_ASSETS = [
     SelectorAsset(type="skill", name="news-search-skill", description="Search recent news."),
     SelectorAsset(type="skill", name="gmail-skill", description="Search and summarize email."),

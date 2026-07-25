@@ -46,11 +46,11 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from simpleclaw.channels.admin_env_local import (  # noqa: E402
+from simpleclaw.channels.admin_env_local import (
     DEFAULT_ENV_LOCAL_PATH,
     sync_env_local,
 )
-from simpleclaw.security.secrets import (  # noqa: E402
+from simpleclaw.security.secrets import (
     SecretReference,
     SecretsError,
     SecretsManager,

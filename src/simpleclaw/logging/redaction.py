@@ -12,7 +12,6 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-
 TELEGRAM_TOKEN_MARKER = "<redacted>"
 
 _TELEGRAM_BOT_URL_RE = re.compile(

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 RunCommand = Callable[[list[str]], subprocess.CompletedProcess[str]]
 
@@ -86,8 +87,7 @@ def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         cmd,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=5,
     )
 

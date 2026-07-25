@@ -167,7 +167,7 @@ class SkillTraceStepSnapshot:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "SkillTraceStepSnapshot":
+    def from_dict(cls, raw: dict[str, Any]) -> SkillTraceStepSnapshot:
         return cls(
             str(raw.get("tool_name") or raw.get("name") or "unknown"),
             raw.get("arguments") if isinstance(raw.get("arguments"), dict) else {},
@@ -213,7 +213,7 @@ class SkillSuggestion:
         trace: list[SkillTraceStepSnapshot] | None = None,
         risk_flags: list[str] | None = None,
         validation_errors: list[str] | None = None,
-    ) -> "SkillSuggestion":
+    ) -> SkillSuggestion:
         now = datetime.now()
         return cls(
             uuid.uuid4().hex,
@@ -243,7 +243,7 @@ class SkillSuggestion:
         return data
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "SkillSuggestion":
+    def from_dict(cls, raw: dict[str, Any]) -> SkillSuggestion:
         created, updated = raw.get("created_at"), raw.get("updated_at")
         trace_raw = raw.get("trace") if isinstance(raw.get("trace"), list) else []
         scripts_raw = raw.get("scripts") if isinstance(raw.get("scripts"), dict) else {}

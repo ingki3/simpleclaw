@@ -70,10 +70,7 @@ class DreamingTrigger:
             return False
 
         idle_seconds = (now - last_input).total_seconds()
-        if idle_seconds < self._idle_threshold:
-            return False
-
-        return True
+        return not idle_seconds < self._idle_threshold
 
     async def execute(self) -> None:
         """드리밍 파이프라인을 실행하고 완료 시각을 기록한다."""

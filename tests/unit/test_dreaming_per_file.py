@@ -24,7 +24,6 @@ from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.dreaming_runs import DreamingRunStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

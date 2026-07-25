@@ -1,5 +1,9 @@
 """Semantic memory and dreaming pipeline."""
 
+from simpleclaw.memory.clustering import ClusterAssignment, IncrementalClusterer
+from simpleclaw.memory.conversation_store import ConversationStore
+from simpleclaw.memory.dreaming import DreamingPipeline
+from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.models import (
     ClusterRecord,
     ConversationMessage,
@@ -8,10 +12,6 @@ from simpleclaw.memory.models import (
     MemoryError,
     MessageRole,
 )
-from simpleclaw.memory.clustering import ClusterAssignment, IncrementalClusterer
-from simpleclaw.memory.conversation_store import ConversationStore
-from simpleclaw.memory.dreaming import DreamingPipeline
-from simpleclaw.memory.embedding_service import EmbeddingService
 from simpleclaw.memory.protected_section import (
     ManagedSection,
     ProtectedSectionError,

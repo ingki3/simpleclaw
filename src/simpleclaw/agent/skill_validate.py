@@ -207,7 +207,7 @@ def _smoke(skill: SkillDefinition, command_args: list[str]) -> dict[str, Any]:
     script = Path(skill.script_path).expanduser()
     command = [*_build_command(script), *command_args]
     try:
-        completed = subprocess.run(  # noqa: S603 — operator-gated smoke이며 shell=False로 실행한다.
+        completed = subprocess.run(
             command,
             cwd=skill.skill_dir or None,
             text=True,

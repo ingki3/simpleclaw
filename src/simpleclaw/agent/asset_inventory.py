@@ -10,23 +10,24 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
+from simpleclaw.agent.tool_schemas import (
+    ToolScope,
+    build_native_tool_registry,
+    native_tool_names,
+)
 from simpleclaw.config import load_asset_selection_config, load_recipes_config
 from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import RecipeDefinition, RecipeParseError
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
-from simpleclaw.agent.tool_schemas import (
-    ToolScope,
-    build_native_tool_registry,
-    native_tool_names,
-)
 
 DEFAULT_CONFIG_PATH = Path("/Users/simplist/.simpleclaw/config.yaml")
 

@@ -5,20 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from simpleclaw.agent.asset_inventory import handle_asset_inventory
-from simpleclaw.agent.config_inspect import handle_config_inspect
-from simpleclaw.agent.deploy_status import handle_deploy_status
-from simpleclaw.agent.log_debug import handle_log_debug
-from simpleclaw.agent.restart_runtime import handle_restart_runtime
-from simpleclaw.agent.review_subagent_ledger_tool import (
-    handle_review_subagent_ledger,
-)
-from simpleclaw.agent.runtime_status import handle_runtime_status
-from simpleclaw.agent.verification_evidence_tool import (
-    handle_verification_evidence,
-)
-from simpleclaw.agent.skill_validate import handle_skill_validate
-from simpleclaw.agent.skill_learning_tool import handle_skill_learning
-from simpleclaw.agent.study_status import handle_study_status
 from simpleclaw.agent.browser_handoff_tool import handle_browser_handoff
 from simpleclaw.agent.builtin_tools import (
     _fetch_search_result_body,
@@ -32,6 +18,20 @@ from simpleclaw.agent.builtin_tools import (
     handle_web_search,
 )
 from simpleclaw.agent.clarify import clarify_chat_id_var
+from simpleclaw.agent.config_inspect import handle_config_inspect
+from simpleclaw.agent.deploy_status import handle_deploy_status
+from simpleclaw.agent.log_debug import handle_log_debug
+from simpleclaw.agent.restart_runtime import handle_restart_runtime
+from simpleclaw.agent.review_subagent_ledger_tool import (
+    handle_review_subagent_ledger,
+)
+from simpleclaw.agent.runtime_status import handle_runtime_status
+from simpleclaw.agent.skill_learning_tool import handle_skill_learning
+from simpleclaw.agent.skill_validate import handle_skill_validate
+from simpleclaw.agent.study_status import handle_study_status
+from simpleclaw.agent.verification_evidence_tool import (
+    handle_verification_evidence,
+)
 from simpleclaw.llm.models import ToolCall
 
 

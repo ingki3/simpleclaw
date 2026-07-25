@@ -178,8 +178,7 @@ def _write_log(log_dir, date_str: str, entries: list[dict]) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"execution_{date_str}.log"
     with open(path, "w", encoding="utf-8") as f:
-        for entry in entries:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        f.writelines(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries)
 
 
 class TestAnalyzeRagLogs:

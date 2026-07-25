@@ -12,7 +12,6 @@ from datetime import datetime
 
 from simpleclaw.memory.models import MemoryItem, MemoryItemType
 
-
 _EVENT_KEYWORDS = (
     "event",
     "forum",

@@ -15,7 +15,6 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
-
 from simpleclaw.memory.dreaming_runs import (
     SKIP_EMPTY_RESULTS,
     SKIP_NO_MESSAGES,

@@ -14,11 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent import skill_dispatch
+from simpleclaw.agent import AgentOrchestrator, skill_dispatch
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import ToolCall
-from simpleclaw.skills.models import SkillDefinition, SkillScope, SkillResult
+from simpleclaw.skills.models import SkillDefinition, SkillResult, SkillScope
 
 
 @pytest.fixture

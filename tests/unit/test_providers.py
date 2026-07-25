@@ -14,9 +14,8 @@ from simpleclaw.llm.models import (
 )
 from simpleclaw.llm.providers.base import flatten_system_blocks
 from simpleclaw.llm.providers.claude import ClaudeProvider
-from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 from simpleclaw.llm.providers.gemini import GeminiProvider
-
+from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 
 # ---------------------------------------------------------------------------
 # Shared fixture: sample ToolDefinition list

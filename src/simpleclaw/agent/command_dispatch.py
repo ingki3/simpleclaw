@@ -43,16 +43,17 @@ _RECIPE_DIR_WRITE_BLOCKED_MESSAGE = (
 
 _RECIPE_WRITE_VERB_RE = re.compile(
     r"(?:^|[;&|]\s*)(?:mkdir|touch|rm|rmdir|cp|mv|install|tee)\b",
-    re.I,
+    re.IGNORECASE,
 )
-_SHELL_REDIRECT_RE = re.compile(r"(?:^|\s)(?:>>?|<<)\s*", re.I)
+_SHELL_REDIRECT_RE = re.compile(r"(?:^|\s)(?:>>?|<<)\s*", re.IGNORECASE)
 
 
 def resolve_command_timeout(orchestrator: Any, command: str) -> int:
     """명령 문자열에 따라 실제로 적용할 타임아웃(초) 을 결정한다."""
-    if "agent-browser " in command or command.endswith("agent-browser"):
-        if orchestrator._agent_browser_timeout > orchestrator._skill_timeout:
-            return orchestrator._agent_browser_timeout
+    if (
+        "agent-browser " in command or command.endswith("agent-browser")
+    ) and orchestrator._agent_browser_timeout > orchestrator._skill_timeout:
+        return orchestrator._agent_browser_timeout
     return orchestrator._skill_timeout
 
 
@@ -179,7 +180,7 @@ async def execute_command(orchestrator: Any, skill_name: str, command: str) -> s
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=effective_timeout
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await kill_process_group(proc, metrics=orchestrator._metrics)
                 raise
             return (
@@ -227,7 +228,7 @@ async def execute_command(orchestrator: Any, skill_name: str, command: str) -> s
         logger.info("Skill command succeeded: %d chars output", len(output))
         return output if output else "[Command completed with no output]"
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("Skill command timed out: %s", command)
         return f"Command timed out after {effective_timeout}s"
     except Exception as exc:  # noqa: BLE001 — tool loop를 죽이지 않고 오류 문자열 반환.

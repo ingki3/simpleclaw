@@ -13,7 +13,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ _MAX_NEWS_SOURCES = 2
 _MAX_SOURCE_CHARS = 8000
 
 FetchPage = Callable[[str], Awaitable[str]]
+ResolveNewsUrl = Callable[["NewsCandidate"], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class NewsCandidate:
     url: str
     source: str
     published_at: str | None
+    source_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,8 +87,8 @@ def _parse_published_at(raw: str) -> str | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat()
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
 
 
 def _candidate_from_item(node: ET.Element) -> NewsCandidate | None:
@@ -103,6 +105,7 @@ def _candidate_from_item(node: ET.Element) -> NewsCandidate | None:
         url=url,
         source=source,
         published_at=_parse_published_at(node.findtext("pubDate") or ""),
+        source_url=(source_node.get("url") or "").strip() if source_node is not None else "",
     )
 
 
@@ -137,7 +140,7 @@ def _as_datetime(value: object) -> datetime:
     raw = str(value or "").strip()
     if raw:
         try:
-            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw)
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=_KST)
             return parsed
@@ -153,7 +156,7 @@ def filter_recent_candidates(
     max_age_hours: int = 48,
 ) -> list[NewsCandidate]:
     """발행시각이 as-of freshness window 안인 RSS 후보만 남긴다."""
-    as_of = _as_datetime(as_of_kst).astimezone(timezone.utc)
+    as_of = _as_datetime(as_of_kst).astimezone(UTC)
     oldest = as_of - timedelta(hours=max(1, max_age_hours))
     accepted: list[NewsCandidate] = []
     for candidate in candidates:
@@ -161,7 +164,7 @@ def filter_recent_candidates(
             continue
         try:
             published = datetime.fromisoformat(candidate.published_at).astimezone(
-                timezone.utc
+                UTC
             )
         except ValueError:
             continue
@@ -178,9 +181,10 @@ def _as_of_date(as_of_kst: object) -> datetime:
 def build_sports_page_url(query: str, *, as_of_kst: object) -> str:
     """요청 기준일을 명시한 네이버 경기정보 검색 페이지 URL을 만든다."""
     date = _as_of_date(as_of_kst)
-    dated_query = (
-        f"{date.year}년 {date.month}월 {date.day}일 {query.strip()} 경기 결과"
-    ).strip()
+    # 구어체 질문 전체를 넣으면 네이버가 일반 web 결과만 반환하고 공식 경기 widget을
+    # 생략할 수 있다. 질문에서 팀을 정규화해 날짜+팀+결과의 최소 query를 사용한다.
+    target = canonical_kbo_team(query) or query.strip()
+    dated_query = f"{date.year}년 {date.month}월 {date.day}일 {target} 경기 결과".strip()
     return _NAVER_SEARCH_ENDPOINT + "?" + urlencode(
         {"where": "nexearch", "query": dated_query}
     )
@@ -471,6 +475,7 @@ async def _collect_news_sources(
     query: str,
     as_of_kst: object,
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None,
 ) -> tuple[list[SourceDocument], list[str]]:
     limitations: list[str] = []
     rss_url = build_google_news_rss_url(query)
@@ -488,15 +493,20 @@ async def _collect_news_sources(
 
     sources: list[SourceDocument] = []
     for candidate in recent[:_MAX_NEWS_SOURCES]:
-        # Google News RSS의 news.google.com 링크는 publisher URL이 아니다. FetchPage
-        # 계약에는 최종 redirect URL이 없으므로 실제 원문 URL을 검증하지 못하면 닫힌다.
+        # Google News RSS article token은 publisher URL이 아니다. RSS source
+        # 홈페이지에서 same-site 제목 anchor를 안전하게 확인한 뒤 원문만 fetch한다.
+        target_url = candidate.url
         if _is_google_news_url(candidate.url):
-            limitations.append(
-                "Google News redirect에서 실제 publisher URL을 확인하지 못함: "
-                f"{candidate.source}"
+            target_url = (
+                await resolve_news_url(candidate) if resolve_news_url is not None else None
             )
-            continue
-        body = await fetch_page(candidate.url)
+            if not target_url:
+                limitations.append(
+                    "Google News 후보의 publisher URL을 안전하게 확인하지 못함: "
+                    f"{candidate.source}"
+                )
+                continue
+        body = await fetch_page(target_url)
         if _looks_like_fetch_failure(body):
             limitations.append(f"원문 fetch 실패: {candidate.source}")
             continue
@@ -512,7 +522,7 @@ async def _collect_news_sources(
         sources.append(
             SourceDocument(
                 source=candidate.source,
-                url=candidate.url,
+                url=target_url,
                 text=text[:_MAX_SOURCE_CHARS],
                 source_kind="news_article",
                 title=candidate.title,
@@ -594,6 +604,7 @@ async def collect_sources(
     kind: str,
     as_of_kst: object,
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None = None,
 ) -> tuple[list[SourceDocument], list[str]]:
     """도메인별 source policy에 따라 검증된 원문 source만 반환한다."""
     if kind == "sports":
@@ -607,6 +618,7 @@ async def collect_sources(
             query=query,
             as_of_kst=as_of_kst,
             fetch_page=fetch_page,
+            resolve_news_url=resolve_news_url,
         )
     return await _collect_direct_search_source(
         query=query,
@@ -618,6 +630,7 @@ async def collect_sources(
 __all__ = [
     "FetchPage",
     "NewsCandidate",
+    "ResolveNewsUrl",
     "SourceDocument",
     "SportsGameFact",
     "build_google_news_rss_url",

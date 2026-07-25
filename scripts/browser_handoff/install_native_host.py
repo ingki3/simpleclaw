@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Install the Chrome Native Messaging manifest for SimpleClaw browser handoff."""
 
 from __future__ import annotations

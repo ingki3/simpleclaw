@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from simpleclaw.daemon.dreaming_trigger import DreamingTrigger, LAST_DREAMING_KEY
+from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline

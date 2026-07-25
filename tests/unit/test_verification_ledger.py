@@ -7,7 +7,7 @@ raw_excerpt redaction/길이 제한, retention 정책을 검증한다.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -22,7 +22,7 @@ from simpleclaw.review.verification_ledger import (
     redact_excerpt,
 )
 
-_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
 
 class _Clock:

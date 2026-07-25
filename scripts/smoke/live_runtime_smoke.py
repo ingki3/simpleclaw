@@ -16,7 +16,6 @@ from typing import Any
 
 import yaml
 
-
 DEFAULT_CONFIG = Path("/Users/simplist/.simpleclaw/config.yaml")
 DEFAULT_DAEMON_DB = Path("/Users/simplist/.simpleclaw-agent/default/daemon.db")
 DEFAULT_BOT_LOG = Path("/Users/simplist/.simpleclaw-agent/default/bot.log")

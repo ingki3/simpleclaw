@@ -401,9 +401,9 @@ def _is_blocklist_expired(
 
 
 __all__ = [
+    "TERMINAL_STATUSES",
+    "VALID_STATUSES",
+    "BlocklistStore",
     "SuggestionMeta",
     "SuggestionStore",
-    "BlocklistStore",
-    "VALID_STATUSES",
-    "TERMINAL_STATUSES",
 ]

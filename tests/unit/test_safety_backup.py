@@ -14,7 +14,6 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-
 from simpleclaw.memory.safety_backup import (
     SafetyBackupManager,
     find_legacy_memory_backup,

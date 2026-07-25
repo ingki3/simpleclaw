@@ -58,9 +58,8 @@ class TestVertexGeminiInit:
         with patch(
             "simpleclaw.llm.providers.vertex_gemini.genai.Client",
             side_effect=DefaultCredentialsError("no ADC"),
-        ):
-            with pytest.raises(LLMAuthError):
-                VertexGeminiProvider(model="gemini-3.5-flash", project="test-proj")
+        ), pytest.raises(LLMAuthError):
+            VertexGeminiProvider(model="gemini-3.5-flash", project="test-proj")
 
 
 class TestVertexGeminiServiceAccount:
@@ -122,11 +121,10 @@ class TestVertexGeminiServiceAccount:
             "simpleclaw.llm.providers.vertex_gemini."
             "service_account.Credentials.from_service_account_file",
             side_effect=ValueError("bad key file"),
-        ):
-            with pytest.raises(LLMAuthError):
-                VertexGeminiProvider(
-                    model="gemini-3.5-flash", credentials_path=str(sa_file)
-                )
+        ), pytest.raises(LLMAuthError):
+            VertexGeminiProvider(
+                model="gemini-3.5-flash", credentials_path=str(sa_file)
+            )
 
 
 class TestVertexGeminiSend:

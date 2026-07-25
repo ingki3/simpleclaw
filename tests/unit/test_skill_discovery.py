@@ -2,9 +2,8 @@
 
 from pathlib import Path
 
-
-from simpleclaw.skills.models import SkillScope
 from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills.models import SkillScope
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "skills"
 

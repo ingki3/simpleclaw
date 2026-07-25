@@ -56,6 +56,7 @@ def _run_command(command: str) -> tuple[str, str, int | None]:
         proc = subprocess.run(
             command,
             shell=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=_COMMAND_TIMEOUT_SECONDS,

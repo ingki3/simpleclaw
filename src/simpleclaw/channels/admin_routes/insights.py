@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 # ruff: noqa: F401
-
 import copy
 import json
 import logging
@@ -18,12 +17,9 @@ from typing import Any
 import yaml
 from aiohttp import web
 
-from simpleclaw.channels.admin_audit import AuditEntry
-from simpleclaw.channels.admin_policy import HOT, PROCESS_RESTART, classify_keys, validate_patch
 from simpleclaw.channels.admin_api import (
-    AREA_TO_YAML_KEY,
     _BACKEND_LABELS,
-    _RevealEntry,
+    AREA_TO_YAML_KEY,
     _actor_from,
     _audit_to_dict,
     _deep_merge,
@@ -42,10 +38,18 @@ from simpleclaw.channels.admin_api import (
     _policy_to_dict,
     _project,
     _project_subtree,
+    _RevealEntry,
     _rotate_master_key,
     _save_pending,
     _set_dotted,
     _truthy_query,
+)
+from simpleclaw.channels.admin_audit import AuditEntry
+from simpleclaw.channels.admin_policy import (
+    HOT,
+    PROCESS_RESTART,
+    classify_keys,
+    validate_patch,
 )
 from simpleclaw.memory.memory_items_sync import sync_suggestion_to_memory_item
 from simpleclaw.memory.suggestions import TERMINAL_STATUSES

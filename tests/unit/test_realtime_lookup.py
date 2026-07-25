@@ -429,3 +429,57 @@ async def test_non_live_question_does_not_invoke_realtime_lookup(
     orchestrator._execute_skill.assert_not_called()
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert _REALTIME_LOOKUP_CONTEXT_HEADER not in request.system_prompt
+
+
+@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+@pytest.mark.asyncio
+async def test_runtime_google_rss_resolves_publisher_before_article_fetch(
+    config_file, monkeypatch
+):
+    """production wiring은 RSS source homepage resolver 뒤 publisher 원문을 fetch한다."""
+    orchestrator = AgentOrchestrator(config_file)
+    rss_url_prefix = "https://news.google.com/rss/search?"
+    google_url = "https://news.google.com/rss/articles/CBMi-real-token?oc=5"
+    publisher_home = "https://publisher.example/"
+    publisher_url = "https://publisher.example/original"
+    xml = f"""<?xml version="1.0"?><rss><channel><item>
+      <title>검증 가능한 최신 AI 기사 - Example News</title>
+      <link>{google_url}</link>
+      <pubDate>Fri, 24 Jul 2026 11:30:00 GMT</pubDate>
+      <source url="{publisher_home}">Example News</source>
+    </item></channel></rss>"""
+    fetched = []
+    resolved = []
+
+    async def fake_handle_web_fetch(routing, *, headless_binary=None):
+        fetched.append(routing["url"])
+        if routing["url"].startswith(rss_url_prefix):
+            return xml
+        if routing["url"] == publisher_url:
+            return "검증된 publisher 원문입니다. " * 40
+        return "Error: unexpected URL"
+
+    async def fake_resolve_web_page_link(page_url, title):
+        resolved.append((page_url, title))
+        return publisher_url
+
+    from simpleclaw.agent import builtin_tools
+
+    monkeypatch.setattr(builtin_tools, "handle_web_fetch", fake_handle_web_fetch)
+    monkeypatch.setattr(
+        builtin_tools, "resolve_web_page_link", fake_resolve_web_page_link
+    )
+    raw = json.dumps(
+        {"query": "AI 뉴스", "as_of_kst": "2026-07-24T22:18:43+09:00"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    token = base64.urlsafe_b64encode(raw).decode("ascii")
+
+    output = await orchestrator._execute_skill("realtime-lookup-skill", token)
+    result = json.loads(output or "{}")
+
+    assert resolved == [(publisher_home, "검증 가능한 최신 AI 기사")]
+    assert fetched[0].startswith(rss_url_prefix)
+    assert fetched[1] == publisher_url
+    assert result["facts"][0]["type"] == "source_excerpt"
+    assert result["facts"][0]["source_url"] == publisher_url

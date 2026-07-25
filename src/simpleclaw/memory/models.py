@@ -13,7 +13,6 @@ from enum import Enum
 
 import numpy as np
 
-
 # BIZ-76 — 채널 식별자 규약.
 #
 # ``ConversationMessage.channel`` 에 들어갈 출처 식별자 문자열의 표준 prefix·값.
@@ -69,9 +68,7 @@ def is_auto_trigger_channel(channel: str | None) -> bool:
         return True
     if channel.startswith(CHANNEL_CRON_PREFIX):
         return True
-    if channel.startswith(CHANNEL_GOAL_PREFIX):
-        return True
-    return False
+    return bool(channel.startswith(CHANNEL_GOAL_PREFIX))
 
 
 class MessageRole(Enum):

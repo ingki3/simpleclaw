@@ -33,7 +33,6 @@ from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.memory.protected_section import get_section_body
 
-
 # ----------------------------------------------------------------------
 # 픽스처 — managed 마커가 모두 포함된 USER.md / MEMORY.md
 # ----------------------------------------------------------------------

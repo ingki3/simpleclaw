@@ -2,7 +2,10 @@
 
 import pytest
 
-from simpleclaw.agent.context_retrieval import ContextRetrievalConfig, ContextRetrievalService
+from simpleclaw.agent.context_retrieval import (
+    ContextRetrievalConfig,
+    ContextRetrievalService,
+)
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 
 

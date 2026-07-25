@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import yaml
@@ -24,7 +24,7 @@ from simpleclaw.agent.tool_dispatch import dispatch_tool_call
 from simpleclaw.llm.models import ToolCall
 
 # 모든 age 계산의 기준 시각 — 테스트 결정성을 위해 고정.
-_NOW = datetime(2026, 6, 29, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 29, 12, 0, 0, tzinfo=UTC)
 
 
 def _now() -> datetime:

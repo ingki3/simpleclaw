@@ -8,7 +8,7 @@ subagent required gate 스냅샷(from_subagent_gate), dispatch operator gate
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import yaml
@@ -24,7 +24,7 @@ from simpleclaw.review.verification_ledger import (
     VerificationEvidenceLedger,
 )
 
-_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from simpleclaw.logging.structured_logger import StructuredLogger, LogEntry
+from simpleclaw.logging.structured_logger import LogEntry, StructuredLogger
 from simpleclaw.logging.trace_context import reset_trace_id, set_trace_id, trace_scope
 
 

@@ -13,9 +13,9 @@ import time
 from pathlib import Path
 
 from simpleclaw.voice.models import (
+    SUPPORTED_FORMATS,
     STTError,
     STTResult,
-    SUPPORTED_FORMATS,
     UnsupportedFormatError,
 )
 

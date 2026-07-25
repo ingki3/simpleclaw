@@ -1,5 +1,7 @@
 """Tests for the recipe executor."""
 
+from pathlib import Path
+
 import pytest
 
 from simpleclaw.recipes.executor import execute_recipe
@@ -12,8 +14,6 @@ from simpleclaw.recipes.models import (
     StepStatus,
     StepType,
 )
-
-from pathlib import Path
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "recipes"
 

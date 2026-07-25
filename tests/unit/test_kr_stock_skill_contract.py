@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 SKILL_ROOT = Path("/Users/simplist/.agents/skills/kr-stock-skill")
 PYTHON = SKILL_ROOT / "scripts" / "venv" / "bin" / "python"
 SCRIPT = SKILL_ROOT / "scripts" / "kr_stock.py"

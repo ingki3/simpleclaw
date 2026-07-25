@@ -4,11 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from simpleclaw.skills.models import RetryPolicy, SkillDefinition, SkillScope
 from simpleclaw.skills.executor import execute_skill
 from simpleclaw.skills.models import (
+    RetryPolicy,
+    SkillDefinition,
     SkillExecutionError,
     SkillNotFoundError,
+    SkillScope,
     SkillTimeoutError,
 )
 

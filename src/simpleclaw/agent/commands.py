@@ -16,11 +16,16 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.recipes.loader import discover_recipes
 
 if TYPE_CHECKING:
-    from pathlib import Path  # noqa: F401  (type annotations only)
+    from pathlib import Path
+
     from simpleclaw.daemon.scheduler import CronScheduler
 
 logger = logging.getLogger(__name__)

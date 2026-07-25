@@ -159,7 +159,7 @@ def load_source_policy(mapping: Mapping[str, object]) -> SourcePolicy:
     """
     categories_raw = mapping.get("default_sources", mapping)
     if not isinstance(categories_raw, Mapping):
-        raise ValueError("source policy: 'default_sources' must be a mapping")
+        raise TypeError("source policy: 'default_sources' must be a mapping")
 
     categories: dict[str, CategorySourcePolicy] = {}
     for name, raw in categories_raw.items():
@@ -179,7 +179,7 @@ def load_source_policy(mapping: Mapping[str, object]) -> SourcePolicy:
 def _build_category_policy(name: str, raw: object) -> CategorySourcePolicy:
     """category 한 항목의 raw dict 를 :class:`CategorySourcePolicy` 로 변환한다."""
     if not isinstance(raw, Mapping):
-        raise ValueError(f"source policy: category {name!r} must be a mapping")
+        raise TypeError(f"source policy: category {name!r} must be a mapping")
     collectors = tuple(str(c) for c in raw.get("collectors", ()))
     if not collectors:
         raise ValueError(f"source policy: category {name!r} has no collectors")

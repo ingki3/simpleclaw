@@ -33,10 +33,10 @@ from __future__ import annotations
 import logging
 import shutil
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +285,7 @@ def find_legacy_memory_backup(
 
 
 __all__ = [
+    "TIMESTAMP_FORMAT",
     "SafetyBackupManager",
     "find_legacy_memory_backup",
-    "TIMESTAMP_FORMAT",
 ]

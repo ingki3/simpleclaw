@@ -17,7 +17,6 @@ from simpleclaw.agent.response_router import (
     classify_response_route,
 )
 
-
 # --------------------------------------------------------------------------
 # Structural impact/current routing (특정 사건 키워드 비의존)
 # --------------------------------------------------------------------------

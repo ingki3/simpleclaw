@@ -20,8 +20,8 @@ from __future__ import annotations
 import contextvars
 import os
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator
 
 # 환경변수 키 — 서브프로세스(스킬/서브에이전트)에 trace_id를 전달할 때 사용.
 TRACE_ID_ENV_VAR = "SIMPLECLAW_TRACE_ID"

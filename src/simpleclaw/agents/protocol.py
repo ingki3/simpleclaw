@@ -47,7 +47,7 @@ class SubAgentResponse(BaseModel):
     meta: dict[str, Any] | None = Field(default=None)
 
     @model_validator(mode="after")
-    def _check_status_consistency(self) -> "SubAgentResponse":
+    def _check_status_consistency(self) -> SubAgentResponse:
         """status와 동반 필드의 정합성을 강제한다.
 
         - error 상태인데 error 필드가 비어 있으면 검증 실패 — 디버깅 정보가 누락된다.

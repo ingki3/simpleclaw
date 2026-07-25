@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from io import StringIO
 import sys
+from io import StringIO
 
 import httpx
 import pytest
@@ -14,7 +14,6 @@ from simpleclaw.logging.redaction import (
     TelegramTokenRedactionFilter,
     install_telegram_token_redaction,
 )
-
 
 SYNTHETIC_TOKEN = "123456789:synthetic_bot_token_value_for_tests"
 
@@ -112,7 +111,7 @@ def test_real_httpx_info_log_redacts_url_and_preserves_diagnostics(path: str):
         logger.setLevel(logging.INFO)
         logger.propagate = False
         install_telegram_token_redaction(
-            root_logger=logging.Logger("isolated-root"),
+            root_logger=logging.getLogger("isolated-root"),
             httpx_logger=logger,
         )
 
@@ -178,8 +177,8 @@ def test_non_secret_numeric_formatting_is_unchanged():
 
 
 def test_install_is_idempotent_for_loggers_and_handlers():
-    root = logging.Logger("isolated-root")
-    httpx = logging.Logger("isolated-httpx")
+    root = logging.getLogger("isolated-root")
+    httpx = logging.getLogger("isolated-httpx")
     root_handler = logging.StreamHandler()
     httpx_handler = logging.StreamHandler()
     root.addHandler(root_handler)

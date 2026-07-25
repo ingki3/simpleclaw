@@ -223,7 +223,7 @@ def _coerce_datetime(value: object) -> datetime | None:
         return value
     if isinstance(value, str) and value:
         try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+            return datetime.fromisoformat(value).replace(tzinfo=None)
         except ValueError:
             return None
     return None

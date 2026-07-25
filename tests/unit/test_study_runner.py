@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import yaml
@@ -28,8 +28,9 @@ from simpleclaw.study.runner import (
     load_daily_digest_prompt,
     load_topic_update_prompt,
 )
+from simpleclaw.study.source_planner import StudyPromptError
 
-FIXED_NOW = datetime(2026, 6, 29, 6, 0, 0, tzinfo=timezone.utc)
+FIXED_NOW = datetime(2026, 6, 29, 6, 0, 0, tzinfo=UTC)
 
 
 @dataclass
@@ -355,7 +356,7 @@ def test_daily_digest_prompt_loads_and_validates():
 
 def test_missing_required_var_raises():
     spec = load_topic_update_prompt()
-    with pytest.raises(Exception):
+    with pytest.raises(StudyPromptError):
         spec.format(topic_title="x")  # 나머지 required_vars 누락
 
 

@@ -78,7 +78,9 @@ def _kill_existing_bots():
     try:
         result = subprocess.run(
             ["pgrep", "-f", "run_bot.py"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         for line in result.stdout.strip().split("\n"):
             if not line:
@@ -177,7 +179,7 @@ def _create_webhook_alert_notifier(
             tg_bot = Bot(token=bot_token)
             async with tg_bot:
                 await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
-        except Exception as exc:  # noqa: BLE001 — 운영 알림 실패는 본 요청을 막지 않는다.
+        except Exception as exc:
             logger.exception("Webhook alert Telegram dispatch failed")
             structured_logger.log(
                 action_type="webhook_alert_dispatch_failed",
@@ -309,7 +311,7 @@ async def main():
         )
         try:
             await webhook_server.start()
-        except Exception as exc:  # noqa: BLE001 — 부팅 단계에서 명시적으로 중단.
+        except Exception as exc:
             print(f"ERROR: Webhook 서버 바인딩 실패 — {exc}")
             structured_logger.log(
                 action_type="webhook_start_failed",
@@ -651,7 +653,7 @@ async def main():
                         blockers.append(
                             f"사용자 활동 후 {int(idle)}초 경과 (필요: {idle_threshold_cfg}초)"
                         )
-        except Exception:  # noqa: BLE001 — 진단용이므로 어떤 실패도 응답을 막지 않는다.
+        except Exception:
             pass
 
         msg = (
@@ -771,7 +773,7 @@ async def main():
     if admin_api is not None:
         try:
             await admin_api.start()
-        except Exception as exc:  # noqa: BLE001 — 포트 충돌 등은 명시적 에러로 종료.
+        except Exception as exc:
             print(f"ERROR: Admin API 바인딩 실패 — {exc}")
             return
 
@@ -809,12 +811,12 @@ async def main():
         try:
             # AppRunner.cleanup()이 진행 중 요청을 마무리한다 — graceful shutdown.
             await admin_api.stop()
-        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
+        except Exception:
             logger.exception("Admin API stop failed")
     if webhook_server is not None:
         try:
             await webhook_server.stop()
-        except Exception:  # noqa: BLE001 — 종료 경로에서 예외 흡수.
+        except Exception:
             logger.exception("Webhook server stop failed")
     await bot.stop()
     print("Done.")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 # ruff: noqa: F401
-
 import copy
 import json
 import logging
@@ -18,12 +17,9 @@ from typing import Any
 import yaml
 from aiohttp import web
 
-from simpleclaw.channels.admin_audit import AuditEntry
-from simpleclaw.channels.admin_policy import HOT, PROCESS_RESTART, classify_keys, validate_patch
 from simpleclaw.channels.admin_api import (
-    AREA_TO_YAML_KEY,
     _BACKEND_LABELS,
-    _RevealEntry,
+    AREA_TO_YAML_KEY,
     _actor_from,
     _audit_to_dict,
     _deep_merge,
@@ -42,10 +38,18 @@ from simpleclaw.channels.admin_api import (
     _policy_to_dict,
     _project,
     _project_subtree,
+    _RevealEntry,
     _rotate_master_key,
     _save_pending,
     _set_dotted,
     _truthy_query,
+)
+from simpleclaw.channels.admin_audit import AuditEntry
+from simpleclaw.channels.admin_policy import (
+    HOT,
+    PROCESS_RESTART,
+    classify_keys,
+    validate_patch,
 )
 from simpleclaw.memory.memory_items_sync import sync_suggestion_to_memory_item
 from simpleclaw.memory.suggestions import TERMINAL_STATUSES
@@ -119,7 +123,7 @@ async def _handle_undo_audit(self, request: web.Request) -> web.Response:
         try:
             self._merge_patch_into_full(pending, target.area, target.before)
             _save_pending(pending_path, pending)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     if self._reload_cb is not None:
@@ -127,7 +131,7 @@ async def _handle_undo_audit(self, request: web.Request) -> web.Response:
             result = self._reload_cb(target.area, target.before)
             if hasattr(result, "__await__"):
                 await result  # type: ignore[func-returns-value]
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("reload callback failed during undo")
 
     self._metrics.audit_undos += 1
@@ -197,7 +201,7 @@ async def _handle_health(self, request: web.Request) -> web.Response:
             extra = self._health_provider() or {}
             if isinstance(extra, dict):
                 snapshot.update(extra)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("health_provider failed")
     # BIZ-442 — drain 상태/active operation 수. deploy script 의 quiesce 폴링과
     # 운영자 점검이 이 키 하나로 "지금 재시작해도 되는가"를 판단한다.
@@ -206,7 +210,7 @@ async def _handle_health(self, request: web.Request) -> web.Response:
             drain_status = self._drain_status_provider()
             if isinstance(drain_status, dict):
                 snapshot["drain"] = drain_status
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("drain_status_provider failed")
     return _json_ok(snapshot)
 
@@ -220,13 +224,14 @@ async def _handle_system_info(self, request: web.Request) -> web.Response:
     # 버전 정보 — pyproject.toml의 단일 소스를 importlib.metadata로 조회.
     version = "unknown"
     try:
-        from importlib.metadata import PackageNotFoundError, version as _pkg_version
+        from importlib.metadata import PackageNotFoundError
+        from importlib.metadata import version as _pkg_version
 
         try:
             version = _pkg_version("simpleclaw")
         except PackageNotFoundError:
             version = "unknown"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 빌드 해시 — 환경변수(SIMPLECLAW_BUILD_SHA)가 있으면 사용. 운영자가
@@ -326,7 +331,7 @@ async def _handle_system_restart(self, request: web.Request) -> web.Response:
             result = self._restart_cb(body)
             if hasattr(result, "__await__"):
                 await result  # type: ignore[func-returns-value]
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("restart_callback failed")
 
     return _json_ok(
@@ -380,7 +385,7 @@ async def _handle_test_channel(self, request: web.Request) -> web.Response:
                 result = raw  # type: ignore[assignment]
         else:
             result = await self._default_channel_test(name, options)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("channel test failed: name=%s", name)
         result = {
             "ok": False,

@@ -25,19 +25,19 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Awaitable, Callable
 
-from simpleclaw.agent.progress import (
-    ProgressCallback,
-    ProgressEvent,
-    format_progress_line,
-)
 from simpleclaw.agent.clarify import (
     ClarifyOption,
     ClarifyRequest,
     decode_callback_data,
     encode_callback_data,
+)
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    format_progress_line,
 )
 from simpleclaw.channels.models import AccessAttempt
 from simpleclaw.llm.models import MultimodalAttachment
@@ -337,7 +337,7 @@ class TelegramStreamSink:
             self._message_id = getattr(msg, "message_id", None)
             self._last_committed_text = self._placeholder
             self._last_edit_ts = time.monotonic()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("TelegramStreamSink.start failed: %s", exc)
             self._message_id = None
 
@@ -391,7 +391,7 @@ class TelegramStreamSink:
             )
             self._last_committed_text = text
             self._last_edit_ts = time.monotonic()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # FloodWait / parse error / message-not-modified 류는 다음 시도에서 회복.
             logger.warning(
                 "TelegramStreamSink edit_message_text failed: %s", exc
@@ -441,7 +441,7 @@ class TelegramStreamSink:
                             **first_kwargs,
                         )
                         sent_chunks.append(first)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning(
                             "TelegramStreamSink finalize first-edit failed, "
                             "fallback to send_message: %s", exc,
@@ -462,7 +462,7 @@ class TelegramStreamSink:
                         chat_id=self._chat_id, text=rendered_first, **first_kwargs,
                     )
                     sent_chunks.append(first)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error(
                         "TelegramStreamSink finalize send failed: %s", exc,
                     )
@@ -484,7 +484,7 @@ class TelegramStreamSink:
                         chat_id=self._chat_id, text=rendered_chunk, **chunk_kwargs,
                     )
                     sent_chunks.append(chunk)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error(
                         "TelegramStreamSink finalize chunk send failed: "
                         "chunk=%d/%d delivered_chunks=%d total_chunks=%d: %s",
@@ -525,7 +525,7 @@ class TelegramStreamSink:
                     chat_id=self._chat_id, text=rendered_chunk, **chunk_kwargs
                 )
                 sent_chunks.append(chunk)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "TelegramStreamSink finalize tail fallback failed: "
                     "chunk=%d/%d delivered_chunks=%d total_chunks=%d: %s",
@@ -560,7 +560,7 @@ class TelegramStreamSink:
                 chat_id=self._chat_id,
                 text=_PARTIAL_DELIVERY_NOTICE,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "TelegramStreamSink partial-delivery notice failed: "
                 "delivered_chunks=%d total_chunks=%d: %s",
@@ -680,10 +680,7 @@ class TelegramBot:
 
         if user_id in self._whitelist_user_ids:
             return True
-        if chat_id in self._whitelist_chat_ids:
-            return True
-
-        return False
+        return chat_id in self._whitelist_chat_ids
 
     def log_access(
         self, user_id: int, chat_id: int, authorized: bool
@@ -738,7 +735,7 @@ class TelegramBot:
         if self._drain_notice_provider is not None:
             try:
                 drain_notice = self._drain_notice_provider()
-            except Exception:  # noqa: BLE001 — drain 판정 실패가 응답을 막으면 안 됨
+            except Exception:
                 logger.exception("drain_notice_provider failed")
                 drain_notice = None
             if drain_notice:
@@ -932,7 +929,7 @@ class TelegramBot:
                 response = await self._proactive_callback_handler(
                     action, opportunity_id
                 )
-            except Exception:  # noqa: BLE001 — callback UX 보호.
+            except Exception:
                 logger.exception("proactive callback handler error")
                 response = "제안 처리 중 오류가 발생했습니다."
             try:
@@ -1047,7 +1044,7 @@ class TelegramBot:
                             size_bytes=len(payload),
                         )
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("Telegram photo download failed: %s", exc)
 
         document = getattr(message, "document", None)
@@ -1104,7 +1101,7 @@ class TelegramBot:
                             size_bytes=len(payload),
                         )
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("Telegram document download failed: %s", exc)
 
         return attachments
@@ -1205,7 +1202,7 @@ class TelegramBot:
                                         chat_id=chat_id,
                                         message_id=sink.message_id,
                                     )
-                                except Exception:  # noqa: BLE001
+                                except Exception:
                                     pass
                             keyboard = self._build_inline_keyboard(pending_request)
                             sent = await update.message.reply_text(

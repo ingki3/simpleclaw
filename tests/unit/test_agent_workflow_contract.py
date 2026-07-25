@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENT_RULES = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 

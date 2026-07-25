@@ -22,7 +22,6 @@ from simpleclaw.agent.tool_schemas import (
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

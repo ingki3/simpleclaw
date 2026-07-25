@@ -3,11 +3,11 @@
 
 import pytest
 
-from simpleclaw.persona.resolver import resolve_persona_files
-from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
+from simpleclaw.persona.assembler import assemble_prompt
+from simpleclaw.persona.resolver import resolve_persona_files
 
 
 class RecordingProvider(LLMProvider):

@@ -9,7 +9,7 @@ gate 차단을 검증한다. mark_late/create_followup_note 가 parent issue 상
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import yaml
@@ -21,7 +21,7 @@ from simpleclaw.agent.tool_dispatch import dispatch_tool_call
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.review.subagent_ledger import SubagentReviewLedger
 
-_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
 
 class _Clock:

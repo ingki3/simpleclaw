@@ -7,7 +7,7 @@ required/optional gate 구분, merge blocking 판정, late record 조회, follow
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -21,7 +21,7 @@ from simpleclaw.review.subagent_ledger import (
     SubagentReviewRecord,
 )
 
-_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=UTC)
 
 
 class _Clock:

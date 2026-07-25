@@ -27,12 +27,12 @@ from simpleclaw.llm.models import (
     ToolCall,
     ToolDefinition,
 )
+from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 from simpleclaw.llm.providers.base import (
     LLMProvider,
     TextDeltaCallback,
     flatten_system_blocks,
 )
-from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 
 logger = logging.getLogger(__name__)
 

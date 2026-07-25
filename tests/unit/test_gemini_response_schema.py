@@ -20,8 +20,8 @@ from types import SimpleNamespace
 import pytest
 
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
-from simpleclaw.llm.providers.gemini import GeminiProvider
 from simpleclaw.llm.profiles import get_provider_profile
+from simpleclaw.llm.providers.gemini import GeminiProvider
 
 _NESTED_SCHEMA = {
     "type": "object",

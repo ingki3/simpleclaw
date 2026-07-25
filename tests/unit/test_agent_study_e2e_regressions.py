@@ -44,7 +44,6 @@ from simpleclaw.study.source_planner import (
     select_wiki_worthy,
 )
 
-
 # --------------------------------------------------------------------------- #
 # 테스트 헬퍼 — StudyTopic Protocol 을 만족하는 topic 과 수집 결과 빌더.
 # --------------------------------------------------------------------------- #
@@ -201,7 +200,7 @@ class TestCaseAWorldCup:
         # 후속 e2e 계약: study context 에서 world-cup-2026/korea-football topic 이
         # 검색되고, route 가 complex workflow 또는 current-fact-guarded 로 가며,
         # 답변 contract 가 현재 상태 + 규칙 + 남은 변수 + 계산을 요구한다.
-        from simpleclaw.study import retrieval  # noqa: F401  (후속 issue 모듈)
+        from simpleclaw.study import retrieval
 
         question = "대한민국 월드컵 32강 진출 가능성이 어떻게 되지?"
         context = retrieval.retrieve_study_context(question)
@@ -287,7 +286,7 @@ class TestCaseBOpenAiIpo:
         strict=False,
     )
     def test_openai_ipo_question_enforces_freshness_and_evidence_tiers(self):
-        from simpleclaw.study import retrieval  # noqa: F401  (후속 issue 모듈)
+        from simpleclaw.study import retrieval
 
         question = "OpenAI 상장 연기가 증시에 끼치는 영향을 조사해줘"
         context = retrieval.retrieve_study_context(question)
@@ -331,7 +330,7 @@ class TestCaseCDreamingNewTopic:
         strict=False,
     )
     def test_repeated_signals_create_coding_agents_topic(self):
-        from simpleclaw.study import interest_signals  # noqa: F401  (후속 issue 모듈)
+        from simpleclaw.study import interest_signals
 
         signals = [
             {"term": "Claude Code", "count": 4},

@@ -57,12 +57,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable
 
 import yaml
 
@@ -200,7 +199,7 @@ class TopicRegistry:
             self._topics[topic.id] = topic
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> "TopicRegistry":
+    def load(cls, path: str | Path | None = None) -> TopicRegistry:
         """디스크의 ``topics.yaml`` 에서 레지스트리를 로드한다."""
         resolved = topics_yaml_path() if path is None else Path(path)
         return cls(load_topics(resolved), path=resolved)
@@ -246,7 +245,7 @@ NowFn = Callable[[], datetime]
 
 def _utcnow() -> datetime:
     """기본 now 제공자. timezone-aware UTC 로 통일한다(감쇠 계산 일관성)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class TopicState(StrEnum):

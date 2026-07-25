@@ -5,13 +5,13 @@ LLM provider 설정과 api_key 시크릿 해소를 담당한다.
 
 from __future__ import annotations
 
-import os
-import logging
 import copy
+import logging
+import os
 from pathlib import Path
 
-from dotenv import dotenv_values
 import yaml
+from dotenv import dotenv_values
 
 from simpleclaw.config_sections.common import _resolve_secret_field
 from simpleclaw.llm.models import LLMConfigError
@@ -197,13 +197,12 @@ def load_llm_config(config_path: str | Path) -> dict:
     if "default" not in routes:
         routes["default"] = {"primary": legacy_default, "retry": legacy_fallback}
         route_sources["default"] = "legacy"
-    if legacy_multimodal:
-        if "multimodal" not in routes:
-            routes["multimodal"] = {
-                "primary": legacy_multimodal,
-                "retry": legacy_fallback,
-            }
-            route_sources["multimodal"] = "legacy"
+    if legacy_multimodal and "multimodal" not in routes:
+        routes["multimodal"] = {
+            "primary": legacy_multimodal,
+            "retry": legacy_fallback,
+        }
+        route_sources["multimodal"] = "legacy"
 
     # One-release compatibility: materialize legacy TurnAnalysis model overrides
     # as ordinary static backends, then route to them. This preserves behavior

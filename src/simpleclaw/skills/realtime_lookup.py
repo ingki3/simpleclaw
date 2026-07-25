@@ -22,12 +22,13 @@ import json
 import re
 import sys
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.request import Request, urlopen
 
 from simpleclaw.skills.realtime_sources import (
     FetchPage,
+    ResolveNewsUrl,
     SourceDocument,
     collect_sources,
     html_to_visible_text,
@@ -446,7 +447,7 @@ def _expected_event_date(
     if raw is None:
         return None
     try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date().isoformat()
+        return datetime.fromisoformat(str(raw)).date().isoformat()
     except ValueError:
         return None
 
@@ -513,6 +514,7 @@ has_usable_realtime_evidence = is_usable_realtime_evidence
 async def lookup_async(
     payload: dict[str, Any],
     fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None = None,
 ) -> dict[str, Any]:
     """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
 
@@ -528,9 +530,10 @@ async def lookup_async(
         kind=kind,
         as_of_kst=as_of_kst,
         fetch_page=fetch_page,
+        resolve_news_url=resolve_news_url,
     )
     limitations = list(limitations)
-    now_utc = datetime.now(timezone.utc).isoformat()
+    now_utc = datetime.now(UTC).isoformat()
 
     combined_text = "\n".join(source.text for source in sources)
 

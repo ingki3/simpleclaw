@@ -45,7 +45,7 @@ _DEFAULT_PYTHON_PATH = Path.home() / ".simpleclaw/.venv/bin/python"
 def _subprocess_json(argv: Sequence[str]) -> dict:
     """argv 를 실행해 stdout JSON 을 파싱한다(실패 시 ``{"ok": False, ...}``)."""
     try:
-        proc = subprocess.run(  # noqa: S603 — 고정된 skill 스크립트 호출
+        proc = subprocess.run(
             list(argv),
             text=True,
             capture_output=True,

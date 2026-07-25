@@ -144,7 +144,7 @@ class SubAgentSpawner:
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=_GRACE_PERIOD)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     proc.kill()
                     await proc.wait()
 
@@ -200,13 +200,13 @@ class SubAgentSpawner:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=agent.timeout
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 agent.status = SubAgentStatus.TIMEOUT
                 agent.end_time = datetime.now()
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=_GRACE_PERIOD)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     proc.kill()
                     await proc.wait()
 

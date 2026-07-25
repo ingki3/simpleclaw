@@ -14,10 +14,15 @@ import re
 import subprocess
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from simpleclaw.config import load_admin_api_config, load_daemon_config, load_telegram_config
+from simpleclaw.config import (
+    load_admin_api_config,
+    load_daemon_config,
+    load_telegram_config,
+)
 
 RunCommand = Callable[[list[str]], subprocess.CompletedProcess[str]]
 Sleep = Callable[[float], None]
@@ -26,7 +31,7 @@ UrlOpen = Callable[[urllib.request.Request, float], Any]
 DEFAULT_CONFIG_PATH = Path("/Users/simplist/.simpleclaw/config.yaml")
 _LAUNCHAGENT_LABEL = "com.simpleclaw.agent"
 _ALLOWED_METHOD = "launchagent_kickstart"
-_SECRET_KEY_RE = re.compile(r"(token|secret|password|api[_-]?key|authorization)", re.I)
+_SECRET_KEY_RE = re.compile(r"(token|secret|password|api[_-]?key|authorization)", re.IGNORECASE)
 _SECRET_VALUE_RE = re.compile(
     r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+|"
     r"(gh[pousr]_[A-Za-z0-9_]+)|"
@@ -127,8 +132,7 @@ def _run_command(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         cmd,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=10,
     )
 

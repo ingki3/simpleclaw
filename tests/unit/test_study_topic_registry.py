@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -145,7 +145,7 @@ def test_topic_registry_crud(tmp_path: Path):
 # 진화형 레지스트리: 생성·승격·감쇠·아카이브 생애주기
 # ======================================================================
 
-_T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class Clock:

@@ -35,7 +35,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Callable
+from collections.abc import Callable
 
 from simpleclaw.config_sections.channels import load_admin_api_config
 from simpleclaw.config_sections.daemon import load_daemon_config

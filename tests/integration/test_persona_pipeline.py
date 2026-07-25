@@ -3,8 +3,8 @@
 
 import pytest
 
-from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.persona.assembler import assemble_prompt
+from simpleclaw.persona.resolver import resolve_persona_files
 
 
 @pytest.fixture

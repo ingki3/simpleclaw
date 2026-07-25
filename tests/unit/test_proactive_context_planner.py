@@ -13,7 +13,6 @@ from simpleclaw.proactive.context_collectors import (
 from simpleclaw.proactive.context_planner import ContextCronPlanner
 from simpleclaw.proactive.models import OpportunityType, SuggestedActionKind
 
-
 NOW = datetime(2026, 6, 6, 9, 0, 0)
 
 
@@ -27,7 +26,7 @@ def test_planner_creates_approval_required_one_shot_reminder_without_raw_mail_bo
 
     opportunities = ContextCronPlanner(now=NOW).plan(snapshot)
 
-    one_shot = [op for op in opportunities if op.type == OpportunityType.CONTEXTUAL_REMINDER][0]
+    one_shot = next(op for op in opportunities if op.type == OpportunityType.CONTEXTUAL_REMINDER)
     assert one_shot.requires_user_approval is True
     assert one_shot.suggested_action.kind == SuggestedActionKind.CREATE_CRON
     payload = one_shot.suggested_action.payload
@@ -53,7 +52,7 @@ def test_planner_creates_recurring_briefing_for_explicit_repeated_intent_and_det
     first = planner.plan(snapshot)
     second = planner.plan(snapshot)
 
-    recurring = [op for op in first if op.type == OpportunityType.INTEREST_BRIEFING][0]
+    recurring = next(op for op in first if op.type == OpportunityType.INTEREST_BRIEFING)
     assert recurring.requires_user_approval is True
     assert recurring.suggested_action.payload["run_once"] is False
     assert recurring.suggested_action.payload["cron_expression"] == "0 9 * * *"

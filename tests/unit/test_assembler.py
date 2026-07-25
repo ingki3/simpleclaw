@@ -1,12 +1,12 @@
 """Tests for the prompt assembler."""
 
+from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.models import (
     FileType,
     PersonaFile,
     Section,
     SourceScope,
 )
-from simpleclaw.persona.assembler import assemble_prompt
 
 
 def _make_persona(file_type: FileType, content_text: str) -> PersonaFile:

@@ -117,7 +117,7 @@ class CLIProvider(LLMProvider):
                 process.communicate(input=input_text.encode("utf-8")),
                 timeout=self._timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             process.kill()
             await process.wait()
             raise LLMTimeoutError(

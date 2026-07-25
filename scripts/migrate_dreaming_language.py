@@ -51,12 +51,12 @@ _HERE = Path(__file__).resolve()
 _ROOT = _HERE.parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
-from simpleclaw.memory.language_policy import (  # noqa: E402
+from simpleclaw.memory.language_policy import (
     LANG_KOREAN,
     is_primary_language,
     split_bullets,
 )
-from simpleclaw.memory.protected_section import (  # noqa: E402
+from simpleclaw.memory.protected_section import (
     ProtectedSectionError,
     get_section_body,
     has_managed_section,

@@ -6,7 +6,11 @@
 
 from __future__ import annotations
 
-from simpleclaw.agent.progress import ProgressEvent, format_progress_line, redact_secrets
+from simpleclaw.agent.progress import (
+    ProgressEvent,
+    format_progress_line,
+    redact_secrets,
+)
 
 
 def test_redact_secret_like_key_values() -> None:

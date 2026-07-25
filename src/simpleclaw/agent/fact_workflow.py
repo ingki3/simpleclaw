@@ -13,7 +13,11 @@ from simpleclaw.agent.claim_verification import verify_answer_claims
 from simpleclaw.agent.evidence_validation import validate_slot_evidence
 from simpleclaw.agent.fact_plan import build_fact_plan
 from simpleclaw.agent.fact_types import ComplexFactResult, EvidenceItem, FactPlan
-from simpleclaw.agent.progress import ProgressCallback, ProgressEvent, emit_progress_event
+from simpleclaw.agent.progress import (
+    ProgressCallback,
+    ProgressEvent,
+    emit_progress_event,
+)
 from simpleclaw.agent.response_router import RouteDecision
 
 
@@ -51,8 +55,7 @@ class ComplexFactWorkflow:
             decision,
             max_iterations=self._config.max_iterations,
         )
-        iterations = 0
-        for slot in list(plan.slots):
+        for iterations, slot in enumerate(list(plan.slots)):
             if iterations >= plan.max_iterations:
                 break
             if self._config.enable_progress_events:
@@ -68,7 +71,6 @@ class ComplexFactWorkflow:
             validated = validate_slot_evidence(slot, candidates)
             idx = plan.slots.index(slot)
             plan.slots[idx] = validated
-            iterations += 1
             if self._config.enable_progress_events:
                 await emit_progress_event(
                     on_progress,

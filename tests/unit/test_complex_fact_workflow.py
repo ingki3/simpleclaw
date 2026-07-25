@@ -3,7 +3,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem
-from simpleclaw.agent.fact_workflow import ComplexFactWorkflow, ComplexFactWorkflowConfig
+from simpleclaw.agent.fact_workflow import (
+    ComplexFactWorkflow,
+    ComplexFactWorkflowConfig,
+)
 from simpleclaw.agent.response_router import classify_response_route
 
 

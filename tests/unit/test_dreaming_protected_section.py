@@ -31,7 +31,6 @@ from simpleclaw.memory.protected_section import (
     get_section_body,
 )
 
-
 # ──────────────────────────────────────────────────────────
 # 헬퍼: managed 마커가 포함된 starter 파일을 만든다.
 # ──────────────────────────────────────────────────────────

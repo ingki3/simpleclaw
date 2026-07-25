@@ -61,7 +61,7 @@ def pipeline_with_runs(tmp_path):
 @pytest.mark.asyncio
 async def test_no_messages_records_skip_reason(pipeline_with_runs):
     """대상 메시지가 0건일 때 메트릭이 skip_reason='no_messages' 로 기록되어야 한다."""
-    _, pipeline, _, _, runs_file = pipeline_with_runs
+    _, pipeline, _, _, _runs_file = pipeline_with_runs
 
     result = await pipeline.run()
     assert result is None

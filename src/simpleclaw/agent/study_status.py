@@ -39,10 +39,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
@@ -187,7 +188,7 @@ class StudyStatusReport:
 
 def _utcnow() -> datetime:
     """기본 now 제공자 — 테스트는 store 에 now 콜백을 주입해 고정한다."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -204,7 +205,7 @@ def _parse_iso(value: object) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -778,12 +779,12 @@ def _error_json(message: str) -> str:
 
 
 __all__ = [
-    "StudyStatusError",
-    "StudyTopicView",
-    "StudyRunView",
     "StudyLowConfidenceItem",
+    "StudyRunView",
+    "StudyStatusError",
     "StudyStatusReport",
+    "StudyTopicView",
     "StudyWikiStore",
-    "resolve_wiki_dir",
     "handle_study_status",
+    "resolve_wiki_dir",
 ]

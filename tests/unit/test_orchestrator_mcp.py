@@ -5,6 +5,7 @@ tool 노출(runtime scope 필요, operator context 완화)을 검증한다.
 """
 
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -12,7 +13,7 @@ from simpleclaw.agent.orchestrator import AgentOrchestrator
 
 
 class FakeMCPManager:
-    instances: list["FakeMCPManager"] = []
+    instances: ClassVar[list["FakeMCPManager"]] = []
 
     def __init__(self, *_, **__):
         self.connected_with = None

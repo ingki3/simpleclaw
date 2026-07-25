@@ -24,10 +24,10 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ class AuditLog:
         """
         entry = AuditEntry(
             id=str(uuid.uuid4()),
-            ts=datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+            ts=datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
             actor_id=actor_id,
             trace_id=trace_id,
             action=action,

@@ -1,4 +1,3 @@
-# ruff: noqa: F401,F403,F405
 """DreamingPipeline에서 분리한 단계별 service 함수.
 
 이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드로 바인딩된다.
@@ -8,8 +7,8 @@
 
 from __future__ import annotations
 
-from simpleclaw.memory.dreaming import *  # noqa: F403
 from simpleclaw.memory import dreaming as _dreaming
+from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -391,7 +390,7 @@ def _safe_sync_memory_items(self, label: str, fn, *args, **kwargs):
     """memory_items sync failures must not break the dreaming response flow."""
     try:
         return fn(*args, **kwargs)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception("memory_items sync failed (%s); continuing", label)
         return None
 

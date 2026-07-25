@@ -18,8 +18,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from simpleclaw.security.secrets import SecretsError, SecretsManager, set_default_manager
-
+from simpleclaw.security.secrets import (
+    SecretsError,
+    SecretsManager,
+    set_default_manager,
+)
 
 # scripts/setup_admin_api.py 는 패키지가 아니므로 importlib 로 직접 로드한다.
 # Pytest 가 ``pythonpath = ['src']`` 만 보장하므로 scripts 경로는 수동 처리.

@@ -56,7 +56,7 @@ def _apply_changes(root: Path, n_added: int, n_modified: int, n_deleted: int) ->
             fh.write("appended\n")
 
     # 삭제: 두 번째 디렉터리에서
-    second_dir = sorted(p for p in root.iterdir() if p.is_dir() and p.name != "_new" and p != first_dir)[0]
+    second_dir = min(p for p in root.iterdir() if p.is_dir() and p.name != "_new" and p != first_dir)
     targets = sorted(second_dir.iterdir())[:n_deleted]
     for p in targets:
         p.unlink()

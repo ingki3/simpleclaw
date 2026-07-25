@@ -33,11 +33,12 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ class VerificationLedgerError(Exception):
 
 def _utcnow() -> datetime:
     """기본 now 제공자 — 테스트는 ledger 에 now 콜백을 주입해 고정한다."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -119,7 +120,7 @@ def _parse_iso(value: object) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -195,7 +196,7 @@ class VerificationEvidence:
         }
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "VerificationEvidence":
+    def from_dict(cls, raw: dict[str, Any]) -> VerificationEvidence:
         """저장분을 관대하게 복원한다.
 
         알 수 없는 status 는 ``pending`` 으로 정규화한다 — done 을 잘못

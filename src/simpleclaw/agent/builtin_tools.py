@@ -22,10 +22,13 @@ import logging
 import os
 import re
 import shutil
-import urllib.parse
-from html import unescape
 import stat as _stat
+import urllib.parse
+from dataclasses import dataclass
 from datetime import datetime
+from difflib import SequenceMatcher
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -292,13 +295,18 @@ def _is_headless_retryable_static_error(static_text: str) -> bool:
 _STATIC_MAX_REDIRECTS = 5
 
 
-async def _fetch_static(url: str) -> str:
-    """정적 HTML/텍스트 fetch (aiohttp). 성공 시 본문, 실패 시 ``Error: ...`` 문자열.
+@dataclass(frozen=True)
+class _StaticFetchDocument:
+    """SSRF/redirect 검증을 마친 정적 fetch 응답."""
 
-    BIZ-443: redirect는 자동 추적하지 않고 hop마다 ``_is_blocked_url`` 검사를
-    거친다 — 공개 URL이 내부망/메타데이터 endpoint로 redirect해 SSRF 가드를
-    우회하는 경로를 차단한다.
-    """
+    final_url: str
+    body: str
+    content_type: str
+    error: str = ""
+
+
+async def _fetch_static_document(url: str) -> _StaticFetchDocument:
+    """redirect hop마다 SSRF를 검사하고 최종 URL과 raw body를 반환한다."""
     import aiohttp
 
     timeout = aiohttp.ClientTimeout(total=30)
@@ -311,40 +319,134 @@ async def _fetch_static(url: str) -> str:
                     location = resp.headers.get("Location", "")
                     resp.release()
                     if not location:
-                        return f"Error: HTTP {resp.status} redirect without Location"
+                        return _StaticFetchDocument(
+                            current, "", "", f"Error: HTTP {resp.status} redirect without Location"
+                        )
                     current = urllib.parse.urljoin(current, location)
                     if _is_blocked_url(current):
-                        return _BLOCKED_URL_MESSAGE
+                        return _StaticFetchDocument(current, "", "", _BLOCKED_URL_MESSAGE)
                     continue
                 break
             else:
-                return f"Error: too many redirects (> {_STATIC_MAX_REDIRECTS})"
+                return _StaticFetchDocument(
+                    current, "", "", f"Error: too many redirects (> {_STATIC_MAX_REDIRECTS})"
+                )
 
             async with resp:
                 if resp.status != 200:
-                    return f"Error: HTTP {resp.status} — {resp.reason}"
-
-                content_type = resp.content_type or ""
-                body = await resp.text(errors="replace")
-
-                if "html" in content_type:
-                    body = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.S | re.I)
-                    body = re.sub(r"<style[^>]*>.*?</style>", "", body, flags=re.S | re.I)
-                    body = re.sub(r"<[^>]+>", " ", body)
-                    body = re.sub(r"\s+", " ", body).strip()
-
-                if len(body) > _WEB_FETCH_MAX_CHARS:
-                    body = (
-                        body[:_WEB_FETCH_MAX_CHARS]
-                        + f"\n\n... [truncated, total {len(body)} chars]"
+                    return _StaticFetchDocument(
+                        current, "", "", f"Error: HTTP {resp.status} — {resp.reason}"
                     )
-
-                return body
-
+                return _StaticFetchDocument(
+                    final_url=current,
+                    body=await resp.text(errors="replace"),
+                    content_type=resp.content_type or "",
+                )
     except aiohttp.ClientError as exc:
-        return f"Error: request failed — {str(exc)[:200]}"
+        return _StaticFetchDocument(url, "", "", f"Error: request failed — {str(exc)[:200]}")
     except Exception as exc:
-        return f"Error: {str(exc)[:200]}"
+        return _StaticFetchDocument(url, "", "", f"Error: {str(exc)[:200]}")
+
+
+async def _fetch_static(url: str) -> str:
+    """정적 HTML/텍스트 fetch. redirect는 hop마다 SSRF 검사를 거친다."""
+    document = await _fetch_static_document(url)
+    if document.error:
+        return document.error
+
+    body = document.body
+    if "html" in document.content_type:
+        body = re.sub(r"<script[^>]*>.*?</script>", "", body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r"<style[^>]*>.*?</style>", "", body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r"<[^>]+>", " ", body)
+        body = re.sub(r"\s+", " ", body).strip()
+
+    if len(body) > _WEB_FETCH_MAX_CHARS:
+        body = body[:_WEB_FETCH_MAX_CHARS] + f"\n\n... [truncated, total {len(body)} chars]"
+    return body
+
+
+class _PageLinkParser(HTMLParser):
+    """publisher landing page의 anchor URL과 가시 텍스트를 수집한다."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "a":
+            self._href = dict(attrs).get("href")
+            self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "a" and self._href is not None:
+            text = re.sub(r"\s+", " ", "".join(self._parts)).strip()
+            self.links.append((self._href, text))
+            self._href = None
+            self._parts = []
+
+
+def _normalized_link_title(value: str) -> str:
+    return re.sub(r"[^0-9a-z가-힣]+", " ", value.lower()).strip()
+
+
+def _same_public_site(left: str, right: str) -> bool:
+    left_host = (urllib.parse.urlparse(left).hostname or "").lower().rstrip(".")
+    right_host = (urllib.parse.urlparse(right).hostname or "").lower().rstrip(".")
+    return bool(
+        left_host
+        and right_host
+        and (
+            left_host == right_host
+            or left_host.endswith("." + right_host)
+            or right_host.endswith("." + left_host)
+        )
+    )
+
+
+async def resolve_web_page_link(page_url: str, title: str) -> str | None:
+    """publisher 첫 화면에서 제목이 일치하는 same-site 원문 URL을 안전하게 찾는다.
+
+    Google News RSS의 article token을 무검증으로 디코딩하지 않고 RSS ``source``
+    홈페이지를 기존 static SSRF/redirect 경계로 읽는다. 최신 기사 anchor가 제목과
+    충분히 일치할 때만 같은 publisher site URL을 반환하며, 나머지는 fail-closed다.
+    """
+    if _is_blocked_url(page_url) or not title.strip():
+        return None
+    document = await _fetch_static_document(page_url)
+    if document.error or "html" not in document.content_type:
+        return None
+    if _contains_block_page_signature(document.body):
+        return None
+
+    parser = _PageLinkParser()
+    try:
+        parser.feed(document.body)
+    except Exception:
+        return None
+
+    target = _normalized_link_title(title)
+    ranked: list[tuple[float, str]] = []
+    for href, anchor_text in parser.links:
+        candidate = urllib.parse.urljoin(document.final_url, href)
+        if _is_blocked_url(candidate) or not _same_public_site(document.final_url, candidate):
+            continue
+        normalized = _normalized_link_title(anchor_text)
+        if not normalized:
+            continue
+        score = SequenceMatcher(None, target, normalized).ratio()
+        if score >= 0.72:
+            ranked.append((score, candidate))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return ranked[0][1]
 
 
 def _resolve_agent_browser(
@@ -429,7 +531,7 @@ async def _fetch_headless(
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 proc.kill()
             except ProcessLookupError:
@@ -449,7 +551,7 @@ async def _fetch_headless(
         # timeout 도 8 초로 짧게 — load 자체는 보통 1~2초; 안 풀리면 빠르게 get text 단계로.
         try:
             await _run(["wait", "--load", "load"], timeout=8)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.info("agent-browser wait load timed out for %s; continuing", url)
 
         rc, out, err = await _run(["get", "text", "body"], timeout=30)
@@ -464,7 +566,7 @@ async def _fetch_headless(
             )
         return body
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "Error: headless rendering timed out."
     except FileNotFoundError as exc:
         return f"Error: headless fallback unavailable — {str(exc)[:200]}"
@@ -629,7 +731,7 @@ def _decode_duckduckgo_href(href: str) -> str:
         href = "https:" + href
     parsed = urllib.parse.urlparse(href)
     query = urllib.parse.parse_qs(parsed.query)
-    if "uddg" in query and query["uddg"]:
+    if query.get("uddg"):
         return query["uddg"][0]
     return href
 
@@ -640,13 +742,13 @@ def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
     blocks = re.split(
         r'<div[^>]+class="(?:result(?:\s|")|[^"]*\sresult(?:\s|"))[^>]*>',
         html,
-        flags=re.I,
+        flags=re.IGNORECASE,
     )
     for block in blocks[1:]:
         link_match = re.search(
             r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
             block,
-            flags=re.I | re.S,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         if not link_match:
             continue
@@ -656,7 +758,7 @@ def _parse_duckduckgo_html(html: str, limit: int) -> list[dict[str, str]]:
             r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|'
             r'<div[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>',
             block,
-            flags=re.I | re.S,
+            flags=re.IGNORECASE | re.DOTALL,
         )
         snippet = ""
         if snippet_match:
@@ -689,12 +791,14 @@ async def _web_search_duckduckgo(query: str, limit: int) -> list[dict[str, str]]
         )
     }
     params = {"q": query}
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-        async with session.get(
+    async with (
+        aiohttp.ClientSession(timeout=timeout, headers=headers) as session,
+        session.get(
             "https://html.duckduckgo.com/html/",
             params=params,
             allow_redirects=True,
-        ) as resp:
+        ) as resp,
+    ):
             if resp.status != 200:
                 raise RuntimeError(f"DuckDuckGo returned HTTP {resp.status} — {resp.reason}")
             body = await resp.text(errors="replace")
@@ -745,7 +849,7 @@ def _resolve_google_search_model() -> str:
             from simpleclaw.config import load_llm_config
 
             gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
-        except Exception:  # noqa: BLE001 — 검색 도구는 설정 로드 실패 시 기본 모델로 degrade
+        except Exception:
             logger.exception("web_search Google grounding model config load failed")
             continue
         model = str(gemini.get("model", "") or "").strip()
@@ -773,7 +877,7 @@ def _resolve_google_search_api_key() -> str:
             from simpleclaw.config import load_llm_config
 
             gemini = load_llm_config(config_path).get("providers", {}).get("gemini", {})
-        except Exception:  # noqa: BLE001 — 다음 후보로 폴백
+        except Exception:
             logger.exception("web_search Google grounding API key config load failed")
             continue
         api_key = str(gemini.get("api_key", "") or "").strip()
@@ -910,7 +1014,7 @@ async def _fetch_search_result_body(url: str) -> str:
         return ""
     try:
         body = await _fetch_static(url)
-    except Exception:  # noqa: BLE001 — 보강 실패는 snippet-only로 graceful degrade
+    except Exception:
         return ""
     if not body or body.startswith("Error:") or _looks_like_block_page(body):
         return ""
@@ -972,7 +1076,7 @@ async def handle_web_search(
                 continue
             try:
                 body = await body_fetcher(url)
-            except Exception:  # noqa: BLE001 — 개별 본문 회수 실패는 무시하고 진행
+            except Exception:
                 body = ""
             if body:
                 item["body"] = body
@@ -1327,7 +1431,7 @@ def handle_cron_action(
                 return "Error: expires_at must be an ISO datetime string."
             try:
                 expires_at = datetime.fromisoformat(
-                    expires_at_raw.replace("Z", "+00:00")
+                    expires_at_raw
                 )
             except ValueError:
                 return "Error: expires_at must be a valid ISO datetime string."

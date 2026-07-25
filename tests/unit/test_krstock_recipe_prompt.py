@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 KRSTOCK_RECIPE = Path("/Users/simplist/.simpleclaw-agent/default/recipes/krstock/recipe.yaml")
 KRSTOCK_SKILL = Path("/Users/simplist/.agents/skills/kr-stock-skill/SKILL.md")
 

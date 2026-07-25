@@ -1,5 +1,10 @@
 from simpleclaw.agent.claim_verification import verify_answer_claims
-from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem, EvidenceSlot, FactPlan
+from simpleclaw.agent.fact_types import (
+    EvidenceCoverage,
+    EvidenceItem,
+    EvidenceSlot,
+    FactPlan,
+)
 
 
 def test_claim_verifier_allows_answer_with_evidence_terms():

@@ -14,7 +14,7 @@ send() 메서드를 구현해야 한다. 라우터는 이 인터페이스만 바
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from simpleclaw.llm.models import (
     LLMProviderError,

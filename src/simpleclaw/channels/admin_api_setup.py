@@ -17,8 +17,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from simpleclaw.channels.admin_api import AdminAPIServer, SecretRotationCallback
 from simpleclaw.channels.admin_audit import AuditLog

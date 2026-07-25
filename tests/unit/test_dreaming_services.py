@@ -1,14 +1,14 @@
 """DreamingPipeline service 분리 구조 회귀 테스트."""
 
-from simpleclaw.memory.dreaming import DreamingPipeline
 from simpleclaw.memory import (
     dreaming_active_projects,
     dreaming_cluster_pipeline,
     dreaming_language,
     dreaming_preflight,
     dreaming_runner,
+    insight_meta,
 )
-from simpleclaw.memory import insight_meta
+from simpleclaw.memory.dreaming import DreamingPipeline
 
 
 def test_dreaming_pipeline_binds_split_service_methods():

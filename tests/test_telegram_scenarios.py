@@ -28,7 +28,6 @@ import pytest
 
 from simpleclaw.channels.telegram_bot import TelegramBot
 
-
 # ──────────────────────────────────────────────────────────
 # Shared fixture: full agent environment
 # ──────────────────────────────────────────────────────────
@@ -217,7 +216,7 @@ class TestCmd_Greeting:
 
     @pytest.mark.asyncio
     async def test_greeting(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, agent_dir = agent_env
 
         _mock_router(orch,
             routing_response='{"use_skill": false}',
@@ -262,7 +261,7 @@ class TestCmd_TimeSkill:
 
     @pytest.mark.asyncio
     async def test_time_skill(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, agent_dir = agent_env
 
         time_script = agent_dir / "skills" / "time-skill" / "run.py"
         captured = {}
@@ -319,7 +318,7 @@ class TestCmd_CalcSkill:
 
     @pytest.mark.asyncio
     async def test_calc(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, agent_dir = agent_env
 
         calc_script = agent_dir / "skills" / "calc-skill" / "run.py"
         captured = {}
@@ -372,7 +371,7 @@ class TestCmd_MultiTurn:
 
     @pytest.mark.asyncio
     async def test_multi_turn(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, agent_dir = agent_env
 
         captured_messages = []
 
@@ -428,7 +427,7 @@ class TestCmd_UnauthorizedUser:
 
     @pytest.mark.asyncio
     async def test_unauthorized(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, _orch, _tmp_path, agent_dir = agent_env
         HACKER_ID = 999999
 
         # ── 비인가 사용자 명령 ──
@@ -465,7 +464,7 @@ class TestCmd_NoSkillNeeded:
 
     @pytest.mark.asyncio
     async def test_no_skill(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, agent_dir = agent_env
 
         captured = {}
 
@@ -518,7 +517,7 @@ class TestCmd_CronJobLifecycle:
 
     @pytest.mark.asyncio
     async def test_cron_lifecycle(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        _bot, _orch, tmp_path, agent_dir = agent_env
         from simpleclaw.daemon.daemon import AgentDaemon
         from simpleclaw.daemon.models import ActionType
 
@@ -591,7 +590,7 @@ class TestCmd_Heartbeat:
 
     @pytest.mark.asyncio
     async def test_heartbeat_file_changes(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        _bot, _orch, tmp_path, agent_dir = agent_env
         from simpleclaw.daemon.daemon import AgentDaemon
 
         config = tmp_path / "config.yaml"
@@ -646,8 +645,11 @@ class TestCmd_DreamingMemoryUpdate:
 
     @pytest.mark.asyncio
     async def test_dreaming_updates_memory(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
-        from simpleclaw.daemon.dreaming_trigger import DreamingTrigger, LAST_DREAMING_KEY
+        _bot, _orch, _tmp_path, agent_dir = agent_env
+        from simpleclaw.daemon.dreaming_trigger import (
+            LAST_DREAMING_KEY,
+            DreamingTrigger,
+        )
         from simpleclaw.daemon.store import DaemonStore
         from simpleclaw.memory.conversation_store import ConversationStore
         from simpleclaw.memory.dreaming import DreamingPipeline
@@ -715,7 +717,7 @@ class TestCmd_PersonaReflection:
 
     @pytest.mark.asyncio
     async def test_persona_in_prompt(self, agent_env):
-        bot, orch, tmp_path, agent_dir = agent_env
+        bot, orch, _tmp_path, _agent_dir = agent_env
 
         captured = {}
 

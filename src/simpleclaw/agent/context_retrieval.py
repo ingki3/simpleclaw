@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -61,7 +61,7 @@ def _parse_iso_datetime(raw: str) -> datetime | None:
         except ValueError:
             continue
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return parsed
     return None
 
@@ -93,7 +93,7 @@ def annotate_study_freshness(
     if not block:
         return study_block
 
-    now_aware = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
 
     updated_dts = [
         dt for dt in (_parse_iso_datetime(m) for m in _STUDY_UPDATED_RE.findall(block)) if dt
@@ -124,8 +124,8 @@ def annotate_study_freshness(
             # 현재 사실 재조회(at-least guarded)를 강제하는 신호로 쓴다.
             _STUDY_FRESHNESS_STALE_MARKER,
             f"경고: 위 배경지식은 신뢰 근거로 쓰기에 한계가 있습니다 — {reason_text}.",
-            "배경지식만으로 현재 사실을 단정하지 마세요. 답변에 시점·불확실성 한계를 "
-            "명시하거나, 실시간 조회로 재확인한 뒤 답하세요.",
+            ("배경지식만으로 현재 사실을 단정하지 마세요. 답변에 시점·불확실성 한계를 "
+            "명시하거나, 실시간 조회로 재확인한 뒤 답하세요."),
         ]
     )
     return f"{block}\n{warning}"
@@ -158,7 +158,7 @@ class ContextRetrievalService:
         embedding_service: EmbeddingService | None,
         config: ContextRetrievalConfig,
         structured_logger: StructuredLogger | None = None,
-        study_retriever: "StudyRetriever | None" = None,
+        study_retriever: StudyRetriever | None = None,
         now_provider: Callable[[], datetime] | None = None,
         study_stale_after_days: int = STUDY_STALE_AFTER_DAYS,
         study_min_confidence: float = STUDY_MIN_CONFIDENCE,
@@ -178,7 +178,7 @@ class ContextRetrievalService:
         self._embedding_service = embedding_service
         self._structured_logger = structured_logger
         self._study_retriever = study_retriever
-        self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self._now_provider = now_provider or (lambda: datetime.now(UTC))
         self._study_stale_after_days = study_stale_after_days
         self._study_min_confidence = study_min_confidence
         self._rag_top_k = config.rag_top_k
@@ -223,7 +223,7 @@ class ContextRetrievalService:
             return ""
         try:
             block = self._study_retriever.retrieve_context(user_text)
-        except Exception as exc:  # noqa: BLE001 — study 회수 장애는 대화 응답을 막지 않는다
+        except Exception as exc:
             logger.warning("Study context retrieval failed: %s", exc)
             return ""
         return self._annotate_study_freshness(block)
@@ -239,7 +239,7 @@ class ContextRetrievalService:
                 stale_after_days=self._study_stale_after_days,
                 min_confidence=self._study_min_confidence,
             )
-        except Exception as exc:  # noqa: BLE001 — 신선도 주석 실패가 회수를 막아선 안 됨
+        except Exception as exc:
             logger.warning("Study freshness annotation failed: %s", exc)
             return block
 
@@ -311,7 +311,7 @@ class ContextRetrievalService:
                     status=status,
                     **details,
                 )
-            except Exception as exc:  # noqa: BLE001 — 로깅 실패가 회상을 막아선 안 됨
+            except Exception as exc:
                 logger.warning("RAG structured log write failed: %s", exc)
 
         if self._embedding_service is None or not self._embedding_service.is_enabled:
@@ -424,7 +424,7 @@ class ContextRetrievalService:
                         f"(confidence={insight.confidence:.2f}, evidence={insight.evidence_count})"
                     )
                     long_term_candidates.append((score, insight.text, line))
-            except Exception as exc:  # noqa: BLE001 — sidecar 장애는 대화 응답을 막지 않는다
+            except Exception as exc:
                 logger.warning("Long-term insight retrieval failed: %s", exc)
                 _increment_source_error("long_term")
                 errors += 1
@@ -450,7 +450,7 @@ class ContextRetrievalService:
                     if project.role:
                         line += f" (role={project.role})"
                     long_term_candidates.append((score, text, line))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Active-project retrieval failed: %s", exc)
                 _increment_source_error("long_term")
                 errors += 1
@@ -470,15 +470,15 @@ class ContextRetrievalService:
                     score = similarity + item.confidence + (item.importance * 0.1)
                     try:
                         self._store.mark_memory_item_accessed(item.id)
-                    except Exception as exc:  # noqa: BLE001 — 접근 메타 실패는 회상 자체를 막지 않는다
+                    except Exception as exc:
                         logger.warning("Memory item access mark failed: %s", exc)
                     long_term_candidates.append((
                         score,
                         item.text,
-                        f"- [memory_item:{item.type.value}] {_clip(item.text)} "
-                        f"(confidence={item.confidence:.2f}, importance={item.importance:.2f})",
+                        (f"- [memory_item:{item.type.value}] {_clip(item.text)} "
+                        f"(confidence={item.confidence:.2f}, importance={item.importance:.2f})"),
                     ))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Memory item retrieval failed: %s", exc)
                 _increment_source_error("long_term")
                 errors += 1

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem, EvidenceSlot, SlotStatus
+from simpleclaw.agent.fact_types import (
+    EvidenceCoverage,
+    EvidenceItem,
+    EvidenceSlot,
+    SlotStatus,
+)
 
 _FINALISH = {EvidenceCoverage.FINAL, EvidenceCoverage.CURRENT_PENDING}
 _STALEISH = {EvidenceCoverage.PRE_EVENT, EvidenceCoverage.STALE}

@@ -312,7 +312,7 @@ class StudyRetriever:
         ``max_context_chars`` 를 넘기면 멈춘다(결정적 절단). 한 항목조차 예산을
         넘으면 그 항목 텍스트를 문자 경계에서 잘라 최소 한 건은 싣는다.
         """
-        header = "\n".join([STUDY_CONTEXT_HEADER, _PURPOSE_LINE_EN, _PURPOSE_LINE_KO])
+        header = f"{STUDY_CONTEXT_HEADER}\n{_PURPOSE_LINE_EN}\n{_PURPOSE_LINE_KO}"
         budget = max(0, int(self._config.max_context_chars))
 
         rendered = [self._render_topic(m) for m in matches]

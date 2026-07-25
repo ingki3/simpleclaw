@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
-
 from simpleclaw.memory.active_projects import (
     ActiveProject,
     ActiveProjectStore,
@@ -20,7 +19,6 @@ from simpleclaw.memory.active_projects import (
     normalize_name,
     render_section_body,
 )
-
 
 # ----------------------------------------------------------------------
 # normalize_name

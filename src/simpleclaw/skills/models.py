@@ -17,7 +17,6 @@ from enum import Enum
 from simpleclaw.capability import CapabilityMetadata
 
 
-
 class SkillScope(Enum):
     """스킬의 로드 출처 (로컬 프로젝트 vs 사용자 전역)."""
     LOCAL = "local"
@@ -68,8 +67,7 @@ class RetryPolicy:
         Returns:
             ``initial * factor^attempt``를 ``max_backoff_seconds``로 클램프한 값.
         """
-        if attempt < 0:
-            attempt = 0
+        attempt = max(attempt, 0)
         delay = self.initial_backoff_seconds * (self.backoff_factor ** attempt)
         return min(delay, self.max_backoff_seconds)
 

@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.fact_answer import compose_fact_answer
-from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem, EvidenceSlot, FactPlan
+from simpleclaw.agent.fact_types import (
+    EvidenceCoverage,
+    EvidenceItem,
+    EvidenceSlot,
+    FactPlan,
+)
 from simpleclaw.llm.models import LLMResponse
 
 
