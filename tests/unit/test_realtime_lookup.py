@@ -236,8 +236,10 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
     """완결된 sports_score fact는 exact score final 답변의 usable evidence다."""
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
-    orchestrator._execute_skill = AsyncMock(
-        return_value=json.dumps(
+
+    async def realtime_score_evidence(_skill_name, token):
+        payload = json.loads(base64.urlsafe_b64decode(token).decode("utf-8"))
+        return json.dumps(
             {
                 "kind": "sports",
                 "confidence": "high",
@@ -245,7 +247,7 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
                     {
                         "type": "sports_score",
                         "league": "KBO",
-                        "event_date": "2026-07-24",
+                        "event_date": payload["as_of_kst"].split("T", maxsplit=1)[0],
                         "status": "final",
                         "away_team": "kt wiz",
                         "away_score": 5,
@@ -259,7 +261,8 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
             },
             ensure_ascii=False,
         )
-    )
+
+    orchestrator._execute_skill = AsyncMock(side_effect=realtime_score_evidence)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(
         return_value=_text_response("KT가 롯데를 5:4로 이겼고 경기는 종료됐습니다.")
