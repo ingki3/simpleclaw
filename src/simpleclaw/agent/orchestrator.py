@@ -63,6 +63,10 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.execution_router import (
+    ExecutionCallbacks,
+    ExecutionRouter,
+)
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
@@ -688,6 +692,17 @@ class AgentOrchestrator:
     4. LLM이 텍스트만 반환 시 → 최종 응답
     5. 대화 저장
     """
+
+    @staticmethod
+    def _build_execution_router(
+        callbacks: ExecutionCallbacks,
+    ) -> ExecutionRouter:
+        """PlanGate PASS 이후 사용할 mode→callback 경계를 만든다.
+
+        BIZ-494에서는 callback 경계만 준비한다. ``primary`` 응답 경로 연결과
+        각 callback의 context/allowlist/evidence adapter는 후속 이슈가 맡는다.
+        """
+        return ExecutionRouter(callbacks)
 
     def __init__(
         self,

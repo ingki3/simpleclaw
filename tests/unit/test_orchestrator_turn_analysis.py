@@ -427,10 +427,18 @@ async def test_unified_turn_planner_default_off_does_not_schedule_shadow(
         return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
     )
     shadow = AsyncMock()
+    execution_router_builder = MagicMock(
+        side_effect=AssertionError("execution router must remain disconnected")
+    )
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
     )
     monkeypatch.setattr(orch, "_run_unified_turn_planner_shadow", shadow)
+    monkeypatch.setattr(
+        orch,
+        "_build_execution_router",
+        execution_router_builder,
+    )
     orch._tool_loop = AsyncMock(return_value="안녕하세요")
 
     result = await orch.process_message("안녕", user_id=1, chat_id=1)
@@ -439,6 +447,7 @@ async def test_unified_turn_planner_default_off_does_not_schedule_shadow(
     assert result == "안녕하세요"
     analyzer.assert_awaited_once()
     shadow.assert_not_awaited()
+    execution_router_builder.assert_not_called()
 
 
 @pytest.mark.asyncio
