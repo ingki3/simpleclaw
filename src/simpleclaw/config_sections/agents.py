@@ -105,6 +105,7 @@ _AGENT_DEFAULTS: dict = {
     },
     "complex_fact_workflow": {
         "enabled": False,
+        "source_claim_hardening_ready": False,
         "route_threshold": 3,
         "max_iterations": 6,
         "max_sources_per_slot": 3,
@@ -469,6 +470,12 @@ def _agent_with_defaults(agent: dict) -> dict:
         },
         "complex_fact_workflow": {
             "enabled": bool(complex_fact.get("enabled", complex_defaults["enabled"])),
+            "source_claim_hardening_ready": bool(
+                complex_fact.get(
+                    "source_claim_hardening_ready",
+                    complex_defaults["source_claim_hardening_ready"],
+                )
+            ),
             "route_threshold": _coerce_int_config(
                 complex_fact.get(
                     "route_threshold",

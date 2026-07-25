@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from simpleclaw.agent.claim_verification import verify_answer_claims
 from simpleclaw.agent.evidence_validation import validate_slot_evidence
-from simpleclaw.agent.fact_plan import build_fact_plan
+from simpleclaw.agent.fact_plan import build_fact_plan, fact_plan_from_turn_plan
 from simpleclaw.agent.fact_types import ComplexFactResult, EvidenceItem, FactPlan
 from simpleclaw.agent.progress import (
     ProgressCallback,
@@ -19,6 +19,7 @@ from simpleclaw.agent.progress import (
     emit_progress_event,
 )
 from simpleclaw.agent.response_router import RouteDecision
+from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 
 
 @dataclass(frozen=True)
@@ -55,9 +56,39 @@ class ComplexFactWorkflow:
             decision,
             max_iterations=self._config.max_iterations,
         )
-        for iterations, slot in enumerate(list(plan.slots)):
-            if iterations >= plan.max_iterations:
+        return await self._run_plan(plan, on_progress=on_progress)
+
+    async def run_turn_plan(
+        self,
+        turn_plan: UnifiedTurnPlan,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> ComplexFactResult:
+        """Run one immutable planner result without invoking another planner."""
+
+        plan = fact_plan_from_turn_plan(
+            turn_plan,
+            max_iterations=self._config.max_iterations,
+        )
+        return await self._run_plan(plan, on_progress=on_progress)
+
+    async def _run_plan(
+        self,
+        plan: FactPlan,
+        *,
+        on_progress: ProgressCallback | None,
+    ) -> ComplexFactResult:
+        question = plan.question
+        attempted: set[str] = set()
+        for _iteration in range(plan.max_iterations):
+            missing = plan.missing_required_slots()
+            if not missing:
                 break
+            slot = next(
+                (candidate for candidate in missing if candidate.name not in attempted),
+                missing[0],
+            )
+            attempted.add(slot.name)
             if self._config.enable_progress_events:
                 await emit_progress_event(
                     on_progress,
@@ -78,22 +109,32 @@ class ComplexFactWorkflow:
                 )
 
         missing = plan.missing_required_slots()
-        text = await self._compose_answer(question, plan)
-        if not text.strip():
-            if missing:
-                names = ", ".join(slot.name for slot in missing)
-                text = f"근거가 부족해 확정 답변할 수 없습니다. 부족한 슬롯: {names}"
-            else:
+        no_required_claims = not plan.slots
+        if missing or no_required_claims:
+            names = ", ".join(slot.name for slot in missing)
+            text = (
+                "근거가 부족해 제한된 답변만 드릴 수 있습니다. "
+                f"추가 확인이 필요한 항목: {names or 'required_claims'}"
+            )
+        else:
+            text = await self._compose_answer(question, plan)
+            if not text.strip():
                 text = "검증된 근거를 바탕으로 답변을 생성하지 못했습니다."
 
         limitations: list[str] = []
-        success = not missing
+        success = not missing and not no_required_claims
         if missing:
             limitations.append(
                 "missing_required_slots: " + ", ".join(slot.name for slot in missing)
             )
+        if no_required_claims:
+            limitations.append("missing_required_claims")
 
-        if self._config.enable_claim_verifier:
+        if (
+            self._config.enable_claim_verifier
+            and not missing
+            and not no_required_claims
+        ):
             verification = verify_answer_claims(text, plan)
             if not verification.allow_final:
                 success = False

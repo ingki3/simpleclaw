@@ -1575,17 +1575,51 @@ class AgentOrchestrator:
             """PASS plan의 명시적 clarify mode도 같은 사용자 UX로 수렴시킨다."""
             return self._render_unified_clarification(_callback_plan)
 
-        # Issue 9 전까지 fact/complex/recipe도 plan scope가 고정된 기존 loop를
-        # 재사용한다. 상위 mode 선택은 ExecutionRouter만 소유하며 semantic legacy
-        # router나 Asset Selector를 다시 호출하지 않는다.
+        async def run_planned_fact_check(
+            callback_plan: UnifiedTurnPlan,
+        ) -> str:
+            """Run bounded fact retrieval in the planned ToolLoop scope."""
+            return await run_planned_tool_loop(callback_plan)
+
+        async def run_planned_complex_fact(
+            callback_plan: UnifiedTurnPlan,
+        ) -> str:
+            """Delegate slot ownership without rerunning planner/context selection."""
+            nonlocal routed_result
+            if not self._complex_fact_config.get(
+                "source_claim_hardening_ready",
+                False,
+            ):
+                routed_result = ToolLoopResult(
+                    "출처·주장 검증 선행 작업이 준비되지 않아 복합 사실 답변을 "
+                    "안전하게 확정할 수 없습니다. 현재는 제한된 답변만 제공합니다.",
+                    success=False,
+                )
+                return routed_result.text
+            fact_result = await self._run_planned_complex_fact_workflow(
+                callback_plan,
+                on_progress=on_progress,
+            )
+            routed_result = ToolLoopResult(
+                fact_result.text,
+                success=fact_result.success,
+            )
+            return routed_result.text
+
+        async def run_planned_recipe(
+            callback_plan: UnifiedTurnPlan,
+        ) -> str:
+            """Expose only the selected recipe; its asset owns any evidence lifecycle."""
+            return await run_planned_tool_loop(callback_plan)
+
         router = self._build_execution_router(
             ExecutionCallbacks(
                 direct_answer=run_planned_tool_loop,
                 execute_asset=run_planned_tool_loop,
                 tool_loop=run_planned_tool_loop,
-                fact_check=run_planned_tool_loop,
-                complex_fact=run_planned_tool_loop,
-                recipe=run_planned_tool_loop,
+                fact_check=run_planned_fact_check,
+                complex_fact=run_planned_complex_fact,
+                recipe=run_planned_recipe,
                 clarify=clarify,
             )
         )
@@ -1792,6 +1826,41 @@ class AgentOrchestrator:
         )
         result = await workflow.run(text, route_decision, on_progress=on_progress)
         return result.text
+
+    async def _run_planned_complex_fact_workflow(
+        self,
+        plan: UnifiedTurnPlan,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ):
+        """Execute a gated complex plan without semantic replanning."""
+        from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
+        from simpleclaw.agent.fact_answer import compose_fact_answer
+        from simpleclaw.agent.fact_workflow import (
+            ComplexFactWorkflow,
+            ComplexFactWorkflowConfig,
+        )
+
+        cfg = self._complex_fact_config or {}
+        retriever = EvidenceRetriever.from_turn_plan(
+            plan,
+            max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3)),
+        )
+
+        async def compose(question, fact_plan):
+            return await compose_fact_answer(self._router.send, question, fact_plan)
+
+        workflow = ComplexFactWorkflow(
+            retriever=retriever,
+            compose_answer=compose,
+            config=ComplexFactWorkflowConfig(
+                max_iterations=int(cfg.get("max_iterations", 4)),
+                max_sources_per_slot=int(cfg.get("max_sources_per_slot", 3)),
+                enable_claim_verifier=bool(cfg.get("enable_claim_verifier", True)),
+                enable_progress_events=bool(cfg.get("enable_progress_events", True)),
+            ),
+        )
+        return await workflow.run_turn_plan(plan, on_progress=on_progress)
 
     # ------------------------------------------------------------------
     # 대화 저장 + 백그라운드 임베딩 (spec 005 Phase 2)
@@ -2278,7 +2347,8 @@ class AgentOrchestrator:
             ]
             primary = plan.execution.primary_asset
             if (
-                plan.execution.mode is ExecutionMode.EXECUTE_ASSET
+                plan.execution.mode
+                in {ExecutionMode.EXECUTE_ASSET, ExecutionMode.RECIPE}
                 and primary is not None
             ):
                 if primary.asset_type == "skill":

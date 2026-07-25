@@ -9,6 +9,7 @@ def test_complex_fact_workflow_defaults_disabled(tmp_path):
 
     cfg = agent["complex_fact_workflow"]
     assert cfg["enabled"] is False
+    assert cfg["source_claim_hardening_ready"] is False
     assert cfg["route_threshold"] == 3
     assert cfg["max_iterations"] == 6
     assert cfg["max_sources_per_slot"] == 3
@@ -23,6 +24,7 @@ def test_complex_fact_workflow_config_overrides(tmp_path):
 agent:
   complex_fact_workflow:
     enabled: true
+    source_claim_hardening_ready: true
     route_threshold: 4
     max_iterations: 2
     max_sources_per_slot: 1
@@ -35,6 +37,7 @@ agent:
     cfg = load_agent_config(config)["complex_fact_workflow"]
 
     assert cfg["enabled"] is True
+    assert cfg["source_claim_hardening_ready"] is True
     assert cfg["route_threshold"] == 4
     assert cfg["max_iterations"] == 2
     assert cfg["max_sources_per_slot"] == 1

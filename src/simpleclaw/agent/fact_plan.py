@@ -4,6 +4,41 @@ from __future__ import annotations
 
 from simpleclaw.agent.fact_types import EvidenceSlot, FactPlan
 from simpleclaw.agent.response_router import RouteDecision
+from simpleclaw.agent.turn_plan import ExecutionMode, UnifiedTurnPlan
+
+
+def fact_plan_from_turn_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    max_iterations: int,
+) -> FactPlan:
+    """Adapt planner-owned required claims without reclassifying user text."""
+
+    if plan.execution.mode is not ExecutionMode.COMPLEX_FACT:
+        raise ValueError("complex fact adapter requires complex_fact execution mode")
+
+    slots = [
+        EvidenceSlot(
+            name=f"claim_{index}",
+            question=claim,
+            required=True,
+            freshness_required=plan.fact_check.freshness_required,
+            preferred_source_type="official",
+        )
+        for index, claim in enumerate(plan.fact_check.required_claims, start=1)
+    ]
+    return FactPlan(
+        task_type=plan.fact_check.domain or "complex_fact",
+        complexity_score=max(1, len(slots)),
+        slots=slots,
+        requires_calculation="calculation" in plan.intents,
+        max_iterations=max_iterations,
+        answer_contract=(
+            "Answer only from filled evidence slots. Separate conclusion, verified facts, "
+            "scenario/condition analysis, limitations, and source/as-of notes."
+        ),
+        question=plan.context.standalone_question,
+    )
 
 
 def build_fact_plan(
@@ -86,4 +121,5 @@ def build_fact_plan(
             "Answer only from filled evidence slots. Separate conclusion, verified facts, "
             "scenario/condition analysis, limitations, and source/as-of notes."
         ),
+        question=question,
     )
