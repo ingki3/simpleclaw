@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from simpleclaw.agent import planner_catalog as planner_catalog_module
 from simpleclaw.agent.planner_catalog import (
     DESCRIPTION_MAX_CHARS,
     PlannerAsset,
+    PlannerCatalogSensitiveTextError,
     build_planner_catalog,
     catalog_prompt_metrics,
 )
@@ -212,6 +216,181 @@ def test_description_is_whitespace_normalized_and_clamped():
     assert "  " not in compact
     assert len(compact) == DESCRIPTION_MAX_CHARS
     assert compact.endswith("…")
+
+
+def test_description_allows_non_path_slash_compounds():
+    description = "실적 리뷰/프리뷰 — 발표 수치와 주가 반응을 분리"
+
+    catalog = build_planner_catalog(
+        recipes=[
+            RecipeDefinition(
+                name="earnings",
+                description=description,
+            )
+        ],
+        native_specs=[],
+    )
+
+    assert catalog.assets[0].description == description
+
+
+@pytest.mark.parametrize(
+    ("asset_type", "sensitive_text", "expected_reason"),
+    [
+        (
+            "skill",
+            "Read " + "/" + "private/example/config.yaml before use.",
+            "absolute_path",
+        ),
+        (
+            "recipe",
+            "Use " + "API_" + "KEY=synthetic-only for the fixture.",
+            "credential",
+        ),
+        (
+            "native_tool",
+            "Read " + "/" + "tmp/synthetic-catalog-input.",
+            "absolute_path",
+        ),
+    ],
+)
+def test_sensitive_description_fails_before_fingerprint_or_prompt(
+    asset_type,
+    sensitive_text,
+    expected_reason,
+    monkeypatch,
+    caplog,
+):
+    def unexpected_fingerprint(*_args, **_kwargs):
+        raise AssertionError("fingerprint must not run for sensitive catalog text")
+
+    monkeypatch.setattr(
+        planner_catalog_module.hashlib,
+        "sha256",
+        unexpected_fingerprint,
+    )
+    kwargs = {
+        "skills": [
+            SkillDefinition(
+                name="sensitive-skill",
+                description=sensitive_text,
+            )
+        ]
+        if asset_type == "skill"
+        else [],
+        "recipes": [
+            RecipeDefinition(
+                name="sensitive-recipe",
+                description=sensitive_text,
+            )
+        ]
+        if asset_type == "recipe"
+        else [],
+        "native_specs": (
+            [_tool("sensitive_tool", description=sensitive_text)]
+            if asset_type == "native_tool"
+            else []
+        ),
+    }
+
+    with pytest.raises(PlannerCatalogSensitiveTextError) as exc_info:
+        build_planner_catalog(**kwargs)
+
+    error = str(exc_info.value)
+    assert exc_info.value.reason == expected_reason
+    assert exc_info.value.code == (
+        f"planner_catalog_sensitive_text.{expected_reason}"
+    )
+    assert "field=description" in error
+    assert sensitive_text not in error
+    assert sensitive_text not in caplog.text
+
+
+def test_sensitive_output_contract_fails_closed_without_raw_value():
+    synthetic_token = "sk-" + "synthetic-catalog-token-123456"
+    capability = CapabilityMetadata(
+        output_contract=synthetic_token,
+        declared=True,
+    )
+
+    with pytest.raises(PlannerCatalogSensitiveTextError) as exc_info:
+        build_planner_catalog(
+            skills=[
+                SkillDefinition(
+                    name="contract-skill",
+                    description="Safe description.",
+                    capability=capability,
+                )
+            ],
+            native_specs=[],
+        )
+
+    assert exc_info.value.code == "planner_catalog_sensitive_text.credential"
+    assert "asset=skill/contract-skill" in str(exc_info.value)
+    assert "field=output_contract" in str(exc_info.value)
+    assert synthetic_token not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", "/" + "private/example/name"),
+        ("domains", ("safe", "/" + "private/example/domain")),
+        ("intents", ("safe", "TOKEN=" + "synthetic-only")),
+    ],
+)
+def test_planner_asset_rejects_sensitive_text_in_every_serialized_field(
+    field,
+    value,
+):
+    kwargs = {
+        "asset_type": "skill",
+        "name": "safe-name",
+        "description": "Safe description.",
+        "domains": ("safe",),
+        "intents": ("safe",),
+        "read_only": False,
+        "side_effects": True,
+        "freshness_sensitive": False,
+        "direct_answer": False,
+        "requires_confirmation": False,
+        "output_contract": None,
+        "declared": False,
+        "runtime_visible": True,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(PlannerCatalogSensitiveTextError) as exc_info:
+        PlannerAsset(**kwargs)
+
+    assert f"field={field.rstrip('s')}" in str(exc_info.value)
+    assert str(value) not in str(exc_info.value)
+
+
+def test_sensitive_failure_is_deterministic_and_credential_free():
+    sensitive_text = "PASSWORD=" + "synthetic-only"
+    errors = []
+
+    for _ in range(2):
+        with pytest.raises(PlannerCatalogSensitiveTextError) as exc_info:
+            build_planner_catalog(
+                recipes=[
+                    RecipeDefinition(
+                        name="deterministic-recipe",
+                        description=sensitive_text,
+                    )
+                ],
+                native_specs=[],
+            )
+        errors.append(str(exc_info.value))
+
+    assert errors == [
+        (
+            "planner_catalog_sensitive_text.credential: "
+            "asset=recipe/deterministic-recipe field=description"
+        ),
+    ] * 2
+    assert sensitive_text not in errors[0]
 
 
 def test_51_asset_prompt_report_stays_below_prototype_token_budget():

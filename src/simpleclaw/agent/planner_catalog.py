@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,78 @@ _ALL_NATIVE_SCOPES = (
     ToolScope.OPERATOR,
     ToolScope.DEVELOPMENT,
 )
+_POSIX_ABSOLUTE_PATH_RE = re.compile(
+    r"(?<![\w:/])/(?!/)[^\s/]+(?:/[^\s/]+)*"
+)
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?:[A-Z]:[\\/]|\\\\[^\\\s]+[\\/])[^\s]+"
+)
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?:"
+    r"api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|"
+    r"client[_-]?secret|authorization"
+    r")\b\s*[:=]\s*['\"]?[^\s,;'\"`]+"
+)
+_CREDENTIAL_TOKEN_RE = re.compile(
+    r"(?i)(?:"
+    r"\bbearer\s+[A-Za-z0-9._~+/=-]{8,}|"
+    r"\b(?:sk|gh[pousr])[-_][A-Za-z0-9._-]{8,}|"
+    r"\bAIza[0-9A-Za-z_-]{10,}|"
+    r"\b[A-Za-z0-9_]{16,}:[A-Za-z0-9_-]{20,}\b"
+    r")"
+)
+_SENSITIVE_TEXT_PATTERNS = (
+    ("absolute_path", _POSIX_ABSOLUTE_PATH_RE),
+    ("absolute_path", _WINDOWS_ABSOLUTE_PATH_RE),
+    ("credential", _CREDENTIAL_ASSIGNMENT_RE),
+    ("credential", _CREDENTIAL_TOKEN_RE),
+)
+
+
+class PlannerCatalogSensitiveTextError(ValueError):
+    """민감 원문 없이 catalog 직렬화를 중단하는 명시적 보안 오류."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        asset_type: str,
+        asset_name: str | None,
+        field: str,
+    ) -> None:
+        self.reason = reason
+        self.code = f"planner_catalog_sensitive_text.{reason}"
+        self.asset_type = asset_type
+        self.asset_name = asset_name
+        self.field = field
+        identity = (
+            asset_type
+            if asset_name is None
+            else f"{asset_type}/{asset_name}"
+        )
+        super().__init__(
+            f"{self.code}: asset={identity} field={field}"
+        )
+
+
+def _validate_catalog_text(
+    value: object,
+    *,
+    asset_type: str,
+    asset_name: str | None,
+    field: str,
+) -> str:
+    """Planner payload/fingerprint에 들어갈 문자열을 fail-closed 검증한다."""
+    text = str(value or "")
+    for reason, pattern in _SENSITIVE_TEXT_PATTERNS:
+        if pattern.search(text):
+            raise PlannerCatalogSensitiveTextError(
+                reason=reason,
+                asset_type=asset_type,
+                asset_name=asset_name,
+                field=field,
+            )
+    return text
 
 
 @dataclass(frozen=True)
@@ -53,11 +126,45 @@ class PlannerAsset:
     runtime_visible: bool
 
     def __post_init__(self) -> None:
-        """알 수 없는 자산 종류와 빈 이름은 snapshot에 들어오지 못하게 한다."""
+        """알 수 없거나 민감한 자산 문자열은 snapshot에 들어오지 못하게 한다."""
         if self.asset_type not in _ASSET_TYPES:
             raise ValueError(f"unsupported planner asset_type: {self.asset_type}")
         if not self.name.strip():
             raise ValueError("planner asset name must not be empty")
+        safe_name = self.name.strip()
+        _validate_catalog_text(
+            self.name,
+            asset_type=self.asset_type,
+            asset_name=None,
+            field="name",
+        )
+        _validate_catalog_text(
+            self.description,
+            asset_type=self.asset_type,
+            asset_name=safe_name,
+            field="description",
+        )
+        for domain in self.domains:
+            _validate_catalog_text(
+                domain,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="domain",
+            )
+        for intent in self.intents:
+            _validate_catalog_text(
+                intent,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="intent",
+            )
+        if self.output_contract is not None:
+            _validate_catalog_text(
+                self.output_contract,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="output_contract",
+            )
 
 
 @dataclass(frozen=True)
@@ -91,9 +198,20 @@ def _canonical_json(value: object) -> str:
     )
 
 
-def _compact_description(value: object) -> str:
-    """설명의 줄바꿈/중복 공백을 제거하고 고정 길이로 clamp한다."""
-    compact = " ".join(str(value or "").split())
+def _compact_description(
+    value: object,
+    *,
+    asset_type: str,
+    asset_name: str,
+) -> str:
+    """민감 원문을 거부한 뒤 설명을 정규화하고 고정 길이로 clamp한다."""
+    validated = _validate_catalog_text(
+        value,
+        asset_type=asset_type,
+        asset_name=asset_name,
+        field="description",
+    )
+    compact = " ".join(validated.split())
     if len(compact) <= DESCRIPTION_MAX_CHARS:
         return compact
     return compact[: DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
@@ -117,10 +235,21 @@ def _asset_from_capability(
     runtime_visible: bool,
 ) -> PlannerAsset:
     """Skill/recipe 공용 CapabilityMetadata를 PlannerAsset으로 변환한다."""
+    clean_name = name.strip()
+    _validate_catalog_text(
+        clean_name,
+        asset_type=asset_type,
+        asset_name=None,
+        field="name",
+    )
     return PlannerAsset(
         asset_type=asset_type,
-        name=name.strip(),
-        description=_compact_description(description),
+        name=clean_name,
+        description=_compact_description(
+            description,
+            asset_type=asset_type,
+            asset_name=clean_name,
+        ),
         domains=_normalized_tuple(capability.domains),
         intents=_normalized_tuple(capability.intents),
         read_only=capability.read_only,
@@ -138,10 +267,21 @@ def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
     """기존 native scope/risk metadata를 보수적인 capability로 투영한다."""
     read_only = spec.risk is ToolRisk.LOW
     side_effects = not read_only
+    clean_name = spec.definition.name.strip()
+    _validate_catalog_text(
+        clean_name,
+        asset_type="native_tool",
+        asset_name=None,
+        field="name",
+    )
     return PlannerAsset(
         asset_type="native_tool",
-        name=spec.definition.name.strip(),
-        description=_compact_description(spec.definition.description),
+        name=clean_name,
+        description=_compact_description(
+            spec.definition.description,
+            asset_type="native_tool",
+            asset_name=clean_name,
+        ),
         domains=(),
         intents=(),
         read_only=read_only,
