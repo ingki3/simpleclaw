@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.orchestrator import (
-    AgentOrchestrator,
     _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
+    AgentOrchestrator,
     _canary_read_only_eligible,
     _deterministic_rollout_sample,
 )
