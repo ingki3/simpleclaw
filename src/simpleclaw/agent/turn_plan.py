@@ -460,7 +460,7 @@ def parse_turn_plan_payload(
     """JSON 문자열을 파싱해 semantic clamp가 적용된 UnifiedTurnPlan을 만든다."""
     data = json.loads(_strip_json_fence(payload))
     if not isinstance(data, dict):
-        raise ValueError("unified turn plan payload must be a JSON object")
+        raise TypeError("unified turn plan payload must be a JSON object")
     return parse_turn_plan_data(
         data,
         original_text=original_text,
@@ -476,7 +476,7 @@ def parse_turn_plan_data(
 ) -> UnifiedTurnPlan:
     """structured dict를 안전한 cross-field 불변식에 맞춰 모델로 조립한다."""
     if not isinstance(data, Mapping):
-        raise ValueError("unified turn plan data must be a mapping")
+        raise TypeError("unified turn plan data must be a mapping")
 
     context_data = _mapping(data.get("context"))
     relation = _enum_value(

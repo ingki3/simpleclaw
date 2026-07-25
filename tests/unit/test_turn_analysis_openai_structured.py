@@ -17,8 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
+from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
 from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
 
