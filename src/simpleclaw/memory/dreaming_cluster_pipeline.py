@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -24,6 +23,13 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+ClusterRecord = _dreaming.ClusterRecord
+ConversationMessage = _dreaming.ConversationMessage
+ProtectedSectionMissing = _dreaming.ProtectedSectionMissing
+get_section_body = _dreaming.get_section_body
+load_dreaming_prompt = _dreaming.load_dreaming_prompt
+replace_section_body = _dreaming.replace_section_body
+sync_cluster_summary_to_memory_item = _dreaming.sync_cluster_summary_to_memory_item
 
 def assign_clusters_for_unprocessed(self) -> dict[int, list[ConversationMessage]]:
     """클러스터링되지 않은 메시지를 점진 할당하고 영향받은 클러스터별 멤버를 반환한다.
@@ -377,4 +383,3 @@ async def _run_cluster_pipeline(self) -> str:
         self.upsert_memory_section(cid, new_label, new_summary)
         summaries.append(f"[cluster {cid} · {new_label}]\n{new_summary}")
     return "\n\n".join(summaries)
-

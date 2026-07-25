@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -24,6 +23,12 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+ActiveProject = _dreaming.ActiveProject
+ActiveProjectStore = _dreaming.ActiveProjectStore
+filter_active = _dreaming.filter_active
+merge_projects = _dreaming.merge_projects
+render_active_projects_body = _dreaming.render_active_projects_body
+replace_section_body = _dreaming.replace_section_body
 
 def is_active_projects_enabled(self) -> bool:
     """active-projects 추출/갱신이 활성화되어 있는지 여부.
@@ -107,4 +112,3 @@ def update_active_projects(
             len(active),
         )
     return active
-

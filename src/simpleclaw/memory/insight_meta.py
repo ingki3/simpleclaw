@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -24,6 +23,13 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+InsightMeta = _dreaming.InsightMeta
+ProtectedSectionError = _dreaming.ProtectedSectionError
+RejectBlocklistStore = _dreaming.RejectBlocklistStore
+has_managed_section = _dreaming.has_managed_section
+is_promoted = _dreaming.is_promoted
+merge_insights = _dreaming.merge_insights
+normalize_topic = _dreaming.normalize_topic
 
 def reject_blocklist(self) -> RejectBlocklistStore | None:
     """BIZ-78 — reject 차단 리스트 저장소. ``None`` 이면 비활성.
@@ -393,4 +399,3 @@ def _safe_sync_memory_items(self, label: str, fn, *args, **kwargs):
     except Exception:
         logger.exception("memory_items sync failed (%s); continuing", label)
         return None
-
