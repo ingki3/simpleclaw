@@ -31,7 +31,9 @@ def test_unified_turn_planner_defaults_to_off(tmp_path):
     }
 
 
-def test_unified_turn_planner_loads_shadow_contract(tmp_path):
+def test_unified_turn_planner_loads_shadow_contract_and_enforces_strict_policy(
+    tmp_path,
+):
     config = tmp_path / "config.yaml"
     config.write_text(
         """\
@@ -40,7 +42,7 @@ agent:
     mode: SHADOW
     sample_rate: 0.25
     max_tokens: 1024
-    structured_output: true
+    structured_output: false
     reasoning:
       enabled: false
       effort: HIGH
@@ -73,7 +75,7 @@ agent:
         "context_candidate_max_chars": 4000,
         "selected_context_max_turns": 2,
         "selected_context_max_chars": 1200,
-        "repair_attempts": 0,
+        "repair_attempts": 1,
         "telemetry": {
             "enabled": False,
             "include_raw_text": False,

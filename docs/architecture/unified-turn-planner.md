@@ -169,6 +169,14 @@ structured log의 `action_type=unified_turn_plan_shadow` 항목은 다음처럼 
 원문, selected turn content, standalone question, 검색 query, entity, tool argument,
 credential, user/chat ID는 event API에 필드가 없으며 기록하지 않는다. 실패도 예외
 본문 대신 `planner_unavailable` 같은 stable `error_code`만 기록한다.
+또한 shadow structured row는 `trace_id=""`를 명시해 ordinary turn의
+contextvar trace를 상속하지 않는다. 따라서 redacted aggregate를 같은 turn의 다른
+action log와 trace로 재결합할 수 없다.
+
+`structured_output`과 `repair_attempts`는 rollout 중 조절 가능한 knob가 아니라
+strict planner compatibility 계약이다. loader는 사용자 입력과 관계없이 각각
+`true`와 `1`로 fail-closed 정규화한다. provider schema와 deterministic
+repair/validated semantic retry를 완화하려면 별도 설계·검증이 필요하다.
 
 Acceptance report 생성 절차:
 
@@ -183,7 +191,8 @@ Acceptance report 생성 절차:
    대조한다. critical omission과 topic-shift 오사용은 gold 또는 승인된 label이
    있는 평가 집합으로 판정하며, unlabeled shadow telemetry만으로 추정하지 않는다.
 5. sample 100개 이상과 아래 Shadow-to-primary gate를 모두 확인하고, event/report
-   JSON에 승인된 canary 원문·credential marker가 0건인지 별도 leak scan한다.
+   JSON에 승인된 canary 원문·credential marker와 ordinary turn correlation
+   identifier가 각각 0건인지 별도 leak scan한다.
 
 ## 실행
 

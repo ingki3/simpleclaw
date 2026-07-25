@@ -32,8 +32,11 @@ from simpleclaw.agent.turn_planner_telemetry import (
     PlannerUsageCaptureRouter,
     aggregate_turn_planner_shadow_events,
     build_turn_planner_shadow_event,
+    emit_turn_planner_shadow_event,
 )
 from simpleclaw.llm.models import LLMRequest, LLMResponse
+from simpleclaw.logging.structured_logger import StructuredLogger
+from simpleclaw.logging.trace_context import trace_scope
 
 
 def _candidates(private_text: str = "PRIVATE_HISTORY") -> ContextCandidateSet:
@@ -194,6 +197,32 @@ def test_shadow_event_contains_only_redacted_structured_fields():
         "PRIVATE_MESSAGE",
     ):
         assert private not in serialized
+
+
+def test_structured_shadow_event_breaks_turn_trace_correlation(tmp_path):
+    event = build_turn_planner_shadow_event(
+        plan=_plan(),
+        gate_result=PlanGateResult(GateStatus.PASS, _plan()),
+        candidates=_candidates(),
+        latency_ms=100,
+    )
+    structured_logger = StructuredLogger(tmp_path / "logs")
+    synthetic_trace_id = "SYNTHETIC_TURN_TRACE_PRIVATE"
+
+    with trace_scope(synthetic_trace_id):
+        emit_turn_planner_shadow_event(
+            event,
+            structured_logger=structured_logger,
+        )
+
+    log_path = next((tmp_path / "logs").glob("execution_*.log"))
+    raw_row = log_path.read_text(encoding="utf-8").strip()
+    row = json.loads(raw_row)
+
+    assert row["action_type"] == "unified_turn_plan_shadow"
+    assert row["trace_id"] == ""
+    assert synthetic_trace_id not in raw_row
+    assert "PRIVATE_" not in raw_row
 
 
 def test_shadow_event_aggregate_reports_gate_latency_tokens_and_context_reduction():

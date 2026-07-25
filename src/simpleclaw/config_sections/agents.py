@@ -568,12 +568,9 @@ def _agent_with_defaults(agent: dict) -> dict:
                 unified_defaults["max_tokens"],
                 minimum=64,
             ),
-            "structured_output": bool(
-                unified_turn_planner.get(
-                    "structured_output",
-                    unified_defaults["structured_output"],
-                )
-            ),
+            # Unified planner는 strict provider schema가 필수다. config의 false를
+            # 읽어 동작하지 않는 knob로 노출하지 않고 fail-closed 고정한다.
+            "structured_output": unified_defaults["structured_output"],
             "reasoning": {
                 "enabled": bool(
                     unified_reasoning.get(
@@ -595,14 +592,9 @@ def _agent_with_defaults(agent: dict) -> dict:
             "context_candidate_max_chars": context_candidate_max_chars,
             "selected_context_max_turns": selected_context_max_turns,
             "selected_context_max_chars": selected_context_max_chars,
-            "repair_attempts": _coerce_int_config(
-                unified_turn_planner.get(
-                    "repair_attempts",
-                    unified_defaults["repair_attempts"],
-                ),
-                unified_defaults["repair_attempts"],
-                minimum=0,
-            ),
+            # deterministic repair + validated semantic retry 1회가 strict 계약이다.
+            # config의 0/다른 값은 무시하고 고정값으로 정규화한다.
+            "repair_attempts": unified_defaults["repair_attempts"],
             "telemetry": {
                 "enabled": bool(
                     unified_telemetry.get(

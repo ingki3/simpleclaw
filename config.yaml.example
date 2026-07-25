@@ -156,6 +156,7 @@ agent:
     mode: off                 # off | shadow | primary
     sample_rate: 0.0          # 0.0~1.0; default 0%로 외부 호출 없음
     max_tokens: 2048
+    # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
     structured_output: true
     reasoning:
       enabled: true
@@ -165,6 +166,7 @@ agent:
     context_candidate_max_chars: 6000
     selected_context_max_turns: 3
     selected_context_max_chars: 2400
+    # deterministic repair + validated semantic retry 1회 고정값. 다른 값은 무시한다.
     repair_attempts: 1
     telemetry:
       enabled: true

@@ -209,6 +209,9 @@ def emit_turn_planner_shadow_event(
             action_type=event.event,
             duration_ms=event.latency_ms,
             status="success" if event.ok else "error",
+            # Shadow aggregate는 ordinary turn trace와 의도적으로 분리한다.
+            # create_task가 contextvars를 복사하므로 생략하면 원대화 trace를 상속한다.
+            trace_id="",
             **payload,
         )
     except Exception:  # noqa: BLE001 — telemetry 실패는 응답/worker를 막지 않는다.
