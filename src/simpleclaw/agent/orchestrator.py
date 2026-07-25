@@ -80,12 +80,12 @@ from simpleclaw.agent.response_router import (
     classify_response_route,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
     ToolLoopState,
 )
-from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,
     ToolScope,
@@ -1510,7 +1510,7 @@ class AgentOrchestrator:
                 max_tokens=int(config.get("max_tokens", 2048)),
                 reasoning=config.get("reasoning"),
             )
-        except Exception as exc:  # noqa: BLE001 — primary는 의미 fallback 없이 종료.
+        except Exception as exc:
             logger.warning(
                 "Unified TurnPlanner primary failed (error_type=%s)",
                 type(exc).__name__,
