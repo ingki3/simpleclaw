@@ -68,10 +68,18 @@ llm:
 2. API 키가 설정된 backend만 활성화되며, route는 primary와 compatible retry를 사용합니다.
 3. attachment 요청은 `multimodal` route가 있으면 그 route로 갑니다.
 4. TurnAnalysis 등 역할별 호출부는 provider/model을 직접 선택하지 않고 route name만 전달합니다.
+5. Unified TurnPlanner rollout은 `off | shadow | canary | primary`를 사용합니다.
+   `canary`는 결정적 user/chat cohort 중 direct answer와 선언된 read-only/
+   no-side-effect 자산만 Unified plan으로 실행하며, Planner 실패·unknown asset·
+   mutation gate는 fail-closed합니다.
 
 ## Migration and operations
 
 - Legacy `llm.default`/`fallback`/`multimodal`과 `agent.turn_analysis` selector는 한 release 동안 warning과 함께 route로 정규화됩니다. 새 설정은 `llm.routes`와 explicit `transport`/`profile`을 사용하세요.
+- TurnAnalysis, Asset Selector, capability/response keyword router는 Unified
+  primary/eligible canary에서 사용하지 않는 rollback-window compatibility
+  경로입니다. 한 release 안정화 후 별도 cleanup에서 제거하며, rollback은
+  `agent.unified_turn_planner.mode: off`와 runtime restart로 수행합니다.
 - `llm.routes`, backend model, transport, profile, or credential 변경은 service restart가 필요합니다. LLM config hot reload는 지원하지 않습니다.
 - `gemini-openai`는 `openai_chat` transport를 공유하는 opt-in A/B profile입니다. 현재는 text/streaming/structured output만 선언하며, provider-neutral tool replay·reasoning·attachment/image는 preflight에서 차단합니다. credential-gated matrix의 endpoint 결과와 해당 변환 구현이 함께 검토되기 전에는 native Gemini route를 유지합니다.
 - OpenAI Responses API는 Chat Completions와 별도 transport입니다. `openai_responses`를 설정하면 구현 전에는 actionable 오류가 발생합니다.

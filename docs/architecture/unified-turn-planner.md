@@ -12,9 +12,9 @@ Unified TurnPlanner는 ordinary user turn마다 한 번 실행되어 다음 상�
 - current-fact 계획
 - execution mode와 허용 asset/tool
 
-이 문서는 production wiring이 아니라 fixed-gold evaluator의 책임과 acceptance
-기준을 정의한다. production orchestrator 변경, live shadow 활성화, live 대화
-수집은 BIZ-488 범위 밖이다.
+이 문서는 fixed-gold evaluator와 production rollout 계약을 함께 정의한다.
+live shadow/canary 활성화, live 대화 수집, runtime restart는 코드 merge와
+분리된 운영자 승인 사항이다.
 
 ## Outer turn과 inner loop
 
@@ -148,8 +148,19 @@ Report에는 다음 값을 기록하지 않는다.
 `agent.unified_turn_planner.mode=shadow`는 ordinary turn의 기존 응답 경로와
 독립된 sampled background task만 실행한다. default는 `off`,
 `sample_rate=0.0`이며 live shadow 활성화와 sample rate 변경은 별도 운영자
-승인을 받아야 한다. `primary`는 후속 production 전환을 위한 예약 값으로,
-현재 구현에서는 응답 route/tool/context를 바꾸지 않는다.
+승인을 받아야 한다. `canary`는 user/chat ID를 고정 hash bucket에 매핑하므로
+프로세스 재시작 후에도 같은 cohort가 같은 선택을 받는다. sampled cohort에서도
+direct answer 또는 catalog에 선언된 read-only/no-side-effect 자산만 Unified
+primary로 실행한다. fact/complex/clarify 등 Phase 2 비대상 plan은 legacy로
+돌아가며, PlannerUnavailable·unknown asset·mutation confirmation gate는
+semantic fallback 없이 fail-closed한다. `primary`는 PlanGate를 통과한 모든
+execution mode에 selected context와 exact allowlist를 적용한다.
+
+모든 canary 선택은 `action_type=unified_turn_planner_rollout` 구조화 event로
+기록한다. event에는 `rollout_mode`, `selected_path`, stable `reason`,
+`execution_mode`, `gate_status`, `raw_text_included=false`만 들어가며 사용자
+원문·ID·tool argument는 기록하지 않는다. `selected_path=legacy`와 reason별
+수를 집계하면 sampled-out/ineligible legacy 비율을 별도 추적할 수 있다.
 
 structured log의 `action_type=unified_turn_plan_shadow` 항목은 다음처럼 evaluator
 지표에 대응한다.
@@ -240,6 +251,34 @@ Shadow-to-primary gate:
 - planner p95가 현재 two-stage p95의 80% 이하
 - downstream 예상 history 문자 수 40% 이상 감소
 - mutation direct auto-execution 0건
+
+### Production cutover와 rollback
+
+| Phase | 설정/대상 | Gate |
+|---|---|---|
+| 0 — Off | `mode: off`, `sample_rate: 0.0` | 기존 production behavior |
+| 1 — Shadow 10% | `mode: shadow`, `sample_rate: 0.10` | 동일 catalog의 redacted sample 100개 이상 |
+| 2 — Canary 5% | `mode: canary`, `sample_rate: 0.05` | direct answer + declared read-only/no-side-effect asset만 |
+| 3 — Canary 25/50% | 승인된 config 확대 | fact/complex는 source/claim hardening과 별도 운영 승인 후 |
+| 4 — Primary | `mode: primary` | fixed-gold, live latency/token, 7일 또는 승인 sample window 통과 |
+| 5 — Cleanup | 별도 cleanup issue/commit | rollback release window 종료 후 legacy semantic selector 제거 |
+
+즉시 rollback은 다음 설정으로 수행한다.
+
+```yaml
+agent:
+  unified_turn_planner:
+    mode: off
+```
+
+`agent.unified_turn_planner`는 orchestrator 초기화 때 로드되므로 live config 변경
+후 runtime restart가 필요하다. config 수정·restart·canary 비율 확대는 운영자
+액션이며 PR merge가 자동으로 production mode를 바꾸지 않는다.
+
+TurnAnalysis, Asset Selector, capability/response keyword router와 두 legacy prompt는
+rollback을 위해 한 release 동안 유지한다. Unified primary/eligible canary에서는
+호출하지 않으며 신규 semantic cue를 추가하지 않는다. 실제 삭제와 config migration/
+deprecation warning은 Phase 5의 별도 cleanup issue에서 수행한다.
 
 Fixed replay의 latency는 report schema와 percentile 계산을 검증하는 표본이며 live
 성능 acceptance 증거가 아니다. 실제 전환 판단은 승인된 live benchmark와 shadow

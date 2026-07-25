@@ -1,5 +1,9 @@
 """Selector 응답을 안전한 top-k 후보 목록으로 정규화한다.
 
+BIZ-497 — Unified plan이 있는 primary/canary 실행에서는 selector를 호출하지
+않는다. 이 모듈은 rollback window의 legacy 경로만 지원하며 semantic 역할 제거는
+안정화 이후 별도 cleanup 이슈에서 수행한다.
+
 Function selector는 실행 여부를 결정하는 권한을 갖지 않는다. 이 모듈은 LLM의
 function-call 결과를 후보 축소용 자료구조로 바꾸고, recipe 과선택·낮은 confidence·
 function-call 누락·모호한 요청을 main LLM 판단으로 되돌리는 guardrail을 제공한다.

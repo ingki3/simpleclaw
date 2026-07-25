@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import inspect
 import json
 import logging
@@ -73,7 +74,7 @@ from simpleclaw.agent.file_mutation_tracker import (
 )
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.response_router import (
     ResponseRoute,
@@ -96,7 +97,7 @@ from simpleclaw.agent.tool_schemas import (
 )
 from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
 from simpleclaw.agent.turn_frame import build_turn_frame
-from simpleclaw.agent.turn_plan import ExecutionMode, UnifiedTurnPlan
+from simpleclaw.agent.turn_plan import AssetRef, ExecutionMode, UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.agent.turn_planner_telemetry import (
     PlannerUsageCaptureRouter,
@@ -186,6 +187,75 @@ if TYPE_CHECKING:
     from simpleclaw.logging.structured_logger import StructuredLogger
 
 logger = logging.getLogger(__name__)
+
+
+def _deterministic_rollout_sample(
+    *,
+    user_id: int,
+    chat_id: int,
+    sample_rate: float,
+) -> bool:
+    """user/chat cohort를 프로세스 재시작과 무관한 rollout bucket에 고정한다."""
+    bounded_rate = min(max(float(sample_rate), 0.0), 1.0)
+    if bounded_rate <= 0.0:
+        return False
+    if bounded_rate >= 1.0:
+        return True
+    cohort = f"unified-turn-planner-canary-v1:{user_id}:{chat_id}".encode()
+    bucket = int.from_bytes(
+        hashlib.blake2s(cohort, digest_size=8).digest(),
+        "big",
+    )
+    return bucket / float(1 << 64) < bounded_rate
+
+
+def _canary_read_only_eligible(
+    plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+) -> bool:
+    """Phase 2 canary에서 부작용 없는 direct/declared asset plan만 허용한다."""
+    execution = plan.execution
+    if execution.requires_confirmation:
+        return False
+    if execution.mode is ExecutionMode.DIRECT_ANSWER:
+        return (
+            execution.primary_asset is None
+            and not execution.allowed_assets
+            and not execution.allowed_tools
+            and not plan.fact_check.required
+        )
+    if execution.mode not in {
+        ExecutionMode.EXECUTE_ASSET,
+        ExecutionMode.RECIPE,
+    }:
+        return False
+
+    refs = set(execution.allowed_assets)
+    if execution.primary_asset is not None:
+        refs.add(execution.primary_asset)
+    refs.update(
+        AssetRef("native_tool", tool_name)
+        for tool_name in execution.allowed_tools
+        if tool_name != "execute_skill"
+    )
+    if not refs:
+        return False
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible
+    }
+    for ref in refs:
+        asset = runtime_assets.get((ref.asset_type, ref.name))
+        if (
+            asset is None
+            or not asset.declared
+            or not asset.read_only
+            or asset.side_effects
+            or asset.requires_confirmation
+        ):
+            return False
+    return True
 
 _ATTACHMENT_CONTEXT_HEADER = "Attachment context"
 
@@ -713,8 +783,8 @@ class AgentOrchestrator:
     ) -> ExecutionRouter:
         """PlanGate PASS 이후 사용할 mode→callback 경계를 만든다.
 
-        BIZ-494에서는 callback 경계만 준비한다. ``primary`` 응답 경로 연결과
-        각 callback의 context/allowlist/evidence adapter는 후속 이슈가 맡는다.
+        BIZ-495/BIZ-497부터 primary와 eligible canary가 이 경계를 사용하며,
+        각 callback은 같은 immutable plan의 context/allowlist를 유지한다.
         """
         return ExecutionRouter(callbacks)
 
@@ -745,8 +815,8 @@ class AgentOrchestrator:
         # BIZ-426 — 일반 turn 앞단 LLM turn analysis 설정. 기본 활성이며,
         # 비활성/분석 실패 시에는 기존 결정적(keyword) 경로가 fallback 이다.
         self._turn_analysis_config = agent_config.get("turn_analysis", {}) or {}
-        # BIZ-493/BIZ-495 — default off. shadow는 sampled background 관측만,
-        # primary는 selected context/allowlist 기반 응답 경로를 사용한다.
+        # BIZ-493/BIZ-497 — default off. shadow는 sampled background 관측만,
+        # canary는 결정적 read-only cohort, primary는 전체 검증 plan을 사용한다.
         self._unified_turn_planner_config = (
             agent_config.get("unified_turn_planner", {}) or {}
         )
@@ -1254,7 +1324,28 @@ class AgentOrchestrator:
                     text,
                     recent_rows=recent_rows,
                 )
-                if self._unified_turn_planner_config.get("mode") == "primary":
+                rollout_mode = str(
+                    self._unified_turn_planner_config.get("mode", "off")
+                )
+                canary_selected = (
+                    rollout_mode == "canary"
+                    and _deterministic_rollout_sample(
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        sample_rate=float(
+                            self._unified_turn_planner_config.get(
+                                "sample_rate",
+                                0.0,
+                            )
+                        ),
+                    )
+                )
+                if rollout_mode == "canary" and not canary_selected:
+                    self._record_unified_rollout_path(
+                        path="legacy",
+                        reason="canary_sampled_out",
+                    )
+                if rollout_mode == "primary" or canary_selected:
                     tool_loop_result = await self._run_unified_turn_planner_primary(
                         text,
                         recent_rows=recent_rows,
@@ -1262,23 +1353,25 @@ class AgentOrchestrator:
                         on_text_delta=on_text_delta,
                         on_progress=on_progress,
                         operator_tools=operator_tools,
+                        canary_read_only=canary_selected,
                     )
-                    response_text = tool_loop_result.text
-                    pending = self._pending_clarify.get(chat_id)
-                    if pending is not None:
-                        response_text = pending.format_user_visible()
+                    if tool_loop_result is not None:
+                        response_text = tool_loop_result.text
+                        pending = self._pending_clarify.get(chat_id)
+                        if pending is not None:
+                            response_text = pending.format_user_visible()
 
-                    msg_ids = self._save_turn(text, response_text)
-                    await self._capture_conversation_end_opportunity(
-                        text, response_text, list(msg_ids)
-                    )
-                    await self._capture_skill_learning_candidate(
-                        text, response_text, tool_loop_result, list(msg_ids)
-                    )
-                    await self._capture_recipe_learning_candidate(
-                        text, response_text, tool_loop_result, list(msg_ids)
-                    )
-                    return response_text
+                        msg_ids = self._save_turn(text, response_text)
+                        await self._capture_conversation_end_opportunity(
+                            text, response_text, list(msg_ids)
+                        )
+                        await self._capture_skill_learning_candidate(
+                            text, response_text, tool_loop_result, list(msg_ids)
+                        )
+                        await self._capture_recipe_learning_candidate(
+                            text, response_text, tool_loop_result, list(msg_ids)
+                        )
+                        return response_text
 
                 turn_analysis = None
                 turn_analysis_cfg = self._turn_analysis_config
@@ -1478,7 +1571,8 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None,
         on_progress: ProgressCallback | None,
         operator_tools: bool,
-    ) -> ToolLoopResult:
+        canary_read_only: bool = False,
+    ) -> ToolLoopResult | None:
         """Planner→PlanGate→ExecutionRouter를 ordinary primary turn에 한 번 적용한다.
 
         Planner와 context 선택은 controller loop 밖에서 고정한다. gate가 실행을
@@ -1515,6 +1609,10 @@ class AgentOrchestrator:
                 "Unified TurnPlanner primary failed (error_type=%s)",
                 type(exc).__name__,
             )
+            self._record_unified_rollout_path(
+                path="fail_closed",
+                reason="planner_unavailable",
+            )
             return ToolLoopResult(
                 _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
                 success=False,
@@ -1543,15 +1641,65 @@ class AgentOrchestrator:
                 gate_result.status.value,
                 [violation.code for violation in gate_result.violations],
             )
+            self._record_unified_rollout_path(
+                path="fail_closed",
+                reason=f"gate_{gate_result.status.value}",
+                execution_mode=plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
         if gate_result.status is GateStatus.CONFIRMATION_REQUIRED:
+            self._record_unified_rollout_path(
+                path="fail_closed",
+                reason="confirmation_required",
+                execution_mode=plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
             return ToolLoopResult(_UNIFIED_PLAN_CONFIRMATION_MESSAGE, success=False)
         if gate_result.status is GateStatus.CLARIFY:
+            if canary_read_only:
+                self._record_unified_rollout_path(
+                    path="legacy",
+                    reason="canary_ineligible_clarify",
+                    execution_mode=plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                return None
+            self._record_unified_rollout_path(
+                path="primary",
+                reason="clarify",
+                execution_mode=plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
             return ToolLoopResult(self._render_unified_clarification(plan))
 
         effective_plan = gate_result.effective_plan
         if effective_plan is None:
+            self._record_unified_rollout_path(
+                path="fail_closed",
+                reason="missing_effective_plan",
+                execution_mode=plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+        if canary_read_only and not _canary_read_only_eligible(
+            effective_plan,
+            catalog,
+        ):
+            self._record_unified_rollout_path(
+                path="legacy",
+                reason="canary_ineligible_plan",
+                execution_mode=effective_plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
+            return None
+
+        self._record_unified_rollout_path(
+            path="primary",
+            reason="canary_eligible" if canary_read_only else "primary_mode",
+            execution_mode=effective_plan.execution.mode.value,
+            gate_status=gate_result.status.value,
+        )
 
         routed_result: ToolLoopResult | None = None
 
@@ -1625,6 +1773,44 @@ class AgentOrchestrator:
         )
         response_text = await router.dispatch(effective_plan)
         return routed_result or ToolLoopResult(response_text)
+
+    def _record_unified_rollout_path(
+        self,
+        *,
+        path: str,
+        reason: str,
+        execution_mode: str = "unknown",
+        gate_status: str = "not_run",
+    ) -> None:
+        """원문 없이 primary/legacy/fail-closed 경로 선택을 구조화 기록한다."""
+        rollout_mode = str(self._unified_turn_planner_config.get("mode", "off"))
+        logger.info(
+            "Unified TurnPlanner rollout: mode=%s path=%s reason=%s "
+            "execution_mode=%s gate_status=%s",
+            rollout_mode,
+            path,
+            reason,
+            execution_mode,
+            gate_status,
+        )
+        telemetry = self._unified_turn_planner_config.get("telemetry", {})
+        if (
+            self._structured_logger is None
+            or not isinstance(telemetry, dict)
+            or not telemetry.get("enabled", True)
+        ):
+            return
+        self._structured_logger.log(
+            action_type="unified_turn_planner_rollout",
+            status="failure" if path == "fail_closed" else "success",
+            trace_id="",
+            rollout_mode=rollout_mode,
+            selected_path=path,
+            reason=reason,
+            execution_mode=execution_mode,
+            gate_status=gate_status,
+            raw_text_included=False,
+        )
 
     def _render_unified_clarification(self, plan: UnifiedTurnPlan) -> str:
         """Unified clarification plan을 기존 pending/button UX로 변환한다."""

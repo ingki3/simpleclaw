@@ -1,3 +1,5 @@
+# 상태: BIZ-497 rollback-window legacy 전용. Unified plan 실행에서는 호출하지
+# 않으며 안정화 후 별도 cleanup 이슈에서 제거한다.
 name: asset_selector
 version: 1
 description: Prompt pair for the conservative skill/recipe asset selector.
