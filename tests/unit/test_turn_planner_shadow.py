@@ -14,8 +14,8 @@ from simpleclaw.agent.context_candidates import (
     ContextCandidateSet,
     ContextTrust,
 )
-from simpleclaw.agent.plan_gate import GateStatus, PlanGateResult, PlanViolation
 from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.plan_gate import GateStatus, PlanGateResult, PlanViolation
 from simpleclaw.agent.turn_analysis import TurnAnalysis
 from simpleclaw.agent.turn_plan import (
     AssetRef,

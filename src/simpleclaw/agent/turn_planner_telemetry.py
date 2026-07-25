@@ -126,7 +126,7 @@ def build_turn_planner_shadow_event(
     plan: UnifiedTurnPlan,
     gate_result: PlanGateResult,
     candidates: ContextCandidateSet,
-    latency_ms: int | float,
+    latency_ms: float,
     input_tokens: int = 0,
     output_tokens: int = 0,
 ) -> TurnPlannerShadowEvent:
@@ -165,7 +165,7 @@ def build_turn_planner_shadow_failure_event(
     *,
     candidates: ContextCandidateSet,
     catalog_fingerprint: str,
-    latency_ms: int | float,
+    latency_ms: float,
     input_tokens: int = 0,
     output_tokens: int = 0,
     error_code: str = "planner_unavailable",

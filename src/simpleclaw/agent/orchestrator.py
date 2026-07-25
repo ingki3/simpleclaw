@@ -55,13 +55,13 @@ from simpleclaw.agent.commands import (
     try_cron_command,
     try_recipe_command,
 )
-from simpleclaw.agent.context_retrieval import (
-    ContextRetrievalConfig,
-    ContextRetrievalService,
-)
 from simpleclaw.agent.context_candidates import (
     ContextCandidateBuilder,
     ContextCandidateSet,
+)
+from simpleclaw.agent.context_retrieval import (
+    ContextRetrievalConfig,
+    ContextRetrievalService,
 )
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
@@ -1518,7 +1518,7 @@ class AgentOrchestrator:
                 input_tokens=usage_router.input_tokens,
                 output_tokens=usage_router.output_tokens,
             )
-        except Exception:  # noqa: BLE001 — shadow는 모든 실패를 응답과 격리한다.
+        except Exception:
             event = build_turn_planner_shadow_failure_event(
                 candidates=candidates,
                 catalog_fingerprint=catalog_fingerprint,
