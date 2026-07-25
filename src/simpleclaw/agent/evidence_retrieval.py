@@ -28,7 +28,7 @@ _BLOG_MARKERS = ("blog", "tistory", "blogspot", "medium.com")
 
 @dataclass(frozen=True)
 class EvidenceRetrievalPolicy:
-    """Planner-selected retrieval scope consumed by the complex controller."""
+    """복합 컨트롤러가 사용할 검색 범위를 Planner 선택 결과로 제한한다."""
 
     domain: str = ""
     search_query: str = ""
@@ -78,7 +78,7 @@ class EvidenceRetriever:
         *,
         max_sources_per_slot: int = 3,
     ) -> EvidenceRetriever:
-        """Build a retriever from explicit plan fields, never from text cues."""
+        """텍스트 단서를 재해석하지 않고 명시적 계획 필드로 검색기를 구성한다."""
 
         collectors = frozenset(
             name

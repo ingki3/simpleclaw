@@ -64,7 +64,7 @@ class ComplexFactWorkflow:
         *,
         on_progress: ProgressCallback | None = None,
     ) -> ComplexFactResult:
-        """Run one immutable planner result without invoking another planner."""
+        """Planner를 다시 호출하지 않고 단일 불변 계획으로 근거 슬롯을 실행한다."""
 
         plan = fact_plan_from_turn_plan(
             turn_plan,

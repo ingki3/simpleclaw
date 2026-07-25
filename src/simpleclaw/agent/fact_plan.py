@@ -12,7 +12,7 @@ def fact_plan_from_turn_plan(
     *,
     max_iterations: int,
 ) -> FactPlan:
-    """Adapt planner-owned required claims without reclassifying user text."""
+    """사용자 텍스트를 재분류하지 않고 Planner 소유 필수 주장을 변환한다."""
 
     if plan.execution.mode is not ExecutionMode.COMPLEX_FACT:
         raise ValueError("complex fact adapter requires complex_fact execution mode")

@@ -1578,13 +1578,13 @@ class AgentOrchestrator:
         async def run_planned_fact_check(
             callback_plan: UnifiedTurnPlan,
         ) -> str:
-            """Run bounded fact retrieval in the planned ToolLoop scope."""
+            """계획된 ToolLoop 범위 안에서 제한된 사실 검색을 실행한다."""
             return await run_planned_tool_loop(callback_plan)
 
         async def run_planned_complex_fact(
             callback_plan: UnifiedTurnPlan,
         ) -> str:
-            """Delegate slot ownership without rerunning planner/context selection."""
+            """Planner와 맥락 선택을 반복하지 않고 근거 슬롯 소유권을 위임한다."""
             nonlocal routed_result
             if not self._complex_fact_config.get(
                 "source_claim_hardening_ready",
@@ -1609,7 +1609,7 @@ class AgentOrchestrator:
         async def run_planned_recipe(
             callback_plan: UnifiedTurnPlan,
         ) -> str:
-            """Expose only the selected recipe; its asset owns any evidence lifecycle."""
+            """선택된 recipe만 노출하고 해당 asset이 근거 수명주기를 소유하게 한다."""
             return await run_planned_tool_loop(callback_plan)
 
         router = self._build_execution_router(
@@ -1833,7 +1833,7 @@ class AgentOrchestrator:
         *,
         on_progress: ProgressCallback | None = None,
     ):
-        """Execute a gated complex plan without semantic replanning."""
+        """의미 재계획 없이 gate를 통과한 복합 계획을 실행한다."""
         from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
         from simpleclaw.agent.fact_answer import compose_fact_answer
         from simpleclaw.agent.fact_workflow import (
