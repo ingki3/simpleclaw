@@ -47,6 +47,23 @@ def test_asset_inventory_native_tools_include_scope_risk_and_enabled():
     assert tools["asset_inventory"]["operator_gate_required"] is True
 
 
+def test_asset_inventory_payload_is_not_replaced_by_planner_compact_shape():
+    """Planner catalog 추가 후에도 operator inventory의 상세 payload를 유지한다."""
+    payload = json.loads(handle_asset_inventory({"type": "native_tools"}))
+    tool = payload["sections"]["native_tools"][0]
+
+    assert set(tool) == {
+        "aliases",
+        "enabled",
+        "name",
+        "operator_gate_required",
+        "risk",
+        "scope",
+    }
+    assert "type" not in tool
+    assert "description" not in tool
+
+
 def test_asset_inventory_skill_paths_show_runtime_source_dir_and_executable(tmp_path):
     """SimpleClaw runtime skill과 Hermes skill이 헷갈리지 않도록 source_dir/path를 명시한다."""
     local_dir = tmp_path / "runtime-skills"

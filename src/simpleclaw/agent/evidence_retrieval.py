@@ -9,9 +9,11 @@ workflow interface.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from simpleclaw.agent.builtin_tools import _fetch_search_result_body, handle_web_search
 from simpleclaw.agent.fact_types import EvidenceCoverage, EvidenceItem
+from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 
 _URL_RE = re.compile(r"https?://[^\s)\],]+")
 _TITLE_RE = re.compile(r"^\s*\d+\.\s*(?P<title>.+?)\s*$")
@@ -22,6 +24,15 @@ _PARTIAL_MARKERS = ("partial", "일부", "잠정")
 _OFFICIAL_MARKERS = ("official", "fifa", "kbo", "naver", "공식", "go.kr", "정부")
 _MAJOR_NEWS_MARKERS = ("news", "연합뉴스", "reuters", "apnews", "yonhap", "bbc", "cnn")
 _BLOG_MARKERS = ("blog", "tistory", "blogspot", "medium.com")
+
+
+@dataclass(frozen=True)
+class EvidenceRetrievalPolicy:
+    """복합 컨트롤러가 사용할 검색 범위를 Planner 선택 결과로 제한한다."""
+
+    domain: str = ""
+    search_query: str = ""
+    allowed_collectors: frozenset[str] = frozenset({"web_search"})
 
 
 def _infer_coverage(text: str) -> EvidenceCoverage:
@@ -51,12 +62,48 @@ def _infer_source_type(text: str, url: str) -> str:
 class EvidenceRetriever:
     """Small adapter around SimpleClaw's existing web_search handler."""
 
-    def __init__(self, *, max_sources_per_slot: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        max_sources_per_slot: int = 3,
+        policy: EvidenceRetrievalPolicy | None = None,
+    ) -> None:
         self.max_sources_per_slot = max_sources_per_slot
+        self.policy = policy or EvidenceRetrievalPolicy()
+
+    @classmethod
+    def from_turn_plan(
+        cls,
+        plan: UnifiedTurnPlan,
+        *,
+        max_sources_per_slot: int = 3,
+    ) -> EvidenceRetriever:
+        """텍스트 단서를 재해석하지 않고 명시적 계획 필드로 검색기를 구성한다."""
+
+        collectors = frozenset(
+            name
+            for name in plan.execution.allowed_tools
+            if name in {"web_search", "web_fetch"}
+        )
+        return cls(
+            max_sources_per_slot=max_sources_per_slot,
+            policy=EvidenceRetrievalPolicy(
+                domain=plan.fact_check.domain,
+                search_query=plan.fact_check.search_query,
+                allowed_collectors=collectors,
+            ),
+        )
 
     async def search_for_slot(self, slot_name: str, query: str) -> list[EvidenceItem]:
+        if "web_search" not in self.policy.allowed_collectors:
+            return []
+        scoped_query = " ".join(
+            part.strip()
+            for part in (self.policy.domain, self.policy.search_query, query)
+            if part.strip()
+        )
         raw = await handle_web_search(
-            {"query": query, "limit": self.max_sources_per_slot},
+            {"query": scoped_query, "limit": self.max_sources_per_slot},
             body_fetcher=_fetch_search_result_body,
         )
         return self._items_from_search_output(slot_name, raw)

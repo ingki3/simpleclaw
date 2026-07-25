@@ -1,5 +1,10 @@
 """LLM 기반 turn 분석(TurnAnalysis) 모듈.
 
+BIZ-497 — Unified TurnPlanner `primary`와 eligible `canary`에서는 호출하지 않는
+rollback-window compatibility 경로다. `off`/`shadow` 및 canary sampled-out/
+ineligible plan의 legacy 응답을 한 release 동안 보존한 뒤 별도 cleanup 이슈에서
+semantic 역할을 제거한다.
+
 BIZ-426 — 운영자는 follow-up/맥락/복잡도 판단을 키워드로 하는 방식을 원하지
 않는다. 이 모듈은 일반 사용자 turn 앞단에서 LLM 한 번의 structured JSON
 호출로 다음을 함께 판단한다:

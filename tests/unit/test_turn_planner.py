@@ -1,0 +1,349 @@
+"""BIZ-491 — Unified TurnPlanner prompt 조립과 structured 요청 테스트."""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
+
+from simpleclaw.agent.context_candidates import (
+    ContextCandidate,
+    ContextCandidateSet,
+    ContextTrust,
+)
+from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
+from simpleclaw.agent.system_prompts import load_system_prompt
+from simpleclaw.agent.turn_plan import (
+    UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
+    ExecutionMode,
+)
+from simpleclaw.agent.turn_planner import (
+    PlannerUnavailable,
+    build_turn_planner_user_prompt,
+    plan_turn_with_llm,
+)
+from simpleclaw.llm.models import LLMResponse
+
+
+def _response_payload() -> str:
+    """structured planner 성공 응답 fixture를 JSON 문자열로 만든다."""
+    return json.dumps(
+        {
+            "context": {
+                "relation": "same_thread",
+                "use_prior_context": True,
+                "selected_turn_ids": ["msg:101"],
+                "standalone_question": "SK와 NVIDIA의 오늘 협업 발표를 확인해줘",
+                "unresolved_references": [],
+                "ignored_context_reason": "",
+            },
+            "clarification": {
+                "required": False,
+                "question": "",
+                "options": [],
+                "reason": "",
+            },
+            "domains": ["news"],
+            "intents": ["realtime_lookup"],
+            "fact_check": {
+                "required": True,
+                "owner": "planner",
+                "domain": "news",
+                "entities": ["SK", "NVIDIA"],
+                "search_query": "SK NVIDIA 오늘 협업 발표",
+                "required_claims": ["오늘 발표 내용"],
+                "freshness_required": True,
+                "reason": "현재 사실",
+            },
+            "execution": {
+                "mode": "fact_check",
+                "primary_asset": {
+                    "asset_type": "skill",
+                    "asset_name": "realtime-lookup-skill",
+                },
+                "allowed_assets": [
+                    {
+                        "asset_type": "skill",
+                        "asset_name": "realtime-lookup-skill",
+                    }
+                ],
+                "allowed_tools": ["execute_skill"],
+                "requires_confirmation": False,
+                "reason": "최신 사실 조회",
+            },
+            "confidence": 0.93,
+            "decision_summary": "직전 사용자 질문만 사용해 최신 발표를 확인한다.",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _candidates() -> ContextCandidateSet:
+    """assistant evidence 차단 표식을 포함한 문맥 후보 fixture를 만든다."""
+    timestamp = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+    candidates = (
+        ContextCandidate(
+            turn_id="msg:101",
+            role="user",
+            timestamp=timestamp,
+            content="SK와 엔비디아 협업 발표를 정리해줘",
+            trust=ContextTrust.USER_INPUT,
+        ),
+        ContextCandidate(
+            turn_id="msg:102",
+            role="assistant",
+            timestamp=timestamp,
+            content="최근 발표는 없다고 보입니다.",
+            trust=ContextTrust.ASSISTANT_CONTEXT_ONLY,
+        ),
+    )
+    return ContextCandidateSet(
+        candidates=candidates,
+        total_chars=sum(len(item.content) for item in candidates),
+        truncated=False,
+    )
+
+
+def _catalog(
+    *,
+    side_effecting_skill: bool = False,
+    skill_runtime_visible: bool = True,
+) -> PlannerCatalog:
+    """성공·side-effect·internal 경계를 표현하는 compact catalog를 만든다."""
+    skill = PlannerAsset(
+        asset_type="skill",
+        name="realtime-lookup-skill",
+        description="현재 사실 조회",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=not side_effecting_skill,
+        side_effects=side_effecting_skill,
+        freshness_sensitive=True,
+        direct_answer=True,
+        requires_confirmation=side_effecting_skill,
+        output_contract=None,
+        declared=True,
+        runtime_visible=skill_runtime_visible,
+    )
+    execute_skill = PlannerAsset(
+        asset_type="native_tool",
+        name="execute_skill",
+        description="선택 skill 실행",
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+    )
+    return PlannerCatalog(
+        assets=(execute_skill, skill),
+        fingerprint="fingerprint-123",
+    )
+
+
+def _response_data() -> dict[str, object]:
+    """성공 응답 JSON을 trust-boundary 변형 가능한 dict로 반환한다."""
+    data = json.loads(_response_payload())
+    assert isinstance(data, dict)
+    return data
+
+
+def test_prompt_yaml_contains_required_semantic_guards() -> None:
+    """YAML SoT가 문맥·evidence·single mode·catalog·CoT 금지 지시를 포함한다."""
+    prompt = load_system_prompt("unified_turn_planner", refresh=True).system_prompt
+
+    assert "selected_turn_ids" in prompt
+    assert "assistant history" in prompt
+    assert "not factual evidence" in prompt
+    assert "execution.mode" in prompt
+    assert "exact names from the capability catalog" in prompt
+    assert "chain-of-thought" in prompt
+    assert "decision_summary" in prompt
+
+
+def test_user_prompt_assembles_current_context_and_catalog() -> None:
+    """현재 질문·ID 후보·catalog fingerprint를 하나의 deterministic JSON으로 조립한다."""
+    catalog = PlannerCatalog(assets=(), fingerprint="fingerprint-123")
+
+    rendered = build_turn_planner_user_prompt(
+        text="오늘 있었던 발표야. 체크해봐",
+        candidates=_candidates(),
+        catalog=catalog,
+    )
+    data = json.loads(rendered)
+
+    assert data["current_user_message"] == "오늘 있었던 발표야. 체크해봐"
+    assert data["context_candidates"][0]["id"] == "msg:101"
+    assert data["context_candidates"][1]["evidence_eligible"] is False
+    assert data["capability_catalog"] == []
+    assert data["catalog_fingerprint"] == "fingerprint-123"
+
+
+@pytest.mark.asyncio
+async def test_planner_sends_one_structured_request() -> None:
+    """성공 경로는 context/fact/execution을 한 번의 schema 요청으로 반환한다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+    catalog = _catalog()
+
+    plan = await plan_turn_with_llm(
+        "오늘 있었던 발표야. 체크해봐",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+    )
+
+    assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    assert plan.context.selected_turn_ids == ("msg:101",)
+    assert plan.catalog_fingerprint == "fingerprint-123"
+    router.send.assert_awaited_once()
+    request = router.send.await_args.args[0]
+    assert request.route_name == "turn_analysis"
+    assert request.response_mime_type == "application/json"
+    assert request.response_schema is UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+    assert request.require_structured_output is True
+    assert request.tools is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_hint_is_forwarded_only_when_enabled() -> None:
+    """provider-neutral reasoning 설정은 명시적으로 켠 경우에만 요청에 포함한다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+    catalog = _catalog()
+
+    await plan_turn_with_llm(
+        "질문",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+        reasoning={"enabled": True, "effort": "medium"},
+    )
+
+    request = router.send.await_args.args[0]
+    assert request.reasoning == {"enabled": True, "effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_empty_boundaries_reject_hallucinated_ids_assets_and_tools(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """빈 후보/catalog에서는 모델이 만든 ID·asset·tool을 모두 fail-closed한다."""
+    data = _response_data()
+    data["context"]["selected_turn_ids"] = ["invented-turn-id"]
+    data["execution"] = {
+        "mode": "execute_asset",
+        "primary_asset": {
+            "asset_type": "skill",
+            "asset_name": "invented-dangerous-skill",
+        },
+        "allowed_assets": [
+            {
+                "asset_type": "skill",
+                "asset_name": "invented-dangerous-skill",
+            }
+        ],
+        "allowed_tools": ["invented_tool"],
+        "requires_confirmation": False,
+        "reason": "hallucinated scope",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="simpleclaw.agent.turn_planner"),
+        pytest.raises(PlannerUnavailable),
+    ):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=ContextCandidateSet(
+                candidates=(),
+                total_chars=0,
+                truncated=False,
+            ),
+            catalog=PlannerCatalog(assets=(), fingerprint="empty"),
+            router=router,
+        )
+
+    assert "boundary_code=unknown_selected_turn_id" in caplog.text
+    assert "invented-turn-id" not in caplog.text
+    assert "invented-dangerous-skill" not in caplog.text
+    assert "invented_tool" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_primary_asset_must_also_be_in_allowed_assets() -> None:
+    """등록된 primary라도 allowed_assets에 없으면 allowlist 확장으로 거부한다."""
+    data = _response_data()
+    data["execution"]["allowed_assets"] = []
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_unknown_allowed_tool_is_rejected() -> None:
+    """runtime-visible native tool catalog에 없는 이름은 실행 scope에 들어오지 못한다."""
+    data = _response_data()
+    data["execution"]["allowed_tools"] = ["invented_tool"]
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_internal_asset_is_rejected() -> None:
+    """catalog snapshot에 있어도 runtime_visible=false인 자산은 선택할 수 없다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(skill_runtime_visible=False),
+            router=router,
+        )
+
+
+@pytest.mark.asyncio
+async def test_side_effecting_asset_requires_confirmation() -> None:
+    """side-effect 또는 catalog confirmation gate가 있으면 plan도 확인을 요구해야 한다."""
+    router = AsyncMock()
+    router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(side_effecting_skill=True),
+            router=router,
+        )

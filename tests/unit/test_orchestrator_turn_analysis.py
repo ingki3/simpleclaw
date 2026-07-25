@@ -7,12 +7,14 @@ domains/route 를 결정하고, 분석 비활성·실패 시에만 기존 결정
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.response_router import ResponseRoute
+from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.agent.turn_analysis import TurnAnalysis
 from simpleclaw.llm.models import LLMResponse, MultimodalAttachment
 from simpleclaw.memory.models import ConversationMessage, MessageRole
@@ -413,6 +415,66 @@ async def test_disabled_turn_analysis_skips_llm_analyzer(config_file, monkeypatc
     result = await orch.process_message("안녕?", user_id=1, chat_id=1)
 
     assert result == "답변"
+    analyzer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unified_turn_planner_default_off_does_not_schedule_shadow(
+    config_file, monkeypatch
+):
+    """BIZ-493 — 설정 미지정 default off는 기존 TurnAnalysis만 실행한다."""
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(original_text="안녕", normalized_question="안녕")
+    )
+    shadow = AsyncMock()
+    execution_router_builder = MagicMock(
+        side_effect=AssertionError("execution router must remain disconnected")
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    monkeypatch.setattr(orch, "_run_unified_turn_planner_shadow", shadow)
+    monkeypatch.setattr(
+        orch,
+        "_build_execution_router",
+        execution_router_builder,
+    )
+    orch._tool_loop = AsyncMock(return_value="안녕하세요")
+
+    result = await orch.process_message("안녕", user_id=1, chat_id=1)
+    await asyncio.sleep(0)
+
+    assert result == "안녕하세요"
+    analyzer.assert_awaited_once()
+    shadow.assert_not_awaited()
+    execution_router_builder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unified_turn_planner_primary_skips_legacy_turn_analysis(
+    config_file, monkeypatch
+):
+    """BIZ-495 — primary feature flag는 기존 TurnAnalysis semantic path를 우회한다."""
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "turn_analysis:\n    enabled: true",
+            "unified_turn_planner:\n    mode: primary\n  turn_analysis:\n    enabled: true",
+        ),
+        encoding="utf-8",
+    )
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(side_effect=AssertionError("legacy analyzer called"))
+    primary = AsyncMock(return_value=ToolLoopResult("primary 답변"))
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm", analyzer
+    )
+    monkeypatch.setattr(orch, "_run_unified_turn_planner_primary", primary)
+
+    result = await orch.process_message("안녕", user_id=1, chat_id=1)
+
+    assert result == "primary 답변"
+    primary.assert_awaited_once()
     analyzer.assert_not_awaited()
 
 

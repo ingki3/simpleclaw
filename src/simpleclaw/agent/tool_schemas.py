@@ -1286,3 +1286,18 @@ def build_tool_definitions(
         )
 
     return tools
+
+
+def filter_tool_definitions(
+    tools: Iterable[ToolDefinition],
+    *,
+    allowed_names: Iterable[str],
+) -> list[ToolDefinition]:
+    """Planner가 허용한 exact function 이름만 기존 registry 순서로 남긴다.
+
+    알려지지 않은 이름을 새 정의로 합성하지 않는다. PlanGate가 catalog drift를
+    먼저 거부하지만, 이 helper도 현재 runtime에 실제 존재하는 정의만 반환해
+    downstream LLM schema가 planner allowlist보다 넓어지지 않게 한다.
+    """
+    allowed = frozenset(str(name).strip() for name in allowed_names)
+    return [tool for tool in tools if tool.name in allowed]

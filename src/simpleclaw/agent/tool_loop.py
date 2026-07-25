@@ -32,6 +32,7 @@ from simpleclaw.agent.progress import (
     ProgressEvent,
     emit_progress_event,
 )
+from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.security.sanitize import sanitize_tool_output
@@ -166,6 +167,8 @@ class ToolLoopState:
     system_prompt: str
     tools: list[dict[str, Any]]
     system_blocks: list[SystemBlock]
+    execution_scope: ToolExecutionScope | None = None
+    selected_turn_ids: tuple[str, ...] = ()
     live_evidence_seen: bool = False
     live_fact_requires_evidence: bool = False
     previous_mutation_snapshot: dict[str, Any] | None = None
@@ -232,7 +235,7 @@ def _legacy_observation_text(tool_call: ToolCall, sanitized_result: str) -> str:
 
 def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
     """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
-    if tool_call.name == "web_fetch":
+    if tool_call.name in {"web_fetch", "web_search"}:
         return True
     if tool_call.name == "execute_skill":
         skill_name = str(tool_call.arguments.get("skill_name") or "")
@@ -491,6 +494,11 @@ class ToolLoopRunner:
 
     async def run(self, state: ToolLoopState) -> ToolLoopResult:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
+        logger.info(
+            "Tool loop context fixed: selected_turns=%d planned_scope=%s",
+            len(state.selected_turn_ids),
+            state.execution_scope is not None,
+        )
         invoked_tool_sequence: list[str] = []
         tool_results_for_empty_final: list[tuple[str, str]] = []
         action_ledger = ActionResultLedger()
@@ -643,6 +651,11 @@ class ToolLoopRunner:
                         dispatch_kwargs["operator_tools"] = state.operator_tools
                     if "allow_cron_mutation" in dispatch_params:
                         dispatch_kwargs["allow_cron_mutation"] = state.allow_cron_mutation
+                    if (
+                        state.execution_scope is not None
+                        and "execution_scope" in dispatch_params
+                    ):
+                        dispatch_kwargs["execution_scope"] = state.execution_scope
                     if dispatch_kwargs:
                         result = await dispatch(tc, **dispatch_kwargs)
                     else:

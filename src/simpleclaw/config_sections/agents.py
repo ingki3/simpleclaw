@@ -5,6 +5,8 @@ Agent runtime 주변 설정을 한 모듈에 모아 facade에서 재-export한�
 
 from __future__ import annotations
 
+import math
+from enum import Enum
 from pathlib import Path
 
 import yaml
@@ -103,6 +105,7 @@ _AGENT_DEFAULTS: dict = {
     },
     "complex_fact_workflow": {
         "enabled": False,
+        "source_claim_hardening_ready": False,
         "route_threshold": 3,
         "max_iterations": 6,
         "max_sources_per_slot": 3,
@@ -147,10 +150,41 @@ _AGENT_DEFAULTS: dict = {
         },
         "fallback_mode": "conservative_original",
     },
+    # BIZ-493/BIZ-497: default off, shadow는 관측 전용, canary는 결정적
+    # read-only cohort, primary는 검증된 context/tool scope 전체를 연결한다.
+    "unified_turn_planner": {
+        "mode": "off",
+        "sample_rate": 0.0,
+        "max_tokens": 2048,
+        "structured_output": True,
+        "reasoning": {
+            "enabled": True,
+            "effort": "medium",
+            "budget_tokens": 512,
+        },
+        "context_candidate_limit": 8,
+        "context_candidate_max_chars": 6000,
+        "selected_context_max_turns": 3,
+        "selected_context_max_chars": 2400,
+        "repair_attempts": 1,
+        "telemetry": {
+            "enabled": True,
+            "include_raw_text": False,
+        },
+    },
 }
 
 # BIZ-453 — reasoning.effort 허용값. 밖의 값은 기본(medium)으로 정규화한다.
 _REASONING_EFFORTS = {"low", "medium", "high"}
+
+
+class UnifiedTurnPlannerMode(str, Enum):
+    """Unified TurnPlanner의 단계적 rollout 모드."""
+
+    OFF = "off"
+    SHADOW = "shadow"
+    CANARY = "canary"
+    PRIMARY = "primary"
 
 
 def _coerce_optional_name(raw: object) -> str | None:
@@ -256,6 +290,83 @@ def _agent_with_defaults(agent: dict) -> dict:
     ).strip().lower()
     if reasoning_effort not in _REASONING_EFFORTS:
         reasoning_effort = reasoning_defaults["effort"]
+
+    unified_turn_planner = agent.get("unified_turn_planner", {})
+    if not isinstance(unified_turn_planner, dict):
+        unified_turn_planner = {}
+    unified_defaults = _AGENT_DEFAULTS["unified_turn_planner"]
+    raw_mode = str(
+        unified_turn_planner.get("mode", unified_defaults["mode"])
+    ).strip().lower()
+    try:
+        unified_mode = UnifiedTurnPlannerMode(raw_mode)
+    except ValueError:
+        unified_mode = UnifiedTurnPlannerMode.OFF
+    unified_reasoning = unified_turn_planner.get("reasoning", {})
+    if not isinstance(unified_reasoning, dict):
+        unified_reasoning = {}
+    unified_reasoning_defaults = unified_defaults["reasoning"]
+    unified_reasoning_effort = str(
+        unified_reasoning.get(
+            "effort",
+            unified_reasoning_defaults["effort"],
+        )
+    ).strip().lower()
+    if unified_reasoning_effort not in _REASONING_EFFORTS:
+        unified_reasoning_effort = unified_reasoning_defaults["effort"]
+    unified_telemetry = unified_turn_planner.get("telemetry", {})
+    if not isinstance(unified_telemetry, dict):
+        unified_telemetry = {}
+    unified_telemetry_defaults = unified_defaults["telemetry"]
+
+    try:
+        sample_rate = float(
+            unified_turn_planner.get("sample_rate", unified_defaults["sample_rate"])
+        )
+    except (TypeError, ValueError):
+        sample_rate = unified_defaults["sample_rate"]
+    if not math.isfinite(sample_rate):
+        sample_rate = unified_defaults["sample_rate"]
+    sample_rate = min(max(sample_rate, 0.0), 1.0)
+
+    context_candidate_limit = _coerce_int_config(
+        unified_turn_planner.get(
+            "context_candidate_limit",
+            unified_defaults["context_candidate_limit"],
+        ),
+        unified_defaults["context_candidate_limit"],
+        minimum=1,
+    )
+    context_candidate_max_chars = _coerce_int_config(
+        unified_turn_planner.get(
+            "context_candidate_max_chars",
+            unified_defaults["context_candidate_max_chars"],
+        ),
+        unified_defaults["context_candidate_max_chars"],
+        minimum=1,
+    )
+    selected_context_max_turns = min(
+        context_candidate_limit,
+        _coerce_int_config(
+            unified_turn_planner.get(
+                "selected_context_max_turns",
+                unified_defaults["selected_context_max_turns"],
+            ),
+            unified_defaults["selected_context_max_turns"],
+            minimum=1,
+        ),
+    )
+    selected_context_max_chars = min(
+        context_candidate_max_chars,
+        _coerce_int_config(
+            unified_turn_planner.get(
+                "selected_context_max_chars",
+                unified_defaults["selected_context_max_chars"],
+            ),
+            unified_defaults["selected_context_max_chars"],
+            minimum=1,
+        ),
+    )
     planner_backend = str(
         complex_fact.get("planner_backend", complex_defaults["planner_backend"])
     )
@@ -360,6 +471,12 @@ def _agent_with_defaults(agent: dict) -> dict:
         },
         "complex_fact_workflow": {
             "enabled": bool(complex_fact.get("enabled", complex_defaults["enabled"])),
+            "source_claim_hardening_ready": bool(
+                complex_fact.get(
+                    "source_claim_hardening_ready",
+                    complex_defaults["source_claim_hardening_ready"],
+                )
+            ),
             "route_threshold": _coerce_int_config(
                 complex_fact.get(
                     "route_threshold",
@@ -447,6 +564,55 @@ def _agent_with_defaults(agent: dict) -> dict:
                     "fallback_mode", turn_analysis_defaults["fallback_mode"]
                 )
             ),
+        },
+        "unified_turn_planner": {
+            "mode": unified_mode.value,
+            "sample_rate": sample_rate,
+            "max_tokens": _coerce_int_config(
+                unified_turn_planner.get(
+                    "max_tokens",
+                    unified_defaults["max_tokens"],
+                ),
+                unified_defaults["max_tokens"],
+                minimum=64,
+            ),
+            # Unified planner는 strict provider schema가 필수다. config의 false를
+            # 읽어 동작하지 않는 knob로 노출하지 않고 fail-closed 고정한다.
+            "structured_output": unified_defaults["structured_output"],
+            "reasoning": {
+                "enabled": bool(
+                    unified_reasoning.get(
+                        "enabled",
+                        unified_reasoning_defaults["enabled"],
+                    )
+                ),
+                "effort": unified_reasoning_effort,
+                "budget_tokens": _coerce_int_config(
+                    unified_reasoning.get(
+                        "budget_tokens",
+                        unified_reasoning_defaults["budget_tokens"],
+                    ),
+                    unified_reasoning_defaults["budget_tokens"],
+                    minimum=0,
+                ),
+            },
+            "context_candidate_limit": context_candidate_limit,
+            "context_candidate_max_chars": context_candidate_max_chars,
+            "selected_context_max_turns": selected_context_max_turns,
+            "selected_context_max_chars": selected_context_max_chars,
+            # deterministic repair + validated semantic retry 1회가 strict 계약이다.
+            # config의 0/다른 값은 무시하고 고정값으로 정규화한다.
+            "repair_attempts": unified_defaults["repair_attempts"],
+            "telemetry": {
+                "enabled": bool(
+                    unified_telemetry.get(
+                        "enabled",
+                        unified_telemetry_defaults["enabled"],
+                    )
+                ),
+                # 원문 telemetry는 rollout 단계와 무관하게 fail-closed한다.
+                "include_raw_text": False,
+            },
         },
     }
 

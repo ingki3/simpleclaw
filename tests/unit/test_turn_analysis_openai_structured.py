@@ -18,7 +18,20 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
+from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
+
+
+def _contains_key(node: object, key: str) -> bool:
+    """schema tree 어디든 지정 key가 남아 있는지 재귀 확인한다."""
+    if isinstance(node, dict):
+        if key in node:
+            return True
+        return any(_contains_key(value, key) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_key(item, key) for item in node)
+    return False
 
 
 @pytest.mark.asyncio
@@ -129,3 +142,58 @@ async def test_openai_provider_preserves_length_finish_reason(monkeypatch, caplo
     assert "finish_reason=length" in joined
     assert "user secret question" not in joined
     assert "cut mid strin" not in joined
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_accepts_unified_turn_plan_schema(monkeypatch):
+    """Unified schema의 Gemini/OpenAI dialect가 같은 필드 계약을 보존한다."""
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[
+                MagicMock(
+                    message=MagicMock(content="{}", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=MagicMock(prompt_tokens=10, completion_tokens=2),
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+    provider = OpenAIProvider(
+        model="deepseek/deepseek-v4-pro",
+        api_key="test-key",
+        name="openrouter_deepseek_v4_pro",
+    )
+
+    await provider.send(
+        system_prompt="plan",
+        user_message="hello",
+        response_mime_type="application/json",
+        response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
+        require_structured_output=True,
+    )
+
+    response_format = create.call_args.kwargs["response_format"]
+    schema = response_format["json_schema"]["schema"]
+    assert response_format["type"] == "json_schema"
+    assert schema["additionalProperties"] is False
+    assert "propertyOrdering" not in schema
+    assert "propertyOrdering" in UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+    assert schema["properties"]["execution"]["additionalProperties"] is False
+
+    gemini_schema = get_provider_profile("gemini").adapt_schema(
+        UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+    )
+    assert not _contains_key(gemini_schema, "additionalProperties")
+    assert not _contains_key(schema, "propertyOrdering")
+    assert gemini_schema["propertyOrdering"] == schema["required"]
+    assert set(gemini_schema["properties"]) == set(schema["properties"])
+    assert (
+        gemini_schema["properties"]["execution"]["required"]
+        == schema["properties"]["execution"]["required"]
+    )

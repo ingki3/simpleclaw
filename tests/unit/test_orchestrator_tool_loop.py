@@ -88,6 +88,8 @@ def test_tool_loop_runner_contract_is_importable():
         "system_prompt",
         "tools",
         "system_blocks",
+        "execution_scope",
+        "selected_turn_ids",
     }
     assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
 

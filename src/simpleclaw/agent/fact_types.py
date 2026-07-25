@@ -70,6 +70,7 @@ class FactPlan:
     requires_calculation: bool = False
     max_iterations: int = 4
     answer_contract: str = ""
+    question: str = ""
 
     def missing_required_slots(self) -> list[EvidenceSlot]:
         return [

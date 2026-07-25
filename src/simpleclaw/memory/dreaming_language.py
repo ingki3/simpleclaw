@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 from simpleclaw.memory import dreaming as _dreaming
-from simpleclaw.memory.dreaming import *
 
 AUTO_TRIGGER_MODE_DOWNWEIGHT = _dreaming.AUTO_TRIGGER_MODE_DOWNWEIGHT
 AUTO_TRIGGER_MODE_EXCLUDE = _dreaming.AUTO_TRIGGER_MODE_EXCLUDE
@@ -24,6 +23,10 @@ shutil = _dreaming.shutil
 time = _dreaming.time
 datetime = _dreaming.datetime
 timedelta = _dreaming.timedelta
+filter_active_projects = _dreaming.filter_active_projects
+filter_meta_items = _dreaming.filter_meta_items
+filter_text_to_primary = _dreaming.filter_text_to_primary
+language_instruction_block = _dreaming.language_instruction_block
 
 async def summarize(self, messages: list) -> dict:
     """LLM을 사용하여 대화 요약을 생성한다 — BIZ-299 부터는 파일별 다회 호출 오케스트레이터.
@@ -427,4 +430,3 @@ def _summarize_fallback(self, messages: list) -> str:
         lines.append(f"- {topic}...")
 
     return "\n".join(lines)
-

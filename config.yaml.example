@@ -149,6 +149,30 @@ agent:
     retry_model: null
     retry_backend: null
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
+  # BIZ-493/BIZ-497 — Unified TurnPlanner rollout. `shadow`는 현재 응답 경로와
+  # 독립된 sampled 관측만 수행한다. `canary`는 결정적 user/chat cohort에서
+  # direct answer와 선언된 read-only/no-side-effect 자산만 primary로 실행한다.
+  # `primary`는 모든 검증된 plan을 응답 경로에 적용하므로 canary/primary의
+  # live 활성화와 비율 확대에는 운영자 승인 및 runtime restart가 필요하다.
+  unified_turn_planner:
+    mode: off                 # off | shadow | canary | primary
+    sample_rate: 0.0          # shadow/canary 0.0~1.0; off default는 외부 호출 없음
+    max_tokens: 2048
+    # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
+    structured_output: true
+    reasoning:
+      enabled: true
+      effort: medium
+      budget_tokens: 512
+    context_candidate_limit: 8
+    context_candidate_max_chars: 6000
+    selected_context_max_turns: 3
+    selected_context_max_chars: 2400
+    # deterministic repair + validated semantic retry 1회 고정값. 다른 값은 무시한다.
+    repair_attempts: 1
+    telemetry:
+      enabled: true
+      include_raw_text: false  # true로 설정해도 loader가 false로 fail-closed
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``
