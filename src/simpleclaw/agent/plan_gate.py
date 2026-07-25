@@ -108,7 +108,7 @@ class PlanGate:
             return PlanGateResult(
                 status=GateStatus.REJECT,
                 effective_plan=None,
-                violations=tuple((*violations, *rejected)),
+                violations=(*violations, *rejected),
             )
         if violations:
             return PlanGateResult(

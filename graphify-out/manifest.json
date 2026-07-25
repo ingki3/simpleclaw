@@ -1,7 +1,7 @@
 {
   "tool": "graphifyy",
-  "generated_at": "2026-07-25T15:28:52.164507+00:00",
-  "git_commit": "10b6fef60bccf41ccbe7e3cf87242210f59d62b7",
+  "generated_at": "2026-07-25T15:32:26.734579+00:00",
+  "git_commit": "c46ee03f632f609b5707216d69afadb87b00bce8",
   "target": ".",
   "mode": "code-only",
   "cluster": "--no-label --no-viz",
