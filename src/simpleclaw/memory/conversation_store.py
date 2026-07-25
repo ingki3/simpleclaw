@@ -258,6 +258,8 @@ class ConversationStore:
 
         ``get_recent`` 와 동일하지만 message rowid 를 함께 노출한다 — 드리밍이
         인사이트 메타에 ``source_msg_ids`` 로 적재해야 하므로 BIZ-77 에서 추가됨.
+        기본 조회는 soft-delete 된 메시지를 제외한다. 반환된 rowid 는
+        planner context ID ``msg:<rowid>`` 의 안정적인 원본으로 사용할 수 있다.
         """
         visibility_clause = "" if include_deleted else "WHERE deleted_at IS NULL "
         with self._connect() as conn:
