@@ -10,12 +10,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
+from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.daemon.models import CronFailureKind
 from simpleclaw.llm.models import LLMResponse, MultimodalAttachment, ToolCall
 
 
@@ -92,6 +97,37 @@ def test_tool_loop_runner_contract_is_importable():
         "selected_turn_ids",
     }
     assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
+
+
+@pytest.mark.asyncio
+async def test_process_cron_action_preserves_structured_evidence_failure(
+    config_file, monkeypatch,
+):
+    """C1: cron structured API는 guard failure와 evidence 상태를 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    loop_result = ToolLoopResult(
+        text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+        success=False,
+        failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE.value,
+        live_evidence_seen=False,
+        live_evidence_required=True,
+        domains=("market",),
+    )
+    run_loop = AsyncMock(return_value=loop_result)
+    monkeypatch.setattr(orch, "_run_tool_loop_result", run_loop)
+    monkeypatch.setattr(orch, "_tool_loop", AsyncMock(return_value=loop_result.text))
+
+    structured = await orch.process_cron_action("오늘 한국장 시황")
+    legacy_text = await orch.process_cron_message("오늘 한국장 시황")
+
+    assert structured.text == loop_result.text
+    assert structured.success is False
+    assert structured.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE
+    assert structured.live_evidence_required is True
+    assert structured.live_evidence_seen is False
+    assert structured.domains == ("market",)
+    assert legacy_text == loop_result.text
+
 
 @pytest.mark.asyncio
 async def test_empty_final_response_returns_user_friendly_message(
@@ -457,6 +493,211 @@ async def test_low_confidence_structured_result_does_not_flip_live_evidence(
     assert "확인하지 못" in result.text
     assert "2:1" not in result.text
     assert "LIVE" not in result.text
+
+
+def _structured_market_capability(
+    *, output_contract: str = "structured_evidence"
+) -> CapabilityMetadata:
+    """tool-loop 회귀에서 사용할 이름 비의존 시장 capability를 만든다."""
+    return CapabilityMetadata(
+        domains=("market",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+        output_contract=output_contract,
+        declared=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_capability_market_evidence_preserves_original_long_final(
+    config_file, monkeypatch,
+):
+    """E2: 임의 이름 skill의 정상 structured evidence가 시장 final을 보존한다."""
+    orch = AgentOrchestrator(config_file)
+    as_of = datetime.now(UTC).isoformat()
+
+    async def fake_dispatch(_tc):
+        return json.dumps(
+            {
+                "source": "Naver m.stock",
+                "as_of": as_of,
+                "facts": [{"symbol": "KOSPI", "value": 6729.46}],
+            }
+        )
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    report = ("한국장 시황 " + ("확인된 시장 리포트입니다. " * 400)).strip()
+    responses = [
+        _tool_response(
+            "market-1",
+            "execute_skill",
+            {"skill_name": "arbitrary-market-provider", "args": "summary --json"},
+        ),
+        _text_response(report),
+    ]
+    orch._router.send = AsyncMock(side_effect=responses)
+    state = ToolLoopState(
+        user_content="오늘 한국장 시황을 정리해줘",
+        messages=[{"role": "user", "content": "오늘 한국장 시황을 정리해줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        skill_capabilities={
+            "arbitrary-market-provider": _structured_market_capability()
+        },
+        turn_domains=("market",),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert len(report) > 5_551
+    assert result.text == report
+    assert result.success is True
+    assert result.live_evidence_seen is True
+    assert result.failure_kind is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_output",
+    [
+        "",
+        "Error: upstream unavailable",
+        json.dumps(
+            {
+                "source": "Naver m.stock",
+                "as_of": (datetime.now(UTC) - timedelta(days=10)).isoformat(),
+                "facts": [{"symbol": "KOSPI", "value": 1}],
+            }
+        ),
+        json.dumps(
+            {
+                "source": "Naver m.stock",
+                "as_of": datetime.now(UTC).isoformat(),
+                "stale": True,
+                "facts": [{"symbol": "KOSPI", "value": 1}],
+            }
+        ),
+    ],
+)
+async def test_invalid_market_evidence_returns_structured_market_failure(
+    config_file, monkeypatch, tool_output,
+):
+    """E3/F1/C1: 빈·오류·stale 결과는 시장 fallback semantic failure다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(_tc):
+        return tool_output
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    orch._router.send = AsyncMock(
+        side_effect=[
+            _tool_response(
+                "market-bad",
+                "execute_skill",
+                {"skill_name": "market-provider", "args": "summary --json"},
+            ),
+            _text_response("KOSPI는 7,000입니다."),
+        ]
+    )
+    state = ToolLoopState(
+        user_content="오늘 한국장 시황",
+        messages=[{"role": "user", "content": "오늘 한국장 시황"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        skill_capabilities={"market-provider": _structured_market_capability()},
+        turn_domains=("market",),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is False
+    assert result.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE.value
+    assert result.live_evidence_seen is False
+    assert "최신 시장 데이터" in result.text
+    assert "일정/중계" not in result.text
+    assert "방송사 공지" not in result.text
+    assert "7,000" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_undeclared_or_news_context_skill_cannot_authorize_market_numbers(
+    config_file, monkeypatch,
+):
+    """E4/E5: 긴 미선언 결과와 RSS narrative는 시장 숫자의 단독 근거가 아니다."""
+    orch = AgentOrchestrator(config_file)
+
+    async def fake_dispatch(_tc):
+        return "Google News RSS titles\n" + ("headline " * 1000)
+
+    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    orch._router.send = AsyncMock(
+        side_effect=[
+            _tool_response(
+                "news-1",
+                "execute_skill",
+                {"skill_name": "google-news-search-skill", "args": "--format json"},
+            ),
+            _text_response("KOSPI는 7,000입니다."),
+        ]
+    )
+    state = ToolLoopState(
+        user_content="오늘 한국장 시황",
+        messages=[{"role": "user", "content": "오늘 한국장 시황"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        skill_capabilities={
+            "google-news-search-skill": _structured_market_capability(
+                output_contract="narrative_context"
+            )
+        },
+        turn_domains=("market",),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is False
+    assert result.live_evidence_seen is False
+    assert "최신 시장 데이터" in result.text
+    assert "7,000" not in result.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("domains", "expected", "forbidden"),
+    [
+        (("sports",), "일정/중계", "시장 데이터"),
+        ((), "최신 근거", "일정/중계"),
+    ],
+)
+async def test_live_evidence_fallback_is_domain_specific(
+    config_file, domains, expected, forbidden,
+):
+    """F2/F3: sports와 generic fallback이 각 도메인 의미를 유지한다."""
+    orch = AgentOrchestrator(config_file)
+    orch._router.send = AsyncMock(return_value=_text_response("근거 없는 단정"))
+    state = ToolLoopState(
+        user_content="최신 상태 알려줘",
+        messages=[{"role": "user", "content": "최신 상태 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+        live_fact_requires_evidence=True,
+        turn_domains=domains,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert expected in result.text
+    assert forbidden not in result.text
+    assert result.success is False
+    assert result.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE.value
 
 
 @pytest.mark.asyncio

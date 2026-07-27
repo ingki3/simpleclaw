@@ -111,6 +111,20 @@ class TestDaemonStore:
         assert executions[0].status == ExecutionStatus.SUCCESS
         assert executions[0].finished_at is not None
 
+    def test_semantic_failure_kind_round_trips_in_error_details(self, store):
+        """C2: schema 변경 없이 redacted semantic failure kind를 보존한다."""
+        execution = CronJobExecution(
+            job_name="krstock",
+            status=ExecutionStatus.FAILURE,
+            error_details="failure_kind=evidence_unavailable",
+        )
+        store.log_execution(execution)
+
+        stored = store.get_executions("krstock")[0]
+
+        assert stored.status == ExecutionStatus.FAILURE
+        assert stored.error_details == "failure_kind=evidence_unavailable"
+
     # --- WaitState ---
 
     def test_save_and_get_wait_state(self, store):

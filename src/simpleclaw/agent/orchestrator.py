@@ -123,6 +123,7 @@ from simpleclaw.daemon.drain import (
     DRAIN_MAINTENANCE_MESSAGE,
     DrainController,
 )
+from simpleclaw.daemon.models import CronActionResult, CronFailureKind
 from simpleclaw.llm.models import (
     LLMRequest,
     MultimodalAttachment,
@@ -170,6 +171,9 @@ from simpleclaw.skills.learning import (
 )
 from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
+from simpleclaw.skills.realtime_lookup import (
+    classify_query as classify_realtime_query,
+)
 from simpleclaw.skills.realtime_lookup import (
     decode_payload as decode_realtime_lookup_payload,
 )
@@ -604,13 +608,24 @@ def _format_attachment_context_note(
     return "\n".join(lines)
 
 
-def _tool_call_provides_live_evidence(tool_call: ToolCall) -> bool:
-    """모델이 직접 요청한 도구 호출이 실시간 근거를 제공하는지 판정한다."""
-    if tool_call.name == "web_fetch":
+def _tool_call_provides_live_evidence(
+    tool_call: ToolCall,
+    skill_capabilities: dict[str, object] | None = None,
+) -> bool:
+    """호환 helper: skill 이름이 아니라 전달된 capability 계약만 판정한다."""
+    if tool_call.name in {"web_fetch", "web_search"}:
         return True
     if tool_call.name == "execute_skill":
         skill_name = str((tool_call.arguments or {}).get("skill_name", ""))
-        return skill_name.lower() == _REALTIME_LOOKUP_SKILL_NAME
+        capability = (skill_capabilities or {}).get(skill_name)
+        return bool(
+            capability
+            and getattr(
+                capability,
+                "provides_fresh_structured_evidence",
+                False,
+            )
+        )
     return False
 
 
@@ -1106,8 +1121,8 @@ class AgentOrchestrator:
     # Public API
     # ------------------------------------------------------------------
 
-    async def process_cron_message(self, text: str) -> str:
-        """크론 잡 메시지를 격리된 컨텍스트로 처리한다.
+    async def process_cron_action(self, text: str) -> CronActionResult:
+        """크론 잡 메시지를 격리 처리하고 의미 상태를 보존해 반환한다.
 
         대화 이력을 불러오지 않고 공유 대화 DB에 메시지를 저장하지 않는다.
         진입점이므로 trace_id를 새로 발급해 호출 체인 전체로 전파한다.
@@ -1115,6 +1130,38 @@ class AgentOrchestrator:
         BIZ-442: drain 중이면 실행을 건너뛰고 skip 사유를 반환한다 — cron 은
         재시작 후 다음 스케줄에서 다시 실행되므로 큐잉 없이 skip 이 안전하다.
         이미 시작된 실행은 operation 카운터로 추적되어 완료까지 이어진다.
+        """
+        if self._drain_controller.is_draining():
+            logger.info("Drain active — skipping cron message intake.")
+            return CronActionResult(text=DRAIN_CRON_SKIPPED_MESSAGE)
+        with trace_scope() as trace_id, self._drain_controller.operation("cron_turn"):
+            logger.info("Cron message received: trace_id=%s", trace_id)
+            self._reload_dynamic_files()
+            result = await self._run_tool_loop_result(
+                text,
+                isolated=True,
+                allow_cron_mutation=False,
+            )
+            failure_kind = None
+            if result.failure_kind:
+                try:
+                    failure_kind = CronFailureKind(result.failure_kind)
+                except ValueError:
+                    failure_kind = CronFailureKind.ACTION_FAILED
+            return CronActionResult(
+                text=result.text,
+                success=result.success,
+                failure_kind=failure_kind,
+                live_evidence_seen=result.live_evidence_seen,
+                live_evidence_required=result.live_evidence_required,
+                domains=result.domains,
+            )
+
+    async def process_cron_message(self, text: str) -> str:
+        """기존 호출자를 위한 cron text API compatibility 경로.
+
+        테스트·플러그인이 ``_tool_loop`` wrapper를 교체하는 기존 확장 지점을
+        보존하고, 스케줄러만 ``process_cron_action`` 구조화 API를 사용한다.
         """
         if self._drain_controller.is_draining():
             logger.info("Drain active — skipping cron message intake.")
@@ -2720,6 +2767,16 @@ class AgentOrchestrator:
             if plan is not None
             else realtime_lookup_payload is not None
         )
+        classified_turn_domain = classify_realtime_query(execution_text)
+        turn_domains = (
+            ()
+            if classified_turn_domain in {"general", "news"}
+            else (classified_turn_domain,)
+        )
+        skill_capabilities = {
+            skill.name: skill.capability
+            for skill in active_skills
+        }
         effective_on_text_delta = on_text_delta
         if plan is not None and (
             plan.fact_check.required
@@ -2740,6 +2797,8 @@ class AgentOrchestrator:
             ),
             live_evidence_seen=live_evidence_seen,
             live_fact_requires_evidence=live_fact_requires_evidence,
+            skill_capabilities=skill_capabilities,
+            turn_domains=turn_domains,
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=effective_on_text_delta,
             on_progress=on_progress,
