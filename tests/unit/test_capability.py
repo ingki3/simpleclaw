@@ -96,3 +96,64 @@ def test_structured_evidence_rejects_empty_error_and_stale_contracts():
         },
         now=now,
     ) is False
+
+
+def test_structured_evidence_rejects_nested_error_contract():
+    """중첩 section의 명시 오류도 top-level 오류와 동일하게 fail-closed다."""
+    now = datetime(2026, 7, 27, 6, tzinfo=UTC)
+    payload = {
+        "provider": "kr-stock-skill",
+        "base_date": "2026-07-27",
+        "market": {
+            "status": "error",
+            "error": "upstream failed",
+        },
+        "note": "generated",
+    }
+
+    assert has_usable_structured_evidence(payload, now=now) is False
+
+
+def test_structured_evidence_does_not_mix_fresh_and_stale_sections():
+    """서로 다른 section의 fresh timestamp와 stale 시장 값을 조합하지 않는다."""
+    now = datetime(2026, 7, 27, 6, tzinfo=UTC)
+    payload = {
+        "news": {
+            "source": "Google News RSS",
+            "published_at": now.isoformat(),
+            "headlines": ["fresh narrative"],
+        },
+        "market": {
+            "source": "Naver m.stock",
+            "as_of": (now - timedelta(days=10)).isoformat(),
+            "facts": [{"symbol": "KOSPI", "value": 6729.46}],
+        },
+    }
+
+    assert has_usable_structured_evidence(payload, now=now) is False
+
+
+def test_structured_evidence_requires_coherent_record():
+    """source, as-of, data가 서로 다른 section이면 evidence로 조합하지 않는다."""
+    now = datetime(2026, 7, 27, 6, tzinfo=UTC)
+    payload = {
+        "source_section": {"source": "Naver m.stock"},
+        "time_section": {"as_of": now.isoformat()},
+        "data_section": {"facts": [{"symbol": "KOSPI", "value": 6729.46}]},
+    }
+
+    assert has_usable_structured_evidence(payload, now=now) is False
+
+
+def test_structured_evidence_rejects_metadata_only_envelope():
+    """provider/base_date/note만 있는 envelope는 실제 evidence가 아니다."""
+    now = datetime(2026, 7, 27, 6, tzinfo=UTC)
+
+    assert has_usable_structured_evidence(
+        {
+            "provider": "kr-stock-skill",
+            "base_date": "2026-07-27",
+            "note": "generated",
+        },
+        now=now,
+    ) is False

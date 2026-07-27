@@ -345,6 +345,10 @@ class CronScheduler:
                 )
             except Exception as exc:
                 error_msg = str(exc)
+                # 최종 시도 유형이 알림 경로를 결정해야 한다. 앞선 semantic
+                # failure를 남겨 두면 뒤의 provider/runtime 예외가 fallback
+                # 메시지에 가려지고 circuit-break 알림도 잘못 억제된다.
+                last_semantic_result = None
                 finished = datetime.now()
                 self._store.update_execution(
                     exec_id,

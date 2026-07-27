@@ -363,6 +363,82 @@ class TestStructuredCronActionResult:
         )
 
     @pytest.mark.asyncio
+    async def test_final_exception_supersedes_earlier_semantic_failure(self, setup):
+        """마지막 예외가 이전 semantic fallback과 알림 억제를 덮어쓴다."""
+        store, scheduler, notifier = setup
+        semantic = CronActionResult(
+            text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+            success=False,
+            failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
+        )
+        scheduler._run_action = AsyncMock(
+            side_effect=[
+                semantic,
+                RuntimeError("provider timeout"),
+                RuntimeError("provider timeout"),
+            ]
+        )
+        scheduler.add_job(
+            "mixed-final-exception",
+            "0 12 * * *",
+            ActionType.PROMPT,
+            "오늘 한국장 시황",
+            max_attempts=3,
+            backoff_seconds=0,
+            circuit_break_threshold=1,
+        )
+
+        execution = await scheduler.execute_job("mixed-final-exception")
+
+        assert execution.status == ExecutionStatus.FAILURE
+        assert execution.attempt == 3
+        assert execution.error_details == "provider timeout"
+        notifier.assert_awaited_once()
+        message = notifier.await_args.args[1]
+        assert "auto-disabled" in message
+        assert "provider timeout" in message
+        assert "최신 시장 데이터" not in message
+        assert store.get_job("mixed-final-exception").enabled is False
+
+    @pytest.mark.asyncio
+    async def test_final_semantic_failure_supersedes_earlier_exception(self, setup):
+        """마지막 semantic failure는 이전 예외 대신 사용자 fallback을 1회 보낸다."""
+        store, scheduler, notifier = setup
+        semantic = CronActionResult(
+            text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+            success=False,
+            failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
+        )
+        scheduler._run_action = AsyncMock(
+            side_effect=[
+                RuntimeError("provider timeout"),
+                semantic,
+                semantic,
+            ]
+        )
+        scheduler.add_job(
+            "mixed-final-semantic",
+            "0 12 * * *",
+            ActionType.PROMPT,
+            "오늘 한국장 시황",
+            max_attempts=3,
+            backoff_seconds=0,
+            circuit_break_threshold=1,
+        )
+
+        execution = await scheduler.execute_job("mixed-final-semantic")
+
+        assert execution.status == ExecutionStatus.FAILURE
+        assert execution.attempt == 3
+        assert execution.error_details == "failure_kind=evidence_unavailable"
+        notifier.assert_awaited_once()
+        message = notifier.await_args.args[1]
+        assert "최신 시장 데이터" in message
+        assert "자동 비활성화" in message
+        assert "provider timeout" not in message
+        assert store.get_job("mixed-final-semantic").enabled is False
+
+    @pytest.mark.asyncio
     async def test_structured_success_notifies_and_resets_failure_counter(self, setup):
         """C4: 정상 evidence 결과는 원문 전송·SUCCESS·카운터 reset이다."""
         store, scheduler, notifier = setup

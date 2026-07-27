@@ -40,16 +40,22 @@ _EVIDENCE_AS_OF_KEYS = frozenset(
         "updated_at",
     }
 )
+_EVIDENCE_DATA_CONTAINER_KEYS = frozenset(
+    {"data", "facts", "items", "records", "results", "rows", "values"}
+)
 _EVIDENCE_METADATA_KEYS = (
     _EVIDENCE_SOURCE_KEYS
     | _EVIDENCE_AS_OF_KEYS
     | frozenset(
         {
             "confidence",
+            "error",
             "freshness",
             "kind",
             "limitations",
+            "note",
             "notes",
+            "reason",
             "source_priority",
             "stale",
             "status",
@@ -134,6 +140,19 @@ def _iter_mapping_values(
     return found
 
 
+def _iter_mappings(value: object) -> list[dict[str, Any]]:
+    """중첩 JSON의 모든 mapping을 evidence record 후보로 펼친다."""
+    found: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        found.append(value)
+        for child in value.values():
+            found.extend(_iter_mappings(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found.extend(_iter_mappings(child))
+    return found
+
+
 def _has_nonempty_contract_value(value: object) -> bool:
     """source/data 후보가 비어 있지 않은지 재귀적으로 확인한다."""
     if value is None:
@@ -166,11 +185,36 @@ def _parse_evidence_datetime(value: object) -> datetime | None:
 
 
 def _has_meaningful_evidence_data(payload: dict[str, Any]) -> bool:
-    """source/as_of 같은 envelope 외에 실제 근거 데이터가 있는지 확인한다."""
+    """동일 record에 source/as_of 외 직접 근거 데이터가 있는지 확인한다.
+
+    중첩 mapping 자체는 데이터로 세지 않는다. 그래야 상위 envelope의 source와
+    날짜를 서로 다른 하위 section의 값에 결합하지 않는다. 반면 facts/rows처럼
+    record가 직접 소유한 list와 scalar 값은 근거 데이터로 인정한다.
+    """
     return any(
-        str(key).strip().lower() not in _EVIDENCE_METADATA_KEYS
+        (
+            str(key).strip().lower() in _EVIDENCE_DATA_CONTAINER_KEYS
+            or (
+                str(key).strip().lower() not in _EVIDENCE_METADATA_KEYS
+                and not isinstance(value, dict)
+            )
+        )
         and _has_nonempty_contract_value(value)
         for key, value in payload.items()
+    )
+
+
+def _has_rejected_evidence_state(payload: dict[str, Any]) -> bool:
+    """단일 record의 명시 오류·무효·stale 상태를 fail-closed 판정한다."""
+    status = str(payload.get("status") or "").strip().lower()
+    freshness = str(payload.get("freshness") or "").strip().lower()
+    return (
+        payload.get("success") is False
+        or payload.get("valid") is False
+        or payload.get("stale") is True
+        or status in {"error", "failed", "failure", "invalid", "stale"}
+        or freshness in {"expired", "invalid", "stale"}
+        or _has_nonempty_contract_value(payload.get("error"))
     )
 
 
@@ -190,41 +234,54 @@ def has_usable_structured_evidence(
     if not isinstance(payload, dict) or not payload:
         return False
 
-    status = str(payload.get("status") or "").strip().lower()
-    freshness = str(payload.get("freshness") or "").strip().lower()
-    if (
-        payload.get("success") is False
-        or payload.get("valid") is False
-        or payload.get("stale") is True
-        or status in {"error", "failed", "failure", "invalid", "stale"}
-        or freshness in {"expired", "invalid", "stale"}
-        or _has_nonempty_contract_value(payload.get("error"))
-    ):
-        return False
-
-    source_values = _iter_mapping_values(payload, keys=_EVIDENCE_SOURCE_KEYS)
-    if not any(_has_nonempty_contract_value(value) for value in source_values):
+    records = _iter_mappings(payload)
+    if any(_has_rejected_evidence_state(record) for record in records):
         return False
 
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     current = current.astimezone(UTC)
-    timestamps = [
-        parsed
-        for value in _iter_mapping_values(payload, keys=_EVIDENCE_AS_OF_KEYS)
-        if (parsed := _parse_evidence_datetime(value)) is not None
-    ]
-    if not timestamps:
-        return False
-    if not any(
-        -_STRUCTURED_EVIDENCE_FUTURE_TOLERANCE
-        <= current - timestamp
-        <= max_age
-        for timestamp in timestamps
-    ):
-        return False
-    return _has_meaningful_evidence_data(payload)
+    usable_record_seen = False
+    for record in records:
+        source_values = [
+            value
+            for raw_key, value in record.items()
+            if str(raw_key).strip().lower() in _EVIDENCE_SOURCE_KEYS
+        ]
+        timestamp_values = [
+            value
+            for raw_key, value in record.items()
+            if str(raw_key).strip().lower() in _EVIDENCE_AS_OF_KEYS
+        ]
+        if (
+            not any(
+                _has_nonempty_contract_value(value)
+                for value in source_values
+            )
+            or not timestamp_values
+            or not _has_meaningful_evidence_data(record)
+        ):
+            continue
+
+        timestamps = [
+            _parse_evidence_datetime(value) for value in timestamp_values
+        ]
+        if any(timestamp is None for timestamp in timestamps):
+            return False
+        if any(
+            not (
+                -_STRUCTURED_EVIDENCE_FUTURE_TOLERANCE
+                <= current - timestamp
+                <= max_age
+            )
+            for timestamp in timestamps
+            if timestamp is not None
+        ):
+            return False
+        usable_record_seen = True
+
+    return usable_record_seen
 
 
 def _coerce_str_tuple(value: object) -> tuple[str, ...]:
