@@ -23,6 +23,8 @@ from apscheduler.triggers.cron import CronTrigger
 from simpleclaw.daemon.models import (
     ActionType,
     BackoffStrategy,
+    CronActionResult,
+    CronFailureKind,
     CronJob,
     CronJobExecution,
     CronJobNotFoundError,
@@ -38,6 +40,15 @@ _NO_NOTIFY_TOKEN = "[NO_NOTIFY]"
 
 # 재시도 사이 백오프를 실제로 sleep하는 함수 (테스트에서 monkeypatch로 0초화).
 _sleep = asyncio.sleep
+
+
+def _normalize_cron_action_result(
+    result: str | CronActionResult | None,
+) -> CronActionResult:
+    """기존 string/None 결과를 구조화 cron 계약으로 정규화한다."""
+    if isinstance(result, CronActionResult):
+        return result
+    return CronActionResult(text=result or "[No output]")
 
 
 def _translate_cron_dow_to_apscheduler(field: str) -> str:
@@ -316,6 +327,7 @@ class CronScheduler:
         max_attempts = max(1, int(job.max_attempts))
         last_execution: CronJobExecution | None = None
         last_error: str | None = None
+        last_semantic_result: CronActionResult | None = None
 
         for attempt in range(1, max_attempts + 1):
             started = datetime.now()
@@ -328,9 +340,15 @@ class CronScheduler:
             exec_id = self._store.log_execution(execution)
 
             try:
-                result = await self._run_action(job)
+                result = _normalize_cron_action_result(
+                    await self._run_action(job)
+                )
             except Exception as exc:
                 error_msg = str(exc)
+                # 최종 시도 유형이 알림 경로를 결정해야 한다. 앞선 semantic
+                # failure를 남겨 두면 뒤의 provider/runtime 예외가 fallback
+                # 메시지에 가려지고 circuit-break 알림도 잘못 억제된다.
+                last_semantic_result = None
                 finished = datetime.now()
                 self._store.update_execution(
                     exec_id,
@@ -362,9 +380,49 @@ class CronScheduler:
                         await _sleep(delay)
                 continue
 
+            if not result.success:
+                failure_kind = result.failure_kind or CronFailureKind.ACTION_FAILED
+                error_msg = f"failure_kind={failure_kind.value}"
+                finished = datetime.now()
+                self._store.update_execution(
+                    exec_id,
+                    finished_at=finished,
+                    status=ExecutionStatus.FAILURE,
+                    result_summary=result.text[:500],
+                    error_details=error_msg,
+                )
+                execution.id = exec_id
+                execution.finished_at = finished
+                execution.status = ExecutionStatus.FAILURE
+                execution.result_summary = result.text[:500]
+                execution.error_details = error_msg
+                last_execution = execution
+                last_error = error_msg
+                last_semantic_result = result
+                logger.warning(
+                    "Cron job '%s' attempt %d/%d ended with semantic failure: %s",
+                    job_name,
+                    attempt,
+                    max_attempts,
+                    failure_kind.value,
+                )
+                if attempt < max_attempts:
+                    delay = _compute_backoff(
+                        job.backoff_seconds, attempt, job.backoff_strategy
+                    )
+                    if delay > 0:
+                        logger.info(
+                            "Cron job '%s' backing off %.1fs before retry %d.",
+                            job_name,
+                            delay,
+                            attempt + 1,
+                        )
+                        await _sleep(delay)
+                continue
+
             # 성공 — 카운터 리셋 후 즉시 반환.
             finished = datetime.now()
-            summary = result[:500] if result else ""
+            summary = result.text[:500]
             self._store.update_execution(
                 exec_id,
                 finished_at=finished,
@@ -387,7 +445,16 @@ class CronScheduler:
             return execution
 
         # 모든 시도 실패: circuit-break 평가.
-        await self._record_failure_and_maybe_break(job, last_error or "")
+        await self._record_failure_and_maybe_break(
+            job,
+            last_error or "",
+            notify_circuit_break=last_semantic_result is None,
+        )
+        if last_semantic_result is not None:
+            await self._send_final_semantic_failure_notification(
+                job,
+                last_semantic_result,
+            )
         assert last_execution is not None  # 루프가 1회 이상 돌았음을 보장
         return last_execution
 
@@ -418,7 +485,11 @@ class CronScheduler:
         self._store.save_job(job)
 
     async def _record_failure_and_maybe_break(
-        self, job: CronJob, last_error: str
+        self,
+        job: CronJob,
+        last_error: str,
+        *,
+        notify_circuit_break: bool = True,
     ) -> None:
         """모든 재시도 실패 후 누적 카운터를 증가시키고 임계값 도달 시 차단한다.
 
@@ -439,9 +510,10 @@ class CronScheduler:
                 "auto-disabled. Last error: %s",
                 job.name, job.consecutive_failures, last_error,
             )
-            await self._send_circuit_break_notification(
-                job, last_error
-            )
+            if notify_circuit_break:
+                await self._send_circuit_break_notification(
+                    job, last_error
+                )
             await self._capture_cron_event(
                 event_type="circuit_break",
                 job=job,
@@ -487,6 +559,29 @@ class CronScheduler:
                 job.name,
             )
 
+    async def _send_final_semantic_failure_notification(
+        self,
+        job: CronJob,
+        result: CronActionResult,
+    ) -> None:
+        """재시도 중 숨긴 사용자용 semantic failure를 마지막에 한 번만 알린다."""
+        if (
+            not self._notifier
+            or not result.text
+            or _NO_NOTIFY_TOKEN in result.text
+        ):
+            return
+        message = result.text
+        if not job.enabled:
+            message += "\n(연속 실패로 이 cron 작업은 자동 비활성화되었습니다.)"
+        try:
+            await self._notifier(job.name, message)
+        except Exception:
+            logger.exception(
+                "Failed to send final semantic failure for cron '%s'",
+                job.name,
+            )
+
     async def _capture_cron_event(
         self,
         *,
@@ -518,7 +613,7 @@ class CronScheduler:
         except Exception:
             logger.exception("Cron proactive event hook failed for '%s'", job.name)
 
-    async def _run_action(self, job: CronJob) -> str:
+    async def _run_action(self, job: CronJob) -> CronActionResult:
         """작업의 대상 액션을 실행하고, NO_NOTIFY 필터링 후 알림을 전송한다.
 
         처리 흐름:
@@ -526,31 +621,53 @@ class CronScheduler:
         2. 응답에 [NO_NOTIFY]가 포함되면 알림 건너뜀
         3. 그 외에는 알림 콜백(텔레그램 등) 호출
         """
-        response = await self._execute_action(job)
+        response = _normalize_cron_action_result(
+            await self._execute_action(job)
+        )
 
         # NO_NOTIFY 토큰 감지 시 알림 건너뜀
-        if response and _NO_NOTIFY_TOKEN in response:
+        if response.text and _NO_NOTIFY_TOKEN in response.text:
             logger.info(
                 "Cron job '%s': nothing to notify, skipping.", job.name
             )
             return response
 
+        # 의미적 실패는 재시도 중 사용자 채널로 보내지 않고 execute_job이
+        # 마지막 시도 뒤 한 번만 알린다.
+        if not response.success:
+            return response
+
         # 알림 콜백을 통해 외부 채널로 결과 전송
-        if response and self._notifier:
+        if response.text and self._notifier:
             try:
-                await self._notifier(job.name, response)
+                await self._notifier(job.name, response.text)
                 logger.info(
                     "Cron '%s' notification sent: %d chars",
-                    job.name, len(response),
+                    job.name, len(response.text),
                 )
             except Exception:
                 logger.exception(
                     "Failed to send notification for cron '%s'", job.name
                 )
 
-        return response or "[No output]"
+        return response
 
-    async def _execute_action(self, job: CronJob) -> str:
+    async def _process_agent_cron_input(
+        self,
+        text: str,
+    ) -> str | CronActionResult:
+        """구조화 cron API가 있으면 우선하고 기존 text API로 폴백한다."""
+        if self._agent is None:
+            return text
+        structured_handler = getattr(self._agent, "process_cron_action", None)
+        if callable(structured_handler):
+            return await structured_handler(text)
+        return await self._agent.process_cron_message(text)
+
+    async def _execute_action(
+        self,
+        job: CronJob,
+    ) -> str | CronActionResult:
         """작업의 대상 액션(프롬프트 또는 레시피)을 실행한다.
 
         에이전트 오케스트레이터가 있으면 process_cron_message를 통해
@@ -602,7 +719,7 @@ class CronScheduler:
             if recipe.instructions and self._agent:
                 from simpleclaw.recipes.executor import render_instructions
                 instructions = render_instructions(recipe.instructions)
-                return await self._agent.process_cron_message(instructions)
+                return await self._process_agent_cron_input(instructions)
 
             # v1 레시피 (steps 기반): 스텝별 실행
             guard = getattr(self._agent, "_command_guard", None) if self._agent else None
@@ -626,7 +743,7 @@ class CronScheduler:
                     if sr.output and sr.success
                 )
                 if prompt_output:
-                    return await self._agent.process_cron_message(prompt_output)
+                    return await self._process_agent_cron_input(prompt_output)
 
                 # BIZ-243 — PROMPT 스텝이 있는데 LLM 으로 보낼 입력이 비는
                 # 상태는 로더 검증 이후로는 정상 경로에서 발생하지 않아야 한다.
@@ -654,7 +771,7 @@ class CronScheduler:
 
         elif job.action_type == ActionType.PROMPT:
             if self._agent:
-                return await self._agent.process_cron_message(
+                return await self._process_agent_cron_input(
                     job.action_reference
                 )
             return f"Prompt scheduled: {job.action_reference[:200]}"
