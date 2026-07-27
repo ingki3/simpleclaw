@@ -220,3 +220,35 @@ class TestSkillDiscovery:
         result = discover_skills(local, tmp_path / "no_global")
         skill = next(s for s in result if s.name == "bad-retry")
         assert skill.retry_policy is None
+
+    def test_capability_metadata_preserved_for_structured_evidence_skill(
+        self, tmp_path
+    ):
+        """SKILL.md의 evidence capability가 registry 모델까지 손실 없이 전달된다."""
+        local = tmp_path / "local"
+        skill_dir = local / "arbitrary-market-provider"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: arbitrary-market-provider\n"
+            "description: Structured market evidence fixture.\n"
+            "capability:\n"
+            "  domains: [market]\n"
+            "  read_only: true\n"
+            "  side_effects: false\n"
+            "  freshness_sensitive: true\n"
+            "  output_contract: structured_evidence\n"
+            "---\n"
+            "# Arbitrary Market Provider\n",
+            encoding="utf-8",
+        )
+
+        skills = discover_skills(local, tmp_path / "no_global")
+        capability = skills[0].capability
+
+        assert capability.domains == ("market",)
+        assert capability.read_only is True
+        assert capability.side_effects is False
+        assert capability.freshness_sensitive is True
+        assert capability.output_contract == "structured_evidence"
+        assert capability.provides_fresh_structured_evidence is True

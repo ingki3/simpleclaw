@@ -28,6 +28,13 @@ class ExecutionStatus(Enum):
     FAILURE = "failure"
 
 
+class CronFailureKind(str, Enum):
+    """크론 액션의 구조화된 의미적 실패 종류."""
+
+    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
+    ACTION_FAILED = "action_failed"
+
+
 class BackoffStrategy(Enum):
     """재시도 백오프 전략.
 
@@ -106,6 +113,22 @@ class CronJobExecution:
     error_details: str = ""
     id: int | None = None
     attempt: int = 1
+
+
+@dataclass(frozen=True)
+class CronActionResult:
+    """오케스트레이터에서 스케줄러로 전달하는 구조화 cron 결과.
+
+    기존 SQLite status/schema는 바꾸지 않고, 스케줄러가 텍스트 fallback을
+    성공으로 오기록하지 않도록 실행 중에만 의미 상태를 보존한다.
+    """
+
+    text: str
+    success: bool = True
+    failure_kind: CronFailureKind | None = None
+    live_evidence_seen: bool = False
+    live_evidence_required: bool = False
+    domains: tuple[str, ...] = ()
 
 
 @dataclass

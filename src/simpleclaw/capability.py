@@ -18,8 +18,46 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_STRUCTURED_EVIDENCE_CONTRACT = "structured_evidence"
+_STRUCTURED_EVIDENCE_MAX_AGE = timedelta(days=3)
+_STRUCTURED_EVIDENCE_FUTURE_TOLERANCE = timedelta(minutes=10)
+_EVIDENCE_SOURCE_KEYS = frozenset({"source", "sources", "provider"})
+_EVIDENCE_AS_OF_KEYS = frozenset(
+    {
+        "as_of",
+        "as_of_kst",
+        "base_date",
+        "date",
+        "fetched_at",
+        "local_traded_at",
+        "published_at",
+        "timestamp",
+        "updated_at",
+    }
+)
+_EVIDENCE_METADATA_KEYS = (
+    _EVIDENCE_SOURCE_KEYS
+    | _EVIDENCE_AS_OF_KEYS
+    | frozenset(
+        {
+            "confidence",
+            "freshness",
+            "kind",
+            "limitations",
+            "notes",
+            "source_priority",
+            "stale",
+            "status",
+            "success",
+            "valid",
+        }
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +98,133 @@ class CapabilityMetadata:
             and not self.side_effects
             and not self.requires_confirmation
         )
+
+    @property
+    def provides_fresh_structured_evidence(self) -> bool:
+        """실시간 근거 제공자로 사용할 수 있는지 metadata만으로 보수 판정한다.
+
+        단순히 최신성이나 출력 형식 중 하나만 선언한 자산은 허용하지 않는다.
+        사용자 확인 없이 실행 가능한 read-only/no-side-effect 자산이면서
+        ``structured_evidence`` 계약을 명시한 경우에만 후보가 된다.
+        """
+        return (
+            self.safe_for_auto_execution
+            and self.freshness_sensitive
+            and (self.output_contract or "").strip().lower()
+            == _STRUCTURED_EVIDENCE_CONTRACT
+        )
+
+
+def _iter_mapping_values(
+    value: object,
+    *,
+    keys: frozenset[str],
+) -> list[object]:
+    """중첩 JSON에서 지정 키의 값을 안전하게 수집한다."""
+    found: list[object] = []
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key).strip().lower()
+            if key in keys:
+                found.append(child)
+            found.extend(_iter_mapping_values(child, keys=keys))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found.extend(_iter_mapping_values(child, keys=keys))
+    return found
+
+
+def _has_nonempty_contract_value(value: object) -> bool:
+    """source/data 후보가 비어 있지 않은지 재귀적으로 확인한다."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict)):
+        return bool(value)
+    return True
+
+
+def _parse_evidence_datetime(value: object) -> datetime | None:
+    """ISO datetime/date를 UTC-aware datetime으로 정규화한다."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(raw)
+        except ValueError:
+            return None
+        parsed = datetime.combine(parsed_date, time.min)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _has_meaningful_evidence_data(payload: dict[str, Any]) -> bool:
+    """source/as_of 같은 envelope 외에 실제 근거 데이터가 있는지 확인한다."""
+    return any(
+        str(key).strip().lower() not in _EVIDENCE_METADATA_KEYS
+        and _has_nonempty_contract_value(value)
+        for key, value in payload.items()
+    )
+
+
+def has_usable_structured_evidence(
+    payload: object,
+    *,
+    now: datetime | None = None,
+    max_age: timedelta = _STRUCTURED_EVIDENCE_MAX_AGE,
+) -> bool:
+    """일반 capability skill의 structured evidence 결과 계약을 검증한다.
+
+    이름이나 문자열 길이는 근거가 아니다. JSON object가 source, fresh as-of,
+    실제 데이터와 함께 와야 하며 명시 오류/stale/invalid 표시는 즉시 거부한다.
+    중첩 source/date를 허용하는 이유는 시장 summary처럼 섹션별 출처와 기준일을
+    보존하는 기존 도메인 출력 형식을 wrapper 재작성 없이 수용하기 위해서다.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return False
+
+    status = str(payload.get("status") or "").strip().lower()
+    freshness = str(payload.get("freshness") or "").strip().lower()
+    if (
+        payload.get("success") is False
+        or payload.get("valid") is False
+        or payload.get("stale") is True
+        or status in {"error", "failed", "failure", "invalid", "stale"}
+        or freshness in {"expired", "invalid", "stale"}
+        or _has_nonempty_contract_value(payload.get("error"))
+    ):
+        return False
+
+    source_values = _iter_mapping_values(payload, keys=_EVIDENCE_SOURCE_KEYS)
+    if not any(_has_nonempty_contract_value(value) for value in source_values):
+        return False
+
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    current = current.astimezone(UTC)
+    timestamps = [
+        parsed
+        for value in _iter_mapping_values(payload, keys=_EVIDENCE_AS_OF_KEYS)
+        if (parsed := _parse_evidence_datetime(value)) is not None
+    ]
+    if not timestamps:
+        return False
+    if not any(
+        -_STRUCTURED_EVIDENCE_FUTURE_TOLERANCE
+        <= current - timestamp
+        <= max_age
+        for timestamp in timestamps
+    ):
+        return False
+    return _has_meaningful_evidence_data(payload)
 
 
 def _coerce_str_tuple(value: object) -> tuple[str, ...]:

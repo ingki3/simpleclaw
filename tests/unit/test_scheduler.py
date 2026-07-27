@@ -9,6 +9,8 @@ from simpleclaw.daemon import scheduler as scheduler_module
 from simpleclaw.daemon.models import (
     ActionType,
     BackoffStrategy,
+    CronActionResult,
+    CronFailureKind,
     CronJobNotFoundError,
     ExecutionStatus,
 )
@@ -298,6 +300,125 @@ class TestRetryAndCircuitBreak:
         assert calls["n"] == 1
         assert execution.attempt == 1
         assert execution.status == ExecutionStatus.FAILURE
+
+
+class TestStructuredCronActionResult:
+    """BIZ-503: semantic failure 영속화·알림·호환 회귀."""
+
+    @pytest.fixture
+    def setup(self, tmp_path, monkeypatch):
+        async def _no_sleep(_seconds):
+            return None
+
+        monkeypatch.setattr(scheduler_module, "_sleep", _no_sleep)
+        store = DaemonStore(tmp_path / "semantic.db")
+        apscheduler = MagicMock(spec=AsyncIOScheduler)
+        notifier = AsyncMock()
+        scheduler = CronScheduler(store, apscheduler, notifier=notifier)
+        return store, scheduler, notifier
+
+    @pytest.mark.asyncio
+    async def test_semantic_failure_is_persisted_and_notified_only_once(self, setup):
+        """C2/C3: evidence failure는 시도별 FAILURE, 최종 알림은 1회다."""
+        store, scheduler, notifier = setup
+
+        class FakeAgent:
+            async def process_cron_action(self, _text):
+                return CronActionResult(
+                    text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+                    success=False,
+                    failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
+                    live_evidence_required=True,
+                    live_evidence_seen=False,
+                    domains=("market",),
+                )
+
+        scheduler._agent = FakeAgent()
+        scheduler.add_job(
+            "krstock-intraday",
+            "0 12 * * 1-5",
+            ActionType.PROMPT,
+            "오늘 한국장 시황",
+            max_attempts=3,
+            backoff_seconds=0,
+            circuit_break_threshold=0,
+        )
+
+        execution = await scheduler.execute_job("krstock-intraday")
+
+        assert execution.status == ExecutionStatus.FAILURE
+        assert execution.attempt == 3
+        assert execution.error_details == "failure_kind=evidence_unavailable"
+        history = store.get_executions("krstock-intraday", limit=10)
+        assert len(history) == 3
+        assert all(item.status == ExecutionStatus.FAILURE for item in history)
+        assert all(
+            item.error_details == "failure_kind=evidence_unavailable"
+            for item in history
+        )
+        assert store.get_job("krstock-intraday").consecutive_failures == 1
+        notifier.assert_awaited_once_with(
+            "krstock-intraday",
+            "검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+        )
+
+    @pytest.mark.asyncio
+    async def test_structured_success_notifies_and_resets_failure_counter(self, setup):
+        """C4: 정상 evidence 결과는 원문 전송·SUCCESS·카운터 reset이다."""
+        store, scheduler, notifier = setup
+
+        class FakeAgent:
+            async def process_cron_action(self, _text):
+                return CronActionResult(
+                    text="한국장 원문 리포트",
+                    success=True,
+                    live_evidence_required=True,
+                    live_evidence_seen=True,
+                    domains=("market",),
+                )
+
+        scheduler._agent = FakeAgent()
+        job = scheduler.add_job(
+            "krstock-success",
+            "0 12 * * 1-5",
+            ActionType.PROMPT,
+            "오늘 한국장 시황",
+            max_attempts=3,
+            backoff_seconds=0,
+        )
+        job.consecutive_failures = 2
+        store.save_job(job)
+
+        execution = await scheduler.execute_job("krstock-success")
+
+        assert execution.status == ExecutionStatus.SUCCESS
+        assert execution.result_summary == "한국장 원문 리포트"
+        assert store.get_job("krstock-success").consecutive_failures == 0
+        notifier.assert_awaited_once_with("krstock-success", "한국장 원문 리포트")
+
+    @pytest.mark.asyncio
+    async def test_string_and_no_notify_results_remain_compatible(self, setup):
+        """C5: process_cron_message string과 NO_NOTIFY는 기존처럼 성공이다."""
+        _, scheduler, notifier = setup
+
+        class FakeAgent:
+            async def process_cron_message(self, _text):
+                return "[NO_NOTIFY] 변화 없음"
+
+        scheduler._agent = FakeAgent()
+        scheduler.add_job(
+            "legacy-string",
+            "0 12 * * *",
+            ActionType.PROMPT,
+            "legacy",
+            max_attempts=1,
+        )
+
+        execution = await scheduler.execute_job("legacy-string")
+
+        assert execution.status == ExecutionStatus.SUCCESS
+        assert execution.result_summary == "[NO_NOTIFY] 변화 없음"
+        notifier.assert_not_awaited()
 
 
 class TestRecipeDirResolution:
