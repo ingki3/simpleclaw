@@ -286,12 +286,12 @@ class TestMultiTurnExecution:
         assert tool_msgs[0]["tool_call_id"] == "c1"
 
 
-class TestRealtimeEvidenceGuard:
-    """BIZ-363 — 실시간 사실 질문은 검증 가능한 fresh evidence 없이는 답하지 않는다."""
+class TestRealtimeFinalPreservation:
+    """BIZ-505 — realtime 조회 상태와 무관하게 생성된 final을 보존한다."""
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_sports_schedule_final_answer_blocked_without_evidence(
+    async def test_sports_schedule_final_answer_is_preserved_without_evidence(
         self, config_file, tmp_path,
     ):
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
@@ -304,13 +304,11 @@ class TestRealtimeEvidenceGuard:
             "이번 월드컵 한국 경기 중계 일정 알려줘", 1, 1,
         )
 
-        assert "확인하지 못" in result
-        assert "6월 12일" not in result
-        assert "20:00" not in result
+        assert result == "한국은 6월 12일 20:00에 경기합니다."
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_fetch_blocked_does_not_unlock_sports_schedule_answer(
+    async def test_fetch_blocked_observation_does_not_replace_final(
         self, config_file, tmp_path,
     ):
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
@@ -332,6 +330,4 @@ class TestRealtimeEvidenceGuard:
             "이번 월드컵 한국 경기 중계 일정 알려줘", 1, 1,
         )
 
-        assert "확인하지 못" in result
-        assert "6월 12일" not in result
-        assert "20:00" not in result
+        assert result == "한국은 6월 12일 20:00에 경기합니다."
