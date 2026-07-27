@@ -401,6 +401,26 @@ async def test_live_fact_final_ignores_legacy_evidence_flags(config_file):
 
 
 @pytest.mark.asyncio
+async def test_llm_provider_exception_remains_structured_failure(config_file):
+    """R5: hard gate 제거 후에도 LLM/provider exception은 success=False다."""
+    orch = AgentOrchestrator(config_file)
+    orch._router.send = AsyncMock(side_effect=RuntimeError("provider timeout"))
+    state = ToolLoopState(
+        user_content="오늘 시장 데이터 알려줘",
+        messages=[{"role": "user", "content": "오늘 시장 데이터 알려줘"}],
+        system_prompt="",
+        tools=[],
+        system_blocks=[],
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is False
+    assert result.failure_kind is None
+    assert "provider timeout" in result.text
+
+
+@pytest.mark.asyncio
 async def test_explicit_tool_error_explanation_is_preserved(
     config_file, monkeypatch,
 ):
