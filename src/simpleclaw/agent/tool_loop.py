@@ -33,14 +33,9 @@ from simpleclaw.agent.progress import (
     emit_progress_event,
 )
 from simpleclaw.agent.tool_gate import ToolExecutionScope
-from simpleclaw.capability import (
-    CapabilityMetadata,
-    has_usable_structured_evidence,
-)
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.security.sanitize import sanitize_tool_output
-from simpleclaw.skills.realtime_lookup import has_usable_realtime_evidence
 
 logger = logging.getLogger("simpleclaw.agent.orchestrator")
 
@@ -136,23 +131,6 @@ _FORCED_FINAL_ANSWER_TIMEOUT_MESSAGE = (
 )
 _AGENT_BROWSER_PER_TURN_CALL_CAP = 2
 _LLM_TOOL_RESULT_MESSAGE_MAX_CHARS = 20_000
-_SPORTS_LIVE_EVIDENCE_REQUIRED_MESSAGE = (
-    "검증 가능한 최신 근거를 확인하지 못해 실시간 일정/중계 정보를 단정할 수 없습니다. "
-    "공식 경기 일정이나 방송사 공지처럼 최신 출처를 확인한 뒤 다시 알려 주세요."
-)
-_MARKET_LIVE_EVIDENCE_REQUIRED_MESSAGE = (
-    "검증 가능한 최신 시장 데이터를 확인하지 못해 지수·주가·환율을 단정할 수 없습니다. "
-    "거래소나 공식 시세 제공처의 기준 시각과 출처를 확인한 뒤 다시 알려 주세요."
-)
-_WEATHER_LIVE_EVIDENCE_REQUIRED_MESSAGE = (
-    "검증 가능한 최신 기상 근거를 확인하지 못해 현재 날씨나 예보를 단정할 수 없습니다. "
-    "기상청 등 공식 예보의 발표 시각을 확인한 뒤 다시 알려 주세요."
-)
-_GENERIC_LIVE_EVIDENCE_REQUIRED_MESSAGE = (
-    "검증 가능한 최신 근거를 확인하지 못해 현재 상태를 단정할 수 없습니다. "
-    "기준 시각과 출처가 명확한 최신 자료를 확인한 뒤 다시 알려 주세요."
-)
-_EVIDENCE_UNAVAILABLE_FAILURE_KIND = "evidence_unavailable"
 _AGENT_BROWSER_CAP_EXCEEDED_MESSAGE = (
     "Error: `agent-browser` has already been attempted {count} times in this "
     "turn and is being rate-limited to avoid exhausting the tool loop. If the "
@@ -186,11 +164,6 @@ class ToolLoopState:
     system_blocks: list[SystemBlock]
     execution_scope: ToolExecutionScope | None = None
     selected_turn_ids: tuple[str, ...] = ()
-    live_evidence_seen: bool = False
-    live_fact_requires_evidence: bool = False
-    skill_capabilities: dict[str, CapabilityMetadata] = field(default_factory=dict)
-    turn_domains: tuple[str, ...] = ()
-    evidence_guard_blocked: bool = False
     previous_mutation_snapshot: dict[str, Any] | None = None
     on_text_delta: TextDeltaCallback | None = None
     on_progress: ProgressCallback | None = None
@@ -222,9 +195,6 @@ class ToolLoopResult:
     iterations: int = 0
     success: bool = True
     failure_kind: str | None = None
-    live_evidence_seen: bool = False
-    live_evidence_required: bool = False
-    domains: tuple[str, ...] = ()
 
 
 
@@ -255,89 +225,6 @@ def _legacy_observation_text(tool_call: ToolCall, sanitized_result: str) -> str:
     """ReAct 호환 fixture가 기대하는 user_message Observation 문자열을 만든다."""
     skill_name = str(tool_call.arguments.get("skill_name") or "unknown-skill")
     return f"Observation: execute_skill({skill_name}) result:\n{sanitized_result[:3000]}"
-
-
-def _tool_call_provides_live_evidence(
-    tool_call: ToolCall,
-    skill_capabilities: dict[str, CapabilityMetadata] | None = None,
-) -> bool:
-    """도구 호출이 metadata상 실시간 근거 후보인지 판정한다."""
-    if tool_call.name in {"web_fetch", "web_search"}:
-        return True
-    if tool_call.name == "execute_skill":
-        skill_name = str(tool_call.arguments.get("skill_name") or "")
-        capability = (skill_capabilities or {}).get(skill_name)
-        return bool(
-            capability
-            and capability.provides_fresh_structured_evidence
-        )
-    return False
-
-
-def _tool_result_provides_usable_live_evidence(
-    content: str,
-    *,
-    capability: CapabilityMetadata | None = None,
-) -> bool:
-    """BIZ-363: 차단/오류/빈 결과는 live fact final answer 근거로 인정하지 않는다."""
-    stripped = content.strip()
-    if not stripped:
-        return False
-    lowered = stripped.lower()
-    blocked_markers = (
-        "fetch_blocked:",
-        "automated fetching",
-        "automated traffic",
-        "access denied",
-        "verify you are human",
-        "checking your browser",
-        "realtime-lookup-skill failed",
-        '"facts": []',
-        '"facts":[]',
-    )
-    if any(marker in lowered for marker in blocked_markers):
-        return False
-    try:
-        structured = json.loads(stripped)
-    except json.JSONDecodeError:
-        structured = None
-    if capability is not None:
-        return (
-            capability.provides_fresh_structured_evidence
-            and has_usable_structured_evidence(structured)
-        )
-    if isinstance(structured, dict) and (
-        "confidence" in structured or "facts" in structured
-    ):
-        return has_usable_realtime_evidence(structured)
-    if _tool_result_looks_like_explicit_error(stripped):
-        return False
-    return not any(marker in lowered for marker in _TOOL_RESULT_EMPTY_FINAL_NOT_FOUND_MARKERS)
-
-
-def _merge_domains(
-    current: tuple[str, ...],
-    additional: tuple[str, ...],
-) -> tuple[str, ...]:
-    """명시 turn domain을 앞에 유지하며 중복 없이 합친다."""
-    merged = list(current)
-    for domain in additional:
-        normalized = str(domain).strip().lower()
-        if normalized and normalized not in merged:
-            merged.append(normalized)
-    return tuple(merged)
-
-
-def _live_evidence_required_message(domains: tuple[str, ...]) -> str:
-    """turn domain에 맞는 fail-closed 사용자 메시지를 선택한다."""
-    for domain in domains:
-        if domain == "market":
-            return _MARKET_LIVE_EVIDENCE_REQUIRED_MESSAGE
-        if domain == "sports":
-            return _SPORTS_LIVE_EVIDENCE_REQUIRED_MESSAGE
-        if domain == "weather":
-            return _WEATHER_LIVE_EVIDENCE_REQUIRED_MESSAGE
-    return _GENERIC_LIVE_EVIDENCE_REQUIRED_MESSAGE
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -558,15 +445,8 @@ class ToolLoopRunner:
         return ""
 
     async def run(self, state: ToolLoopState) -> ToolLoopResult:
-        """tool loop 결과에 evidence 상태와 semantic failure를 일관되게 부착한다."""
-        result = await self._run(state)
-        result.live_evidence_seen = state.live_evidence_seen
-        result.live_evidence_required = state.live_fact_requires_evidence
-        result.domains = state.turn_domains
-        if state.evidence_guard_blocked:
-            result.success = False
-            result.failure_kind = _EVIDENCE_UNAVAILABLE_FAILURE_KIND
-        return result
+        """tool loop를 실행하고 생성된 final 및 실행 실패 상태를 그대로 반환한다."""
+        return await self._run(state)
 
     async def _run(self, state: ToolLoopState) -> ToolLoopResult:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
@@ -623,16 +503,6 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
-                    if state.live_fact_requires_evidence and not state.live_evidence_seen:
-                        logger.warning(
-                            "BIZ-363: blocking live-fact final answer without usable fresh evidence",
-                        )
-                        state.evidence_guard_blocked = True
-                        return ToolLoopResult(
-                            _live_evidence_required_message(state.turn_domains),
-                            trace=trace,
-                            iterations=i + 1,
-                        )
                     return ToolLoopResult(final_text, trace=trace, iterations=i + 1)
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -758,26 +628,6 @@ class ToolLoopRunner:
                     ProgressEvent(progress_kind, progress_name, "complete", result),
                 )
                 sanitized = sanitize_tool_output(result)
-                capability = None
-                if tc.name == "execute_skill":
-                    skill_name = str(tc.arguments.get("skill_name") or "")
-                    capability = state.skill_capabilities.get(skill_name)
-                    if capability is not None and capability.declared:
-                        state.turn_domains = _merge_domains(
-                            state.turn_domains,
-                            capability.domains,
-                        )
-                if (
-                    _tool_call_provides_live_evidence(
-                        tc,
-                        state.skill_capabilities,
-                    )
-                    or self._orchestrator._call_invokes_agent_browser(tc)
-                ) and _tool_result_provides_usable_live_evidence(
-                    sanitized,
-                    capability=capability,
-                ):
-                    state.live_evidence_seen = True
                 trace.append(
                     ToolTraceStep(
                         tool_name=tc.name,
@@ -900,12 +750,6 @@ class ToolLoopRunner:
             return f"죄송합니다, 오류가 발생했습니다: {str(exc)[:200]}"
 
         final_text = (final_response.text or "").strip()
-        if final_text and state.live_fact_requires_evidence and not state.live_evidence_seen:
-            logger.warning(
-                "BIZ-363: blocking forced live-fact final answer without usable fresh evidence",
-            )
-            state.evidence_guard_blocked = True
-            return _live_evidence_required_message(state.turn_domains)
         if not final_text:
             return _BUDGET_EXHAUSTED_EMPTY_MESSAGE.format(
                 iterations=self._orchestrator._max_tool_iterations,

@@ -303,7 +303,7 @@ class TestRetryAndCircuitBreak:
 
 
 class TestStructuredCronActionResult:
-    """BIZ-503: semantic failure 영속화·알림·호환 회귀."""
+    """실제 structured failure 영속화·알림·호환 회귀."""
 
     @pytest.fixture
     def setup(self, tmp_path, monkeypatch):
@@ -318,19 +318,16 @@ class TestStructuredCronActionResult:
         return store, scheduler, notifier
 
     @pytest.mark.asyncio
-    async def test_semantic_failure_is_persisted_and_notified_only_once(self, setup):
-        """C2/C3: evidence failure는 시도별 FAILURE, 최종 알림은 1회다."""
+    async def test_action_failure_is_persisted_and_notified_only_once(self, setup):
+        """실제 action failure는 시도별 FAILURE, 최종 알림은 1회다."""
         store, scheduler, notifier = setup
 
         class FakeAgent:
             async def process_cron_action(self, _text):
                 return CronActionResult(
-                    text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+                    text="시장 데이터 provider 실행에 실패했습니다.",
                     success=False,
-                    failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
-                    live_evidence_required=True,
-                    live_evidence_seen=False,
-                    domains=("market",),
+                    failure_kind=CronFailureKind.ACTION_FAILED,
                 )
 
         scheduler._agent = FakeAgent()
@@ -348,28 +345,28 @@ class TestStructuredCronActionResult:
 
         assert execution.status == ExecutionStatus.FAILURE
         assert execution.attempt == 3
-        assert execution.error_details == "failure_kind=evidence_unavailable"
+        assert execution.error_details == "failure_kind=action_failed"
         history = store.get_executions("krstock-intraday", limit=10)
         assert len(history) == 3
         assert all(item.status == ExecutionStatus.FAILURE for item in history)
         assert all(
-            item.error_details == "failure_kind=evidence_unavailable"
+            item.error_details == "failure_kind=action_failed"
             for item in history
         )
         assert store.get_job("krstock-intraday").consecutive_failures == 1
         notifier.assert_awaited_once_with(
             "krstock-intraday",
-            "검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+            "시장 데이터 provider 실행에 실패했습니다.",
         )
 
     @pytest.mark.asyncio
-    async def test_final_exception_supersedes_earlier_semantic_failure(self, setup):
-        """마지막 예외가 이전 semantic fallback과 알림 억제를 덮어쓴다."""
+    async def test_final_exception_supersedes_earlier_action_failure(self, setup):
+        """마지막 예외가 이전 structured failure와 알림 억제를 덮어쓴다."""
         store, scheduler, notifier = setup
         semantic = CronActionResult(
-            text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+            text="시장 데이터 provider 실행에 실패했습니다.",
             success=False,
-            failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
+            failure_kind=CronFailureKind.ACTION_FAILED,
         )
         scheduler._run_action = AsyncMock(
             side_effect=[
@@ -397,17 +394,17 @@ class TestStructuredCronActionResult:
         message = notifier.await_args.args[1]
         assert "auto-disabled" in message
         assert "provider timeout" in message
-        assert "최신 시장 데이터" not in message
+        assert "시장 데이터 provider" not in message
         assert store.get_job("mixed-final-exception").enabled is False
 
     @pytest.mark.asyncio
-    async def test_final_semantic_failure_supersedes_earlier_exception(self, setup):
-        """마지막 semantic failure는 이전 예외 대신 사용자 fallback을 1회 보낸다."""
+    async def test_final_action_failure_supersedes_earlier_exception(self, setup):
+        """마지막 structured failure는 이전 예외 대신 사용자 메시지를 1회 보낸다."""
         store, scheduler, notifier = setup
         semantic = CronActionResult(
-            text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+            text="시장 데이터 provider 실행에 실패했습니다.",
             success=False,
-            failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE,
+            failure_kind=CronFailureKind.ACTION_FAILED,
         )
         scheduler._run_action = AsyncMock(
             side_effect=[
@@ -430,17 +427,17 @@ class TestStructuredCronActionResult:
 
         assert execution.status == ExecutionStatus.FAILURE
         assert execution.attempt == 3
-        assert execution.error_details == "failure_kind=evidence_unavailable"
+        assert execution.error_details == "failure_kind=action_failed"
         notifier.assert_awaited_once()
         message = notifier.await_args.args[1]
-        assert "최신 시장 데이터" in message
+        assert "시장 데이터 provider" in message
         assert "자동 비활성화" in message
         assert "provider timeout" not in message
         assert store.get_job("mixed-final-semantic").enabled is False
 
     @pytest.mark.asyncio
-    async def test_structured_success_notifies_and_resets_failure_counter(self, setup):
-        """C4: 정상 evidence 결과는 원문 전송·SUCCESS·카운터 reset이다."""
+    async def test_structured_success_without_evidence_flags_resets_counter(self, setup):
+        """R9: 정상 final은 evidence flag 없이 원문 전송·SUCCESS·카운터 reset이다."""
         store, scheduler, notifier = setup
 
         class FakeAgent:
@@ -448,9 +445,6 @@ class TestStructuredCronActionResult:
                 return CronActionResult(
                     text="한국장 원문 리포트",
                     success=True,
-                    live_evidence_required=True,
-                    live_evidence_seen=True,
-                    domains=("market",),
                 )
 
         scheduler._agent = FakeAgent()

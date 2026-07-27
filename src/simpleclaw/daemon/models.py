@@ -31,6 +31,8 @@ class ExecutionStatus(Enum):
 class CronFailureKind(str, Enum):
     """크론 액션의 구조화된 의미적 실패 종류."""
 
+    # 과거 DB row 및 외부 plugin 호환용 legacy 값이다. active runtime은
+    # fresh-evidence 부족만으로 이 failure kind를 새로 생성하지 않는다.
     EVIDENCE_UNAVAILABLE = "evidence_unavailable"
     ACTION_FAILED = "action_failed"
 
@@ -126,9 +128,6 @@ class CronActionResult:
     text: str
     success: bool = True
     failure_kind: CronFailureKind | None = None
-    live_evidence_seen: bool = False
-    live_evidence_required: bool = False
-    domains: tuple[str, ...] = ()
 
 
 @dataclass

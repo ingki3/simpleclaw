@@ -221,10 +221,10 @@ class TestSkillDiscovery:
         skill = next(s for s in result if s.name == "bad-retry")
         assert skill.retry_policy is None
 
-    def test_capability_metadata_preserved_for_structured_evidence_skill(
+    def test_capability_metadata_preserved_for_routing(
         self, tmp_path
     ):
-        """SKILL.md의 evidence capability가 registry 모델까지 손실 없이 전달된다."""
+        """SKILL.md capability routing metadata가 registry 모델까지 보존된다."""
         local = tmp_path / "local"
         skill_dir = local / "arbitrary-market-provider"
         skill_dir.mkdir(parents=True)
@@ -251,4 +251,3 @@ class TestSkillDiscovery:
         assert capability.side_effects is False
         assert capability.freshness_sensitive is True
         assert capability.output_contract == "structured_evidence"
-        assert capability.provides_fresh_structured_evidence is True

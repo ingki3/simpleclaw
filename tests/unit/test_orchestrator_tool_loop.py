@@ -469,17 +469,17 @@ async def test_skill_metadata_and_output_envelope_do_not_gate_final(
         system_prompt="",
         tools=[],
         system_blocks=[],
-        skill_capabilities={
-            "market-provider": CapabilityMetadata(
-                domains=("market",),
-                read_only=True,
-                side_effects=False,
-                freshness_sensitive=True,
-                output_contract=output_contract,
-                declared=True,
-            )
-        },
     )
+    state.skill_capabilities = {
+        "market-provider": CapabilityMetadata(
+            domains=("market",),
+            read_only=True,
+            side_effects=False,
+            freshness_sensitive=True,
+            output_contract=output_contract,
+            declared=True,
+        )
+    }
     state.live_fact_requires_evidence = True
     state.live_evidence_seen = False
 
@@ -586,8 +586,7 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert "확인하지 못" in result
-    assert "조회 없이 만든 답변" not in result
+    assert result == "조회 없이 만든 답변"
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
