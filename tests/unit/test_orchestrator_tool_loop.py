@@ -10,9 +10,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -100,18 +98,15 @@ def test_tool_loop_runner_contract_is_importable():
 
 
 @pytest.mark.asyncio
-async def test_process_cron_action_preserves_structured_evidence_failure(
+async def test_process_cron_action_preserves_generic_structured_failure(
     config_file, monkeypatch,
 ):
-    """C1: cron structured API는 guard failure와 evidence 상태를 보존한다."""
+    """실제 실행 실패는 evidence telemetry 없이 cron structured API로 전달된다."""
     orch = AgentOrchestrator(config_file)
     loop_result = ToolLoopResult(
-        text="검증 가능한 최신 시장 데이터를 확인하지 못했습니다.",
+        text="provider 실행에 실패했습니다.",
         success=False,
-        failure_kind=CronFailureKind.EVIDENCE_UNAVAILABLE.value,
-        live_evidence_seen=False,
-        live_evidence_required=True,
-        domains=("market",),
+        failure_kind=CronFailureKind.ACTION_FAILED.value,
     )
     run_loop = AsyncMock(return_value=loop_result)
     monkeypatch.setattr(orch, "_run_tool_loop_result", run_loop)
@@ -122,10 +117,10 @@ async def test_process_cron_action_preserves_structured_evidence_failure(
 
     assert structured.text == loop_result.text
     assert structured.success is False
-    assert structured.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE
-    assert structured.live_evidence_required is True
-    assert structured.live_evidence_seen is False
-    assert structured.domains == ("market",)
+    assert structured.failure_kind == CronFailureKind.ACTION_FAILED
+    assert "live_evidence_seen" not in structured.__dataclass_fields__
+    assert "live_evidence_required" not in structured.__dataclass_fields__
+    assert "domains" not in structured.__dataclass_fields__
     assert legacy_text == loop_result.text
 
 
@@ -378,12 +373,13 @@ async def test_attachment_context_note_includes_attachment_without_path(config_f
 
 
 @pytest.mark.asyncio
-async def test_live_fact_final_without_evidence_is_blocked_by_tool_loop(config_file):
-    """BIZ-363: 최신 근거 없는 실시간 사실 final text는 tool loop가 fallback으로 차단한다."""
+async def test_live_fact_final_ignores_legacy_evidence_flags(config_file):
+    """R1: 과거 evidence flag가 남아 있어도 정상 final은 그대로 보존한다."""
     orch = AgentOrchestrator(config_file)
+    final_text = "대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다."
 
     async def fake_send(_request):
-        return _text_response("대한민국 vs 우루과이: 6월 19일 10시 중계 예정입니다.")
+        return _text_response(final_text)
 
     orch._router.send = fake_send
     state = ToolLoopState(
@@ -392,312 +388,160 @@ async def test_live_fact_final_without_evidence_is_blocked_by_tool_loop(config_f
         system_prompt="",
         tools=[],
         system_blocks=[],
-        live_fact_requires_evidence=True,
-        live_evidence_seen=False,
     )
+    state.live_fact_requires_evidence = True
+    state.live_evidence_seen = False
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert "확인하지 못" in result.text
-    assert "6월 19일 10시" not in result.text
+    assert result.text == final_text
+    assert result.success is True
+    assert result.failure_kind is None
 
 
 @pytest.mark.asyncio
-async def test_live_fact_fetch_blocked_final_is_blocked(
-    config_file, monkeypatch,
-):
-    """BIZ-363: FETCH_BLOCKED는 usable evidence가 아니므로 이후 final text도 fallback으로 차단한다."""
+async def test_llm_provider_exception_remains_structured_failure(config_file):
+    """R5: hard gate 제거 후에도 LLM/provider exception은 success=False다."""
     orch = AgentOrchestrator(config_file)
-
-    async def fake_dispatch(tc):
-        return (
-            "FETCH_BLOCKED: https://www.google.com/search?q=2026+World+Cup\n"
-            "This site appears to block automated fetching."
-        )
-
-    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    responses = [
-        _tool_response(
-            "c1",
-            "web_fetch",
-            {"url": "https://www.google.com/search?q=2026+World+Cup"},
-        ),
-        _text_response("대한민국 vs 미국: 6월 23일 22시에 중계됩니다."),
-    ]
-    call_idx = {"i": 0}
-
-    async def fake_send(_request):
-        i = call_idx["i"]
-        call_idx["i"] += 1
-        return responses[i]
-
-    orch._router.send = fake_send
+    orch._router.send = AsyncMock(side_effect=RuntimeError("provider timeout"))
     state = ToolLoopState(
-        user_content="이번 월드컵 한국 경기 중계 일정 알려줘",
-        messages=[{"role": "user", "content": "이번 월드컵 한국 경기 중계 일정 알려줘"}],
+        user_content="오늘 시장 데이터 알려줘",
+        messages=[{"role": "user", "content": "오늘 시장 데이터 알려줘"}],
         system_prompt="",
         tools=[],
         system_blocks=[],
-        live_fact_requires_evidence=True,
-        live_evidence_seen=False,
     )
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert "확인하지 못" in result.text
-    assert "6월 23일 22시" not in result.text
+    assert result.success is False
+    assert result.failure_kind is None
+    assert "provider timeout" in result.text
 
 
 @pytest.mark.asyncio
-async def test_low_confidence_structured_result_does_not_flip_live_evidence(
+async def test_explicit_tool_error_explanation_is_preserved(
     config_file, monkeypatch,
 ):
-    """confidence=low structured JSON은 tool loop의 live evidence gate를 열지 않는다."""
+    """R6: 명시적 tool error 뒤의 설명 답변을 evidence fallback으로 교체하지 않는다."""
     orch = AgentOrchestrator(config_file)
 
     async def fake_dispatch(_tc):
-        return (
-            '{"kind":"sports","confidence":"low",'
-            '"facts":[{"type":"sports_score","away_score":2,"home_score":1}]}'
-        )
+        return "Error: upstream unavailable"
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
     responses = [
         _tool_response(
             "c1",
             "execute_skill",
-            {"skill_name": "realtime-lookup-skill", "command": "payload"},
+            {"skill_name": "market-provider", "args": "summary"},
         ),
-        _text_response("롯데가 2:1로 이겼고 경기는 LIVE입니다."),
+        _text_response("시장 데이터 조회에 실패했습니다."),
     ]
-    call_idx = {"i": 0}
-
-    async def fake_send(_request):
-        index = call_idx["i"]
-        call_idx["i"] += 1
-        return responses[index]
-
-    orch._router.send = fake_send
+    orch._router.send = AsyncMock(side_effect=responses)
     state = ToolLoopState(
-        user_content="롯데 야구 어케 되었나?",
-        messages=[{"role": "user", "content": "롯데 야구 어케 되었나?"}],
+        user_content="오늘 시장 데이터 알려줘",
+        messages=[{"role": "user", "content": "오늘 시장 데이터 알려줘"}],
         system_prompt="",
         tools=[],
         system_blocks=[],
-        live_fact_requires_evidence=True,
-        live_evidence_seen=False,
     )
+    state.live_fact_requires_evidence = True
+    state.live_evidence_seen = False
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert "확인하지 못" in result.text
-    assert "2:1" not in result.text
-    assert "LIVE" not in result.text
-
-
-def _structured_market_capability(
-    *, output_contract: str = "structured_evidence"
-) -> CapabilityMetadata:
-    """tool-loop 회귀에서 사용할 이름 비의존 시장 capability를 만든다."""
-    return CapabilityMetadata(
-        domains=("market",),
-        read_only=True,
-        side_effects=False,
-        freshness_sensitive=True,
-        output_contract=output_contract,
-        declared=True,
-    )
+    assert result.text == "시장 데이터 조회에 실패했습니다."
+    assert result.success is True
+    assert result.trace[0].success is False
 
 
 @pytest.mark.asyncio
-async def test_capability_market_evidence_preserves_original_long_final(
+@pytest.mark.parametrize(
+    "output_contract",
+    [None, "narrative_context"],
+)
+async def test_skill_metadata_and_output_envelope_do_not_gate_final(
     config_file, monkeypatch,
+    output_contract,
 ):
-    """E2: 임의 이름 skill의 정상 structured evidence가 시장 final을 보존한다."""
+    """R2/R3: metadata 계약과 source/as-of envelope가 final 허용 조건이 아니다."""
     orch = AgentOrchestrator(config_file)
-    as_of = datetime.now(UTC).isoformat()
 
     async def fake_dispatch(_tc):
-        return json.dumps(
-            {
-                "source": "Naver m.stock",
-                "as_of": as_of,
-                "facts": [{"symbol": "KOSPI", "value": 6729.46}],
-            }
-        )
+        return '{"summary":"KOSPI 7,000","rows":[["KOSPI",7000]]}'
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    report = ("한국장 시황 " + ("확인된 시장 리포트입니다. " * 400)).strip()
+    report = ("한국장 시황 " + ("완성된 시장 보고서입니다. " * 300)).strip()
     responses = [
         _tool_response(
-            "market-1",
+            "c1",
             "execute_skill",
-            {"skill_name": "arbitrary-market-provider", "args": "summary --json"},
+            {"skill_name": "market-provider", "args": "summary"},
         ),
         _text_response(report),
     ]
     orch._router.send = AsyncMock(side_effect=responses)
     state = ToolLoopState(
-        user_content="오늘 한국장 시황을 정리해줘",
-        messages=[{"role": "user", "content": "오늘 한국장 시황을 정리해줘"}],
+        user_content="오늘 한국장 시황",
+        messages=[{"role": "user", "content": "오늘 한국장 시황"}],
         system_prompt="",
         tools=[],
         system_blocks=[],
-        live_fact_requires_evidence=True,
-        skill_capabilities={
-            "arbitrary-market-provider": _structured_market_capability()
-        },
-        turn_domains=("market",),
     )
+    state.skill_capabilities = {
+        "market-provider": CapabilityMetadata(
+            domains=("market",),
+            read_only=True,
+            side_effects=False,
+            freshness_sensitive=True,
+            output_contract=output_contract,
+            declared=True,
+        )
+    }
+    state.live_fact_requires_evidence = True
+    state.live_evidence_seen = False
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert len(report) > 5_551
     assert result.text == report
     assert result.success is True
-    assert result.live_evidence_seen is True
     assert result.failure_kind is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "tool_output",
-    [
-        "",
-        "Error: upstream unavailable",
-        json.dumps(
-            {
-                "source": "Naver m.stock",
-                "as_of": (datetime.now(UTC) - timedelta(days=10)).isoformat(),
-                "facts": [{"symbol": "KOSPI", "value": 1}],
-            }
-        ),
-        json.dumps(
-            {
-                "source": "Naver m.stock",
-                "as_of": datetime.now(UTC).isoformat(),
-                "stale": True,
-                "facts": [{"symbol": "KOSPI", "value": 1}],
-            }
-        ),
-    ],
-)
-async def test_invalid_market_evidence_returns_structured_market_failure(
-    config_file, monkeypatch, tool_output,
-):
-    """E3/F1/C1: 빈·오류·stale 결과는 시장 fallback semantic failure다."""
+async def test_forced_final_ignores_legacy_evidence_flags(config_file, monkeypatch):
+    """R4: tool budget 소진 뒤 forced final도 evidence flag와 무관하게 보존한다."""
     orch = AgentOrchestrator(config_file)
 
-    async def fake_dispatch(_tc):
-        return tool_output
+    async def fake_dispatch(tc):
+        return f"result from {tc.name}"
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
+    final_text = "도구 결과를 바탕으로 완성한 시장 보고서입니다."
     orch._router.send = AsyncMock(
         side_effect=[
-            _tool_response(
-                "market-bad",
-                "execute_skill",
-                {"skill_name": "market-provider", "args": "summary --json"},
-            ),
-            _text_response("KOSPI는 7,000입니다."),
+            _tool_response("c1", "skill_docs"),
+            _tool_response("c2", "execute_skill"),
+            _text_response(final_text),
         ]
     )
     state = ToolLoopState(
-        user_content="오늘 한국장 시황",
-        messages=[{"role": "user", "content": "오늘 한국장 시황"}],
+        user_content="시장 보고서를 완성해줘",
+        messages=[{"role": "user", "content": "시장 보고서를 완성해줘"}],
         system_prompt="",
         tools=[],
         system_blocks=[],
-        live_fact_requires_evidence=True,
-        skill_capabilities={"market-provider": _structured_market_capability()},
-        turn_domains=("market",),
     )
+    state.live_fact_requires_evidence = True
+    state.live_evidence_seen = False
 
     result = await ToolLoopRunner(orch).run(state)
 
-    assert result.success is False
-    assert result.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE.value
-    assert result.live_evidence_seen is False
-    assert "최신 시장 데이터" in result.text
-    assert "일정/중계" not in result.text
-    assert "방송사 공지" not in result.text
-    assert "7,000" not in result.text
-
-
-@pytest.mark.asyncio
-async def test_undeclared_or_news_context_skill_cannot_authorize_market_numbers(
-    config_file, monkeypatch,
-):
-    """E4/E5: 긴 미선언 결과와 RSS narrative는 시장 숫자의 단독 근거가 아니다."""
-    orch = AgentOrchestrator(config_file)
-
-    async def fake_dispatch(_tc):
-        return "Google News RSS titles\n" + ("headline " * 1000)
-
-    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    orch._router.send = AsyncMock(
-        side_effect=[
-            _tool_response(
-                "news-1",
-                "execute_skill",
-                {"skill_name": "google-news-search-skill", "args": "--format json"},
-            ),
-            _text_response("KOSPI는 7,000입니다."),
-        ]
-    )
-    state = ToolLoopState(
-        user_content="오늘 한국장 시황",
-        messages=[{"role": "user", "content": "오늘 한국장 시황"}],
-        system_prompt="",
-        tools=[],
-        system_blocks=[],
-        live_fact_requires_evidence=True,
-        skill_capabilities={
-            "google-news-search-skill": _structured_market_capability(
-                output_contract="narrative_context"
-            )
-        },
-        turn_domains=("market",),
-    )
-
-    result = await ToolLoopRunner(orch).run(state)
-
-    assert result.success is False
-    assert result.live_evidence_seen is False
-    assert "최신 시장 데이터" in result.text
-    assert "7,000" not in result.text
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("domains", "expected", "forbidden"),
-    [
-        (("sports",), "일정/중계", "시장 데이터"),
-        ((), "최신 근거", "일정/중계"),
-    ],
-)
-async def test_live_evidence_fallback_is_domain_specific(
-    config_file, domains, expected, forbidden,
-):
-    """F2/F3: sports와 generic fallback이 각 도메인 의미를 유지한다."""
-    orch = AgentOrchestrator(config_file)
-    orch._router.send = AsyncMock(return_value=_text_response("근거 없는 단정"))
-    state = ToolLoopState(
-        user_content="최신 상태 알려줘",
-        messages=[{"role": "user", "content": "최신 상태 알려줘"}],
-        system_prompt="",
-        tools=[],
-        system_blocks=[],
-        live_fact_requires_evidence=True,
-        turn_domains=domains,
-    )
-
-    result = await ToolLoopRunner(orch).run(state)
-
-    assert expected in result.text
-    assert forbidden not in result.text
-    assert result.success is False
-    assert result.failure_kind == CronFailureKind.EVIDENCE_UNAVAILABLE.value
+    assert result.text.startswith(final_text)
+    assert "도구 호출 한도 2회에 도달" in result.text
+    assert result.success is True
+    assert result.failure_kind is None
 
 
 @pytest.mark.asyncio
@@ -724,8 +568,7 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
 
-    assert "확인하지 못" in result
-    assert "7:4" not in result
+    assert result == "LG가 두산을 7:4로 이겼습니다."
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 
@@ -762,8 +605,7 @@ async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
 
     result = await orch.process_cron_message(message)
 
-    assert "확인하지 못" in result
-    assert "조회 없이 만든 답변" not in result
+    assert result == "조회 없이 만든 답변"
     assert call_idx["i"] == 1
     assert dispatch_calls == []
 

@@ -172,9 +172,6 @@ from simpleclaw.skills.learning import (
 from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
 from simpleclaw.skills.realtime_lookup import (
-    classify_query as classify_realtime_query,
-)
-from simpleclaw.skills.realtime_lookup import (
     decode_payload as decode_realtime_lookup_payload,
 )
 from simpleclaw.skills.realtime_lookup import (
@@ -606,27 +603,6 @@ def _format_attachment_context_note(
             parts.append(f"Sandbox path: {attachment.path}")
         lines.append("; ".join(parts))
     return "\n".join(lines)
-
-
-def _tool_call_provides_live_evidence(
-    tool_call: ToolCall,
-    skill_capabilities: dict[str, object] | None = None,
-) -> bool:
-    """호환 helper: skill 이름이 아니라 전달된 capability 계약만 판정한다."""
-    if tool_call.name in {"web_fetch", "web_search"}:
-        return True
-    if tool_call.name == "execute_skill":
-        skill_name = str((tool_call.arguments or {}).get("skill_name", ""))
-        capability = (skill_capabilities or {}).get(skill_name)
-        return bool(
-            capability
-            and getattr(
-                capability,
-                "provides_fresh_structured_evidence",
-                False,
-            )
-        )
-    return False
 
 
 def _tool_result_looks_like_explicit_error(content: str) -> bool:
@@ -1152,9 +1128,6 @@ class AgentOrchestrator:
                 text=result.text,
                 success=result.success,
                 failure_kind=failure_kind,
-                live_evidence_seen=result.live_evidence_seen,
-                live_evidence_required=result.live_evidence_required,
-                domains=result.domains,
             )
 
     async def process_cron_message(self, text: str) -> str:
@@ -2758,25 +2731,6 @@ class AgentOrchestrator:
                 operator_tools=operator_tools,
                 allow_cron_mutation=allow_cron_mutation,
             )
-        # BIZ-363: realtime-lookup-skill 이 이미 근거를 실어 준 경우 그 자체를
-        # 최신 근거로 인정하고, live-fact 질의로 판정됐는데 근거가 없으면 tool
-        # loop 이 근거 없는 final answer 를 차단하도록 상태를 전달한다.
-        live_evidence_seen = realtime_lookup_usable
-        live_fact_requires_evidence = (
-            plan.fact_check.required
-            if plan is not None
-            else realtime_lookup_payload is not None
-        )
-        classified_turn_domain = classify_realtime_query(execution_text)
-        turn_domains = (
-            ()
-            if classified_turn_domain in {"general", "news"}
-            else (classified_turn_domain,)
-        )
-        skill_capabilities = {
-            skill.name: skill.capability
-            for skill in active_skills
-        }
         effective_on_text_delta = on_text_delta
         if plan is not None and (
             plan.fact_check.required
@@ -2795,10 +2749,6 @@ class AgentOrchestrator:
             selected_turn_ids=(
                 plan.context.selected_turn_ids if plan is not None else ()
             ),
-            live_evidence_seen=live_evidence_seen,
-            live_fact_requires_evidence=live_fact_requires_evidence,
-            skill_capabilities=skill_capabilities,
-            turn_domains=turn_domains,
             previous_mutation_snapshot=self._mutation_tracker.snapshot(),
             on_text_delta=effective_on_text_delta,
             on_progress=on_progress,

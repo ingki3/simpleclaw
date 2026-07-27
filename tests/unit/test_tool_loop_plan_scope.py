@@ -543,10 +543,10 @@ async def test_runner_keeps_blocked_call_as_observation_without_execution(
 
 
 @pytest.mark.asyncio
-async def test_selected_assistant_context_never_starts_as_live_evidence(
+async def test_fact_check_plan_does_not_create_evidence_gate_state(
     primary_config,
 ):
-    """선택된 assistant 발화는 대화 문맥일 뿐 evidence gate를 열지 않는다."""
+    """R8: fact-check plan은 조회를 유도하되 final hard-gate state를 만들지 않는다."""
     orchestrator = AgentOrchestrator(primary_config)
     state = await orchestrator._prepare_tool_loop_state(
         "원문",
@@ -568,16 +568,19 @@ async def test_selected_assistant_context_never_starts_as_live_evidence(
     )
 
     assert state.messages[0]["role"] == "assistant"
-    assert state.live_evidence_seen is False
-    assert state.live_fact_requires_evidence is True
+    assert "live_evidence_seen" not in state.__dataclass_fields__
+    assert "live_fact_requires_evidence" not in state.__dataclass_fields__
+    assert "evidence_guard_blocked" not in state.__dataclass_fields__
+    assert state.execution_scope is not None
+    assert state.execution_scope.allowed_tools == frozenset({"web_fetch"})
 
 
 @pytest.mark.asyncio
-async def test_web_search_usable_result_unlocks_live_fact_final(
+async def test_fact_check_plan_still_executes_web_search(
     primary_config,
     monkeypatch,
 ):
-    """허용된 web_search의 URL 포함 성공 결과는 최신 근거 gate를 연다."""
+    """planner fact-check는 hard gate 제거 후에도 허용된 조회 도구를 실행한다."""
     orchestrator = AgentOrchestrator(primary_config)
     search = AsyncMock(
         return_value=(
@@ -630,7 +633,6 @@ async def test_web_search_usable_result_unlocks_live_fact_final(
     result = await ToolLoopRunner(orchestrator).run(state)
 
     assert result.text == "공식 결과를 확인했습니다"
-    assert state.live_evidence_seen is True
     search.assert_awaited_once()
 
 
@@ -642,12 +644,12 @@ async def test_web_search_usable_result_unlocks_live_fact_final(
         "Error: web search backend unavailable",
     ],
 )
-async def test_web_search_empty_or_error_result_keeps_live_fact_final_blocked(
+async def test_web_search_empty_or_error_does_not_replace_final(
     primary_config,
     monkeypatch,
     search_result,
 ):
-    """web_search가 빈 결과나 오류를 반환하면 최신 근거 gate를 열지 않는다."""
+    """R8: 자동 조회가 실패해도 후속 LLM final을 hard fallback으로 교체하지 않는다."""
     orchestrator = AgentOrchestrator(primary_config)
     monkeypatch.setattr(
         "simpleclaw.agent.tool_dispatch.handle_web_search",
@@ -691,17 +693,15 @@ async def test_web_search_empty_or_error_result_keeps_live_fact_final_blocked(
     orchestrator._router.send = fake_send
     result = await ToolLoopRunner(orchestrator).run(state)
 
-    assert state.live_evidence_seen is False
-    assert "근거 없이 단정한 결과" not in result.text
-    assert "확인하지 못" in result.text
+    assert result.text == "근거 없이 단정한 결과"
 
 
 @pytest.mark.asyncio
-async def test_fact_required_primary_path_suppresses_all_streaming(
+async def test_fact_required_primary_path_suppresses_streaming_but_preserves_final(
     primary_config,
     monkeypatch,
 ):
-    """current-fact plan은 근거 gate 전 delta를 caller에게 한 건도 내보내지 않는다."""
+    """fact-check 조회 경로는 streaming을 억제해도 생성된 final은 보존한다."""
     orchestrator = AgentOrchestrator(primary_config)
 
     async def fake_planner(_text, *, catalog, **_kwargs):
@@ -739,5 +739,4 @@ async def test_fact_required_primary_path_suppresses_all_streaming(
 
     assert send_callbacks == [None]
     assert deltas == []
-    assert "근거 없는 점수" not in result
-    assert "확인하지 못" in result
+    assert result == "근거 없는 점수"

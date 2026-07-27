@@ -206,12 +206,12 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
         '{"kind":"sports","confidence":"medium","facts":[]}',
     ],
 )
-async def test_low_or_empty_realtime_evidence_blocks_unsupported_score(
+async def test_low_or_empty_realtime_evidence_does_not_replace_final(
     config_file,
     tmp_path,
     evidence,
 ):
-    """low/empty evidence는 2:1 승리·LIVE 같은 exact sports 문구를 허용하지 않는다."""
+    """realtime prefetch 품질은 final을 강제로 교체하는 hard gate가 아니다."""
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(return_value=evidence)
@@ -222,9 +222,8 @@ async def test_low_or_empty_realtime_evidence_blocks_unsupported_score(
 
     result = await orchestrator.process_message("롯데 야구 어케 되었나?", 1, 1)
 
-    assert "확인하지 못" in result
-    assert "2:1" not in result
-    assert "LIVE" not in result
+    assert result == "롯데가 2:1로 승리했고 현재 LIVE입니다."
+    orchestrator._execute_skill.assert_awaited_once()
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -368,8 +367,7 @@ async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
 
     result = await orchestrator.process_message("오늘 AI 최신 뉴스 알려줘", 1, 1)
 
-    assert "확인하지 못" in result
-    assert "직접 답변" not in result
+    assert result == "직접 답변"
     orchestrator._execute_skill.assert_not_called()
     assert orchestrator._router.send.call_count == 1
     request = orchestrator._router.send.call_args_list[0][0][0]

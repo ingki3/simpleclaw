@@ -127,6 +127,10 @@
 
 ## Done
 
+### 2026-07-28
+
+- [x] **[BIZ-505](mention://issue/cb9f1853-2b50-4f9f-b2a4-75255fe143f0): Fresh structured evidence hard gate 제거** — 일반 final·forced-final을 skill metadata/JSON envelope와 무관하게 보존하도록 post-generation evidence 차단, structured validator, active cron의 `evidence_unavailable` 생성 경로를 제거했다. planner fact-check/realtime lookup, capability routing safety, explicit provider/action failure와 scheduler retry는 유지했다. 검증: targeted 167 passed, 전체 `tests/unit/` 2991 passed·3 xfailed, `ruff check src/ tests/ scripts/` 및 `git diff --check` 통과, PR #518의 `contracts`·`offline-integration`·`pytest` CI green. (2026-07-28)
+
 ### 2026-07-19
 
 - [x] **BIZ-460: Gemini OpenAI-compatible A/B 및 LLM 운영 마이그레이션** — `gemini-openai` opt-in profile을 공용 `openai_chat` transport에 등록하고 Google OpenAI-compatible endpoint 예시를 주석 처리된 backend로만 제공했다. profile은 Gemini-native `propertyOrdering`만 복사본에서 제거한다. provider-neutral tool·multimodal attachment·reasoning·native replay는 capability `false`로 선언되어 preflight에서 차단되며, native Gemini route가 이 기능들의 운영 경로로 유지된다. credential-gated integration matrix는 endpoint의 text·TurnAnalysis schema·OpenAI-shaped tool/replay·reasoning·image 입력을 실제로 요청하도록 구성했지만, gate 비활성 시 `5 passed, 6 skipped`이고 billable live matrix는 미실행이다. `openai_responses`는 Chat Completions 재사용을 금지하는 actionable not-registered 확장 계약과 transport 문서로 고정했다. `llm.routes`/backend `transport`/`profile`/credential 변경은 service restart 정책으로 정렬했고, config example·feature/admin 문서에 legacy migration, secret redaction, restart 및 native/default 전환 운영자 승인 gate를 반영했다. 검증: `tests/unit/` 2744 passed·3 xfailed, ruff clean. (2026-07-19)
