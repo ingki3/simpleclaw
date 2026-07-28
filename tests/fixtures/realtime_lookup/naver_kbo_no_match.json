@@ -4,19 +4,6 @@
   "result": {
     "games": [
       {
-        "gameId": "wrong-date",
-        "categoryId": "kbo",
-        "gameDate": "2026-07-27",
-        "awayTeamName": "롯데",
-        "awayTeamScore": 8,
-        "homeTeamName": "한화",
-        "homeTeamScore": 3,
-        "statusCode": "ENDED",
-        "winner": "AWAY",
-        "cancel": false,
-        "suspended": false
-      },
-      {
         "gameId": "wrong-team",
         "categoryId": "kbo",
         "gameDate": "2026-07-28",
@@ -28,21 +15,8 @@
         "winner": "HOME",
         "cancel": false,
         "suspended": false
-      },
-      {
-        "gameId": "wrong-category",
-        "categoryId": "kbaseballetc",
-        "gameDate": "2026-07-28",
-        "awayTeamName": "롯데",
-        "awayTeamScore": 8,
-        "homeTeamName": "한화",
-        "homeTeamScore": 3,
-        "statusCode": "ENDED",
-        "winner": "AWAY",
-        "cancel": false,
-        "suspended": false
       }
     ],
-    "gameTotalCount": 3
+    "gameTotalCount": 1
   }
 }

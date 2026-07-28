@@ -332,11 +332,17 @@ def parse_naver_kbo_schedule(
     games = payload["result"].get("games")
     if not isinstance(games, list) or not all(isinstance(game, dict) for game in games):
         return _failed_sports_outcome("네이버 스포츠 result.games 배열이 올바르지 않습니다.")
+    if any(game.get("gameDate") != expected_date for game in games):
+        return _failed_sports_outcome(
+            "날짜 제한 요청과 다른 gameDate가 네이버 스포츠 응답에 포함됐습니다."
+        )
+    if any(game.get("categoryId") != "kbo" for game in games):
+        return _failed_sports_outcome(
+            "KBO 제한 요청과 다른 categoryId가 네이버 스포츠 응답에 포함됐습니다."
+        )
 
     candidates: list[tuple[bool, datetime, str, SourceDocument]] = []
     for game in games:
-        if game.get("gameDate") != expected_date or game.get("categoryId") != "kbo":
-            continue
         away_team = canonical_kbo_team(str(game.get("awayTeamName") or ""))
         home_team = canonical_kbo_team(str(game.get("homeTeamName") or ""))
         if away_team is None or home_team is None or away_team == home_team:

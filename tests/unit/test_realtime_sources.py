@@ -304,6 +304,29 @@ def test_parse_naver_kbo_schedule_rejects_invalid_live_envelope(field, value):
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("gameDate", "2026-07-27"),
+        ("categoryId", "kbaseballetc"),
+    ],
+)
+def test_parse_naver_kbo_schedule_rejects_date_or_category_drift(field, value):
+    payload = json.loads(_STARTED_JSON)
+    payload["result"]["games"][0][field] = value
+
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload, ensure_ascii=False),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
+    )
+
+    assert outcome.lookup_status == "failed"
+    assert outcome.sources == []
+    assert outcome.limitations
+
+
+@pytest.mark.parametrize(
     ("body", "expected_status"),
     [
         (_NO_MATCH_JSON, "not_found"),
