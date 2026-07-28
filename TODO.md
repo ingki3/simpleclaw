@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-511](mention://issue/57a9a033-d881-48c9-b001-f14495d9fc0a): MCP 2.0 FastMCP 호환성 회귀 복구** — `mcp>=1.0,<2`로 v1 runtime 계약을 유지하는 PR #523의 머지와, 머지 후 BIZ-509 PR #522 fresh CI 재검증을 남은 gate로 추적한다.
-
 - [x] **BIZ-507: news-search-skill Gemini secret을 등록 skill 자식 범위로 제한** — PR #520을 `dev`에 squash merge(`62a203566fd2185e3b3dbec99824932bec3e0166`)했다. 2026-07-28 live rollout에서 `news-search-skill` N1~N3와 `krstock*` R1~R2 수정·timestamp backup, Gemini credential `file:gemini_api_key` encrypted-vault migration/read-back, LaunchAgent drain restart·Admin health, notifier 없는 registered skill 및 `/krstock-close` smoke를 완료했다.
 
 - [x] **BIZ-503: 한국장 cron fresh-evidence 오판·성공 오기록 수정** — capability metadata 기반 evidence provider 판정, 중첩 error/stale/invalid fail-closed, 동일 record의 source/as-of/data 결합, 도메인별 fallback, structured semantic failure 영속화와 마지막 재시도 유형 기반 알림을 구현·검증했다. PR #514를 `dev`에 squash merge(SHA `e1d65e638afe586e7b2da136c8751d3ea8c1ef57`)하고 PR #516을 merge commit(SHA `b6658e5401b3ca3e162747bd0edb05f8ea3d9f99`)으로 `main`에 긴급 release하여 `v2026.07.27` 발행을 확인했다. live 스킬 timestamp backup/capability metadata/loader readback, release checkout 동기화, drain restart, Admin·Webhook·Telegram health, 실제 market-summary validator, notifier 없는 한국장 cron structured success smoke까지 완료했다. (2026-07-27)
@@ -132,6 +130,8 @@
 ## Done
 
 ### 2026-07-28
+
+- [x] **[BIZ-511](mention://issue/57a9a033-d881-48c9-b001-f14495d9fc0a): MCP 2.0 FastMCP 호환성 회귀 복구** — `mcp>=1.0,<2`로 v1 runtime 계약을 유지하는 PR #523을 `dev`에 squash merge(`24ffa6b1bff4ff03928de8d560d7b53d14b18d4d`)했고, BIZ-509 PR #522를 새 `dev`와 동기화한 fresh CI에서 Offline Integration·Runtime Contracts·Unit Tests가 모두 통과했다. (2026-07-28)
 
 - [x] **[BIZ-505](mention://issue/cb9f1853-2b50-4f9f-b2a4-75255fe143f0): Fresh structured evidence hard gate 제거** — 일반 final·forced-final을 skill metadata/JSON envelope와 무관하게 보존하도록 post-generation evidence 차단, structured validator, active cron의 `evidence_unavailable` 생성 경로를 제거했다. planner fact-check/realtime lookup, capability routing safety, explicit provider/action failure와 scheduler retry는 유지했다. 검증: targeted 167 passed, 전체 `tests/unit/` 2991 passed·3 xfailed, `ruff check src/ tests/ scripts/` 및 `git diff --check` 통과, PR #518의 `contracts`·`offline-integration`·`pytest` CI green. (2026-07-28)
 
