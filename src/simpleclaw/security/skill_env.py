@@ -111,7 +111,14 @@ def load_skill_env_secret_refs(
             ):
                 raise SkillEnvConfigError("Invalid skill secret reference")
 
-            value = resolver.resolve(reference)
+            try:
+                value = resolver.resolve(reference)
+            except Exception:  # noqa: BLE001 — backend 진단은 credential을 포함할 수 있음.
+                # resolver 예외를 chaining하면 startup traceback이 backend의 raw
+                # reference/master-key 진단을 노출할 수 있어 이 경계에서 끊는다.
+                raise SkillEnvConfigError(
+                    "Unable to resolve configured skill secret"
+                ) from None
             if not value:
                 raise SkillEnvConfigError("Unable to resolve configured skill secret")
             resolved_env[env_name] = value

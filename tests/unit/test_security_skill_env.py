@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import traceback
 
 import pytest
 
@@ -21,6 +22,16 @@ class _FakeSecretsManager:
 
     def resolve(self, reference: str) -> str:
         return self._values.get(reference, "")
+
+
+class _RaisingSecretsManager:
+    """민감 진단을 예외 문자열에 싣는 adversarial resolver."""
+
+    def resolve(self, reference: str) -> str:
+        raise RuntimeError(
+            f"backend failure reference={reference} "
+            "master=synthetic-master-canary"
+        )
 
 
 def test_loads_exact_skill_child_env_without_mutating_parent(monkeypatch):
@@ -80,6 +91,32 @@ def test_unresolved_reference_fails_closed_without_secret_value(caplog):
     assert canary not in serialized
     assert "missing_key" not in serialized
     assert "Unable to resolve configured skill secret" in str(caught.value)
+
+
+def test_resolver_exception_is_sanitized_without_chained_sensitive_context():
+    with pytest.raises(SkillEnvConfigError) as caught:
+        load_skill_env_secret_refs(
+            {
+                "news-search-skill": {
+                    "GEMINI_API_KEY": "file:gemini_api_key",
+                }
+            },
+            manager=_RaisingSecretsManager(),
+        )
+
+    rendered = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert type(caught.value) is SkillEnvConfigError
+    assert str(caught.value) == "Unable to resolve configured skill secret"
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+    assert "file:gemini_api_key" not in rendered
+    assert "synthetic-master-canary" not in rendered
 
 
 def test_resolved_secret_is_never_logged(caplog):
