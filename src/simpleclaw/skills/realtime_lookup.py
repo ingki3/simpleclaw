@@ -27,6 +27,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from simpleclaw.skills.realtime_sources import (
+    CollectionOutcome,
     FetchPage,
     ResolveNewsUrl,
     SourceDocument,
@@ -460,6 +461,8 @@ def is_usable_realtime_evidence(
     parsed = _parsed_result(result)
     if parsed is None or parsed.get("confidence") not in {"medium", "high"}:
         return False
+    if parsed.get("lookup_status") in {"not_found", "failed"}:
+        return False
     facts = parsed.get("facts")
     if not isinstance(facts, list) or not facts or not all(
         isinstance(fact, dict) for fact in facts
@@ -518,20 +521,29 @@ async def lookup_async(
 ) -> dict[str, Any]:
     """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
 
-    뉴스/일반은 Google News RSS로 후보를 찾은 뒤 원문을 읽고, 스포츠는 기준일이
-    포함된 경기정보 페이지에서 한 경기 card의 값만 구조화한다. production에서는
-    오케스트레이터가 SSRF/redirect/headless 정책을 적용한 ``fetch_page``를 주입한다.
+    뉴스/일반은 Google News RSS로 후보를 찾은 뒤 원문을 읽고, 스포츠는 기준일로
+    제한한 네이버 schedule API에서 한 경기의 enum/schema 값만 구조화한다.
+    production에서는 오케스트레이터가 SSRF/redirect 정책을 적용한
+    ``fetch_page``를 주입한다.
     """
     query = str(payload.get("query") or "").strip() or "실시간 정보"
     kind = classify_query(query)
     as_of_kst = payload.get("as_of_kst")
-    sources, limitations = await collect_sources(
+    collected = await collect_sources(
         query=query,
         kind=kind,
         as_of_kst=as_of_kst,
         fetch_page=fetch_page,
         resolve_news_url=resolve_news_url,
     )
+    if isinstance(collected, CollectionOutcome):
+        sources = collected.sources
+        limitations = collected.limitations
+        lookup_status = collected.lookup_status
+    else:
+        # 테스트/외부 monkeypatch의 기존 2-tuple 계약을 한 릴리스 동안 허용한다.
+        sources, limitations = collected
+        lookup_status = "found" if sources else "failed"
     limitations = list(limitations)
     now_utc = datetime.now(UTC).isoformat()
 
@@ -539,14 +551,42 @@ async def lookup_async(
 
     # BIZ-383: 일정/상태성 질문이면 출처 본문이 어느 이벤트까지 반영했는지 검증한다.
     is_sensitive = kind == "sports" or is_timeline_sensitive_query(query)
-    timeline_validation = validate_timeline(combined_text, is_sensitive, as_of_kst)
+    sports_facts = [
+        _fact_from_source(source)
+        for source in sources
+        if source.sports_fact is not None
+    ]
+    if kind == "sports" and sports_facts:
+        sports_status = sports_facts[0]["status"]
+        timeline_status = "final" if sports_status == "final" else "partial"
+        timeline_validation = {
+            "is_timeline_sensitive": True,
+            "status": timeline_status,
+            "as_of_kst": as_of_kst,
+            "signals": {
+                "future_cues": [],
+                "past_cues": [],
+                "in_progress_cues": [],
+                "dates": [],
+            },
+            "notes": _timeline_notes(timeline_status, True),
+        }
+    else:
+        timeline_validation = validate_timeline(
+            combined_text, is_sensitive, as_of_kst
+        )
     status = timeline_validation["status"]
 
     evidence = []
     for source in sources:
         # 출처별로 시간 cue를 따로 분류해, 어떤 소스가 stale/partial인지 드러낸다.
-        source_signals = extract_time_signals(source.text)
-        source_status = classify_timeline_status(source_signals, has_text=True)
+        if source.sports_fact is not None:
+            source_status = (
+                "final" if source.sports_fact.status == "final" else "partial"
+            )
+        else:
+            source_signals = extract_time_signals(source.text)
+            source_status = classify_timeline_status(source_signals, has_text=True)
         structured_fact = _fact_from_source(source)
         entry = {
             "source": source.source,
@@ -599,6 +639,7 @@ async def lookup_async(
     return {
         "kind": kind,
         "query": query,
+        "lookup_status": lookup_status,
         "freshness": {
             "as_of_kst": as_of_kst,
             "retrieved_at_utc": now_utc,
@@ -629,6 +670,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "kind": "unknown",
+                    "lookup_status": "failed",
                     "confidence": "low",
                     "evidence": [],
                     "facts": [],
@@ -644,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — stdout JSON contract 유지
         result = {
             "kind": "unknown",
+            "lookup_status": "failed",
             "confidence": "low",
             "evidence": [],
             "facts": [],

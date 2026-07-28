@@ -1,0 +1,23 @@
+{
+  "code": 200,
+  "success": true,
+  "result": {
+    "games": [
+      {
+        "gameId": "cancelled",
+        "categoryId": "kbo",
+        "gameDate": "2026-07-28",
+        "gameDateTime": "2026-07-28T18:30:00",
+        "awayTeamName": "롯데",
+        "awayTeamScore": 0,
+        "homeTeamName": "한화",
+        "homeTeamScore": 0,
+        "statusCode": "RESULT",
+        "winner": "DRAW",
+        "cancel": true,
+        "suspended": false
+      }
+    ],
+    "gameTotalCount": 1
+  }
+}

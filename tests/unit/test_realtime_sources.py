@@ -2,29 +2,45 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from urllib.parse import unquote_plus
 
 import pytest
 
 from simpleclaw.skills.realtime_sources import (
+    CollectionOutcome,
     NewsCandidate,
     SportsGameFact,
     build_google_news_rss_url,
+    build_naver_sports_schedule_url,
     build_sports_page_url,
     collect_sources,
     filter_recent_candidates,
     html_to_visible_text,
+    parse_naver_kbo_schedule,
     parse_google_news_rss,
-    parse_naver_kbo_game_card,
 )
 
 _FIXTURES = Path(__file__).parents[1] / "fixtures" / "realtime_lookup"
 _RECENT_RSS = (_FIXTURES / "google_news_recent.xml").read_text(encoding="utf-8")
 _STALE_RSS = (_FIXTURES / "google_news_stale.xml").read_text(encoding="utf-8")
-_FINAL_HTML = (_FIXTURES / "naver_kbo_final.html").read_text(encoding="utf-8")
-_LIVE_HTML = (_FIXTURES / "naver_kbo_live.html").read_text(encoding="utf-8")
+_STARTED_JSON = (_FIXTURES / "naver_kbo_started.json").read_text(encoding="utf-8")
+_ENDED_JSON = (_FIXTURES / "naver_kbo_ended.json").read_text(encoding="utf-8")
+_RESULT_JSON = (_FIXTURES / "naver_kbo_result.json").read_text(encoding="utf-8")
+_DOUBLEHEADER_JSON = (_FIXTURES / "naver_kbo_doubleheader.json").read_text(
+    encoding="utf-8"
+)
+_NO_MATCH_JSON = (_FIXTURES / "naver_kbo_no_match.json").read_text(encoding="utf-8")
+_MALFORMED_JSON = (_FIXTURES / "naver_kbo_malformed.json").read_text(encoding="utf-8")
+_CANCELLED_JSON = (_FIXTURES / "naver_kbo_cancelled_suspended.json").read_text(
+    encoding="utf-8"
+)
+_UNKNOWN_JSON = (_FIXTURES / "naver_kbo_unknown_status.json").read_text(
+    encoding="utf-8"
+)
 _AS_OF = "2026-07-24T22:18:43+09:00"
+_SPORTS_AS_OF = "2026-07-28T20:18:43+09:00"
 
 
 class FetchRecorder:
@@ -123,15 +139,21 @@ async def test_news_rss_title_without_usable_article_body_produces_no_source(art
     assert limitations
 
 
-def test_sports_page_url_contains_as_of_date_and_team_query():
-    url = build_sports_page_url("롯데 야구 어케 되었나?", as_of_kst=_AS_OF)
+def test_sports_schedule_url_is_date_bounded_without_status_filter():
+    url = build_naver_sports_schedule_url(as_of_kst=_SPORTS_AS_OF)
 
     decoded = unquote_plus(url)
-    assert "search.naver.com/search.naver" in url
-    assert "2026년 7월 24일" in decoded
-    assert "롯데 자이언츠 경기 결과" in decoded
-    assert "어케 되었나" not in decoded
-    assert "경기 결과" in decoded
+    assert url.startswith("https://api-gw.sports.naver.com/schedule/games?")
+    assert "fromDate=2026-07-28" in decoded
+    assert "toDate=2026-07-28" in decoded
+    assert "size=20" in decoded
+    assert "page=1" in decoded
+    assert "fields=basic,schedule,baseball,manualRelayUrl" in decoded
+    assert "upperCategoryId=kbaseball" in decoded
+    assert "categoryIds=kbo" in decoded
+    assert "statusCode" not in decoded
+    # 기존 public helper는 호출자를 깨지 않고 동일 structured endpoint를 가리킨다.
+    assert build_sports_page_url("ignored", as_of_kst=_SPORTS_AS_OF) == url
 
 
 def test_html_to_visible_text_preserves_image_alt_markers():
@@ -141,113 +163,232 @@ def test_html_to_visible_text_preserves_image_alt_markers():
     assert "LIVE" in text
 
 
-def test_parse_naver_kbo_final_card_extracts_one_exact_score_fact():
-    source_url = build_sports_page_url("오늘 롯데 경기 결과", as_of_kst=_AS_OF)
+@pytest.mark.parametrize(
+    ("body", "expected_status", "expected_winner", "expected_scores"),
+    [
+        (_STARTED_JSON, "live", None, (8, 3)),
+        (_ENDED_JSON, "final", "롯데 자이언츠", (8, 3)),
+        (_RESULT_JSON, "final", "한화 이글스", (2, 4)),
+    ],
+)
+def test_parse_naver_kbo_schedule_uses_enums_not_status_info(
+    body,
+    expected_status,
+    expected_winner,
+    expected_scores,
+):
+    source_url = build_naver_sports_schedule_url(as_of_kst=_SPORTS_AS_OF)
 
-    fact = parse_naver_kbo_game_card(
-        _FINAL_HTML,
+    outcome = parse_naver_kbo_schedule(
+        body,
         source_url=source_url,
-        expected_date="2026-07-24",
-        expected_team="롯데 자이언츠",
+        expected_date="2026-07-28",
+        expected_team="롯데",
     )
 
+    assert outcome.lookup_status == "found"
+    assert outcome.limitations == []
+    fact = outcome.sources[0].sports_fact
     assert fact == SportsGameFact(
         league="KBO",
-        event_date="2026-07-24",
-        status="final",
-        away_team="kt wiz",
-        away_score=5,
-        home_team="롯데 자이언츠",
-        home_score=4,
-        winner="kt wiz",
-        source="Naver Sports Game Card",
+        event_date="2026-07-28",
+        status=expected_status,
+        away_team="롯데 자이언츠",
+        away_score=expected_scores[0],
+        home_team="한화 이글스",
+        home_score=expected_scores[1],
+        winner=expected_winner,
+        source="Naver Sports Schedule API",
         source_url=source_url,
     )
 
 
-def test_parse_naver_kbo_final_visible_text_from_builtin_fetch():
-    """태그가 제거된 built-in web-fetch 본문에서도 날짜-bound 카드만 파싱한다."""
-    visible_text = html_to_visible_text(_FINAL_HTML, limit=30_000)
+@pytest.mark.parametrize("status_info", ["경기중", "임의 변경 문구", None])
+def test_started_state_is_unchanged_when_status_info_changes(status_info):
+    payload = json.loads(_STARTED_JSON)
+    game = payload["result"]["games"][0]
+    if status_info is None:
+        game.pop("statusInfo", None)
+    else:
+        game["statusInfo"] = status_info
 
-    fact = parse_naver_kbo_game_card(
-        visible_text,
-        source_url="https://search.naver.com/static-text",
-        expected_date="2026-07-24",
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload, ensure_ascii=False),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
         expected_team="롯데",
     )
 
-    assert fact is not None
-    assert fact.status == "final"
-    assert (fact.away_team, fact.away_score) == ("kt wiz", 5)
-    assert (fact.home_team, fact.home_score) == ("롯데 자이언츠", 4)
-    assert fact.winner == "kt wiz"
-
-
-def test_parse_naver_kbo_live_card_never_marks_winner():
-    fact = parse_naver_kbo_game_card(
-        _LIVE_HTML,
-        source_url="https://search.naver.com/live",
-        expected_date="2026-07-24",
-        expected_team="롯데",
-    )
-
+    fact = outcome.sources[0].sports_fact
+    assert outcome.lookup_status == "found"
     assert fact is not None
     assert fact.status == "live"
-    assert (fact.away_score, fact.home_score) == (2, 4)
+    assert fact.winner is None
+
+
+def test_doubleheader_prefers_later_started_game_over_earlier_result():
+    outcome = parse_naver_kbo_schedule(
+        _DOUBLEHEADER_JSON,
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
+    )
+
+    fact = outcome.sources[0].sports_fact
+    assert outcome.lookup_status == "found"
+    assert fact is not None
+    assert fact.status == "live"
+    assert (fact.away_score, fact.home_score) == (3, 1)
+    assert fact.winner is None
+
+
+def test_doubleheader_with_two_finals_selects_latest_game_datetime():
+    payload = json.loads(_DOUBLEHEADER_JSON)
+    later_game = payload["result"]["games"][1]
+    later_game["statusCode"] = "RESULT"
+    later_game["winner"] = "AWAY"
+
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload, ensure_ascii=False),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
+    )
+
+    fact = outcome.sources[0].sports_fact
+    assert outcome.lookup_status == "found"
+    assert fact is not None
+    assert fact.status == "final"
+    assert (fact.away_score, fact.home_score) == (3, 1)
+    assert fact.winner == "롯데 자이언츠"
+
+
+def test_multiple_started_games_use_game_id_as_deterministic_datetime_tie_breaker():
+    payload = json.loads(_DOUBLEHEADER_JSON)
+    earlier_game, later_game = payload["result"]["games"]
+    earlier_game["statusCode"] = "STARTED"
+    earlier_game["gameDateTime"] = later_game["gameDateTime"]
+
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload, ensure_ascii=False),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
+    )
+
+    fact = outcome.sources[0].sports_fact
+    assert outcome.lookup_status == "found"
+    assert fact is not None
+    assert fact.status == "live"
+    assert (fact.away_score, fact.home_score) == (3, 1)
     assert fact.winner is None
 
 
 @pytest.mark.parametrize(
-    ("expected_date", "expected_team"),
-    [("2026-07-25", "롯데"), ("2026-07-24", "한화 이글스")],
+    ("field", "value"),
+    [("code", 500), ("success", False), ("success", 1)],
 )
-def test_parse_naver_card_rejects_date_or_team_mismatch(expected_date, expected_team):
-    assert (
-        parse_naver_kbo_game_card(
-            _FINAL_HTML,
-            source_url="https://search.naver.com/final",
-            expected_date=expected_date,
-            expected_team=expected_team,
-        )
-        is None
+def test_parse_naver_kbo_schedule_rejects_invalid_live_envelope(field, value):
+    payload = json.loads(_STARTED_JSON)
+    payload[field] = value
+
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
     )
 
+    assert outcome.lookup_status == "failed"
+    assert outcome.sources == []
 
-def test_parse_naver_card_never_scans_trailing_blog_without_card_boundary():
-    page_without_card = (
-        '<meta property="og:title" content="2026년 7월 24일 롯데 야구">'
-        "<article>롯데 자이언츠가 2:1로 이겼다. 경기종료.</article>"
+
+@pytest.mark.parametrize(
+    ("body", "expected_status"),
+    [
+        (_NO_MATCH_JSON, "not_found"),
+        (_MALFORMED_JSON, "failed"),
+        (_CANCELLED_JSON, "failed"),
+        (_UNKNOWN_JSON, "failed"),
+        ("not-json", "failed"),
+    ],
+)
+def test_parse_naver_kbo_schedule_distinguishes_no_match_from_failure(
+    body, expected_status
+):
+    outcome = parse_naver_kbo_schedule(
+        body,
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
     )
 
-    assert (
-        parse_naver_kbo_game_card(
-            page_without_card,
-            source_url="https://search.naver.com/no-card",
-            expected_date="2026-07-24",
-            expected_team="롯데",
-        )
-        is None
+    assert isinstance(outcome, CollectionOutcome)
+    assert outcome.lookup_status == expected_status
+    assert outcome.sources == []
+    assert outcome.limitations
+
+
+@pytest.mark.parametrize(("cancelled", "suspended"), [(True, False), (False, True)])
+def test_parse_naver_kbo_schedule_rejects_cancelled_or_suspended(
+    cancelled, suspended
+):
+    payload = json.loads(_CANCELLED_JSON)
+    game = payload["result"]["games"][0]
+    game["cancel"] = cancelled
+    game["suspended"] = suspended
+
+    outcome = parse_naver_kbo_schedule(
+        json.dumps(payload),
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+        expected_date="2026-07-28",
+        expected_team="롯데",
     )
+
+    assert outcome.lookup_status == "failed"
+    assert outcome.sources == []
 
 
 @pytest.mark.asyncio
-async def test_sports_collection_fetches_only_dated_naver_game_page():
-    url = build_sports_page_url("오늘 롯데 자이언츠 경기 결과", as_of_kst=_AS_OF)
-    fetch = FetchRecorder({url: _FINAL_HTML})
+async def test_sports_collection_fetches_only_dated_naver_schedule_api():
+    url = build_naver_sports_schedule_url(as_of_kst=_SPORTS_AS_OF)
+    fetch = FetchRecorder({url: _STARTED_JSON})
 
-    sources, limitations = await collect_sources(
+    outcome = await collect_sources(
         query="오늘 롯데 자이언츠 경기 결과",
         kind="sports",
-        as_of_kst=_AS_OF,
+        as_of_kst=_SPORTS_AS_OF,
         fetch_page=fetch,
     )
 
     assert fetch.urls == [url]
-    assert sources[0].source_kind == "sports_page"
-    assert sources[0].sports_fact is not None
-    assert sources[0].sports_fact.away_score == 5
-    assert sources[0].sports_fact.home_score == 4
-    assert limitations == []
+    assert outcome.lookup_status == "found"
+    assert outcome.sources[0].source_kind == "sports_api"
+    assert outcome.sources[0].sports_fact is not None
+    assert outcome.sources[0].sports_fact.status == "live"
+    assert outcome.sources[0].sports_fact.winner is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "expected_status"),
+    [
+        (_NO_MATCH_JSON, "not_found"),
+        (_MALFORMED_JSON, "failed"),
+        (_UNKNOWN_JSON, "failed"),
+        ("Error: upstream unavailable", "failed"),
+    ],
+)
+async def test_sports_collection_exposes_typed_lookup_status(body, expected_status):
+    url = build_naver_sports_schedule_url(as_of_kst=_SPORTS_AS_OF)
+    outcome = await collect_sources(
+        query="롯데 야구 결과",
+        kind="sports",
+        as_of_kst=_SPORTS_AS_OF,
+        fetch_page=FetchRecorder({url: body}),
+    )
+
+    assert outcome.lookup_status == expected_status
 
 
 @pytest.mark.asyncio
