@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환 — 코드·오프라인 gate 완료, 운영 rollout 대기** — Naver Sports 구조화 schedule schema/enum 기반 KBO live/final 판정, typed `lookup_status`, 조회 실패 확대 방지 계약과 PR #522의 fresh CI까지 완료했다. **남은 운영 gate:** PR #522의 `dev` merge와 `dev → main` release, live `realtime-lookup-skill` timestamp backup·갱신, LaunchAgent drain restart, Admin health, notifier 없는 no-send 스포츠 smoke. 이 운영 DoD를 모두 마치기 전에는 `[x]`로 전환하지 않는다. (진행: 2026-07-28)
+
 - [x] **BIZ-507: news-search-skill Gemini secret을 등록 skill 자식 범위로 제한** — PR #520을 `dev`에 squash merge(`62a203566fd2185e3b3dbec99824932bec3e0166`)했다. 2026-07-28 live rollout에서 `news-search-skill` N1~N3와 `krstock*` R1~R2 수정·timestamp backup, Gemini credential `file:gemini_api_key` encrypted-vault migration/read-back, LaunchAgent drain restart·Admin health, notifier 없는 registered skill 및 `/krstock-close` smoke를 완료했다.
 
 - [x] **BIZ-503: 한국장 cron fresh-evidence 오판·성공 오기록 수정** — capability metadata 기반 evidence provider 판정, 중첩 error/stale/invalid fail-closed, 동일 record의 source/as-of/data 결합, 도메인별 fallback, structured semantic failure 영속화와 마지막 재시도 유형 기반 알림을 구현·검증했다. PR #514를 `dev`에 squash merge(SHA `e1d65e638afe586e7b2da136c8751d3ea8c1ef57`)하고 PR #516을 merge commit(SHA `b6658e5401b3ca3e162747bd0edb05f8ea3d9f99`)으로 `main`에 긴급 release하여 `v2026.07.27` 발행을 확인했다. live 스킬 timestamp backup/capability metadata/loader readback, release checkout 동기화, drain restart, Admin·Webhook·Telegram health, 실제 market-summary validator, notifier 없는 한국장 cron structured success smoke까지 완료했다. (2026-07-27)
