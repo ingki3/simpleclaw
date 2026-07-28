@@ -45,7 +45,7 @@ def validate_env_overrides(
     if env_overrides is None:
         return {}
     if not isinstance(env_overrides, Mapping):
-        raise ValueError("Invalid skill environment override mapping")
+        raise TypeError("Invalid skill environment override mapping")
 
     validated: dict[str, str] = {}
     for env_name, value in env_overrides.items():

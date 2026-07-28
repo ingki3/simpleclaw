@@ -12,11 +12,6 @@ from simpleclaw.security.env_filter import filter_env
 from simpleclaw.security.guard import CommandGuard, DangerousCommandError
 from simpleclaw.security.process import KillResult, get_preexec_fn, kill_process_group
 from simpleclaw.security.sanitize import sanitize_tool_error, sanitize_tool_output
-from simpleclaw.security.skill_env import (
-    SkillEnvConfigError,
-    load_skill_env_secret_refs,
-    validate_env_overrides,
-)
 from simpleclaw.security.secrets import (
     EncryptedFileBackend,
     EnvBackend,
@@ -27,6 +22,11 @@ from simpleclaw.security.secrets import (
     default_manager,
     resolve_secret,
     set_default_manager,
+)
+from simpleclaw.security.skill_env import (
+    SkillEnvConfigError,
+    load_skill_env_secret_refs,
+    validate_env_overrides,
 )
 
 __all__ = [

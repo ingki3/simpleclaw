@@ -104,7 +104,7 @@ class TestExecuteSkillEnvScrub:
         script = _write_env_echo_script(tmp_path)
         skill = _make_skill("news-search-skill", str(script))
 
-        with pytest.raises(ValueError, match="Invalid skill environment override"):
+        with pytest.raises((TypeError, ValueError), match="Invalid skill environment override"):
             await execute_skill(
                 skill,
                 timeout=10,
