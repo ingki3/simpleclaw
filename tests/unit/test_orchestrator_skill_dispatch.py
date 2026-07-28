@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,24 @@ from simpleclaw.agent import AgentOrchestrator, skill_dispatch
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.skills.models import SkillDefinition, SkillResult, SkillScope
+
+
+class _MemorySecretBackend:
+    """orchestrator bootstrap의 file: 참조 해소를 위한 최소 테스트 backend."""
+
+    name = "file"
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+
+    def get(self, key: str) -> str | None:
+        return self._values.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self._values[key] = value
+
+    def delete(self, key: str) -> None:
+        self._values.pop(key, None)
 
 
 @pytest.fixture
@@ -79,6 +98,41 @@ def _make_python_skill(tmp_path, name: str) -> SkillDefinition:
     )
 
 
+def test_orchestrator_initializes_per_skill_secret_map_without_parent_env(
+    config_file, monkeypatch
+):
+    """S1 — config loader→orchestrator map 연결과 parent env 비변경을 고정한다."""
+    from simpleclaw.security.secrets import SecretsManager, set_default_manager
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    config_file.write_text(
+        config_file.read_text()
+        + """
+security:
+  skill_env_secret_refs:
+    news-search-skill:
+      GEMINI_API_KEY: "file:gemini_api_key"
+"""
+    )
+    manager = SecretsManager(
+        backends={
+            "file": _MemorySecretBackend(
+                {"gemini_api_key": "skill-secret-canary"}
+            )
+        }
+    )
+    set_default_manager(manager)
+    try:
+        orch = AgentOrchestrator(config_file)
+    finally:
+        set_default_manager(None)
+
+    assert orch._skill_env_overrides == {
+        "news-search-skill": {"GEMINI_API_KEY": "skill-secret-canary"}
+    }
+    assert "GEMINI_API_KEY" not in os.environ
+
+
 def test_bare_skill_name_rewritten_to_venv_python(config_file, tmp_path):
     """`news-search-skill "foo"` → `<venv>/bin/python <script> "foo"` 로 치환."""
     orch = AgentOrchestrator(config_file)
@@ -121,7 +175,15 @@ async def test_execute_registered_skill_falls_back_on_bad_quote(
     orch._skills_by_name = {skill.name: skill}
     seen_args: list[str] | None = None
 
-    async def fake_run_skill(skill_def, *, args, timeout, metrics, env_passthrough=None):
+    async def fake_run_skill(
+        skill_def,
+        *,
+        args,
+        timeout,
+        metrics,
+        env_passthrough=None,
+        env_overrides=None,
+    ):
         nonlocal seen_args
         seen_args = args
         return SkillResult(output="ok", exit_code=0, success=True)
@@ -311,12 +373,14 @@ async def test_execute_registered_skill_preserves_quoted_args(
         *,
         metrics=None,
         env_passthrough=None,
+        env_overrides=None,
     ):
         captured["skill"] = skill_arg
         captured["args"] = args
         captured["timeout"] = timeout
         captured["metrics"] = metrics
         captured["env_passthrough"] = env_passthrough
+        captured["env_overrides"] = env_overrides
         return SimpleNamespace(output="ok", success=True)
 
     monkeypatch.setattr(
@@ -331,6 +395,7 @@ async def test_execute_registered_skill_preserves_quoted_args(
 
     assert result == "ok"
     assert captured["args"] == ["-q", "US stock market closing report"]
+    assert captured["env_overrides"] == {}
 
 
 @pytest.mark.asyncio
@@ -363,10 +428,12 @@ async def test_execute_skill_prefers_registered_skill_when_command_also_present(
         *,
         metrics=None,
         env_passthrough=None,
+        env_overrides=None,
     ):
         captured["skill"] = skill_arg
         captured["args"] = args
         captured["env_passthrough"] = env_passthrough
+        captured["env_overrides"] = env_overrides
         return SimpleNamespace(output="registered-skill", success=True)
 
     monkeypatch.setattr(orch, "_execute_command", fake_command)
@@ -391,6 +458,67 @@ async def test_execute_skill_prefers_registered_skill_when_command_also_present(
     assert command_calls == []
     assert captured["skill"] == skill
     assert captured["args"] == ["2026", "북중미", "월드컵", "일정"]
+    assert captured["env_overrides"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_registered_skill_selects_only_exact_skill_override(
+    config_file, tmp_path, monkeypatch,
+):
+    """S1/S2 — fuzzy 입력이어도 해소된 등록 skill 이름의 override만 전달한다."""
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    target = _make_python_skill(tmp_path, "news-search-skill")
+    unrelated = _make_python_skill(tmp_path, "kr-stock-skill")
+    orch._skills_by_name = {
+        target.name: target,
+        unrelated.name: unrelated,
+    }
+    orch._skill_env_overrides = {
+        target.name: {"GEMINI_API_KEY": "skill-secret-canary"}
+    }
+    captured: list[tuple[str, dict[str, str]]] = []
+
+    async def fake_run_skill(
+        skill_arg,
+        args=None,
+        timeout=60,
+        *,
+        metrics=None,
+        env_passthrough=None,
+        env_overrides=None,
+    ):
+        captured.append((skill_arg.name, dict(env_overrides or {})))
+        return SimpleNamespace(output="ok", success=True)
+
+    monkeypatch.setattr(skill_dispatch, "run_skill", fake_run_skill)
+
+    assert await orch._execute_skill("NEWS-SEARCH-SKILL", "") == "ok"
+    assert await orch._execute_skill("kr-stock-skill", "") == "ok"
+    assert captured == [
+        ("news-search-skill", {"GEMINI_API_KEY": "skill-secret-canary"}),
+        ("kr-stock-skill", {}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_raw_command_does_not_receive_skill_secret_override(
+    config_file, monkeypatch,
+):
+    """S3 — per-skill map은 raw shell command 환경으로 전달되지 않는다."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    orch = AgentOrchestrator(config_file)
+    orch._skill_env_overrides = {
+        "news-search-skill": {"GEMINI_API_KEY": "skill-secret-canary"}
+    }
+
+    result = await orch._execute_command(
+        "raw-probe",
+        'printf "GEMINI_API_KEY=${GEMINI_API_KEY:-MISSING}"',
+    )
+
+    assert result == "GEMINI_API_KEY=MISSING"
 
 
 @pytest.mark.asyncio

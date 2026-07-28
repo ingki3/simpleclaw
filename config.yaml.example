@@ -289,6 +289,15 @@ security:
     - GOOGLE_API_KEY
     - NAVER_CLIENT_ID
     - NAVER_CLIENT_SECRET
+  # 특정 등록 skill 자식에만 encrypted secret을 전달할 때 사용한다.
+  # env_passthrough는 parent 환경에 이미 존재하는 명시 키를 모든 등록 skill에
+  # 허용하는 레거시 전역 계약이고, 아래 binding은 정확히 일치하는 skill에만 적용된다.
+  # LaunchAgent는 대화형 ~/.zshrc를 읽지 않으므로 이를 source하거나 plist/config에
+  # credential 평문을 복사하지 말고 file:/keyring: 참조를 사용한다.
+  # 변경은 orchestrator 시작 시 해소되므로 서비스 재시작이 필요하다.
+  skill_env_secret_refs:
+    news-search-skill:
+      GEMINI_API_KEY: "file:gemini_api_key"
 
 skills:
   local_dir: ".agent/skills"

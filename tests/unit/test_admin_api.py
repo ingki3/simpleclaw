@@ -102,6 +102,13 @@ def tmp_state(tmp_path):
             "token_secret": "file:admin_api_token",
             "request_max_body_kb": 256,
         },
+        "security": {
+            "skill_env_secret_refs": {
+                "news-search-skill": {
+                    "GEMINI_API_KEY": "file:gemini_api_key",
+                }
+            }
+        },
     }
     config_path.write_text(yaml.safe_dump(initial), encoding="utf-8")
     return {
@@ -202,6 +209,22 @@ class TestConfigGet:
         assert data["area"] == "admin_api"
         assert data["config"]["bind_port"] == 8082
         assert data["config"]["token_secret"] == "file:admin_api_token"
+
+    @pytest.mark.asyncio
+    async def test_nested_skill_secret_reference_is_safe_in_config_response(
+        self, client
+    ):
+        resp = await client.get("/admin/v1/config/security", headers=HEADERS)
+        assert resp.status == 200
+        data = await resp.json()
+
+        mapping = data["config"]["skill_env_secret_refs"]
+        assert mapping == {
+            "news-search-skill": {
+                "GEMINI_API_KEY": "file:gemini_api_key",
+            }
+        }
+        assert "skill-secret-canary" not in str(data)
 
 
 class TestDashboardRoutesOnAdminAPI:
@@ -713,6 +736,23 @@ class TestPolicyEngine:
         assert result.level == SERVICE_RESTART
         assert result.requires_restart is True
         assert "llm.router" in result.affected_modules
+
+    def test_service_restart_for_skill_secret_binding(self):
+        result = classify_keys(
+            "security",
+            {
+                "skill_env_secret_refs": {
+                    "news-search-skill": {
+                        "GEMINI_API_KEY": "file:gemini_api_key",
+                    }
+                }
+            },
+        )
+
+        assert result.level == SERVICE_RESTART
+        assert result.requires_restart is True
+        assert "skills.executor" in result.affected_modules
+        assert "secrets" in result.affected_modules
 
 
 class TestValidation:

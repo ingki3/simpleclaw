@@ -23,6 +23,11 @@ from simpleclaw.security.secrets import (
     resolve_secret,
     set_default_manager,
 )
+from simpleclaw.security.skill_env import (
+    SkillEnvConfigError,
+    load_skill_env_secret_refs,
+    validate_env_overrides,
+)
 
 __all__ = [
     "CommandGuard",
@@ -34,12 +39,15 @@ __all__ = [
     "SecretReference",
     "SecretsError",
     "SecretsManager",
+    "SkillEnvConfigError",
     "default_manager",
     "filter_env",
     "get_preexec_fn",
     "kill_process_group",
+    "load_skill_env_secret_refs",
     "resolve_secret",
     "sanitize_tool_error",
     "sanitize_tool_output",
     "set_default_manager",
+    "validate_env_overrides",
 ]

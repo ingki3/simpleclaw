@@ -158,6 +158,7 @@ from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.security.secrets import default_manager
+from simpleclaw.security.skill_env import load_skill_env_secret_refs
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.learning import (
     SKILL_SUGGESTION_RESPONSE_SCHEMA,
@@ -966,6 +967,9 @@ class AgentOrchestrator:
         )
         self._env_passthrough = security_config.get("env_passthrough", [])
         _inject_env_secret_refs(security_config.get("env_secret_refs", {}))
+        self._skill_env_overrides = load_skill_env_secret_refs(
+            security_config.get("skill_env_secret_refs", {})
+        )
 
         # Multi-turn tool execution budget
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)

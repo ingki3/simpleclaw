@@ -6,13 +6,15 @@
 3. ``proactive.context_provider_resolver._run_json_list`` — 스킬 venv provider 호출
 """
 
+import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from simpleclaw.skills.executor import execute_skill
-from simpleclaw.skills.models import SkillDefinition, SkillScope
+from simpleclaw.skills.models import SkillDefinition, SkillExecutionError, SkillScope
 
 # 스킬 subprocess 에 절대 상속되면 안 되는 대표 시크릿 키.
 _SECRET_ENV = {
@@ -20,6 +22,7 @@ _SECRET_ENV = {
     "OPENROUTER_API_KEY": "sk-or-x",
     "ADMIN_API_TOKEN": "admin-tok",
     "TELEGRAM_BOT_TOKEN": "123:abc",
+    "GEMINI_API_KEY": "gemini-parent-secret",
 }
 
 
@@ -72,6 +75,67 @@ class TestExecuteSkillEnvScrub:
 
         assert "OPENROUTER_API_KEY=SET" in result.output
         assert "ANTHROPIC_API_KEY=MISSING" in result.output
+
+    @pytest.mark.asyncio
+    async def test_per_skill_override_is_delivered_without_parent_mutation(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        script = _write_env_echo_script(tmp_path)
+        skill = _make_skill("news-search-skill", str(script))
+
+        result = await execute_skill(
+            skill,
+            timeout=10,
+            env_overrides={"GEMINI_API_KEY": "skill-only-canary"},
+        )
+
+        assert "GEMINI_API_KEY=SET" in result.output
+        assert "GEMINI_API_KEY" not in os.environ
+
+        unrelated = _make_skill("kr-stock-skill", str(script))
+        unrelated_result = await execute_skill(unrelated, timeout=10)
+        assert "GEMINI_API_KEY=MISSING" in unrelated_result.output
+
+    @pytest.mark.asyncio
+    async def test_invalid_override_name_is_rejected_before_spawn(
+        self, tmp_path
+    ):
+        script = _write_env_echo_script(tmp_path)
+        skill = _make_skill("news-search-skill", str(script))
+
+        with pytest.raises((TypeError, ValueError), match="Invalid skill environment override"):
+            await execute_skill(
+                skill,
+                timeout=10,
+                env_overrides={"GEMINI_API_KEY;echo": "secret-canary"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_override_value_is_redacted_from_error_and_logs(
+        self, tmp_path, caplog
+    ):
+        canary = "stderr-secret-canary"
+        script = tmp_path / "leak_env.py"
+        script.write_text(
+            "import os, sys\n"
+            "print(os.environ['GEMINI_API_KEY'], file=sys.stderr)\n"
+            "raise SystemExit(2)\n"
+        )
+        skill = _make_skill("news-search-skill", str(script))
+
+        with caplog.at_level(logging.WARNING), pytest.raises(
+            SkillExecutionError
+        ) as caught:
+            await execute_skill(
+                skill,
+                timeout=10,
+                env_overrides={"GEMINI_API_KEY": canary},
+            )
+
+        serialized = f"{caught.value}\n{caplog.text}"
+        assert canary not in serialized
+        assert "[REDACTED]" in serialized
 
 
 class TestSkillValidateSmokeEnvScrub:
