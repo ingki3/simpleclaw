@@ -18,8 +18,8 @@ from simpleclaw.skills.realtime_sources import (
     collect_sources,
     filter_recent_candidates,
     html_to_visible_text,
-    parse_naver_kbo_schedule,
     parse_google_news_rss,
+    parse_naver_kbo_schedule,
 )
 
 _FIXTURES = Path(__file__).parents[1] / "fixtures" / "realtime_lookup"
