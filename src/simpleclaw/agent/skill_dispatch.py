@@ -262,6 +262,12 @@ async def execute_registered_skill(
             timeout=orchestrator._skill_timeout,
             metrics=orchestrator._metrics,
             env_passthrough=orchestrator._env_passthrough,
+            env_overrides=dict(
+                getattr(orchestrator, "_skill_env_overrides", {}).get(
+                    skill.name,
+                    {},
+                )
+            ),
         )
         logger.info("Skill '%s' executed: success=%s", skill_name, result.success)
         return result.output
