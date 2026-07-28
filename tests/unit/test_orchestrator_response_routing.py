@@ -156,11 +156,9 @@ async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(
 
     result = await orch.process_message("오늘 서울 날씨 어때?", 1, 1)
 
-    # 라우팅은 complex workflow 로 가지 않고 standard tool loop 로 처리돼야 한다
-    # (fail_complex 가 호출되면 AssertionError). 단, 실시간 사실 질의인데 최신
-    # 근거 없이 만든 final answer 는 BIZ-363 가드가 차단한다.
-    assert "확인하지 못" in result
-    assert "근거 기반 현재 날씨" not in result
+    # 라우팅은 complex workflow 로 가지 않고 standard tool loop 로 처리돼야 한다.
+    # fail_complex가 호출되지 않고 생성된 final이 그대로 보존되는지 함께 확인한다.
+    assert result == "근거 기반 현재 날씨"
 
 
 @pytest.mark.asyncio
@@ -221,10 +219,9 @@ async def test_market_impact_question_does_not_use_complex_but_not_standard(
     result = await orch.process_message(
         "OpenAI 상장 연기가 증시에 끼치는 영향을 조사해줘", 1, 1
     )
-    # complex workflow 로 가지 않는다는 라우팅 특성은 fail_complex 로 검증되고,
-    # 최신 근거 없이 만든 실시간 사실 final answer 는 BIZ-363 가드가 차단한다.
-    assert "확인하지 못" in result
-    assert "근거 기반 답변" not in result
+    # complex workflow로 가지 않는 라우팅 특성은 fail_complex로 검증하고,
+    # standard tool loop가 생성한 final은 hard gate 없이 보존한다.
+    assert result == "근거 기반 답변"
 
 
 @pytest.mark.asyncio

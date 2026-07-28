@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **BIZ-503: 한국장 cron fresh-evidence 오판·성공 오기록 수정 — 운영 반영 대기** — **완료된 code/offline gate:** capability metadata 기반 evidence provider 판정, 중첩 error/stale/invalid fail-closed, 동일 record의 source/as-of/data 결합, 도메인별 fallback, structured semantic failure 영속화와 마지막 재시도 유형 기반 알림을 구현·검증하고 PR #514를 `dev`에 squash merge했다(merge SHA `e1d65e638afe586e7b2da136c8751d3ea8c1ef57`; CI Runtime Contracts/Offline Integration/Unit Tests SUCCESS). **남은 운영 DoD:** `dev → main` release, live `kr-stock-skill`/`google-news-search-skill` SKILL.md timestamp backup 및 capability metadata 반영·loader readback, LaunchAgent restart, Admin/Telegram health 확인, 다음 한국장 cron 또는 승인된 수동 smoke 검증. (2026-07-27)
+- [x] **BIZ-503: 한국장 cron fresh-evidence 오판·성공 오기록 수정** — capability metadata 기반 evidence provider 판정, 중첩 error/stale/invalid fail-closed, 동일 record의 source/as-of/data 결합, 도메인별 fallback, structured semantic failure 영속화와 마지막 재시도 유형 기반 알림을 구현·검증했다. PR #514를 `dev`에 squash merge(SHA `e1d65e638afe586e7b2da136c8751d3ea8c1ef57`)하고 PR #516을 merge commit(SHA `b6658e5401b3ca3e162747bd0edb05f8ea3d9f99`)으로 `main`에 긴급 release하여 `v2026.07.27` 발행을 확인했다. live 스킬 timestamp backup/capability metadata/loader readback, release checkout 동기화, drain restart, Admin·Webhook·Telegram health, 실제 market-summary validator, notifier 없는 한국장 cron structured success smoke까지 완료했다. (2026-07-27)
 
 - [x] **BIZ-497: Unified TurnPlanner canary 전환과 중복 라우팅 정리 — 코드·오프라인 검증 완료** — `off|shadow|canary|primary` 설정과 재시작에도 안정적인 user/chat cohort sampling을 추가하고, canary primary를 direct answer 및 선언된 read-only/no-side-effect 자산으로 제한했다. PlannerUnavailable·unknown asset·mutation confirmation은 semantic fallback 없이 fail-closed하며, primary/legacy/fail-closed 선택은 원문·식별자 없는 구조화 event로 계측한다. TurnAnalysis·Asset Selector·keyword router는 rollback window 한 release 동안 legacy 경로에만 유지하고 Phase 5 cleanup 시점을 문서화했다. 검증: canary/config/integration focused 14 passed, 관련 focused 77 passed, 전체 `tests/unit/` 2978 passed·3 xfailed, Unified pipeline integration 2 passed, fixed-gold 31 cases×3에서 schema/critical/pass 100%·context reduction 58.41%·failure 0, `ruff check src/ tests/ scripts/` 및 `git diff --check` clean, GitHub CI Unit Tests/Runtime Contracts/Offline Integration SUCCESS. **미완료 운영 단계:** 승인된 live benchmark, 100+ shadow sample, live canary와 7일 또는 운영자 승인 window, p50/p95·token·quality acceptance, 운영자 승인 후 config 반영·restart 및 static/follow-up/topic-shift/stock/weather/complex/recipe/mutation smoke. (2026-07-26)
 
@@ -126,6 +126,10 @@
 ---
 
 ## Done
+
+### 2026-07-28
+
+- [x] **[BIZ-505](mention://issue/cb9f1853-2b50-4f9f-b2a4-75255fe143f0): Fresh structured evidence hard gate 제거** — 일반 final·forced-final을 skill metadata/JSON envelope와 무관하게 보존하도록 post-generation evidence 차단, structured validator, active cron의 `evidence_unavailable` 생성 경로를 제거했다. planner fact-check/realtime lookup, capability routing safety, explicit provider/action failure와 scheduler retry는 유지했다. 검증: targeted 167 passed, 전체 `tests/unit/` 2991 passed·3 xfailed, `ruff check src/ tests/ scripts/` 및 `git diff --check` 통과, PR #518의 `contracts`·`offline-integration`·`pytest` CI green. (2026-07-28)
 
 ### 2026-07-19
 
