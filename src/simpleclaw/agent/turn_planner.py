@@ -42,6 +42,16 @@ _REPAIR_REQUIRED_FIELDS = (
 class PlannerUnavailable(RuntimeError):
     """structured 계획을 안전하게 확정하지 못했음을 나타내는 fail-closed 오류."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        boundary_code: str | None = None,
+    ) -> None:
+        """원문 없이 최종 boundary 실패의 안정적 코드만 선택적으로 보존한다."""
+        self.boundary_code = boundary_code
+        super().__init__(message)
+
 
 class PlanBoundaryViolation(ValueError):
     """LLM 계획이 실제 context/catalog 실행 경계를 벗어났음을 나타낸다."""
@@ -476,4 +486,12 @@ async def plan_turn_with_llm(
             diagnostic["finish_reason"],
             diagnostic["boundary_code"],
         )
-        raise PlannerUnavailable("unified turn planner unavailable") from None
+        boundary_code = (
+            exc.code
+            if isinstance(exc, PlanBoundaryViolation)
+            else None
+        )
+        raise PlannerUnavailable(
+            "unified turn planner unavailable",
+            boundary_code=boundary_code,
+        ) from None
