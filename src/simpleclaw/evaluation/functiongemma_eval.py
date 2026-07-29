@@ -9,8 +9,8 @@ import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 from simpleclaw.evaluation.functiongemma_contract import (
     NO_ASSET,
