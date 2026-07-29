@@ -196,8 +196,10 @@ recipes:
     structured_output: true      # BIZ-427 — response_schema 로 후보 JSON 강제
 
 # 시맨틱 메모리 (RAG, spec 005 Phase 2)
-# enabled: true 로 켜면 sentence-transformers가 첫 메시지에 모델(~500MB)을 다운로드한다.
-# 다운로드 완료 후에는 시간 경계 밖 과거 대화도 의미 기반으로 회상된다.
+# enabled: true 로 켜면 Telegram polling 전에 모델을 pre-warm한다.
+# cache miss면 최초 모델 다운로드(~500MB)도 startup에서 발생할 수 있다.
+# 로드 실패 시 RAG만 비활성/fallback되며 scheduler와 Telegram은 정상 기동한다.
+# 준비된 모델은 첫 메시지부터 재로드 없이 시간 경계 밖 과거 대화를 의미 기반으로 회상한다.
 memory:
   rag:
     enabled: false

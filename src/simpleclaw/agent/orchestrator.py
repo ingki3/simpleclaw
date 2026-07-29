@@ -890,6 +890,7 @@ class AgentOrchestrator:
         memory_config = load_memory_config(config_path)
         rag_cfg = memory_config["rag"]
         self._rag_enabled: bool = bool(rag_cfg["enabled"])
+        self._rag_model_name: str = str(rag_cfg["model"])
         self._rag_top_k: int = int(rag_cfg["top_k"])
         self._rag_threshold: float = float(rag_cfg["similarity_threshold"])
         long_term_cfg = memory_config.get("long_term", {})
@@ -918,7 +919,7 @@ class AgentOrchestrator:
         )
         self._embedding_service: EmbeddingService | None = (
             EmbeddingService(
-                model_name=str(rag_cfg["model"]),
+                model_name=self._rag_model_name,
                 enabled=self._rag_enabled,
             )
             if self._rag_enabled
@@ -1106,6 +1107,56 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def prewarm_embedding(self) -> bool:
+        """Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.
+
+        disabled/load failure/예상 밖 예외는 모두 ``False``로 축약해 startup을
+        fail-open으로 유지한다. 구조화 이벤트에는 model/status/duration과
+        원문 미포함 표식만 기록한다.
+        """
+        started_at = time.perf_counter()
+        service = self._embedding_service
+        model_name = (
+            service.model_name if service is not None else self._rag_model_name
+        )
+        status = "disabled"
+        ready = False
+
+        if service is not None:
+            try:
+                ready = await asyncio.to_thread(service.prewarm)
+                status = "success" if ready else "failure"
+            except Exception as exc:
+                status = "failure"
+                logger.warning(
+                    "Embedding pre-warm boundary failed: model=%s error_type=%s",
+                    model_name,
+                    type(exc).__name__,
+                )
+
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        logger.info(
+            "Embedding pre-warm startup result: status=%s model=%s duration_ms=%.2f",
+            status,
+            model_name,
+            duration_ms,
+        )
+        if self._structured_logger is not None:
+            try:
+                self._structured_logger.log(
+                    action_type="embedding_prewarm",
+                    status=status,
+                    duration_ms=duration_ms,
+                    model=model_name,
+                    raw_text_included=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Embedding pre-warm structured log failed (error_type=%s)",
+                    type(exc).__name__,
+                )
+        return ready
 
     async def process_cron_action(self, text: str) -> CronActionResult:
         """크론 잡 메시지를 격리 처리하고 의미 상태를 보존해 반환한다.

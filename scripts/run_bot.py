@@ -777,6 +777,11 @@ async def main():
             print(f"ERROR: Admin API 바인딩 실패 — {exc}")
             return
 
+    # BIZ-519: Admin API readiness는 먼저 제공하되, RAG 모델 준비를 await한 뒤에
+    # scheduler/Telegram intake를 연다. prewarm boundary는 disabled/load failure를
+    # False로 축약하므로 RAG만 fallback하고 runtime startup은 계속된다.
+    await orchestrator.prewarm_embedding()
+
     # Start cron + dreaming scheduler
     apscheduler.start()
     cron.load_persisted_jobs()
