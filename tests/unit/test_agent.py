@@ -1749,7 +1749,7 @@ class TestToolLoop:
         orchestrator._dispatch_tool_call = AsyncMock(
             return_value=(
                 "WEB_SEARCH_RESULTS: pitcher (1 results)\n"
-                "1. 공식 선발 정보\n"
+                "1. 롯데 선발투수 공식 정보\n"
                 "URL: https://sports.example/starting-pitcher"
             )
         )

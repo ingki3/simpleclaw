@@ -12,21 +12,66 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from simpleclaw.agent.action_result import looks_like_explicit_error_header
 
 if TYPE_CHECKING:
+    from simpleclaw.agent.planner_catalog import PlannerCatalog
     from simpleclaw.agent.turn_analysis import TurnAnalysis
     from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 
-_COLLECTOR_NAMES = frozenset({"web_search", "web_fetch"})
+_WEB_COLLECTOR_NAMES = frozenset({"web_search", "web_fetch"})
+_DEFAULT_NON_WEB_COLLECTOR_NAMES = frozenset(
+    {
+        "asset_inventory",
+        "browser_handoff",
+        "config_inspect",
+        "deploy_status",
+        "file_read",
+        "log_debug",
+        "mcp_call",
+        "runtime_status",
+        "study_status",
+        "verification_evidence",
+    }
+)
+_NON_EVIDENCE_READ_TOOLS = frozenset({"clarify", "search_memory", "skill_docs"})
 _URL_RE = re.compile(r"https?://[^\s)\],]+")
+_QUOTED_ENTITY_RE = re.compile(r"""["'“”‘’]([^"'“”‘’]{2,})["'“”‘’]""")
+_QUERY_TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]+")
 _EXPLICIT_EMPTY_MESSAGES = frozenset(
     {
         "no results",
         "not found",
         "검색 결과가 없습니다",
         "찾을 수 없습니다",
+    }
+)
+_QUERY_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "about",
+        "find",
+        "search",
+        "show",
+        "please",
+        "정보",
+        "검색",
+        "조회",
+        "확인",
+        "찾아줘",
+        "알려줘",
+        "보여줘",
+        "등장인물",
+        "오늘",
+        "현재",
+        "이번",
+        "최신",
     }
 )
 _STALE_MARKERS = (
@@ -55,6 +100,7 @@ class EvidenceSourceType(str, Enum):
     STRUCTURED_REALTIME = "structured_realtime"
     WEB_SEARCH = "web_search"
     WEB_FETCH = "web_fetch"
+    APPROVED_TOOL = "approved_tool"
 
 
 class EvidenceFreshness(str, Enum):
@@ -113,7 +159,7 @@ def no_evidence_requirement() -> EvidenceRequirement:
 def requirement_from_turn_analysis(
     analysis: TurnAnalysis,
     *,
-    allowed_collectors: frozenset[str] = _COLLECTOR_NAMES,
+    allowed_collectors: frozenset[str] = _WEB_COLLECTOR_NAMES,
 ) -> EvidenceRequirement:
     """Adapt the rollback-window TurnAnalysis schema to the common contract."""
 
@@ -132,13 +178,77 @@ def requirement_from_turn_analysis(
     )
 
 
-def requirement_from_turn_plan(plan: UnifiedTurnPlan) -> EvidenceRequirement:
+def approved_collectors_from_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog | None = None,
+) -> frozenset[str]:
+    """Return plan-scoped collectors approved by immutable capability metadata."""
+
+    allowed_tools = frozenset(plan.execution.allowed_tools)
+    if catalog is None:
+        # The plan still constrains execution. Keep the no-catalog adapter useful
+        # for tests and rollback callers, but exclude read-only tools that cannot
+        # establish current external evidence by contract.
+        return frozenset(
+            name
+            for name in allowed_tools
+            if name in _WEB_COLLECTOR_NAMES
+            or name in _DEFAULT_NON_WEB_COLLECTOR_NAMES
+        )
+
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible and asset.declared
+    }
+    collectors: set[str] = set()
+    for name in allowed_tools:
+        if name in _WEB_COLLECTOR_NAMES:
+            collectors.add(name)
+            continue
+        if name == "execute_skill":
+            # The adapter itself is generic; only a selected read-only skill can
+            # make it an evidence collector.
+            continue
+        if name in _NON_EVIDENCE_READ_TOOLS:
+            continue
+        asset = runtime_assets.get(("native_tool", name))
+        if (
+            asset is not None
+            and asset.read_only
+            and not asset.side_effects
+            and not asset.requires_confirmation
+        ):
+            collectors.add(name)
+
+    if "execute_skill" in allowed_tools:
+        selected_assets = set(plan.execution.allowed_assets)
+        if plan.execution.primary_asset is not None:
+            selected_assets.add(plan.execution.primary_asset)
+        if any(
+            (
+                (asset := runtime_assets.get((ref.asset_type, ref.name))) is not None
+                and ref.asset_type == "skill"
+                and asset.read_only
+                and not asset.side_effects
+                and not asset.requires_confirmation
+            )
+            for ref in selected_assets
+        ):
+            collectors.add("execute_skill")
+    return frozenset(collectors)
+
+
+def requirement_from_turn_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog | None = None,
+) -> EvidenceRequirement:
     """Adapt Unified FactCheckPlan without introducing a duplicate plan field."""
 
     fact_check = plan.fact_check
-    collectors = frozenset(
-        name for name in plan.execution.allowed_tools if name in _COLLECTOR_NAMES
-    )
+    collectors = approved_collectors_from_plan(plan, catalog=catalog)
     return EvidenceRequirement(
         required=fact_check.required,
         query=fact_check.search_query or plan.context.standalone_question,
@@ -159,6 +269,47 @@ def _json_object(value: object) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _normalized_relevance_text(value: str) -> str:
+    return " ".join(_QUERY_TOKEN_RE.findall(value.casefold()))
+
+
+def _result_is_relevant(query: str, text: str) -> bool:
+    """Conservatively require the bounded query's entity or subject in output."""
+
+    normalized_query = _normalized_relevance_text(query)
+    normalized_text = _normalized_relevance_text(text)
+    if not normalized_query or not normalized_text:
+        return False
+
+    query_url = urlparse(query.strip())
+    if query_url.scheme in {"http", "https"} and query_url.netloc:
+        return any(
+            urlparse(url).netloc.casefold() == query_url.netloc.casefold()
+            for url in _URL_RE.findall(text)
+        )
+
+    quoted_entities = [
+        _normalized_relevance_text(entity)
+        for entity in _QUOTED_ENTITY_RE.findall(query)
+    ]
+    quoted_entities = [entity for entity in quoted_entities if entity]
+    if quoted_entities:
+        return all(entity in normalized_text for entity in quoted_entities)
+
+    tokens = [
+        token.casefold()
+        for token in _QUERY_TOKEN_RE.findall(query)
+        if len(token) >= 2 and token.casefold() not in _QUERY_STOPWORDS
+    ]
+    unique_tokens = set(tokens)
+    required_matches = 1 if len(unique_tokens) == 1 else 2
+    return (
+        bool(unique_tokens)
+        and sum(token in normalized_text for token in unique_tokens)
+        >= required_matches
+    )
 
 
 def assess_realtime_result(
@@ -224,14 +375,14 @@ def assess_tool_result(
     output: str,
     as_of: str = "",
 ) -> EvidenceState:
-    """Classify a current-turn web collector observation."""
+    """Classify a current-turn observation from a plan-approved collector."""
 
     source_type = (
         EvidenceSourceType.WEB_SEARCH
         if tool_name == "web_search"
         else EvidenceSourceType.WEB_FETCH
         if tool_name == "web_fetch"
-        else EvidenceSourceType.NONE
+        else EvidenceSourceType.APPROVED_TOOL
     )
     text = str(output or "").strip()
     lowered = text.lower()
@@ -243,11 +394,18 @@ def assess_tool_result(
         "query": requirement.query,
         "as_of": as_of,
     }
-    if tool_name not in _COLLECTOR_NAMES:
+    if tool_name not in requirement.allowed_collectors:
         return EvidenceState(
             status=EvidenceStatus.UNUSABLE,
             freshness=EvidenceFreshness.UNKNOWN,
             failure_reason="tool is not an approved evidence collector",
+            **common,
+        )
+    if not text:
+        return EvidenceState(
+            status=EvidenceStatus.FAILED,
+            freshness=EvidenceFreshness.UNKNOWN,
+            failure_reason="collector returned an untyped empty output",
             **common,
         )
     if looks_like_explicit_error_header(text):
@@ -257,10 +415,24 @@ def assess_tool_result(
             failure_reason=(text.splitlines()[0] if text else "collector failed")[:240],
             **common,
         )
+    typed = _json_object(text)
+    typed_status = str((typed or {}).get("lookup_status") or "")
+    if typed_status == EvidenceStatus.NOT_FOUND.value:
+        return EvidenceState(
+            status=EvidenceStatus.NOT_FOUND,
+            freshness=EvidenceFreshness.CURRENT_TURN,
+            **common,
+        )
+    if typed_status == EvidenceStatus.FAILED.value:
+        return EvidenceState(
+            status=EvidenceStatus.FAILED,
+            freshness=EvidenceFreshness.UNKNOWN,
+            failure_reason="collector reported a typed failure",
+            **common,
+        )
     first_line = lowered.splitlines()[0] if lowered else ""
     explicit_empty = (
-        not text
-        or (
+        (
             tool_name == "web_search"
             and (
                 "(0 results)" in first_line
@@ -284,7 +456,14 @@ def assess_tool_result(
             failure_reason="collector returned stale or pre-event evidence",
             **common,
         )
-    if not _URL_RE.search(text):
+    if not _result_is_relevant(requirement.query, text):
+        return EvidenceState(
+            status=EvidenceStatus.UNUSABLE,
+            freshness=EvidenceFreshness.UNKNOWN,
+            failure_reason="collector result is not relevant to the evidence query",
+            **common,
+        )
+    if tool_name in _WEB_COLLECTOR_NAMES and not _URL_RE.search(text):
         return EvidenceState(
             status=EvidenceStatus.UNUSABLE,
             freshness=EvidenceFreshness.UNKNOWN,

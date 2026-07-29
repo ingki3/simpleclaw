@@ -383,7 +383,7 @@ async def test_live_fact_without_realtime_skill_uses_allowed_web_search(
     web_search = AsyncMock(
         return_value=(
             "WEB_SEARCH_RESULTS: query (1 results)\n"
-            "1. AI latest news\n"
+            "1. AI 최신 뉴스\n"
             "URL: https://example.com/latest"
         )
     )

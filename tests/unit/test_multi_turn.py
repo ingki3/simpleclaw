@@ -315,7 +315,7 @@ class TestRealtimeFinalPreservation:
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_fetch_blocked_observation_does_not_replace_final(
+    async def test_fetch_blocked_observation_blocks_unverified_final(
         self, config_file, tmp_path,
     ):
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
@@ -337,4 +337,6 @@ class TestRealtimeFinalPreservation:
             "이번 월드컵 한국 경기 중계 일정 알려줘", 1, 1,
         )
 
-        assert result == "한국은 6월 12일 20:00에 경기합니다."
+        assert "6월 12일" not in result
+        assert "사실을 확정할 수 없습니다" in result
+        orchestrator._router.send.assert_not_awaited()

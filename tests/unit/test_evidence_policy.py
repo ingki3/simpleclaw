@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from simpleclaw.agent.evidence_policy import (
     EvidenceFreshness,
     EvidenceRequirement,
@@ -174,7 +178,7 @@ def test_web_empty_error_and_valid_result_have_distinct_states() -> None:
         tool_name="web_search",
         output=(
             "WEB_SEARCH_RESULTS: query (1 results)\n"
-            "1. Netflix cast\n"
+            '1. "이런 엿같은 사랑" Netflix cast\n'
             "URL: https://www.netflix.com/example"
         ),
     )
@@ -183,6 +187,94 @@ def test_web_empty_error_and_valid_result_have_distinct_states() -> None:
     assert failed.status is EvidenceStatus.FAILED
     assert found.status is EvidenceStatus.FOUND
     assert found.usable is True
+
+
+def test_sourced_result_must_be_relevant_to_bounded_query() -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset({"web_search"}),
+    )
+
+    state = assess_tool_result(
+        requirement,
+        tool_name="web_search",
+        output=(
+            "오늘 서울 날씨는 맑음\n"
+            "URL: https://weather.example/seoul"
+        ),
+    )
+
+    assert state.attempted is True
+    assert state.status is EvidenceStatus.UNUSABLE
+    assert state.usable is False
+    assert "relevant" in state.failure_reason
+
+
+@pytest.mark.parametrize("output", ["", "   "])
+def test_untyped_empty_tool_output_is_failed_not_not_found(output: str) -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset({"web_search"}),
+    )
+
+    state = assess_tool_result(
+        requirement,
+        tool_name="web_search",
+        output=output,
+    )
+
+    assert state.status is EvidenceStatus.FAILED
+    assert state.status is not EvidenceStatus.NOT_FOUND
+    assert "untyped empty" in state.failure_reason
+
+
+def test_non_web_approved_collector_is_preserved_by_plan_adapter() -> None:
+    plan = replace(
+        _fact_plan(),
+        execution=ExecutionPlan(
+            mode=ExecutionMode.TOOL_LOOP,
+            primary_asset=None,
+            allowed_assets=(),
+            allowed_tools=("file_read",),
+            requires_confirmation=False,
+            reason="read local evidence",
+        ),
+    )
+
+    requirement = requirement_from_turn_plan(plan)
+    state = assess_tool_result(
+        requirement,
+        tool_name="file_read",
+        output='작품명: "이런 엿같은 사랑"\n등장인물: 하영',
+    )
+
+    assert requirement.allowed_collectors == frozenset({"file_read"})
+    assert state.status is EvidenceStatus.FOUND
+    assert state.source_type is EvidenceSourceType.APPROVED_TOOL
+
+
+def test_typed_empty_from_approved_collector_is_not_found() -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query="calendar events today",
+        domain="calendar",
+        allowed_collectors=frozenset({"execute_skill"}),
+    )
+
+    state = assess_tool_result(
+        requirement,
+        tool_name="execute_skill",
+        output='{"lookup_status":"not_found","events":[]}',
+    )
+
+    assert state.status is EvidenceStatus.NOT_FOUND
+    assert state.attempted is True
+    assert state.query == "calendar events today"
+    assert state.source_type is EvidenceSourceType.APPROVED_TOOL
 
 
 def test_not_found_phrase_inside_sourced_result_is_not_explicit_empty() -> None:
@@ -198,7 +290,7 @@ def test_not_found_phrase_inside_sourced_result_is_not_explicit_empty() -> None:
         tool_name="web_search",
         output=(
             "WEB_SEARCH_RESULTS: query (1 results)\n"
-            "1. Why the old title was not found\n"
+            "1. Metadata correction: why the old title was not found\n"
             "URL: https://example.com/correction"
         ),
     )

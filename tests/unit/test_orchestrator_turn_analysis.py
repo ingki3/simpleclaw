@@ -155,7 +155,7 @@ async def test_legacy_drama_lookup_collects_before_accepting_final(
     collector = AsyncMock(
         return_value=(
             "WEB_SEARCH_RESULTS: drama (1 results)\n"
-            "1. Netflix cast\n"
+            '1. "이런 엿같은 사랑" Netflix cast\n'
             "URL: https://www.netflix.com/example"
         )
     )

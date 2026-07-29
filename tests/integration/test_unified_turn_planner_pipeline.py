@@ -280,7 +280,7 @@ async def test_required_fact_plan_collects_before_no_tool_final(
     search = AsyncMock(
         return_value=(
             "WEB_SEARCH_RESULTS: drama (1 results)\n"
-            "1. Netflix cast page\n"
+            '1. "이런 엿같은 사랑" Netflix cast page\n'
             "URL: https://www.netflix.com/example\n"
             "Snippet: cast metadata"
         )

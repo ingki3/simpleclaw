@@ -8,7 +8,8 @@ from simpleclaw.memory.models import ConversationMessage, MessageRole
 
 _VERIFIED_WEB_RESULT = (
     "WEB_SEARCH_RESULTS: current fact (1 results)\n"
-    "1. 공식 현재 정보\n"
+    "1. 한국 16강 가능성 · 서울 날씨 · OpenAI 상장 영향 · "
+    "야구 리그 롯데 순위 공식 현재 정보\n"
     "URL: https://example.com/current-fact"
 )
 

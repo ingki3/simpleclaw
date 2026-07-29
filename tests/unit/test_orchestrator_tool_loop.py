@@ -113,7 +113,7 @@ async def test_required_evidence_collects_before_accepting_no_tool_final(
     dispatch = AsyncMock(
         return_value=(
             "WEB_SEARCH_RESULTS: query (1 results)\n"
-            "1. Netflix cast\n"
+            '1. "이런 엿같은 사랑" Netflix cast\n'
             "URL: https://www.netflix.com/example"
         )
     )
@@ -144,6 +144,103 @@ async def test_required_evidence_collects_before_accepting_no_tool_final(
     assert dispatch.call_args.args[0].name == "web_search"
     request = orch._router.send.call_args.args[0]
     assert "https://www.netflix.com/example" in request.system_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("collector_output", "expected_status"),
+    [
+        (
+            "오늘 서울 날씨는 맑음\nURL: https://weather.example/seoul",
+            EvidenceStatus.UNUSABLE,
+        ),
+        ("", EvidenceStatus.FAILED),
+        ("   ", EvidenceStatus.FAILED),
+    ],
+)
+async def test_required_evidence_rejects_irrelevant_or_untyped_empty_result(
+    config_file,
+    monkeypatch,
+    collector_output,
+    expected_status,
+):
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(return_value=collector_output)
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        return_value=_text_response("검색해보니 그런 작품은 없습니다")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset({"web_search"}),
+    )
+    state = ToolLoopState(
+        user_content='"이런 엿같은 사랑" 등장인물 찾아줘',
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is expected_status
+    assert result.success is False
+    assert "작품은 없습니다" not in result.text
+    if expected_status is EvidenceStatus.UNUSABLE:
+        assert "관련성" in result.text
+    else:
+        assert "조회가 실패" in result.text
+    orch._router.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_required_non_web_collector_runs_in_scoped_tool_loop(
+    config_file,
+    monkeypatch,
+):
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(
+        return_value='작품명: "이런 엿같은 사랑"\n등장인물: 하영'
+    )
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        side_effect=[
+            _tool_response(
+                "file-evidence",
+                "file_read",
+                {"path": "drama-catalog.md"},
+            ),
+            _text_response("검증된 파일 근거 기반 답변"),
+        ]
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset({"file_read"}),
+    )
+    state = ToolLoopState(
+        user_content='"이런 엿같은 사랑" 등장인물 찾아줘',
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "검증된 파일 근거 기반 답변"
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is EvidenceStatus.FOUND
+    dispatch.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -674,7 +771,7 @@ async def test_live_sports_query_collects_without_synthetic_tool_history(
         dispatch_calls.append(tc)
         return (
             "WEB_SEARCH_RESULTS: sports (1 results)\n"
-            "1. 네이버 스포츠 경기 결과\n"
+            "1. 네이버 프로야구 경기 결과\n"
             "URL: https://sports.example/game"
         )
 

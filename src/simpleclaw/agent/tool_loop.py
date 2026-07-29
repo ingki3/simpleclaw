@@ -520,6 +520,14 @@ class ToolLoopRunner:
             arguments = {"url": requirement.query}
 
         if not collector:
+            if (
+                requirement.allowed_collectors
+                - {"web_search", "web_fetch"}
+            ):
+                # Non-web collectors need model-produced typed arguments. Let the
+                # ordinary scoped tool loop execute one; finalization still fails
+                # closed unless its result passes the common evidence policy.
+                return None
             return ToolLoopResult(
                 limited_fallback(state.evidence_state),
                 trace=trace,
@@ -758,7 +766,7 @@ class ToolLoopRunner:
                         state.evidence_requirement.required
                         and state.evidence_state is not None
                         and state.evidence_state.usable
-                        and tc.name in {"web_search", "web_fetch"}
+                        and tc.name in state.evidence_requirement.allowed_collectors
                     ):
                         result = state.evidence_state.evidence_text
                     else:
@@ -819,7 +827,7 @@ class ToolLoopRunner:
                 )
                 if (
                     state.evidence_requirement.required
-                    and tc.name in {"web_search", "web_fetch"}
+                    and tc.name in state.evidence_requirement.allowed_collectors
                 ):
                     state.attempted_collectors.add(tc.name)
                     state.evidence_state = assess_tool_result(

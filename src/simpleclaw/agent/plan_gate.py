@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
     ContextRelation,
@@ -95,7 +96,7 @@ class PlanGate:
             )
 
         self._validate_context(plan, candidates, violations)
-        self._validate_execution_and_facts(plan, violations)
+        self._validate_execution_and_facts(plan, catalog, violations)
         self._validate_catalog_scope(
             plan,
             catalog,
@@ -244,15 +245,16 @@ class PlanGate:
     @staticmethod
     def _validate_execution_and_facts(
         plan: UnifiedTurnPlan,
+        catalog: PlannerCatalog,
         violations: list[PlanViolation],
     ) -> None:
         mode = plan.execution.mode
         fact_check = plan.fact_check
-        allowed_tools = frozenset(plan.execution.allowed_tools)
+        approved_collectors = approved_collectors_from_plan(plan, catalog=catalog)
         has_applicable_collector = (
-            "web_search" in allowed_tools
+            bool(approved_collectors - {"web_fetch"})
             or (
-                "web_fetch" in allowed_tools
+                "web_fetch" in approved_collectors
                 and fact_check.search_query.startswith(("http://", "https://"))
             )
         )

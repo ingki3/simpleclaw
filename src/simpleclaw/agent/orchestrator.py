@@ -1825,6 +1825,10 @@ class AgentOrchestrator:
                 operator_tools=operator_tools,
                 plan=callback_plan,
                 candidates=candidates,
+                evidence_requirement=requirement_from_turn_plan(
+                    callback_plan,
+                    catalog=catalog,
+                ),
             )
             return routed_result.text
 
