@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import scripts.dev.run_functiongemma_intent_poc as intent_poc
+import simpleclaw.evaluation.functiongemma_poc as functiongemma_poc
 from scripts.dev.run_functiongemma_intent_poc import (
     _bounded_catalog,
     _parser,
@@ -35,6 +36,7 @@ from simpleclaw.evaluation.functiongemma_dataset import (
     SanitizedCase,
     SanitizedMessage,
 )
+from simpleclaw.evaluation.functiongemma_eval import canonical_json_sha256
 from simpleclaw.evaluation.functiongemma_labeling import (
     MAX_PROVIDER_TOKENS,
     LabelingBudget,
@@ -55,6 +57,25 @@ from simpleclaw.evaluation.functiongemma_poc import (
 )
 from simpleclaw.llm.models import LLMResponse, LLMRoute
 from simpleclaw.llm.router import LLMRouter
+
+
+@pytest.fixture(autouse=True)
+def _stub_verified_source_for_artifact_boundary_tests(monkeypatch) -> None:
+    """CI shallow clone과 무관하게 artifact/report 경계만 격리 검증한다."""
+    source_hashes = RUN_CONTRACT["task_owned_source"]["files"]
+    provenance = {
+        "status": "verified",
+        "prerequisite_merge_sha": PREREQUISITE_MERGE_SHA,
+        "task_owned_source_hashes": source_hashes,
+        "task_owned_source_set_fingerprint": canonical_json_sha256(
+            source_hashes
+        ),
+    }
+    monkeypatch.setattr(
+        functiongemma_poc,
+        "verify_current_source",
+        lambda *_args, **_kwargs: provenance,
+    )
 
 
 def test_default_budget_enforces_token_hard_cap() -> None:
