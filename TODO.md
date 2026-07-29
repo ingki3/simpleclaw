@@ -135,6 +135,11 @@
 
 ## Done
 
+### 2026-07-30
+
+- [x] **[BIZ-520](mention://issue/c30858d5-f1fa-40ee-a883-99852fbaf6b5): evidence_required를 실행·최종 gate에 연결** — [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)해 evidence relevance·claim coverage·source·freshness 검증, typed empty/schema failure 분리, truncated analysis fail-closed, asset-owned provider 실행, untrusted evidence 경계를 코드·오프라인 테스트로 완료했다. Live config·배포·재시작은 [BIZ-497](mention://issue/599386f6-1aa4-4d1f-85a4-68d804342851) 운영 gate가 소유한다. (2026-07-30)
+- [x] **[BIZ-521](mention://issue/3a00bfdf-1463-40ab-842b-e481ddb367b2): PR #534 evidence gate review blocker 해소** — required review의 blocker 재현 7건과 actual unified·legacy 2턴 회귀를 보완하고 focused `158 passed`, Ruff, `git diff --check`, GitHub CI 3개 SUCCESS를 확인한 뒤 [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)했다. 코드·오프라인 작업은 완료했으며 live config·배포·재시작은 BIZ-497 운영 gate 범위다. (2026-07-30)
+
 ### 2026-07-28
 
 - [x] **[BIZ-511](mention://issue/57a9a033-d881-48c9-b001-f14495d9fc0a): MCP 2.0 FastMCP 호환성 회귀 복구** — `mcp>=1.0,<2`로 v1 runtime 계약을 유지하는 PR #523을 `dev`에 squash merge(`24ffa6b1bff4ff03928de8d560d7b53d14b18d4d`)했고, BIZ-509 PR #522를 새 `dev`와 동기화한 fresh CI에서 Offline Integration·Runtime Contracts·Unit Tests가 모두 통과했다. (2026-07-28)
