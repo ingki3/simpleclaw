@@ -176,7 +176,12 @@ async def test_legacy_drama_lookup_collects_before_accepting_final(
     assert call.name == "web_search"
     assert "이런 엿같은 사랑" in call.arguments["query"]
     request = orch._router.send.call_args.args[0]
-    assert "https://www.netflix.com/example" in request.system_prompt
+    assert "https://www.netflix.com/example" not in request.system_prompt
+    assert any(
+        "https://www.netflix.com/example" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
 
 
 @pytest.mark.asyncio

@@ -267,9 +267,10 @@ async def test_required_fact_plan_collects_before_no_tool_final(
             fact_check=replace(
                 plan.fact_check,
                 domain="entertainment",
-                entities=("이런 엿같은 사랑", "Netflix", "하영", "정해영"),
-                search_query='"이런 엿같은 사랑" Netflix 하영 정해영 등장인물',
-                freshness_required=False,
+                    entities=("이런 엿같은 사랑", "Netflix", "하영", "정해영"),
+                    search_query='"이런 엿같은 사랑" Netflix 하영 정해영 등장인물',
+                    required_claims=("하영", "정해영"),
+                    freshness_required=False,
             ),
             execution=replace(
                 plan.execution,
@@ -279,12 +280,12 @@ async def test_required_fact_plan_collects_before_no_tool_final(
 
     search = AsyncMock(
         return_value=(
-            "WEB_SEARCH_RESULTS: drama (1 results)\n"
-            '1. "이런 엿같은 사랑" Netflix cast page\n'
-            "URL: https://www.netflix.com/example\n"
-            "Snippet: cast metadata"
+                "WEB_SEARCH_RESULTS: drama (1 results)\n"
+                '1. "이런 엿같은 사랑" Netflix cast page\n'
+                "URL: https://www.netflix.com/example\n"
+                "Snippet: 하영과 정해영 cast metadata"
+            )
         )
-    )
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.plan_turn_with_llm",
         fake_planner,
@@ -311,5 +312,9 @@ async def test_required_fact_plan_collects_before_no_tool_final(
     search.assert_awaited_once()
     assert "이런 엿같은 사랑" in search.call_args.args[0]["query"]
     assert len(seen_requests) == 1
-    assert "Validated Current-Turn Evidence" in seen_requests[0].system_prompt
-    assert "https://www.netflix.com/example" in seen_requests[0].system_prompt
+    assert "Validated Current-Turn Evidence" not in seen_requests[0].system_prompt
+    assert any(
+        "https://www.netflix.com/example" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in seen_requests[0].messages
+    )

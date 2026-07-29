@@ -136,6 +136,38 @@ def test_explicit_empty_and_provider_failure_are_not_coerced() -> None:
     assert failed.failure_reason == "provider timeout"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not-json",
+        "[]",
+        {"lookup_status": "found"},
+        {"lookup_status": "found", "facts": "wrong"},
+        {"lookup_status": "found", "facts": ["wrong"]},
+        {"lookup_status": "found", "facts": [{"type": "sports_score"}]},
+    ],
+)
+def test_malformed_structured_evidence_is_failed_with_schema_reason(
+    payload: object,
+) -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query="KBO 오늘 경기",
+        domain="sports",
+        freshness_required=True,
+    )
+
+    state = assess_realtime_result(
+        requirement,
+        payload,
+        usable=False,
+        as_of="2026-07-29T23:00:00+09:00",
+    )
+
+    assert state.status is EvidenceStatus.FAILED
+    assert "schema failure" in state.failure_reason
+
+
 def test_tool_success_without_valid_source_is_unusable() -> None:
     requirement = EvidenceRequirement(
         required=True,
@@ -187,6 +219,50 @@ def test_web_empty_error_and_valid_result_have_distinct_states() -> None:
     assert failed.status is EvidenceStatus.FAILED
     assert found.status is EvidenceStatus.FOUND
     assert found.usable is True
+
+
+def test_explicit_stale_is_unusable_even_when_freshness_not_required() -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        allowed_collectors=frozenset({"web_search"}),
+        freshness_required=False,
+    )
+
+    state = assess_tool_result(
+        requirement,
+        tool_name="web_search",
+        output=(
+            'WEB_SEARCH_RESULTS: "이런 엿같은 사랑" 등장인물 (1 results)\n'
+            "status: stale_or_pre_event\n"
+            "URL: https://example.com/old"
+        ),
+    )
+
+    assert state.status is EvidenceStatus.UNUSABLE
+    assert state.freshness is EvidenceFreshness.STALE
+
+
+def test_required_claim_must_be_covered_not_only_title() -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        entities=("이런 엿같은 사랑",),
+        required_claims=("하영",),
+        allowed_collectors=frozenset({"web_search"}),
+    )
+
+    state = assess_tool_result(
+        requirement,
+        tool_name="web_search",
+        output=(
+            '"이런 엿같은 사랑" 등장인물은 정해영입니다.\n'
+            "URL: https://example.com/cast"
+        ),
+    )
+
+    assert state.status is EvidenceStatus.UNUSABLE
+    assert "relevant" in state.failure_reason
 
 
 def test_sourced_result_must_be_relevant_to_bounded_query() -> None:

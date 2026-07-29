@@ -468,12 +468,25 @@ class ToolLoopRunner:
         if evidence is None or not evidence.usable:
             return
         context = format_evidence_context(evidence)
-        if "## Validated Current-Turn Evidence" in state.system_prompt:
+        if any(
+            message.get("_evidence_context") is True
+            for message in state.messages
+        ):
             return
-        state.system_prompt = "\n\n".join(
-            part for part in (state.system_prompt, context) if part
+        # Collector output is untrusted data, never a trusted system instruction.
+        # A dedicated user-role data envelope is provider-compatible without
+        # requiring a synthetic tool-call history.
+        state.messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "<untrusted_current_turn_evidence>\n"
+                    f"{context}\n"
+                    "</untrusted_current_turn_evidence>"
+                ),
+                "_evidence_context": True,
+            }
         )
-        state.system_blocks = [*state.system_blocks, SystemBlock(text=context)]
 
     async def _collect_required_evidence(
         self,
@@ -492,6 +505,10 @@ class ToolLoopRunner:
             state.evidence_state = requirement.initial_state()
         if state.evidence_state.usable:
             self._inject_evidence_context(state)
+            return None
+        if requirement.owner == "asset":
+            # The selected asset owns collection. It must run before its
+            # observation can be evaluated by the common finalization gate.
             return None
         if (
             state.evidence_state.attempted
@@ -625,7 +642,17 @@ class ToolLoopRunner:
                     tools=state.tools,
                     system_blocks=state.system_blocks,
                 )
-                text_delta_callback = state.on_text_delta
+                text_delta_callback = (
+                    state.on_text_delta
+                    if (
+                        not state.evidence_requirement.required
+                        or (
+                            state.evidence_state is not None
+                            and state.evidence_state.usable
+                        )
+                    )
+                    else None
+                )
                 if text_delta_callback is not None:
                     response = await self._orchestrator._router.send(
                         request, on_text_delta=text_delta_callback,
@@ -657,6 +684,27 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
+                    if (
+                        state.evidence_requirement.required
+                        and state.evidence_requirement.owner == "asset"
+                        and (
+                            state.evidence_state is None
+                            or not state.evidence_state.attempted
+                        )
+                    ):
+                        asset_collectors = sorted(
+                            name
+                            for name in state.evidence_requirement.allowed_collectors
+                            if name.startswith("asset:")
+                        )
+                        if asset_collectors:
+                            collector = asset_collectors[0]
+                            state.attempted_collectors.add(collector)
+                            state.evidence_state = assess_tool_result(
+                                state.evidence_requirement,
+                                tool_name=collector,
+                                output=final_text,
+                            )
                     if (
                         state.evidence_requirement.required
                         and (

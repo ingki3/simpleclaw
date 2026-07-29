@@ -140,6 +140,10 @@ class EvidenceRequirement:
     allowed_collectors: frozenset[str] = frozenset()
     freshness_required: bool = False
     origin: str = ""
+    owner: str = "none"
+    entities: tuple[str, ...] = ()
+    required_claims: tuple[str, ...] = ()
+    collector_validators: tuple[tuple[str, str], ...] = ()
 
     def initial_state(self) -> EvidenceState:
         return EvidenceState(
@@ -175,6 +179,10 @@ def requirement_from_turn_analysis(
         allowed_collectors=allowed_collectors if required else frozenset(),
         freshness_required=bool(getattr(analysis, "needs_current_facts", False)),
         origin="legacy_turn_analysis",
+        owner="planner" if required else "none",
+        collector_validators=tuple(
+            (name, "sourced_text") for name in allowed_collectors
+        ),
     )
 
 
@@ -249,6 +257,23 @@ def requirement_from_turn_plan(
 
     fact_check = plan.fact_check
     collectors = approved_collectors_from_plan(plan, catalog=catalog)
+    validators = tuple(
+        (
+            name,
+            (
+                "sourced_text"
+                if name in _WEB_COLLECTOR_NAMES or name == "execute_skill"
+                else "bounded_text"
+            ),
+        )
+        for name in sorted(collectors)
+    )
+    if fact_check.required and fact_check.owner.value == "asset":
+        primary = plan.execution.primary_asset
+        if primary is not None:
+            asset_collector = f"asset:{primary.asset_type}:{primary.name}"
+            collectors = frozenset((*collectors, asset_collector))
+            validators = (*validators, (asset_collector, "sourced_text"))
     return EvidenceRequirement(
         required=fact_check.required,
         query=fact_check.search_query or plan.context.standalone_question,
@@ -256,6 +281,10 @@ def requirement_from_turn_plan(
         allowed_collectors=collectors if fact_check.required else frozenset(),
         freshness_required=fact_check.freshness_required,
         origin="unified_fact_check_plan",
+        owner=fact_check.owner.value,
+        entities=tuple(fact_check.entities),
+        required_claims=tuple(fact_check.required_claims),
+        collector_validators=validators,
     )
 
 
@@ -328,7 +357,56 @@ def assess_realtime_result(
         if parsed is not None
         else str(result or "")
     )[:_MAX_EVIDENCE_CHARS]
+    schema_failure = ""
+    if parsed is None:
+        schema_failure = "structured evidence schema failure: expected JSON object"
     lookup_status = str((parsed or {}).get("lookup_status") or "")
+    facts = (parsed or {}).get("facts")
+    if not schema_failure and lookup_status not in {
+        EvidenceStatus.FOUND.value,
+        EvidenceStatus.NOT_FOUND.value,
+        EvidenceStatus.FAILED.value,
+    }:
+        schema_failure = "structured evidence schema failure: invalid lookup_status"
+    if not schema_failure and not isinstance(facts, list):
+        schema_failure = "structured evidence schema failure: facts must be a list"
+    if (
+        not schema_failure
+        and isinstance(facts, list)
+        and any(not isinstance(fact, dict) for fact in facts)
+    ):
+        schema_failure = "structured evidence schema failure: fact must be an object"
+    if not schema_failure and lookup_status == EvidenceStatus.FOUND.value:
+        if not facts:
+            schema_failure = "structured evidence schema failure: found requires facts"
+        elif not all(
+            str(
+                fact.get("source_url")
+                or fact.get("url")
+                or fact.get("source")
+                or ""
+            ).strip()
+            for fact in facts
+        ):
+            schema_failure = (
+                "structured evidence schema failure: found fact requires source"
+            )
+        elif not as_of:
+            schema_failure = (
+                "structured evidence schema failure: found requires freshness metadata"
+            )
+    if schema_failure:
+        return EvidenceState(
+            required=requirement.required,
+            attempted=True,
+            status=EvidenceStatus.FAILED,
+            source_type=EvidenceSourceType.STRUCTURED_REALTIME,
+            freshness=EvidenceFreshness.UNKNOWN,
+            failure_reason=schema_failure,
+            evidence_text=evidence_text,
+            query=requirement.query,
+            as_of=as_of,
+        )
     if lookup_status == EvidenceStatus.NOT_FOUND.value:
         status = EvidenceStatus.NOT_FOUND
     elif lookup_status == EvidenceStatus.FAILED.value:
@@ -337,10 +415,6 @@ def assess_realtime_result(
         status = EvidenceStatus.FOUND
     elif lookup_status == EvidenceStatus.FOUND.value:
         status = EvidenceStatus.UNUSABLE
-    elif usable:
-        # Rollback-window realtime fixtures predate the typed lookup_status
-        # field. The domain validator's positive verdict remains authoritative.
-        status = EvidenceStatus.FOUND
     else:
         status = EvidenceStatus.UNUSABLE
 
@@ -447,23 +521,38 @@ def assess_tool_result(
             freshness=EvidenceFreshness.CURRENT_TURN,
             **common,
         )
-    if requirement.freshness_required and any(
-        marker in lowered for marker in _STALE_MARKERS
-    ):
+    if any(marker in lowered for marker in _STALE_MARKERS):
         return EvidenceState(
             status=EvidenceStatus.UNUSABLE,
             freshness=EvidenceFreshness.STALE,
             failure_reason="collector returned stale or pre-event evidence",
             **common,
         )
-    if not _result_is_relevant(requirement.query, text):
+    relevance_terms = tuple(
+        term
+        for term in (*requirement.entities, *requirement.required_claims)
+        if str(term).strip()
+    )
+    if (
+        not _result_is_relevant(requirement.query, text)
+        or any(
+            _normalized_relevance_text(str(term))
+            not in _normalized_relevance_text(text)
+            for term in relevance_terms
+        )
+    ):
         return EvidenceState(
             status=EvidenceStatus.UNUSABLE,
             freshness=EvidenceFreshness.UNKNOWN,
             failure_reason="collector result is not relevant to the evidence query",
             **common,
         )
-    if tool_name in _WEB_COLLECTOR_NAMES and not _URL_RE.search(text):
+    validators = dict(requirement.collector_validators)
+    validator = validators.get(
+        tool_name,
+        "sourced_text" if tool_name in _WEB_COLLECTOR_NAMES else "bounded_text",
+    )
+    if validator == "sourced_text" and not _URL_RE.search(text):
         return EvidenceState(
             status=EvidenceStatus.UNUSABLE,
             freshness=EvidenceFreshness.UNKNOWN,

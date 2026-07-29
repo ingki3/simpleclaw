@@ -484,6 +484,11 @@ def repair_turn_analysis_payload(
         return None
     if any(field_name not in data for field_name in _REPAIR_REQUIRED_FIELDS):
         return None
+    # BIZ-521 — evidence decision 이전에서 잘린 LLM payload를 optional로
+    # 복구하면 검증되지 않은 factual final이 통과한다. 결정 필드가 없으면
+    # current turn은 required로 fail-closed한다.
+    if "evidence_required" not in data:
+        data["evidence_required"] = True
     return _build_turn_analysis(data, original_text=original_text)
 
 

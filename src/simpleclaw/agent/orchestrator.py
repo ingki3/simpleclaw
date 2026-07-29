@@ -2819,8 +2819,9 @@ class AgentOrchestrator:
                 )
                 attempted_collectors.add("structured_realtime")
                 logger.warning("BIZ-480: realtime lookup failed: %s", exc)
-        if realtime_lookup_context and realtime_lookup_usable:
-            rag_context = "\n\n".join(part for part in [rag_context, realtime_lookup_context] if part)
+        # Structured provider output is untrusted observation data. The common
+        # evidence gate passes its validated payload through a user-role data
+        # envelope; never append raw provider text to trusted RAG/system blocks.
 
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.

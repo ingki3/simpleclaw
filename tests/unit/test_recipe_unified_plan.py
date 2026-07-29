@@ -7,8 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.tool_loop import ToolLoopResult
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     ClarificationPlan,
@@ -21,6 +22,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.models import RecipeDefinition
 
 
@@ -199,3 +201,51 @@ async def test_recipe_owner_does_not_run_top_level_fact_controller(
     planned_complex.assert_not_awaited()
     tool_loop.assert_awaited_once()
     assert tool_loop.await_args.kwargs["plan"].fact_check.owner is EvidenceOwner.ASSET
+
+
+@pytest.mark.asyncio
+async def test_asset_owned_recipe_runs_through_common_evidence_gate(tmp_path) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [
+        RecipeDefinition(
+            name="selected-recipe",
+            description="selected evidence recipe",
+            capability=CapabilityMetadata(
+                read_only=True,
+                side_effects=False,
+                declared=True,
+            ),
+        ),
+    ]
+    plan = _plan()
+    state = await orchestrator._prepare_tool_loop_state(
+        plan.context.standalone_question,
+        False,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        plan=plan,
+        candidates=ContextCandidateSet(
+            candidates=(),
+            total_chars=0,
+            truncated=False,
+        ),
+        evidence_requirement=requirement_from_turn_plan(plan),
+    )
+    orchestrator._router.send = AsyncMock(
+        return_value=LLMResponse(
+            text=(
+                "선택 레시피로 조사해줘 결과\n"
+                "URL: https://example.com/recipe-evidence"
+            ),
+            model="test",
+        )
+    )
+
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert result.success is True
+    assert "recipe-evidence" in result.text
+    assert state.evidence_state is not None
+    assert state.evidence_state.usable is True
+    orchestrator._router.send.assert_awaited_once()

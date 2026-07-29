@@ -589,7 +589,7 @@ async def test_fact_check_plan_still_executes_web_search(
             "WEB_SEARCH_RESULTS: '롯데 경기 결과' (1 results)\n"
             "1. 공식 경기 결과\n"
             "   URL: https://example.com/official-result\n"
-            "   Snippet: 롯데가 3대 2로 승리했습니다."
+            "   Snippet: 롯데 최종 점수는 3대 2로 승리했습니다."
         )
     )
     monkeypatch.setattr(
@@ -696,7 +696,7 @@ async def test_fact_required_primary_path_suppresses_streaming_but_preserves_fin
     search = AsyncMock(
         return_value=(
             "WEB_SEARCH_RESULTS: query (1 results)\n"
-            "1. 공식 경기 결과\n"
+            "1. 롯데 최종 점수 공식 경기 결과\n"
             "URL: https://example.com/official-result"
         )
     )

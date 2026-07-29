@@ -169,7 +169,7 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"news","confidence":"medium",'
+            '{"kind":"news","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"AI 뉴스 근거"}]}'
         )
@@ -188,11 +188,12 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     assert isinstance(payload, str) and " " not in payload
 
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
-    assert "AI 뉴스 근거" in request.system_prompt
-    # BIZ-383: timeline validation 사용 규칙이 evidence context에 포함된다.
-    assert "timeline_validation" in request.system_prompt
-    assert "stale_or_pre_event" in request.system_prompt
+    assert "AI 뉴스 근거" not in request.system_prompt
+    assert any(
+        "AI 뉴스 근거" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert not any(m.get("role") == "tool" for m in request.messages)
     assert not any(m.get("tool_calls") for m in request.messages)
 
@@ -248,6 +249,7 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
         return json.dumps(
             {
                 "kind": "sports",
+                "lookup_status": "found",
                 "confidence": "high",
                 "facts": [
                     {
@@ -278,12 +280,12 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
 
     assert result == "KT가 롯데를 5:4로 이겼고 경기는 종료됐습니다."
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert "same `type: sports_score` fact" in request.system_prompt
-    assert "Never merge values across snippets" in request.system_prompt
-    assert "`lookup_status=failed` or an empty `facts` list" in request.system_prompt
-    assert "Only `lookup_status=not_found`" in request.system_prompt
-    assert "Do not mention system prompts" in request.system_prompt
-    assert "raw internal field names" in request.system_prompt
+    assert "Naver Sports Game Card" not in request.system_prompt
+    assert any(
+        "Naver Sports Game Card" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert _REALTIME_LOOKUP_CONTEXT_HEADER not in result
 
 
@@ -350,7 +352,7 @@ async def test_market_impact_question_triggers_realtime_lookup(
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"market","confidence":"medium",'
+            '{"kind":"market","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"증시 영향 근거"}]}'
         )
@@ -367,8 +369,12 @@ async def test_market_impact_question_triggers_realtime_lookup(
     skill_name, _payload = orchestrator._execute_skill.await_args.args
     assert skill_name == "realtime-lookup-skill"
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
-    assert "증시 영향 근거" in request.system_prompt
+    assert "증시 영향 근거" not in request.system_prompt
+    assert any(
+        "증시 영향 근거" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -415,7 +421,7 @@ async def test_internal_realtime_skill_not_exposed_as_llm_callable(
     normal = _register_normal_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"news","confidence":"medium",'
+            '{"kind":"news","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"근거"}]}'
         )
@@ -433,8 +439,11 @@ async def test_internal_realtime_skill_not_exposed_as_llm_callable(
     await orchestrator.process_message("오늘 AI 최신 뉴스 알려줘", 1, 1)
 
     request = orchestrator._router.send.call_args_list[0][0][0]
-    # evidence 블록은 주입되지만 callable skill 목록엔 internal skill 이름이 없다.
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
+    # evidence는 untrusted data message로 주입되고 callable 목록에는 없다.
+    assert any(
+        message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert "realtime-lookup-skill" not in request.system_prompt
     assert normal.name in request.system_prompt
 
