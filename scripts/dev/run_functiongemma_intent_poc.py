@@ -20,9 +20,8 @@ from simpleclaw.agent.context_candidates import (
     ContextTrust,
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.tool_schemas import build_native_tool_registry
-from simpleclaw.agent.planner_catalog import PlannerCatalog
 from simpleclaw.agent.turn_planner import (
     build_turn_planner_user_prompt,
     plan_turn_with_llm,
