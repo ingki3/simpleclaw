@@ -11,9 +11,14 @@ import pytest
 
 import scripts.dev.run_functiongemma_intent_poc as intent_poc
 from scripts.dev.run_functiongemma_intent_poc import (
+    RUN_CONTRACT,
+    RUN_CONTRACT_FINGERPRINT,
+    RUN_CONTRACT_VERSION,
     _bounded_catalog,
     _parser,
+    _preflight_fresh_run,
     _provider_prompt_diagnostic,
+    _record_training_failure,
 )
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
@@ -58,6 +63,84 @@ def test_cli_default_propagates_token_hard_cap() -> None:
         "/tmp/functiongemma-private",
     ])
     assert args.max_provider_tokens == LabelingBudget().max_tokens
+
+
+def _write_run_manifest(output) -> None:
+    (output / "run-manifest.json").write_text(json.dumps({
+        "run_contract_version": RUN_CONTRACT_VERSION,
+        "run_contract_fingerprint": RUN_CONTRACT_FINGERPRINT,
+        "run_contract": RUN_CONTRACT,
+        "training_process_invocation_count": 0,
+    }), encoding="utf-8")
+
+
+def test_clean_rerun_requires_empty_output_and_invalidation_marker(
+    tmp_path,
+) -> None:
+    invalidated = tmp_path / "old"
+    invalidated.mkdir()
+    (invalidated / "INVALIDATED.json").write_text(
+        '{"status":"invalidated"}',
+        encoding="utf-8",
+    )
+    output = tmp_path / "fresh"
+    resolved = _preflight_fresh_run(
+        output,
+        invalidated_artifact_dirs=[invalidated],
+    )
+    manifest = json.loads(
+        (resolved / "run-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["run_contract_fingerprint"] == RUN_CONTRACT_FINGERPRINT
+    assert manifest["training_process_invocation_count"] == 0
+    assert len(manifest["invalidated_artifacts_excluded"]) == 1
+
+    with pytest.raises(FileExistsError, match="fresh"):
+        _preflight_fresh_run(
+            output,
+            invalidated_artifact_dirs=[invalidated],
+        )
+
+
+def test_training_failure_report_is_redacted_and_has_distinct_hashes(
+    tmp_path,
+) -> None:
+    output = tmp_path / "private"
+    output.mkdir()
+    _write_run_manifest(output)
+    (output / "lineage-manifest.json").write_text(json.dumps({
+        "provider_usage": {"provider_calls": 1},
+        "provider_payload_audit": {
+            "payload_count": 1,
+            "accepted_target_out_of_pre_call_set_count": 0,
+            "raw_identifier_match_count": 0,
+            "payload_set_fingerprint": "a" * 64,
+            "fingerprint_algorithm": "SHA-256",
+            "canonicalization": "canonical",
+        },
+    }), encoding="utf-8")
+
+    _record_training_failure(output, manifest={
+        "returncode": 1,
+        "stop_reason": "completed",
+        "elapsed_seconds": 1.0,
+        "artifact_bytes": 0,
+        "peak_artifact_bytes": 0,
+        "artifact_cap_bytes": 10,
+        "process_invocation_count": 1,
+        "adapter_path": str(output / "adapter"),
+        "consumed_budget": {"steps_requested": 2},
+    }, error_code="RuntimeError")
+
+    report = json.loads(
+        (output / "aggregate-report.json").read_text(encoding="utf-8")
+    )
+    assert report["hard_failures"] == {"training.process_error": 1}
+    assert report["recommend_shadow_integration"] is False
+    assert report["raw_text_rows"] == 0
+    assert report["report_fingerprints"]["canonical_payload"]["value"] != (
+        report["report_fingerprints"]["private_report_file_bytes"]["value"]
+    )
 
 
 def _case(number: int) -> SanitizedCase:
@@ -332,6 +415,7 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
 ) -> None:
     output = tmp_path / "private"
     output.mkdir()
+    _write_run_manifest(output)
     (output / "sanitized-cases.jsonl").write_text(
         json.dumps(_case(1).to_dict()) + "\n",
         encoding="utf-8",
@@ -371,6 +455,13 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
         ),
         output,
     )
+    lineage = json.loads(
+        (output / "lineage-manifest.json").read_text(encoding="utf-8")
+    )
+    audit = lineage["provider_payload_audit"]
+    assert audit["payload_count"] > 0
+    assert audit["raw_identifier_match_count"] == 0
+    assert all(len(value) == 64 for value in audit["payload_fingerprints"])
 
     summary = json.loads(
         (output / "labeling-summary.json").read_text(encoding="utf-8")

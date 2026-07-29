@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import statistics
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from pathlib import Path
 
 from simpleclaw.evaluation.functiongemma_contract import (
     NO_ASSET,
@@ -25,6 +28,26 @@ class InferenceResult:
     latency_ms: float
     api_success: bool = True
     error_code: str = ""
+
+
+def canonical_json_sha256(value: object) -> str:
+    """UTF-8 canonical JSON(sort keys, compact separators)의 SHA-256."""
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def file_sha256(path: str | Path) -> str:
+    """파일에 기록된 실제 byte sequence의 SHA-256."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _percentile(values: Sequence[float], q: float) -> float:

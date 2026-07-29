@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **BIZ-512: FunctionGemma 축소 intent·asset classifier QLoRA PoC** — 최초 44 label과 파생 artifact는 candidate/privacy 결함으로 invalidated됐다. BIZ-513(candidate/privacy), BIZ-514(provider·training hard cap), BIZ-515(clean rerun) 및 PR #525~#527의 검증·머지가 남아 있다. live runtime 연결·config 변경·restart·deploy는 수행하지 않았다. (2026-07-29)
+- [>] **BIZ-512: FunctionGemma 축소 intent·asset classifier QLoRA PoC** — 최초 44 label·augmentation·adapter 2개·report는 invalidated marker와 SHA-256으로 격리했다. BIZ-513/514는 `dev`에 반영됐고, BIZ-515 fresh rerun은 provider 300회에서 accepted 4건·raw identifier/out-of-set accepted 0을 확인했다. 단일 QLoRA process는 return code 1로 adapter 없이 hard-fail해 base/tuned 평가는 생략했으며 shadow integration은 추천하지 않는다. BIZ-515 PR review/merge와 부모 Stage D 판정이 남아 있다. live runtime 연결·config 변경·restart·deploy는 수행하지 않았다. (2026-07-29)
 
 - [x] **BIZ-507: news-search-skill Gemini secret을 등록 skill 자식 범위로 제한** — PR #520을 `dev`에 squash merge(`62a203566fd2185e3b3dbec99824932bec3e0166`)했다. 2026-07-28 live rollout에서 `news-search-skill` N1~N3와 `krstock*` R1~R2 수정·timestamp backup, Gemini credential `file:gemini_api_key` encrypted-vault migration/read-back, LaunchAgent drain restart·Admin health, notifier 없는 registered skill 및 `/krstock-close` smoke를 완료했다.
 
