@@ -116,3 +116,65 @@ schema/boundary 위반, missing fallback은 soft 평균과 별도 hard failure�
 
 Aggregate report fingerprint:
 `8cb7e9effcc6908e1907a1736786470edc9ea8afa7b47d93b6b47d24ed973a48`.
+
+## BIZ-515 clean rerun 결과
+
+기존 `functiongemma-intent-20260729-biz512` 디렉터리는 삭제하지 않았다.
+`INVALIDATED.json`에 기존 44 label, augmentation, plain-JSON/native-format
+adapter 2개와 aggregate report의 file SHA-256 및 invalidation 사유를 기록했고,
+fresh run은 marker SHA만 lineage에 포함해 기존 artifact를 metric 입력에서
+제외했다.
+
+비용 실행 당시 private directory에는
+`functiongemma-intent-poc/biz-515-v1` fingerprint
+`a603002a0209644b43a5cc3950e3dca498b2bf250605e68edfb9678baf738ab9`가
+기록됐다. 그러나 이 v1 계약은 reviewed prerequisite와 source를 문자열로만
+표현해 exact 실행 source를 증명하지 못한다.
+
+후속 `biz-515-v2` 계약은 prerequisite PR #527 merge SHA
+`b1c659b5821fe45368596e92a8d67464503e7fd6`와 runner를 포함한
+task-owned FunctionGemma source 8개 파일의 exact file-byte SHA-256을 포함한다.
+현재 checkout에서 prerequisite ancestry와 모든 file hash를 대조해 하나라도
+다르면 provider/training 전에 fail-closed한다. reviewed v2 fingerprint는
+`384ac02895153019e8790481cbfbed7e33f5427e947fb72ec0f535c0ed261e2b`다.
+
+- extraction: DB non-deleted row는 실행 전후 938건으로 동일했다. source 300건의
+  split은 train/dev/test 236/34/30이며 source-group leakage는 0이다.
+- provider: 300-call hard cap에서 종료했다. 968.079초, 20,485 tokens를
+  소비했고 accepted 4건(train/dev/test 3/0/1), adjudication 296건이었다.
+  `boundary.unknown_asset` 21건을 포함한 out-of-set 결과는 accepted되지 않았다.
+- payload audit: 실제 provider-neutral `LLMRequest` 300건을 원문 없이 canonical
+  JSON SHA-256으로 감사했다. raw DB/user/chat/message identifier match와 accepted
+  target out-of-pre-call-set은 모두 0이다. payload-set fingerprint는
+  `f42f398a7de0dea7cecd1c3d08815c9dcb1e5fc914cf297784255b69e2d4b710`이다.
+- augmentation: accepted train 3건에서 필수 strata를 포함한 12건을 생성했다.
+  최종 MLX train/valid/test row는 15/0/1이다.
+- training: fresh run의 MLX QLoRA process invocation은 정확히 1회다. seed 42,
+  요청 45 steps로 시작했으나 3.019초 뒤 return code 1, `process_error`로
+  종료했고 adapter artifact는 0 bytes다. 당시 runner가 child stderr를
+  폐기했기 때문에 내부 예외를 사후 단정하지 않는다. 이후 runner는 private
+  stdout/stderr log와 `process_error` stop reason을 보존하도록 보완했다.
+- evaluation: tuned adapter가 생성되지 않아 base/tuned 비교를 실행하지 않았다.
+  aggregate hard failure는 `training.process_error=1`,
+  `lineage.execution_source_unverifiable=1`,
+  `recommend_shadow_integration=false`다. 추가 seed/run/budget 확대는 수행하지
+  않았다.
+- source provenance: Multica run message와 Git history로 prerequisite checkout
+  base SHA는 복원했지만, 비용 실행은 uncommitted worktree에서 수행됐고
+  runner/report 보완이 실행 후 최초 commit `8106371bee55ca64fcbe6a2dde7e5a05940e06b1`
+  에 함께 저장됐다. 따라서 exact execution commit/tree/task-owned file hash는
+  복원할 수 없다. 이 한계를 private run/lineage/aggregate manifest에
+  `status=unverifiable` hard failure로 기록했으며 기존 process를 재실행하지
+  않았다.
+
+알려진 로컬 MLX 학습 실행 이력은 호환성 2-step smoke 1회, invalidated
+plain-JSON/native-format adapter run 각 1회, BIZ-515 fresh process 1회로 총
+4회다. BIZ-515 fresh directory 내부 invocation count는 1이며 기존 run은 final
+metric에 포함하지 않는다.
+
+hard-failure report는 payload canonical SHA-256과 private report file-byte
+SHA-256을 알고리즘·canonicalization과 함께 별도 필드로 기록한다. 값은 각각
+`cea58e6e38006e90ecc1a534dc5325baab0b9ada2f67fe3bffc6a8209b2d6b29`,
+`86902022b9bf5623996eb9f577368ec973008596e0ad60e3d271b5f784cd7c2b`이다.
+live config, restart, deploy, request-path 연결 및 private artifact 외부 업로드는
+수행하지 않았다.

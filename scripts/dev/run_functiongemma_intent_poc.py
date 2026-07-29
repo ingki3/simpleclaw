@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import re
 import subprocess
 import sys
 import time
@@ -59,6 +58,25 @@ from simpleclaw.evaluation.functiongemma_labeling import (
     label_cases,
     labeling_public_summary,
 )
+from simpleclaw.evaluation.functiongemma_poc import (
+    ProviderPayloadAudit,
+    begin_training_invocation,
+    complete_training_invocation,
+    contains_provider_identifier,
+    finalize_comparison_report,
+)
+from simpleclaw.evaluation.functiongemma_poc import (
+    preflight_fresh_run as _preflight_fresh_run,
+)
+from simpleclaw.evaluation.functiongemma_poc import (
+    read_json as _read_json,
+)
+from simpleclaw.evaluation.functiongemma_poc import (
+    record_training_failure as _record_training_failure,
+)
+from simpleclaw.evaluation.functiongemma_poc import (
+    require_run_contract as _require_run_contract,
+)
 from simpleclaw.evaluation.functiongemma_training import (
     MAX_STEPS,
     MLX_LM_PATH,
@@ -77,19 +95,6 @@ HISTORICAL_GOLD = Path(
     "historical-planner-diff-20260726-aligned-final24/"
     "private_sanitized_cases.jsonl"
 ).expanduser()
-_PROVIDER_IDENTIFIER_PATTERNS = (
-    re.compile(r"\b(?:msg|live):\d+\b", re.IGNORECASE),
-    re.compile(
-        r"""(?ix)
-        (?:"|'|`)?\b(?:user|chat|message|msg)[_\s-]?id\b(?:"|'|`)?
-        \s*(?::|=)\s*(?:"|'|`)?[A-Za-z0-9_-]+
-        """
-    ),
-)
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -324,12 +329,13 @@ def _provider_prompt_diagnostic(
         candidates=_context_set(case),
         catalog=_bounded_catalog(catalog, candidates),
     )
-    if any(pattern.search(prompt) for pattern in _PROVIDER_IDENTIFIER_PATTERNS):
+    if contains_provider_identifier(prompt):
         raise ValueError("provider_prompt_identifier_leak")
     return prompt
 
 
 async def _label_async(args: argparse.Namespace, output: Path) -> None:
+    _require_run_contract(output)
     cases = [_case_from_dict(row) for row in _read_jsonl(
         output / "sanitized-cases.jsonl"
     )]
@@ -339,6 +345,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
     runtime_assets = tuple(
         asset for asset in catalog.assets if asset.runtime_visible
     )
+    provider_payload_audit = ProviderPayloadAudit()
 
     class UsageCapturingRouter(LLMRouter):
         def __init__(self, wrapped: LLMRouter) -> None:
@@ -347,6 +354,8 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
             self.usage_supported = True
 
         async def send_validated(self, request, validate_response):
+            provider_payload_audit.record(request)
+
             def capture_and_validate(response):
                 usage = getattr(response, "usage", None)
                 if not isinstance(usage, dict):
@@ -424,6 +433,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
         "max_tokens": args.max_provider_tokens,
     }
     lineage["provider_usage"] = summary
+    lineage["provider_payload_audit"] = provider_payload_audit.to_manifest()
     write_private_json(output / "lineage-manifest.json", lineage)
     print(json.dumps(summary, sort_keys=True))
 
@@ -507,35 +517,21 @@ def train_command(args: argparse.Namespace) -> None:
     )
     train_rows = _read_jsonl(output / "mlx-data/train.jsonl")
     steps = min(args.training_steps, MAX_STEPS, max(2, len(train_rows) * 3))
+    adapter_path = output / "adapter-function-format"
+    begin_training_invocation(output, adapter_path=adapter_path)
     try:
         manifest = run_training(TrainingConfig(
             model_path=str(model),
             data_dir=str(output / "mlx-data"),
-            adapter_path=str(output / "adapter-function-format"),
+            adapter_path=str(adapter_path),
             steps=steps,
-        ))
-    except RuntimeError:
+        ), process_invocation_count=1)
+    except RuntimeError as exc:
         manifest = _read_json(output / "training-manifest.json")
-        budget_summary = {
-            key: manifest.get(key)
-            for key in (
-                "stop_reason",
-                "elapsed_seconds",
-                "artifact_bytes",
-                "peak_artifact_bytes",
-                "artifact_cap_bytes",
-            )
-        }
-        lineage = _read_json(output / "lineage-manifest.json")
-        lineage["training_budget"] = budget_summary
-        write_private_json(output / "lineage-manifest.json", lineage)
-        write_private_json(
-            output / "aggregate-report.json",
-            {
-                "training_budget": budget_summary,
-                "evaluation_skipped": True,
-                "raw_text_rows": 0,
-            },
+        budget_summary = _record_training_failure(
+            output,
+            manifest=manifest,
+            error_code=type(exc).__name__,
         )
         print(json.dumps(budget_summary, sort_keys=True))
         raise
@@ -550,6 +546,7 @@ def train_command(args: argparse.Namespace) -> None:
     lineage = _read_json(output / "lineage-manifest.json")
     lineage["training_budget"] = summary
     write_private_json(output / "lineage-manifest.json", lineage)
+    complete_training_invocation(output, training_manifest=manifest)
     print(json.dumps(summary, sort_keys=True))
 
 
@@ -623,6 +620,9 @@ def _infer(
 
 def evaluate_command(args: argparse.Namespace) -> None:
     output = ensure_private_output_dir(args.private_output_dir)
+    run_manifest = _require_run_contract(output)
+    if run_manifest.get("training_process_invocation_count") != 1:
+        raise RuntimeError("evaluation requires exactly one training invocation")
     cases = [item for item in _load_labeled(output) if item.case.split == "test"]
     if not cases:
         raise RuntimeError("held-out test split has no labeled cases")
@@ -637,26 +637,7 @@ def evaluate_command(args: argparse.Namespace) -> None:
     tuned = evaluate_predictions(cases, tuned_results)
     report = comparison_report(base, tuned)
     report["privacy_hard_failures"] = 0
-    write_private_json(output / "private-comparison-report.json", report)
-    public_report = {
-        **report,
-        "report_fingerprint": text_fingerprint(json.dumps(report, sort_keys=True)),
-        "raw_text_rows": 0,
-    }
-    training_manifest_path = output / "training-manifest.json"
-    if training_manifest_path.is_file():
-        training = _read_json(training_manifest_path)
-        public_report["training_budget"] = {
-            "stop_reason": training.get("stop_reason"),
-            "elapsed_seconds": training.get("elapsed_seconds"),
-            "artifact_bytes": training.get("artifact_bytes"),
-            "peak_artifact_bytes": training.get("peak_artifact_bytes"),
-            "artifact_cap_bytes": training.get("artifact_cap_bytes"),
-        }
-    labeling_summary_path = output / "labeling-summary.json"
-    if labeling_summary_path.is_file():
-        public_report["provider_usage"] = _read_json(labeling_summary_path)
-    write_private_json(output / "aggregate-report.json", public_report)
+    public_report = finalize_comparison_report(output, report=report)
     print(json.dumps(public_report, sort_keys=True))
 
 
@@ -684,6 +665,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allow-model-download", action="store_true")
     parser.add_argument("--training-steps", type=int, default=100)
+    parser.add_argument(
+        "--invalidated-artifact-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help="Prior artifact directory containing INVALIDATED.json (repeatable).",
+    )
     return parser
 
 
@@ -691,6 +679,15 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command in {"extract", "all"} and args.live_db is None:
         raise SystemExit("--live-db is required for extract/all")
+    if args.command == "all":
+        if not args.invalidated_artifact_dir:
+            raise SystemExit(
+                "--invalidated-artifact-dir is required for clean rerun"
+            )
+        _preflight_fresh_run(
+            args.private_output_dir,
+            invalidated_artifact_dirs=args.invalidated_artifact_dir,
+        )
     commands = {
         "extract": extract_command,
         "label": label_command,
