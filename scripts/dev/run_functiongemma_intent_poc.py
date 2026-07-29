@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FunctionGemma intent/asset PoC를 private artifact 경계 안에서 실행한다."""
 
 from __future__ import annotations
@@ -21,8 +20,8 @@ from simpleclaw.agent.context_candidates import (
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
-from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.agent.tool_schemas import build_native_tool_registry
+from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.config import load_recipes_config
 from simpleclaw.evaluation.functiongemma_augmentation import augment_train_cases
 from simpleclaw.evaluation.functiongemma_contract import (

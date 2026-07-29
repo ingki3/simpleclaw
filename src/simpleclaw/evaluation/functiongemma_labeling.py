@@ -154,18 +154,22 @@ async def label_cases(
     catalog_assets: Sequence[PlannerAsset],
     planner: PlannerCallable,
     allow_provider_calls: bool,
-    budget: LabelingBudget = LabelingBudget(),
+    budget: LabelingBudget | None = None,
     minimum_confidence: float = 0.55,
 ) -> LabelingResult:
     """sanitized case만 planner에 보내고 오류/저신뢰 결과를 queue로 분리한다."""
     if not allow_provider_calls:
         raise PermissionError("provider calls require explicit opt-in")
+    effective_budget = budget or LabelingBudget()
     started = time.monotonic()
     calls = 0
     labeled: list[LabeledCase] = []
     queue: list[AdjudicationItem] = []
     for case in cases:
-        if calls >= budget.max_calls or time.monotonic() - started >= budget.max_seconds:
+        if (
+            calls >= effective_budget.max_calls
+            or time.monotonic() - started >= effective_budget.max_seconds
+        ):
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
                 source_group_id=case.source_group_id,

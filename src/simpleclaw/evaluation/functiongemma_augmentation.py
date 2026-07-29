@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import random
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Callable, Sequence
 
 from simpleclaw.evaluation.functiongemma_labeling import LabeledCase
 
