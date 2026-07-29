@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from simpleclaw.evaluation.functiongemma_augmentation import augment_train_cases
 from simpleclaw.evaluation.functiongemma_contract import (
-    CandidateAsset,
     NO_ASSET,
+    CandidateAsset,
     CompactIntentCall,
     parse_function_call,
 )
@@ -119,9 +119,9 @@ def test_required_strata_coverage_is_deterministic_within_caps() -> None:
         sum(item.case.source_group_id == source for item in first) <= 4
         for source in {item.case.source_group_id for item in first}
     )
-    assert set(
+    assert {
         item.case.case_id.rsplit(":", 1)[-1] for item in first
-    ) == {
+    } == {
         "entity_placeholder",
         "recipe_creation",
         "recipe_execution",
