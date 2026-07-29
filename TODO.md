@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환 — 코드·오프라인 gate 완료, 운영 rollout 대기** — Naver Sports 구조화 schedule schema/enum 기반 KBO live/final 판정, typed `lookup_status`, 조회 실패 확대 방지 계약과 PR #522의 fresh CI까지 완료했다. **남은 운영 gate:** PR #522의 `dev` merge와 `dev → main` release, live `realtime-lookup-skill` timestamp backup·갱신, LaunchAgent drain restart, Admin health, notifier 없는 no-send 스포츠 smoke. 이 운영 DoD를 모두 마치기 전에는 `[x]`로 전환하지 않는다. (진행: 2026-07-28)
+- [x] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환** — PR #522를 `dev`에 squash merge(SHA `c5e84cb97b37818545096dfeabdf880c013746ae`)하고 release PR #530을 merge commit(SHA `4fbbc377950b5ee04219f362a89f4b3e76a634d7`)으로 `main`에 반영해 `v2026.07.29`를 발행했다. Live `realtime-lookup-skill`은 timestamp backup 후 Naver Sports schedule schema·typed `lookup_status` 계약으로 갱신했고, LaunchAgent restart(`67645 → 72755`), Admin·Webhook·Telegram health, notifier 없는 no-send smoke(`found`, 롯데 3:5 한화, `live`, winner `null`)를 완료했다. 표시 문구·고정 키워드 없이 `STARTED → live`, `ENDED|RESULT → final`, 조회 실패와 명시적 경기 없음 분리를 운영에서 확인했다. (2026-07-29)
 
 - [x] **BIZ-512: FunctionGemma 축소 intent·asset classifier QLoRA PoC** — BIZ-513/514의 candidate boundary·privacy·hard cap 보완은 canonical PR #527로 `dev`에 squash merge(SHA `b1c659b5821fe45368596e92a8d67464503e7fd6`)했고, BIZ-515 clean rerun 감사 결과는 PR #528로 squash merge(SHA `72b25d0c3b6d05d95632e221c98fff8fbd182048`)했다. superseded 구현 PR #525는 merge 없이 닫았다. 최초 44 label·augmentation·adapter 2개·report는 invalidated marker와 SHA-256으로 격리했다. clean rerun은 provider 300회에서 accepted 4건·raw identifier/out-of-set accepted 0을 확인했으나, 단일 QLoRA process가 return code 1로 종료되어 adapter를 생성하지 못했다. 따라서 base/tuned 비교는 N/A이며 shadow integration은 추천하지 않는다. live runtime 연결·config 변경·restart·deploy는 수행하지 않았다. (2026-07-29)
 
