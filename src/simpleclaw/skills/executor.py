@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 
 from simpleclaw.logging.trace_context import inject_trace_id_env
 from simpleclaw.security import filter_env, get_preexec_fn, kill_process_group
+from simpleclaw.security.skill_env import validate_env_overrides
 from simpleclaw.skills.models import (
     RetryPolicy,
     SkillDefinition,
@@ -49,6 +50,7 @@ async def execute_skill(
     *,
     metrics: MetricsCollector | None = None,
     env_passthrough: list[str] | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> SkillResult:
     """스킬의 대상 스크립트를 비동기 서브프로세스로 실행한다.
 
@@ -64,6 +66,8 @@ async def execute_skill(
             메트릭 수집기. None이면 기록되지 않으며 기존 동작과 호환된다.
         env_passthrough: 보안 필터의 민감 키 차단에도 스킬 자식 프로세스에
             전달할 환경변수 이름 목록.
+        env_overrides: 이 등록 skill 자식에만 직접 주입할 환경변수. 이름과 값은
+            subprocess 생성 전에 검증되며 parent ``os.environ``은 변경하지 않는다.
 
     Returns:
         출력, 종료 코드, 에러 정보, 시도 횟수를 포함하는 SkillResult
@@ -84,6 +88,7 @@ async def execute_skill(
         )
 
     policy = skill.retry_policy
+    validated_env_overrides = validate_env_overrides(env_overrides)
     # 정책이 없거나 멱등성 가드가 꺼져 있으면 재시도 0회 — 기존 동작과 동일.
     max_retries = policy.max_retries if policy and policy.enabled else 0
 
@@ -99,6 +104,7 @@ async def execute_skill(
                 timeout,
                 metrics=metrics,
                 env_passthrough=env_passthrough,
+                env_overrides=validated_env_overrides,
             )
         except SkillExecutionError as exc:
             last_error = exc
@@ -183,6 +189,7 @@ async def _run_once(
     *,
     metrics: MetricsCollector | None,
     env_passthrough: list[str] | None,
+    env_overrides: dict[str, str],
 ) -> SkillResult:
     """스킬을 한 번 실행한다 (재시도 루프 단위).
 
@@ -196,7 +203,9 @@ async def _run_once(
 
     # filter_env()가 민감 키를 제거한 뒤, 설정에서 허용한 스킬용 API 키만
     # 다시 통과시킨다. trace_id는 비밀이 아니므로 마지막에 주입한다.
-    env = inject_trace_id_env(filter_env(passthrough=env_passthrough))
+    env = filter_env(passthrough=env_passthrough)
+    env.update(env_overrides)
+    env = inject_trace_id_env(env)
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -222,8 +231,14 @@ async def _run_once(
             f"Cannot execute script for skill '{skill.name}': {cmd[0]} not found"
         )
 
-    output = stdout.decode("utf-8", errors="replace").strip()
-    error = stderr.decode("utf-8", errors="replace").strip()
+    output = _redact_env_override_values(
+        stdout.decode("utf-8", errors="replace").strip(),
+        env_overrides,
+    )
+    error = _redact_env_override_values(
+        stderr.decode("utf-8", errors="replace").strip(),
+        env_overrides,
+    )
     exit_code = process.returncode or 0
     success = exit_code == 0
 
@@ -242,6 +257,17 @@ async def _run_once(
         error=error,
         success=True,
     )
+
+
+def _redact_env_override_values(
+    text: str,
+    env_overrides: dict[str, str],
+) -> str:
+    """child 출력에 실수로 포함된 per-skill secret 값을 exact-match 마스킹한다."""
+    redacted = text
+    for value in sorted(set(env_overrides.values()), key=len, reverse=True):
+        redacted = redacted.replace(value, "[REDACTED]")
+    return redacted
 
 
 def _build_command(script: Path) -> list[str]:

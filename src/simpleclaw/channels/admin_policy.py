@@ -74,6 +74,10 @@ POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     "security.command_guard.enabled": (HOT, ["security.guard"]),
     "security.command_guard.allowlist": (HOT, ["security.guard"]),
     "security.env_passthrough": (HOT, ["security.env_filter"]),
+    "security.skill_env_secret_refs.*": (
+        SERVICE_RESTART,
+        ["skills.executor", "secrets"],
+    ),
     # Skills
     "skills.execution_timeout": (HOT, ["skills.executor"]),
     "skills.local_dir": (PROCESS_RESTART, ["skills.discovery"]),

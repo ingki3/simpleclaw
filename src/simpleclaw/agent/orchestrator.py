@@ -158,6 +158,7 @@ from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.security.secrets import default_manager
+from simpleclaw.security.skill_env import load_skill_env_secret_refs
 from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.learning import (
     SKILL_SUGGESTION_RESPONSE_SCHEMA,
@@ -567,6 +568,12 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             "come from the same `type: sports_score` fact. Never merge values across snippets or "
             "sources, and never infer a missing sports_score field. If no complete `sports_score` "
             "fact exists, do not state an exact score, winner, or LIVE/final status."),
+            ("A `lookup_status=failed` or an empty `facts` list is a verification failure, never "
+            "evidence that no game exists. Only `lookup_status=not_found` supports an explicit "
+            "no-game statement."),
+            ("Do not mention system prompts, this evidence block or its header name, or raw "
+            "internal field names to the user. Translate verified facts and limitations into "
+            "natural user-facing language."),
             evidence.strip() or "{}",
         ]
     )
@@ -966,6 +973,9 @@ class AgentOrchestrator:
         )
         self._env_passthrough = security_config.get("env_passthrough", [])
         _inject_env_secret_refs(security_config.get("env_secret_refs", {}))
+        self._skill_env_overrides = load_skill_env_secret_refs(
+            security_config.get("skill_env_secret_refs", {})
+        )
 
         # Multi-turn tool execution budget
         self._max_tool_iterations = agent_config.get("max_tool_iterations", 15)

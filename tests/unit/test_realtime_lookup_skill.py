@@ -17,7 +17,11 @@ import json
 import pytest
 
 from simpleclaw.skills import realtime_lookup
-from simpleclaw.skills.realtime_sources import SourceDocument, SportsGameFact
+from simpleclaw.skills.realtime_sources import (
+    CollectionOutcome,
+    SourceDocument,
+    SportsGameFact,
+)
 
 # ----------------------------------------------------------------------
 # raw query fallback parser
@@ -326,6 +330,66 @@ def test_lookup_sports_score_fact_keeps_all_values_together(monkeypatch):
     assert result["facts"] == [{"type": "sports_score", **fact.__dict__}]
     assert result["timeline_validation"]["status"] == "final"
     assert result["confidence"] == "high"
+    assert result["lookup_status"] == "found"
+
+
+@pytest.mark.parametrize(
+    ("fact_status", "source_text", "expected_timeline"),
+    [
+        ("live", "경기종료 final 승리", "partial"),
+        ("final", "LIVE 경기중 7회말", "final"),
+    ],
+)
+def test_sports_timeline_uses_structured_fact_status(
+    monkeypatch, fact_status, source_text, expected_timeline
+):
+    """스포츠 timeline은 합성/표시 텍스트 cue가 아니라 enum 기반 fact를 따른다."""
+    fact = SportsGameFact(
+        league="KBO",
+        event_date="2026-07-28",
+        status=fact_status,
+        away_team="롯데 자이언츠",
+        away_score=8,
+        home_team="한화 이글스",
+        home_score=3,
+        winner="롯데 자이언츠" if fact_status == "final" else None,
+        source="Naver Sports Schedule API",
+        source_url="https://api-gw.sports.naver.com/schedule/games",
+    )
+    document = SourceDocument(
+        source=fact.source,
+        url=fact.source_url,
+        text=source_text,
+        source_kind="sports_api",
+        event_date=fact.event_date,
+        sports_fact=fact,
+    )
+
+    async def fake_collect_sources(**_kwargs):
+        return CollectionOutcome("found", [document], [])
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    result = realtime_lookup.lookup(
+        {"query": "롯데 야구 결과", "as_of_kst": "2026-07-28T20:18:43+09:00"}
+    )
+
+    assert result["timeline_validation"]["status"] == expected_timeline
+    assert result["evidence"][0]["timeline_status"] == expected_timeline
+
+
+@pytest.mark.parametrize("collection_status", ["not_found", "failed"])
+def test_lookup_propagates_typed_empty_sports_outcome(monkeypatch, collection_status):
+    """명시적 no-match만 not_found이며 schema/fetch 실패는 failed로 유지한다."""
+    async def fake_collect_sources(**_kwargs):
+        return CollectionOutcome(collection_status, [], ["bounded fixture"])
+
+    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    result = realtime_lookup.lookup(
+        {"query": "롯데 야구 결과", "as_of_kst": "2026-07-28T20:18:43+09:00"}
+    )
+
+    assert result["lookup_status"] == collection_status
+    assert result["facts"] == []
 
 
 @pytest.mark.parametrize(
