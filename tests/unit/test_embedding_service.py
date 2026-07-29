@@ -2,6 +2,7 @@
 
 검증 범위 (spec 005 Phase 2):
 - enabled=False 시 어떤 호출도 None
+- prewarm은 모델만 준비하고 encode를 호출하지 않으며 반복 호출에도 재로드하지 않음
 - sentence-transformers 미설치 시 graceful degradation (load_failed 플래그)
 - 모델 로드 실패 후 재시도하지 않음 (반복 실패 레이턴시 방지)
 - e5 query/passage 프리픽스가 model.encode에 정확히 전달되는지
@@ -12,6 +13,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -25,6 +28,15 @@ class TestDisabled:
         assert svc.is_enabled is False
         assert svc.encode_query("hello") is None
         assert svc.encode_passage("hello") is None
+
+    def test_disabled_prewarm_skips_model_import(self):
+        svc = EmbeddingService(model_name="dummy", enabled=False)
+        fake_module = MagicMock()
+
+        with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            assert svc.prewarm() is False
+
+        assert not fake_module.mock_calls
 
 
 class TestLoadFailure:
@@ -55,6 +67,77 @@ class TestLoadFailure:
             # 두 번째 호출에서 모델 생성자가 다시 불리지 않아야 함
             assert call_count["n"] == 1
         assert svc.is_enabled is False
+
+    def test_prewarm_failure_disables_and_does_not_retry(self):
+        svc = EmbeddingService(model_name="bad/model", enabled=True)
+        fake_module = MagicMock()
+        fake_module.SentenceTransformer = MagicMock(
+            side_effect=RuntimeError("download failed")
+        )
+
+        with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            assert svc.prewarm() is False
+            assert svc.prewarm() is False
+
+        assert fake_module.SentenceTransformer.call_count == 1
+        assert svc.is_enabled is False
+
+
+class TestPrewarm:
+    def test_prewarm_loads_model_without_encoding(self):
+        svc = EmbeddingService(model_name="dummy", enabled=True)
+        fake_model = MagicMock()
+        fake_module = MagicMock()
+        fake_module.SentenceTransformer = MagicMock(return_value=fake_model)
+
+        with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            assert svc.prewarm() is True
+
+        fake_module.SentenceTransformer.assert_called_once_with("dummy")
+        fake_model.encode.assert_not_called()
+
+    def test_repeated_prewarm_and_first_encode_reuse_model(self):
+        svc = EmbeddingService(model_name="dummy", enabled=True)
+        fake_model = MagicMock()
+        fake_model.encode.return_value = np.array([1.0], dtype=np.float32)
+        fake_module = MagicMock()
+        fake_module.SentenceTransformer = MagicMock(return_value=fake_model)
+
+        with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
+            assert svc.prewarm() is True
+            assert svc.prewarm() is True
+
+        # prewarm 이후 import가 불가능해져도 첫 query는 메모리의 같은 모델을 재사용한다.
+        with patch.dict(sys.modules, {"sentence_transformers": None}):
+            result = svc.encode_query("first query")
+
+        assert result is not None
+        assert fake_module.SentenceTransformer.call_count == 1
+        fake_model.encode.assert_called_once_with(
+            "query: first query",
+            convert_to_numpy=True,
+        )
+
+    def test_concurrent_prewarm_loads_model_once(self):
+        svc = EmbeddingService(model_name="dummy", enabled=True)
+        fake_model = MagicMock()
+        fake_module = MagicMock()
+        fake_module.SentenceTransformer = MagicMock(return_value=fake_model)
+        callers = 8
+        barrier = threading.Barrier(callers)
+
+        def prewarm_together() -> bool:
+            barrier.wait()
+            return svc.prewarm()
+
+        with (
+            patch.dict(sys.modules, {"sentence_transformers": fake_module}),
+            ThreadPoolExecutor(max_workers=callers) as pool,
+        ):
+            results = list(pool.map(lambda _: prewarm_together(), range(callers)))
+
+        assert results == [True] * callers
+        assert fake_module.SentenceTransformer.call_count == 1
 
 
 class TestEncoding:
