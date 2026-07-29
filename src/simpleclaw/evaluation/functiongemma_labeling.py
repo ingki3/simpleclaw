@@ -30,14 +30,14 @@ MAX_PROVIDER_TOKENS = 300 * 2048
 class LabelingBudget:
     max_calls: int = MAX_PROVIDER_CALLS
     max_seconds: float = MAX_PROVIDER_SECONDS
-    max_tokens: int | None = None
+    max_tokens: int = MAX_PROVIDER_TOKENS
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_calls <= MAX_PROVIDER_CALLS:
             raise ValueError("max_calls exceeds provider hard cap")
         if not 0 < self.max_seconds <= MAX_PROVIDER_SECONDS:
             raise ValueError("max_seconds exceeds provider hard cap")
-        if self.max_tokens is not None and not 1 <= self.max_tokens <= MAX_PROVIDER_TOKENS:
+        if not 1 <= self.max_tokens <= MAX_PROVIDER_TOKENS:
             raise ValueError("max_tokens exceeds provider hard cap")
 
 
@@ -213,10 +213,7 @@ async def label_cases(
                 reason_codes=("budget.time_exhausted",),
             ))
             continue
-        if (
-            effective_budget.max_tokens is not None
-            and usage.tokens >= effective_budget.max_tokens
-        ):
+        if usage.tokens >= effective_budget.max_tokens:
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
                 source_group_id=case.source_group_id,
@@ -238,14 +235,10 @@ async def label_cases(
             else:
                 plan = response
                 usage.token_usage_supported = False
-                if effective_budget.max_tokens is not None:
-                    reasons.append("budget.token_usage_unavailable")
+                reasons.append("budget.token_usage_unavailable")
             if clock() - started >= effective_budget.max_seconds:
                 reasons.append("budget.time_exhausted")
-            if (
-                effective_budget.max_tokens is not None
-                and usage.tokens > effective_budget.max_tokens
-            ):
+            if usage.tokens > effective_budget.max_tokens:
                 reasons.append("budget.token_exhausted")
             budget_reasons = tuple(
                 reason for reason in reasons if reason.startswith("budget.")

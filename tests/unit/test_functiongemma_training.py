@@ -103,6 +103,60 @@ def test_normal_completion_does_not_terminate(tmp_path: Path) -> None:
     assert not process.terminated
 
 
+@pytest.mark.parametrize(
+    ("finish_after_polls", "sizes"),
+    [
+        (1, (10,)),
+        (2, (1, 11)),
+    ],
+)
+def test_final_size_at_or_above_cap_fails_closed_after_child_exit(
+    tmp_path: Path,
+    finish_after_polls: int,
+    sizes: tuple[int, ...],
+) -> None:
+    process = _Process(finish_after_polls=finish_after_polls)
+    observed_sizes = iter(sizes)
+
+    with pytest.raises(RuntimeError, match="disk_cap"):
+        run_training(
+            _config(tmp_path),
+            process_factory=lambda *args, **kwargs: process,
+            size_reader=lambda path: next(observed_sizes),
+            sleeper=lambda _: None,
+            preflight_fn=_preflight,
+        )
+
+    assert not process.terminated
+    manifest = (
+        tmp_path / "training-manifest.json"
+    ).read_text(encoding="utf-8")
+    assert '"stop_reason": "disk_cap"' in manifest
+    assert f'"artifact_bytes": {sizes[-1]}' in manifest
+
+
+def test_final_elapsed_time_at_cap_fails_closed_after_child_exit(
+    tmp_path: Path,
+) -> None:
+    process = _Process(finish_after_polls=1)
+    times = iter((0.0, 1.0))
+
+    with pytest.raises(RuntimeError, match="time_cap"):
+        run_training(
+            _config(tmp_path, max_seconds=1),
+            process_factory=lambda *args, **kwargs: process,
+            clock=lambda: next(times),
+            size_reader=lambda path: 0,
+            sleeper=lambda _: None,
+            preflight_fn=_preflight,
+        )
+
+    manifest = (
+        tmp_path / "training-manifest.json"
+    ).read_text(encoding="utf-8")
+    assert '"stop_reason": "time_cap"' in manifest
+
+
 def test_timeout_uses_kill_after_terminate_grace(tmp_path: Path) -> None:
     class StubbornProcess(_Process):
         def wait(self, timeout=None):

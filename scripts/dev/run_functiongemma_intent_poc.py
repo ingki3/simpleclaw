@@ -46,6 +46,7 @@ from simpleclaw.evaluation.functiongemma_eval import (
     evaluate_predictions,
 )
 from simpleclaw.evaluation.functiongemma_labeling import (
+    MAX_PROVIDER_TOKENS,
     LabeledCase,
     LabelingBudget,
     PlannerResponse,
@@ -601,9 +602,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-provider-tokens",
         type=int,
+        default=MAX_PROVIDER_TOKENS,
         help=(
-            "Optional total token cap. If planner usage metadata is unavailable, "
-            "labeling fails closed into adjudication."
+            "Total token hard cap (default: %(default)s). If planner usage metadata "
+            "is unavailable, labeling fails closed into adjudication."
         ),
     )
     parser.add_argument("--allow-model-download", action="store_true")

@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from scripts.dev.run_functiongemma_intent_poc import _parser
 from simpleclaw.agent.planner_catalog import PlannerAsset
 from simpleclaw.agent.turn_plan import (
     AssetRef,
@@ -20,11 +21,25 @@ from simpleclaw.agent.turn_plan import (
 )
 from simpleclaw.evaluation.functiongemma_dataset import SanitizedCase
 from simpleclaw.evaluation.functiongemma_labeling import (
+    MAX_PROVIDER_TOKENS,
     LabelingBudget,
     PlannerResponse,
     label_cases,
     labeling_public_summary,
 )
+
+
+def test_default_budget_enforces_token_hard_cap() -> None:
+    assert LabelingBudget().max_tokens == MAX_PROVIDER_TOKENS
+
+
+def test_cli_default_propagates_token_hard_cap() -> None:
+    args = _parser().parse_args([
+        "label",
+        "--private-output-dir",
+        "/tmp/functiongemma-private",
+    ])
+    assert args.max_provider_tokens == LabelingBudget().max_tokens
 
 
 def _case(number: int) -> SanitizedCase:
@@ -94,7 +109,10 @@ async def test_budget_stops_calls_and_low_confidence_goes_to_queue() -> None:
     async def planner(case, candidates):
         nonlocal calls
         calls += 1
-        return _plan(0.4 if case.case_id.endswith("1") else 0.9)
+        return PlannerResponse(
+            _plan(0.4 if case.case_id.endswith("1") else 0.9),
+            token_count=1,
+        )
 
     result = await label_cases(
         [_case(1), _case(2), _case(3)],
@@ -145,7 +163,7 @@ async def test_post_call_deadline_result_is_rejected() -> None:
     times = iter((0.0, 0.0, 0.0, 0.02, 0.02))
 
     async def planner(case, candidates):
-        return _plan()
+        return PlannerResponse(_plan(), token_count=1)
 
     result = await label_cases(
         [_case(1)],

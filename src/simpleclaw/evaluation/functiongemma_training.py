@@ -163,6 +163,11 @@ def run_training(
     elapsed = clock() - started
     size = size_reader(adapter)
     peak_size = max(peak_size, size)
+    if stop_reason == "completed":
+        if size >= config.max_artifact_bytes:
+            stop_reason = "disk_cap"
+        elif elapsed >= config.max_seconds:
+            stop_reason = "time_cap"
     manifest = {
         **preflight_data,
         "config": asdict(config),
