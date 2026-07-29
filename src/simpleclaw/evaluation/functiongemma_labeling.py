@@ -15,6 +15,7 @@ from simpleclaw.evaluation.functiongemma_contract import (
     NO_ASSET,
     CandidateAsset,
     CompactIntentCall,
+    FunctionCallContractError,
     candidate_id,
     parse_function_call,
 )
@@ -73,10 +74,8 @@ def _overlap_score(case: SanitizedCase, asset: PlannerAsset) -> tuple[int, str]:
 def select_candidate_assets(
     case: SanitizedCase,
     catalog_assets: Iterable[PlannerAsset],
-    *,
-    target_asset_id: str | None = None,
 ) -> tuple[CandidateAsset, ...]:
-    """target와 metadata 유사 hard negative를 deterministic하게 최대 12개 선택한다."""
+    """metadata 유사 hard negative를 호출 전에 deterministic하게 고정한다."""
     ranked = sorted(
         catalog_assets,
         key=lambda asset: (
@@ -84,11 +83,6 @@ def select_candidate_assets(
             _overlap_score(case, asset)[1],
         ),
     )
-    if target_asset_id:
-        ranked.sort(
-            key=lambda asset: candidate_id(asset.asset_type, asset.name)
-            != target_asset_id
-        )
     selected = ranked[: MAX_CANDIDATES - 1]
     candidates = [
         CandidateAsset(
@@ -177,26 +171,23 @@ async def label_cases(
             ))
             continue
         candidates = select_candidate_assets(case, catalog_assets)
+        fingerprint = candidate_fingerprint(candidates)
         calls += 1
         reasons: list[str] = []
         try:
             plan = await planner(case, candidates)
-            primary = plan.execution.primary_asset
-            target_id = (
-                None
-                if primary is None
-                else candidate_id(primary.asset_type, primary.name)
-            )
-            candidates = select_candidate_assets(
-                case,
-                catalog_assets,
-                target_asset_id=target_id,
-            )
             compact = compact_from_unified_plan(plan, candidates=candidates)
             if plan.confidence < minimum_confidence:
                 reasons.append("confidence.low")
             if plan.execution.mode.value == "recipe" and "create" in plan.intents:
                 reasons.append("boundary.creation_vs_execution")
+        except FunctionCallContractError as exc:
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=(exc.code,),
+            ))
+            continue
         except Exception as exc:  # noqa: BLE001 - private 원문 없이 종류만 queue에 남김.
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
@@ -215,7 +206,7 @@ async def label_cases(
             case=case,
             candidates=candidates,
             label=compact,
-            candidate_fingerprint=candidate_fingerprint(candidates),
+            candidate_fingerprint=fingerprint,
             confidence=plan.confidence,
         ))
     return LabelingResult(

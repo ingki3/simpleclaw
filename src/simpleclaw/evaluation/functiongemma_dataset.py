@@ -30,7 +30,10 @@ _REDACTIONS = (
     ("url", re.compile(r"(?i)\bhttps?://[^\s/]+(?:/[^\s?#]*)?(?:\?[^\s#]*)?")),
     ("private_path", re.compile(r"(?<![\w:/])/(?:Users|home|private|tmp)/[^\s]+")),
     ("identifier", re.compile(
-        r"(?i)\b(?:user|chat|message|msg)[_-]?id\s*[:=]\s*[A-Za-z0-9_-]+"
+        r"""(?ix)
+        (?:"|'|`)?\b(?:user|chat|message|msg)[_\s-]?id\b(?:"|'|`)?
+        \s*(?::|=)\s*(?:"|'|`)?[A-Za-z0-9_-]+(?:"|'|`)?
+        """
     )),
 )
 
@@ -77,6 +80,16 @@ def text_fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def opaque_run_id(*, seed: int, namespace: str, ordinal: int) -> str:
+    """DB 식별자와 무관한 deterministic run-local ID를 만든다."""
+    if ordinal < 0:
+        raise ValueError("ordinal must not be negative")
+    digest = hashlib.sha256(
+        f"functiongemma:{seed}:{namespace}:{ordinal}".encode()
+    ).hexdigest()[:20]
+    return f"opaque-{namespace}-{digest}"
+
+
 def _connect_read_only(path: Path) -> sqlite3.Connection:
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -113,6 +126,7 @@ def extract_cases(
     max_cases: int = MAX_SOURCE_CASES,
     history_messages: int = 4,
     excluded_fingerprints: Iterable[str] = (),
+    run_seed: int = 42,
 ) -> ExtractionResult:
     """non-deleted user turn을 읽고 bounded history와 함께 최대 300건 반환한다."""
     if not 1 <= max_cases <= MAX_SOURCE_CASES:
@@ -136,16 +150,26 @@ def extract_cases(
     sanitized: list[SanitizedMessage] = []
     cases: list[SanitizedCase] = []
     user_scan_count = 0
-    for row_id, role, raw_content, channel in rows:
+    for row_ordinal, (_row_id, role, raw_content, channel) in enumerate(rows):
         clean = redact_text(raw_content)
         message = SanitizedMessage(
-            id=f"msg:{row_id}", role=str(role), content=clean
+            id=opaque_run_id(
+                seed=run_seed,
+                namespace="turn",
+                ordinal=row_ordinal,
+            ),
+            role=str(role),
+            content=clean,
         )
         if role == "user":
             user_scan_count += 1
             fingerprint = text_fingerprint(clean)
             if fingerprint not in excluded and len(cases) < max_cases:
-                source_id = f"live:{row_id}"
+                source_id = opaque_run_id(
+                    seed=run_seed,
+                    namespace="case",
+                    ordinal=row_ordinal,
+                )
                 source_group_id = f"source:{fingerprint[:24]}"
                 cases.append(SanitizedCase(
                     case_id=source_id,

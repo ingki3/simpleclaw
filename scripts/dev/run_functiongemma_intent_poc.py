@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import subprocess
 import sys
 import time
@@ -21,10 +22,15 @@ from simpleclaw.agent.context_candidates import (
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import build_native_tool_registry
-from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.agent.planner_catalog import PlannerCatalog
+from simpleclaw.agent.turn_planner import (
+    build_turn_planner_user_prompt,
+    plan_turn_with_llm,
+)
 from simpleclaw.config import load_recipes_config
 from simpleclaw.evaluation.functiongemma_augmentation import augment_train_cases
 from simpleclaw.evaluation.functiongemma_contract import (
+    NO_ASSET,
     CandidateAsset,
     CompactIntentCall,
     functiongemma_tool_schema,
@@ -48,6 +54,7 @@ from simpleclaw.evaluation.functiongemma_eval import (
 from simpleclaw.evaluation.functiongemma_labeling import (
     LabeledCase,
     LabelingBudget,
+    candidate_fingerprint,
     label_cases,
     labeling_public_summary,
 )
@@ -69,6 +76,15 @@ HISTORICAL_GOLD = Path(
     "historical-planner-diff-20260726-aligned-final24/"
     "private_sanitized_cases.jsonl"
 ).expanduser()
+_PROVIDER_IDENTIFIER_PATTERNS = (
+    re.compile(r"\b(?:msg|live):\d+\b", re.IGNORECASE),
+    re.compile(
+        r"""(?ix)
+        (?:"|'|`)?\b(?:user|chat|message|msg)[_\s-]?id\b(?:"|'|`)?
+        \s*(?::|=)\s*(?:"|'|`)?[A-Za-z0-9_-]+
+        """
+    ),
+)
 
 
 def _read_json(path: Path) -> Any:
@@ -266,6 +282,52 @@ def _context_set(case: SanitizedCase) -> ContextCandidateSet:
     )
 
 
+def _bounded_catalog(
+    catalog: PlannerCatalog,
+    candidates: tuple[CandidateAsset, ...],
+) -> PlannerCatalog:
+    """compact candidate와 동일한 runtime asset만 immutable snapshot으로 만든다."""
+    candidate_ids = {
+        candidate.asset_id
+        for candidate in candidates
+        if candidate.asset_id != NO_ASSET
+    }
+    asset_by_id = {
+        f"{asset.asset_type}:{asset.name}": asset
+        for asset in catalog.assets
+        if asset.runtime_visible
+    }
+    assets = tuple(
+        asset_by_id[candidate.asset_id]
+        for candidate in candidates
+        if candidate.asset_id != NO_ASSET
+        and candidate.asset_id in asset_by_id
+    )
+    exposed_ids = {f"{asset.asset_type}:{asset.name}" for asset in assets}
+    if exposed_ids != candidate_ids:
+        raise ValueError("candidate/catalog boundary mismatch")
+    return PlannerCatalog(
+        assets=assets,
+        fingerprint=candidate_fingerprint(candidates),
+    )
+
+
+def _provider_prompt_diagnostic(
+    case: SanitizedCase,
+    candidates: tuple[CandidateAsset, ...],
+    catalog: PlannerCatalog,
+) -> str:
+    """실제 planner 조립 prompt가 identifier privacy 경계를 지키는지 검사한다."""
+    prompt = build_turn_planner_user_prompt(
+        text=case.current,
+        candidates=_context_set(case),
+        catalog=_bounded_catalog(catalog, candidates),
+    )
+    if any(pattern.search(prompt) for pattern in _PROVIDER_IDENTIFIER_PATTERNS):
+        raise ValueError("provider_prompt_identifier_leak")
+    return prompt
+
+
 async def _label_async(args: argparse.Namespace, output: Path) -> None:
     cases = [_case_from_dict(row) for row in _read_jsonl(
         output / "sanitized-cases.jsonl"
@@ -273,23 +335,36 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
     router = create_router(args.config)
     catalog = _runtime_catalog(Path(args.config))
 
-    async def planner(case: SanitizedCase, _compact_candidates):
+    runtime_assets = tuple(
+        asset for asset in catalog.assets if asset.runtime_visible
+    )
+
+    async def planner(
+        case: SanitizedCase,
+        compact_candidates: tuple[CandidateAsset, ...],
+    ):
         context = _context_set(case)
+        bounded_catalog = _bounded_catalog(catalog, compact_candidates)
+        _provider_prompt_diagnostic(case, compact_candidates, catalog)
         plan = await plan_turn_with_llm(
             case.current,
             candidates=context,
-            catalog=catalog,
+            catalog=bounded_catalog,
             router=router,
             max_tokens=2048,
         )
-        gate = PlanGate().evaluate(plan, candidates=context, catalog=catalog)
+        gate = PlanGate().evaluate(
+            plan,
+            candidates=context,
+            catalog=bounded_catalog,
+        )
         if gate.status in {GateStatus.REPAIR, GateStatus.REJECT}:
             raise ValueError(f"plan_gate_{gate.status.value}")
         return plan
 
     result = await label_cases(
         cases,
-        catalog_assets=catalog.assets,
+        catalog_assets=runtime_assets,
         planner=planner,
         allow_provider_calls=args.allow_provider_calls,
         budget=LabelingBudget(max_calls=args.max_provider_calls),
