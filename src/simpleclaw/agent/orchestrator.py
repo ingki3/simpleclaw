@@ -568,6 +568,12 @@ def _format_realtime_lookup_context(evidence: str) -> str:
             "come from the same `type: sports_score` fact. Never merge values across snippets or "
             "sources, and never infer a missing sports_score field. If no complete `sports_score` "
             "fact exists, do not state an exact score, winner, or LIVE/final status."),
+            ("A `lookup_status=failed` or an empty `facts` list is a verification failure, never "
+            "evidence that no game exists. Only `lookup_status=not_found` supports an explicit "
+            "no-game statement."),
+            ("Do not mention system prompts, this evidence block or its header name, or raw "
+            "internal field names to the user. Translate verified facts and limitations into "
+            "natural user-facing language."),
             evidence.strip() or "{}",
         ]
     )

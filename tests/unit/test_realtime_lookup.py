@@ -273,6 +273,11 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert "same `type: sports_score` fact" in request.system_prompt
     assert "Never merge values across snippets" in request.system_prompt
+    assert "`lookup_status=failed` or an empty `facts` list" in request.system_prompt
+    assert "Only `lookup_status=not_found`" in request.system_prompt
+    assert "Do not mention system prompts" in request.system_prompt
+    assert "raw internal field names" in request.system_prompt
+    assert _REALTIME_LOOKUP_CONTEXT_HEADER not in result
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -287,7 +292,7 @@ async def test_runtime_realtime_source_reuses_builtin_web_fetch_policy(
         Path(__file__).parents[1]
         / "fixtures"
         / "realtime_lookup"
-        / "naver_kbo_final.html"
+        / "naver_kbo_started.json"
     ).read_text(encoding="utf-8")
     fetched: list[str] = []
 
@@ -301,7 +306,7 @@ async def test_runtime_realtime_source_reuses_builtin_web_fetch_policy(
     raw = json.dumps(
         {
             "query": "롯데 야구 어케 되었나?",
-            "as_of_kst": "2026-07-24T22:18:43+09:00",
+            "as_of_kst": "2026-07-28T20:18:43+09:00",
         },
         ensure_ascii=False,
     ).encode("utf-8")
@@ -311,11 +316,16 @@ async def test_runtime_realtime_source_reuses_builtin_web_fetch_policy(
     result = json.loads(output or "{}")
 
     assert len(fetched) == 1
-    assert "2026" in fetched[0]
+    assert fetched[0].startswith("https://api-gw.sports.naver.com/schedule/games?")
+    assert "fromDate=2026-07-28" in fetched[0]
+    assert "statusCode" not in fetched[0]
     assert "duckduckgo.com" not in fetched[0]
     assert result["facts"][0]["type"] == "sports_score"
-    assert result["facts"][0]["away_score"] == 5
-    assert result["facts"][0]["home_score"] == 4
+    assert result["lookup_status"] == "found"
+    assert result["facts"][0]["away_score"] == 8
+    assert result["facts"][0]["home_score"] == 3
+    assert result["facts"][0]["status"] == "live"
+    assert result["facts"][0]["winner"] is None
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})

@@ -1,0 +1,22 @@
+{
+  "code": 200,
+  "success": true,
+  "result": {
+    "games": [
+      {
+        "gameId": "wrong-team",
+        "categoryId": "kbo",
+        "gameDate": "2026-07-28",
+        "awayTeamName": "삼성",
+        "awayTeamScore": 1,
+        "homeTeamName": "KIA",
+        "homeTeamScore": 2,
+        "statusCode": "RESULT",
+        "winner": "HOME",
+        "cancel": false,
+        "suspended": false
+      }
+    ],
+    "gameTotalCount": 1
+  }
+}

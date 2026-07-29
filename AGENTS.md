@@ -55,6 +55,15 @@ SimpleClaw 런타임 프롬프트·스킬·레시피를 수정할 때는 사용�
 - 골프/등산/주식/여행 등 도메인별 체크리스트는 해당 런타임 `SKILL.md`, 레시피 `instructions`, 또는 본 문서의 프로젝트 운영 규약으로 보강한다.
 - `tool_usage.yaml` 에 특정 스킬의 긴 사용법이나 임시 우회 절차를 넣지 않는다. 스킬 선택/사용 세부는 스킬 설명과 docs 에 둔다.
 
+### 0.3 실시간 스포츠 source/parser 원칙
+
+- 경기 상태·승패·진행 여부는 provider의 **구조화 schema/enum 필드**를 typed state로 명시적으로 mapping해 판정한다.
+- 화면 표시 문구, 기사 본문, HTML text의 특정 단어 포함 여부나 정규식(`경기중`, `종료`, `LIVE`, 이닝 문자열 등)으로 상태를 추정하지 않는다. 표시 문구는 사용자 설명용일 수는 있지만 authoritative state가 아니다.
+- 알 수 없는 enum, schema 누락, fetch 실패는 `unknown`/`failed`로 fail-closed 처리한다. 점수가 있거나 예정 시각이 지났다는 이유만으로 `live`/`final`로 승격하지 않는다.
+- 정상 구조화 응답에서 대상 경기 배열이 비어 있는 `not_found`와 조회·파싱 실패인 `failed`를 구분한다. `facts=[]`를 경기 없음의 근거로 사용하지 않는다.
+- HTML fallback이 불가피하면 명시적으로 식별된 embedded structured data만 읽는다. 페이지 전체 문자열의 keyword scan은 금지한다.
+- 회귀 테스트는 표시 문구를 바꾸거나 제거해도 같은 enum에서 같은 typed state가 나오는지, 미지원 enum이 확정 상태로 승격되지 않는지 검증한다.
+
 ---
 
 ## 1. 작업 단계 (Kanban Stages)

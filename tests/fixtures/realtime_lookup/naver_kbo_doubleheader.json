@@ -1,0 +1,39 @@
+{
+  "code": 200,
+  "success": true,
+  "result": {
+    "games": [
+      {
+        "gameId": "20260728LTWO12026",
+        "categoryId": "kbo",
+        "gameDate": "2026-07-28",
+        "gameDateTime": "2026-07-28T14:00:00",
+        "awayTeamName": "롯데",
+        "awayTeamScore": 2,
+        "homeTeamName": "한화",
+        "homeTeamScore": 4,
+        "statusCode": "RESULT",
+        "statusInfo": "표시 문구는 선택과 무관",
+        "winner": "HOME",
+        "cancel": false,
+        "suspended": false
+      },
+      {
+        "gameId": "20260728LTWO22026",
+        "categoryId": "kbo",
+        "gameDate": "2026-07-28",
+        "gameDateTime": "2026-07-28T18:30:00",
+        "awayTeamName": "롯데",
+        "awayTeamScore": 3,
+        "homeTeamName": "한화",
+        "homeTeamScore": 1,
+        "statusCode": "STARTED",
+        "statusInfo": "임의 표시 문구",
+        "winner": "AWAY",
+        "cancel": false,
+        "suspended": false
+      }
+    ],
+    "gameTotalCount": 2
+  }
+}

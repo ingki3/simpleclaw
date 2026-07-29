@@ -1,25 +1,28 @@
 """BIZ-480 realtime lookup의 도메인별 source collector.
 
 뉴스/일반 최신 이슈는 Google News RSS를 후보 발견에만 사용하고, 후보 원문을
-실제로 읽은 경우에만 source로 채택한다. 스포츠는 요청 기준일이 들어간 네이버
-경기정보 검색 페이지 한 장을 읽고, 경기 목록 카드 경계 안에서만 점수 fact를
-구조화한다. 외부 HTML parser 의존성 없이 stdlib만 사용한다.
+실제로 읽은 경우에만 source로 채택한다. KBO 스포츠는 요청 기준일로 제한한
+네이버 스포츠 schedule JSON의 schema와 enum만 사용해 점수 fact를 구조화한다.
+외부 parser 의존성 없이 stdlib만 사용한다.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from typing import Literal
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
 
 GOOGLE_NEWS_RSS_ENDPOINT = "https://news.google.com/rss/search"
 _NAVER_SEARCH_ENDPOINT = "https://search.naver.com/search.naver"
+NAVER_SPORTS_SCHEDULE_ENDPOINT = "https://api-gw.sports.naver.com/schedule/games"
 _KST = ZoneInfo("Asia/Seoul")
 _MIN_ARTICLE_CHARS = 400
 _MIN_PAGE_CHARS = 120
@@ -69,6 +72,20 @@ class SourceDocument:
     published_at: str | None = None
     event_date: str | None = None
     sports_fact: SportsGameFact | None = None
+
+
+@dataclass(frozen=True)
+class CollectionOutcome:
+    """명시적 no-match를 fetch/schema/state 실패와 분리한 수집 결과."""
+
+    lookup_status: Literal["found", "not_found", "failed"]
+    sources: list[SourceDocument]
+    limitations: list[str]
+
+    def __iter__(self):
+        """기존 ``sources, limitations`` 언패킹 호출자를 보존한다."""
+        yield self.sources
+        yield self.limitations
 
 
 def build_google_news_rss_url(query: str, *, lookback_days: int = 1) -> str:
@@ -178,16 +195,26 @@ def _as_of_date(as_of_kst: object) -> datetime:
     return _as_datetime(as_of_kst).astimezone(_KST)
 
 
-def build_sports_page_url(query: str, *, as_of_kst: object) -> str:
-    """요청 기준일을 명시한 네이버 경기정보 검색 페이지 URL을 만든다."""
-    date = _as_of_date(as_of_kst)
-    # 구어체 질문 전체를 넣으면 네이버가 일반 web 결과만 반환하고 공식 경기 widget을
-    # 생략할 수 있다. 질문에서 팀을 정규화해 날짜+팀+결과의 최소 query를 사용한다.
-    target = canonical_kbo_team(query) or query.strip()
-    dated_query = f"{date.year}년 {date.month}월 {date.day}일 {target} 경기 결과".strip()
-    return _NAVER_SEARCH_ENDPOINT + "?" + urlencode(
-        {"where": "nexearch", "query": dated_query}
+def build_naver_sports_schedule_url(*, as_of_kst: object) -> str:
+    """상태 필터 없이 기준일 하루의 KBO schedule API URL을 만든다."""
+    selected_date = _as_of_date(as_of_kst).date().isoformat()
+    return NAVER_SPORTS_SCHEDULE_ENDPOINT + "?" + urlencode(
+        {
+            "fromDate": selected_date,
+            "toDate": selected_date,
+            "size": "20",
+            "page": "1",
+            "fields": "basic,schedule,baseball,manualRelayUrl",
+            "upperCategoryId": "kbaseball",
+            "categoryIds": "kbo",
+        }
     )
+
+
+def build_sports_page_url(query: str, *, as_of_kst: object) -> str:
+    """기존 호출자를 위해 structured schedule URL helper를 유지한다."""
+    del query
+    return build_naver_sports_schedule_url(as_of_kst=as_of_kst)
 
 
 def build_naver_search_url(query: str) -> str:
@@ -275,198 +302,148 @@ def canonical_kbo_team(text: str) -> str | None:
     return min(matches)[2]
 
 
-def _team_mentions(text: str) -> list[tuple[int, str]]:
-    lowered = text.lower()
-    mentions: list[tuple[int, int, str]] = []
-    for canonical, aliases in _TEAM_ALIASES:
-        best: tuple[int, int, str] | None = None
-        for alias in aliases:
-            for match in re.finditer(re.escape(alias.lower()), lowered):
-                candidate = (match.start(), -len(alias), canonical)
-                if best is None or candidate < best:
-                    best = candidate
-        if best is not None:
-            mentions.append(best)
-    mentions.sort()
-    return [(index, canonical) for index, _neg_len, canonical in mentions]
+def _failed_sports_outcome(message: str) -> CollectionOutcome:
+    """스포츠 schema/state 오류를 일관된 fail-closed 결과로 만든다."""
+    return CollectionOutcome("failed", [], [message])
 
 
-def _extract_card_scope(body: str) -> str | None:
-    """경기 목록 table/text 경계만 반환하고 페이지 뒤 콘텐츠는 버린다."""
-    if re.search(r"(?is)<table\b", body):
-        for table in re.findall(r"(?is)<table\b.*?</table>", body):
-            if not re.search(r"(?is)<caption\b[^>]*>\s*경기 목록\s*</caption>", table):
-                continue
-            tbody = re.search(
-                r"(?is)<tbody\b[^>]*class=[\"'][^\"']*_scroll_content[^\"']*[\"'][^>]*>"
-                r"(.*?)</tbody>",
-                table,
-            )
-            if tbody is not None:
-                return html_to_visible_text(tbody.group(1), limit=30_000)
-        return None
-
-    start = body.find("경기 목록")
-    if start < 0:
-        return None
-    end_markers = ("전체일정보기", "최종업데이트 날짜", "스포츠 정보")
-    ends = [body.find(marker, start + len("경기 목록")) for marker in end_markers]
-    valid_ends = [end for end in ends if end > start]
-    if not valid_ends:
-        return None
-    return re.sub(r"\s+", " ", body[start : min(valid_ends)]).strip()
-
-
-def _extract_target_date_section(card_text: str, expected_date: str) -> str | None:
-    try:
-        expected = datetime.strptime(expected_date, "%Y-%m-%d")
-    except ValueError:
-        return None
-    target = f"{expected.month:02d}.{expected.day:02d}."
-    matches = list(re.finditer(r"(?<!\d)(\d{2})\.(\d{2})\.", card_text))
-    for index, match in enumerate(matches):
-        if match.group(0) != target:
-            continue
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(card_text)
-        return card_text[match.end() : end].strip()
-    return None
-
-
-def _full_date_is_present(body: str, expected_date: str) -> bool:
-    try:
-        date = datetime.strptime(expected_date, "%Y-%m-%d")
-    except ValueError:
-        return False
-    patterns = (
-        f"{date.year}.{date.month:02d}.{date.day:02d}",
-        f"{date.year}년 {date.month}월 {date.day}일",
-        f"{date.year}년{date.month}월{date.day}일",
-    )
-    normalized = re.sub(r"\s+", " ", html.unescape(body))
-    return any(pattern in normalized for pattern in patterns)
-
-
-def _score_card_parts(
-    section: str,
-    expected_team: str,
-) -> tuple[str, int, str, int, str, str] | None:
-    """한 팀 쌍 경계 안에서 팀·점수와 점수 앞뒤 상태 문구를 찾는다."""
-    mentions = _team_mentions(section)
-    if len(mentions) < 2:
-        return None
-
-    # ``5 : 4``처럼 구분자가 있는 표/텍스트를 먼저 사용한다.
-    for score_match in re.finditer(
-        r"(?<!\d)(\d{1,2})\s*:\s*(\d{1,2})(?!\d)", section
-    ):
-        before = [mention for mention in mentions if mention[0] < score_match.start()]
-        after = [mention for mention in mentions if mention[0] > score_match.end()]
-        if not before or not after:
-            continue
-        away_start, away_team = before[-1]
-        home_start, home_team = after[0]
-        if away_team == home_team or expected_team not in {away_team, home_team}:
-            continue
-        next_starts = [start for start, _team in mentions if start > home_start]
-        game_end = next_starts[0] if next_starts else len(section)
-        status_start = max(0, away_start - 40)
-        return (
-            away_team,
-            int(score_match.group(1)),
-            home_team,
-            int(score_match.group(2)),
-            section[status_start : score_match.start()],
-            section[score_match.end() : game_end],
-        )
-
-    # handle_web_fetch visible text는 score cell의 colon을 잃고
-    # ``kt wiz 승 로건 5 4 롯데 자이언츠 패``처럼 반환할 수 있다. 인접한 두 팀
-    # 사이의 마지막 두 정수만 점수로 사용하며 다음 카드나 페이지 본문은 보지 않는다.
-    for index in range(len(mentions) - 1):
-        away_start, away_team = mentions[index]
-        home_start, home_team = mentions[index + 1]
-        if away_team == home_team or expected_team not in {away_team, home_team}:
-            continue
-        between = section[away_start:home_start]
-        number_matches = list(re.finditer(r"(?<!\d)(\d{1,2})(?!\d)", between))
-        if len(number_matches) < 2:
-            continue
-        away_match, home_match = number_matches[-2:]
-        next_start = mentions[index + 2][0] if index + 2 < len(mentions) else len(section)
-        status_start = max(0, away_start - 40)
-        return (
-            away_team,
-            int(away_match.group(1)),
-            home_team,
-            int(home_match.group(1)),
-            section[status_start : away_start + away_match.start()],
-            section[away_start + home_match.end() : next_start],
-        )
-    return None
-
-
-def parse_naver_kbo_game_card(
+def parse_naver_kbo_schedule(
     body: str,
     *,
     source_url: str,
     expected_date: str,
     expected_team: str,
-) -> SportsGameFact | None:
-    """날짜-bound 네이버 경기 목록의 한 카드에서만 점수 fact를 추출한다."""
-    if not _full_date_is_present(body, expected_date):
-        return None
+) -> CollectionOutcome:
+    """네이버 KBO schedule JSON에서 구조화 필드로 대상 경기를 결정한다."""
     expected_canonical = canonical_kbo_team(expected_team)
     if expected_canonical is None:
-        return None
-    card_scope = _extract_card_scope(body)
-    if card_scope is None:
-        return None
-    section = _extract_target_date_section(card_scope, expected_date)
-    if not section:
-        return None
-
-    score_parts = _score_card_parts(section, expected_canonical)
-    if score_parts is None:
-        return None
-    away_team, away_score, home_team, home_score, before_score, after_score = score_parts
-    game_text = f"{before_score} {after_score}"
-    lowered = game_text.lower()
-    is_live = any(
-        cue in lowered for cue in ("live", "진행 중", "진행중", "현재 스코어")
-    ) or bool(re.search(r"\b\d{1,2}회\b", game_text))
-    left_won = "승" in before_score and "패" in after_score
-    right_won = "패" in before_score and "승" in after_score
-    is_final = (
-        not is_live
-        and (
-            (left_won or right_won)
-            or "경기종료" in game_text
-            or "final" in lowered
+        return _failed_sports_outcome("질문에서 확인할 KBO 팀을 특정하지 못했습니다.")
+    try:
+        payload = json.loads(body)
+    except (TypeError, json.JSONDecodeError):
+        return _failed_sports_outcome("네이버 스포츠 응답이 유효한 JSON이 아닙니다.")
+    if (
+        not isinstance(payload, dict)
+        or payload.get("code") != 200
+        or payload.get("success") is not True
+        or not isinstance(payload.get("result"), dict)
+    ):
+        return _failed_sports_outcome("네이버 스포츠 응답 envelope가 올바르지 않습니다.")
+    games = payload["result"].get("games")
+    if not isinstance(games, list) or not all(isinstance(game, dict) for game in games):
+        return _failed_sports_outcome("네이버 스포츠 result.games 배열이 올바르지 않습니다.")
+    if any(game.get("gameDate") != expected_date for game in games):
+        return _failed_sports_outcome(
+            "날짜 제한 요청과 다른 gameDate가 네이버 스포츠 응답에 포함됐습니다."
         )
-    )
-    if not is_live and not is_final:
-        return None
+    if any(game.get("categoryId") != "kbo" for game in games):
+        return _failed_sports_outcome(
+            "KBO 제한 요청과 다른 categoryId가 네이버 스포츠 응답에 포함됐습니다."
+        )
 
-    winner: str | None = None
-    if is_final:
-        if left_won:
-            winner = away_team
-        elif right_won:
-            winner = home_team
-        elif away_score != home_score:
-            winner = away_team if away_score > home_score else home_team
+    candidates: list[tuple[bool, datetime, str, SourceDocument]] = []
+    for game in games:
+        away_team = canonical_kbo_team(str(game.get("awayTeamName") or ""))
+        home_team = canonical_kbo_team(str(game.get("homeTeamName") or ""))
+        if away_team is None or home_team is None or away_team == home_team:
+            return _failed_sports_outcome("KBO 경기의 팀 schema가 올바르지 않습니다.")
+        if expected_canonical not in {away_team, home_team}:
+            continue
+        if game.get("cancel") is not False or game.get("suspended") is not False:
+            return _failed_sports_outcome("대상 경기가 취소 또는 중단 상태입니다.")
 
-    return SportsGameFact(
-        league="KBO",
-        event_date=expected_date,
-        status="live" if is_live else "final",
-        away_team=away_team,
-        away_score=away_score,
-        home_team=home_team,
-        home_score=home_score,
-        winner=winner,
-        source="Naver Sports Game Card",
-        source_url=source_url,
+        game_id = game.get("gameId")
+        game_datetime_raw = game.get("gameDateTime")
+        if (
+            not isinstance(game_id, str)
+            or not game_id
+            or game_id != game_id.strip()
+        ):
+            return _failed_sports_outcome("대상 경기의 gameId schema가 올바르지 않습니다.")
+        if not isinstance(game_datetime_raw, str) or "T" not in game_datetime_raw:
+            return _failed_sports_outcome(
+                "대상 경기의 gameDateTime schema가 올바르지 않습니다."
+            )
+        try:
+            game_datetime = datetime.fromisoformat(game_datetime_raw)
+        except ValueError:
+            return _failed_sports_outcome(
+                "대상 경기의 gameDateTime schema가 올바르지 않습니다."
+            )
+        if (
+            game_datetime.tzinfo is not None
+            or game_datetime.date().isoformat() != expected_date
+        ):
+            return _failed_sports_outcome(
+                "대상 경기의 gameDateTime schema가 올바르지 않습니다."
+            )
+
+        away_score = game.get("awayTeamScore")
+        home_score = game.get("homeTeamScore")
+        if (
+            not isinstance(away_score, int)
+            or isinstance(away_score, bool)
+            or not isinstance(home_score, int)
+            or isinstance(home_score, bool)
+            or away_score < 0
+            or home_score < 0
+        ):
+            return _failed_sports_outcome("대상 경기의 점수 schema가 올바르지 않습니다.")
+
+        status_code = game.get("statusCode")
+        if status_code == "STARTED":
+            status = "live"
+            winner = None
+        elif status_code in {"ENDED", "RESULT"}:
+            status = "final"
+            winner_code = game.get("winner")
+            if winner_code == "AWAY":
+                winner = away_team
+            elif winner_code == "HOME":
+                winner = home_team
+            elif winner_code == "DRAW" and away_score == home_score:
+                winner = None
+            else:
+                return _failed_sports_outcome(
+                    "대상 경기의 final winner schema가 올바르지 않습니다."
+                )
+        else:
+            return _failed_sports_outcome("대상 경기의 statusCode를 지원하지 않습니다.")
+
+        fact = SportsGameFact(
+            league="KBO",
+            event_date=expected_date,
+            status=status,
+            away_team=away_team,
+            away_score=away_score,
+            home_team=home_team,
+            home_score=home_score,
+            winner=winner,
+            source="Naver Sports Schedule API",
+            source_url=source_url,
+        )
+        document = SourceDocument(
+            source=fact.source,
+            url=source_url,
+            text=(
+                f"{fact.event_date} {fact.away_team} {fact.away_score} : "
+                f"{fact.home_score} {fact.home_team}"
+            ),
+            source_kind="sports_api",
+            event_date=expected_date,
+            sports_fact=fact,
+        )
+        candidates.append((status == "live", game_datetime, game_id, document))
+
+    if candidates:
+        started = [candidate for candidate in candidates if candidate[0]]
+        selected = max(started or candidates, key=lambda candidate: candidate[1:3])
+        return CollectionOutcome("found", [selected[3]], [])
+
+    return CollectionOutcome(
+        "not_found",
+        [],
+        ["정상 응답에 기준일·KBO·대상 팀이 모두 일치하는 경기가 없습니다."],
     )
 
 
@@ -539,41 +516,22 @@ async def _collect_sports_source(
     query: str,
     as_of_kst: object,
     fetch_page: FetchPage,
-) -> tuple[list[SourceDocument], list[str]]:
+) -> CollectionOutcome:
     expected_team = canonical_kbo_team(query)
     if expected_team is None:
-        return [], ["질문에서 확인할 KBO 팀을 특정하지 못했습니다."]
+        return _failed_sports_outcome("질문에서 확인할 KBO 팀을 특정하지 못했습니다.")
     date = _as_of_date(as_of_kst)
     expected_date = date.date().isoformat()
-    url = build_sports_page_url(query, as_of_kst=as_of_kst)
+    url = build_naver_sports_schedule_url(as_of_kst=as_of_kst)
     body = await fetch_page(url)
-    if _looks_like_fetch_failure(body) or len(body.strip()) < _MIN_PAGE_CHARS:
-        return [], ["날짜가 지정된 네이버 경기정보 페이지를 읽지 못했습니다."]
-    fact = parse_naver_kbo_game_card(
+    if _looks_like_fetch_failure(body):
+        return _failed_sports_outcome("날짜가 지정된 네이버 스포츠 API를 읽지 못했습니다.")
+    return parse_naver_kbo_schedule(
         body,
         source_url=url,
         expected_date=expected_date,
         expected_team=expected_team,
     )
-    if fact is None:
-        return [], [
-            "현재 기준일과 일치하는 경기정보 카드에서 팀·점수·상태를 모두 확인하지 못했습니다."
-        ]
-    text = (
-        f"{fact.event_date} {fact.away_team} {fact.away_score} : "
-        f"{fact.home_score} {fact.home_team} "
-        f"{'final score' if fact.status == 'final' else 'live'}"
-    )
-    return [
-        SourceDocument(
-            source=fact.source,
-            url=url,
-            text=text,
-            source_kind="sports_page",
-            event_date=expected_date,
-            sports_fact=fact,
-        )
-    ], []
 
 async def _collect_direct_search_source(
     *,
@@ -605,7 +563,7 @@ async def collect_sources(
     as_of_kst: object,
     fetch_page: FetchPage,
     resolve_news_url: ResolveNewsUrl | None = None,
-) -> tuple[list[SourceDocument], list[str]]:
+) -> CollectionOutcome:
     """도메인별 source policy에 따라 검증된 원문 source만 반환한다."""
     if kind == "sports":
         return await _collect_sports_source(
@@ -614,20 +572,27 @@ async def collect_sources(
             fetch_page=fetch_page,
         )
     if kind in {"news", "general", "market"}:
-        return await _collect_news_sources(
+        sources, limitations = await _collect_news_sources(
             query=query,
             as_of_kst=as_of_kst,
             fetch_page=fetch_page,
             resolve_news_url=resolve_news_url,
         )
-    return await _collect_direct_search_source(
-        query=query,
-        kind=kind,
-        fetch_page=fetch_page,
+    else:
+        sources, limitations = await _collect_direct_search_source(
+            query=query,
+            kind=kind,
+            fetch_page=fetch_page,
+        )
+    return CollectionOutcome(
+        "found" if sources else "failed",
+        sources,
+        limitations,
     )
 
 
 __all__ = [
+    "CollectionOutcome",
     "FetchPage",
     "NewsCandidate",
     "ResolveNewsUrl",
@@ -635,11 +600,12 @@ __all__ = [
     "SportsGameFact",
     "build_google_news_rss_url",
     "build_naver_search_url",
+    "build_naver_sports_schedule_url",
     "build_sports_page_url",
     "canonical_kbo_team",
     "collect_sources",
     "filter_recent_candidates",
     "html_to_visible_text",
     "parse_google_news_rss",
-    "parse_naver_kbo_game_card",
+    "parse_naver_kbo_schedule",
 ]
