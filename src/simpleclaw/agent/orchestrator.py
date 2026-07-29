@@ -64,10 +64,6 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
-from simpleclaw.agent.execution_router import (
-    ExecutionCallbacks,
-    ExecutionRouter,
-)
 from simpleclaw.agent.evidence_policy import (
     EvidenceRequirement,
     EvidenceState,
@@ -75,6 +71,10 @@ from simpleclaw.agent.evidence_policy import (
     no_evidence_requirement,
     requirement_from_turn_analysis,
     requirement_from_turn_plan,
+)
+from simpleclaw.agent.execution_router import (
+    ExecutionCallbacks,
+    ExecutionRouter,
 )
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
