@@ -136,7 +136,7 @@ fresh run은 marker SHA만 lineage에 포함해 기존 artifact를 metric 입력
 task-owned FunctionGemma source 8개 파일의 exact file-byte SHA-256을 포함한다.
 현재 checkout에서 prerequisite ancestry와 모든 file hash를 대조해 하나라도
 다르면 provider/training 전에 fail-closed한다. reviewed v2 fingerprint는
-`3ad807841aff40042e07d20d66833b927847f2307a5ddbfaacc022eb98438863`다.
+`384ac02895153019e8790481cbfbed7e33f5427e947fb72ec0f535c0ed261e2b`다.
 
 - extraction: DB non-deleted row는 실행 전후 938건으로 동일했다. source 300건의
   split은 train/dev/test 236/34/30이며 source-group leakage는 0이다.

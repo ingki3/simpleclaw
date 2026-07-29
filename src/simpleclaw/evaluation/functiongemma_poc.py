@@ -240,7 +240,7 @@ def require_run_contract(
     current = verify_current_source(repository_root)
     recorded = manifest.get("execution_source_provenance")
     if not isinstance(recorded, dict):
-        raise RuntimeError("missing execution source provenance")
+        raise TypeError("missing execution source provenance")
     if (
         recorded.get("prerequisite_merge_sha") != PREREQUISITE_MERGE_SHA
         or recorded.get("task_owned_source_hashes")

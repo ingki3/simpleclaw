@@ -48,8 +48,8 @@ from simpleclaw.evaluation.functiongemma_poc import (
     RUN_CONTRACT,
     RUN_CONTRACT_FINGERPRINT,
     preflight_fresh_run,
-    record_unverifiable_execution_provenance,
     record_training_failure,
+    record_unverifiable_execution_provenance,
     require_run_contract,
     verify_current_source,
 )
@@ -126,7 +126,7 @@ def test_run_contract_rejects_missing_source_provenance(tmp_path) -> None:
     manifest.pop("execution_source_provenance")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="source provenance"):
+    with pytest.raises(TypeError, match="source provenance"):
         require_run_contract(output)
 
 
