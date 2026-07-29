@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [x] **BIZ-512: FunctionGemma 축소 intent·asset classifier QLoRA PoC** — live user turn 469건에서 비식별 source 300건을 read-only 추출하고, provider 누적 300회 hard cap에서 strict weak label 44건을 채택했다. leakage 중복 6건 제외 후 train/dev/test 31/3/4와 train augmentation 124건으로 MLX 4-bit/group64·seed 42·all-layer QLoRA 100 step을 실제 수행했다. held-out 4건에서 base/tuned API 성공은 모두 100%였으나 tuned native call/schema/boundary는 모두 0%, compact macro 개선 0%p로 hard gate 실패·shadow integration 비추천 결론이다. 전체 unit 3,031 passed·3 xfailed, ruff clean. live runtime 연결·config 변경·restart·deploy는 수행하지 않았다. (2026-07-29)
+
 - [x] **BIZ-507: news-search-skill Gemini secret을 등록 skill 자식 범위로 제한** — PR #520을 `dev`에 squash merge(`62a203566fd2185e3b3dbec99824932bec3e0166`)했다. 2026-07-28 live rollout에서 `news-search-skill` N1~N3와 `krstock*` R1~R2 수정·timestamp backup, Gemini credential `file:gemini_api_key` encrypted-vault migration/read-back, LaunchAgent drain restart·Admin health, notifier 없는 registered skill 및 `/krstock-close` smoke를 완료했다.
 
 - [x] **BIZ-503: 한국장 cron fresh-evidence 오판·성공 오기록 수정** — capability metadata 기반 evidence provider 판정, 중첩 error/stale/invalid fail-closed, 동일 record의 source/as-of/data 결합, 도메인별 fallback, structured semantic failure 영속화와 마지막 재시도 유형 기반 알림을 구현·검증했다. PR #514를 `dev`에 squash merge(SHA `e1d65e638afe586e7b2da136c8751d3ea8c1ef57`)하고 PR #516을 merge commit(SHA `b6658e5401b3ca3e162747bd0edb05f8ea3d9f99`)으로 `main`에 긴급 release하여 `v2026.07.27` 발행을 확인했다. live 스킬 timestamp backup/capability metadata/loader readback, release checkout 동기화, drain restart, Admin·Webhook·Telegram health, 실제 market-summary validator, notifier 없는 한국장 cron structured success smoke까지 완료했다. (2026-07-27)
