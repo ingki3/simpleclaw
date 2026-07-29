@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from argparse import Namespace
 from unittest.mock import AsyncMock
@@ -11,6 +12,7 @@ import pytest
 import scripts.dev.run_functiongemma_intent_poc as intent_poc
 from scripts.dev.run_functiongemma_intent_poc import (
     _bounded_catalog,
+    _parser,
     _provider_prompt_diagnostic,
 )
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
@@ -34,13 +36,28 @@ from simpleclaw.evaluation.functiongemma_dataset import (
     SanitizedMessage,
 )
 from simpleclaw.evaluation.functiongemma_labeling import (
+    MAX_PROVIDER_TOKENS,
     LabelingBudget,
+    PlannerResponse,
     candidate_fingerprint,
     label_cases,
     labeling_public_summary,
 )
 from simpleclaw.llm.models import LLMResponse, LLMRoute
 from simpleclaw.llm.router import LLMRouter
+
+
+def test_default_budget_enforces_token_hard_cap() -> None:
+    assert LabelingBudget().max_tokens == MAX_PROVIDER_TOKENS
+
+
+def test_cli_default_propagates_token_hard_cap() -> None:
+    args = _parser().parse_args([
+        "label",
+        "--private-output-dir",
+        "/tmp/functiongemma-private",
+    ])
+    assert args.max_provider_tokens == LabelingBudget().max_tokens
 
 
 def _case(number: int) -> SanitizedCase:
@@ -161,7 +178,10 @@ async def test_budget_stops_calls_and_low_confidence_goes_to_queue() -> None:
     async def planner(case, candidates):
         nonlocal calls
         calls += 1
-        return _plan(0.4 if case.case_id.endswith("1") else 0.9)
+        return PlannerResponse(
+            _plan(0.4 if case.case_id.endswith("1") else 0.9),
+            token_count=1,
+        )
 
     result = await label_cases(
         [_case(1), _case(2), _case(3)],
@@ -174,10 +194,102 @@ async def test_budget_stops_calls_and_low_confidence_goes_to_queue() -> None:
     assert len(result.labeled) == 1
     assert {reason for item in result.adjudication_queue for reason in item.reason_codes} == {
         "confidence.low",
-        "budget.exhausted",
+        "budget.call_exhausted",
     }
     summary = labeling_public_summary(result)
     assert "private-1" not in str(summary)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_timeout_cancels_and_rejects_label() -> None:
+    cancelled = False
+
+    async def planner(case, candidates):
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        return PlannerResponse(_plan(), token_count=1)
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_seconds=0.01),
+    )
+    assert cancelled
+    assert result.labeled == ()
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.time_exhausted",
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_deadline_result_is_rejected() -> None:
+    times = iter((0.0, 0.0, 0.0, 0.02, 0.02))
+
+    async def planner(case, candidates):
+        return PlannerResponse(_plan(), token_count=1)
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_seconds=0.01),
+        clock=lambda: next(times),
+    )
+    assert result.labeled == ()
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.time_exhausted",
+    )
+
+
+@pytest.mark.asyncio
+async def test_token_cap_rejects_overshoot_and_stops_next_call() -> None:
+    calls = 0
+
+    async def planner(case, candidates):
+        nonlocal calls
+        calls += 1
+        return PlannerResponse(_plan(), token_count=6)
+
+    result = await label_cases(
+        [_case(1), _case(2)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_tokens=5),
+    )
+    assert calls == 1
+    assert result.labeled == ()
+    assert result.provider_tokens == 6
+    assert all(
+        item.reason_codes == ("budget.token_exhausted",)
+        for item in result.adjudication_queue
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_token_usage_fails_closed_when_cap_enabled() -> None:
+    async def planner(case, candidates):
+        return _plan()
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_tokens=10),
+    )
+    assert result.labeled == ()
+    assert not result.token_usage_supported
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.token_usage_unavailable",
+    )
 
 
 @pytest.mark.asyncio
@@ -187,7 +299,7 @@ async def test_out_of_set_target_is_not_promoted_after_planner_call() -> None:
     async def planner(case, candidates):
         nonlocal exposed
         exposed = tuple(candidate.asset_id for candidate in candidates)
-        return _plan(asset_name="outside")
+        return PlannerResponse(_plan(asset_name="outside"), token_count=1)
 
     result = await label_cases(
         [_case(1)],
@@ -224,6 +336,7 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
         json.dumps(_case(1).to_dict()) + "\n",
         encoding="utf-8",
     )
+    (output / "lineage-manifest.json").write_text("{}", encoding="utf-8")
     catalog = PlannerCatalog(assets=(_asset(),), fingerprint="full")
     response = LLMResponse(text=_planner_response(
         primary_asset=primary_asset,
@@ -253,6 +366,8 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
             config="unused.yaml",
             allow_provider_calls=True,
             max_provider_calls=1,
+            max_provider_seconds=3600,
+            max_provider_tokens=MAX_PROVIDER_TOKENS,
         ),
         output,
     )
@@ -280,7 +395,7 @@ async def test_pre_call_candidates_and_fingerprint_remain_identical() -> None:
     async def planner(case, candidates):
         nonlocal captured
         captured = tuple(candidate.asset_id for candidate in candidates)
-        return _plan()
+        return PlannerResponse(_plan(), token_count=1)
 
     result = await label_cases(
         [_case(1)],
