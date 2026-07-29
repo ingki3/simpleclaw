@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
-import re
 import subprocess
 import sys
 import time
@@ -48,10 +46,8 @@ from simpleclaw.evaluation.functiongemma_dataset import (
 )
 from simpleclaw.evaluation.functiongemma_eval import (
     InferenceResult,
-    canonical_json_sha256,
     comparison_report,
     evaluate_predictions,
-    file_sha256,
 )
 from simpleclaw.evaluation.functiongemma_labeling import (
     MAX_PROVIDER_TOKENS,
@@ -61,6 +57,17 @@ from simpleclaw.evaluation.functiongemma_labeling import (
     candidate_fingerprint,
     label_cases,
     labeling_public_summary,
+)
+from simpleclaw.evaluation.functiongemma_poc import (
+    ProviderPayloadAudit,
+    begin_training_invocation,
+    complete_training_invocation,
+    contains_provider_identifier,
+    finalize_comparison_report,
+    preflight_fresh_run as _preflight_fresh_run,
+    read_json as _read_json,
+    record_training_failure as _record_training_failure,
+    require_run_contract as _require_run_contract,
 )
 from simpleclaw.evaluation.functiongemma_training import (
     MAX_STEPS,
@@ -74,34 +81,12 @@ from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN_CONTRACT_VERSION = "functiongemma-intent-poc/biz-515-v1"
-RUN_CONTRACT = {
-    "candidate_privacy_contract": "biz-513-reviewed",
-    "provider_augmentation_training_contract": "biz-514-reviewed",
-    "model_revision": "39eccb091651513a5dfb56892d3714c1b5b8276c",
-    "single_training_process": True,
-    "provider_payload_audit": "router-request-canonical-json-sha256",
-}
-RUN_CONTRACT_FINGERPRINT = canonical_json_sha256(RUN_CONTRACT)
 FIXED_GOLD = ROOT / "tests/fixtures/unified_turn_planner_cases.jsonl"
 HISTORICAL_GOLD = Path(
     "~/.simpleclaw-agent/default/evaluations/"
     "historical-planner-diff-20260726-aligned-final24/"
     "private_sanitized_cases.jsonl"
 ).expanduser()
-_PROVIDER_IDENTIFIER_PATTERNS = (
-    re.compile(r"\b(?:msg|live):\d+\b", re.IGNORECASE),
-    re.compile(
-        r"""(?ix)
-        (?:"|'|`)?\b(?:user|chat|message|msg)[_\s-]?id\b(?:"|'|`)?
-        \s*(?::|=)\s*(?:"|'|`)?[A-Za-z0-9_-]+
-        """
-    ),
-)
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -111,74 +96,6 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-
-
-def _preflight_fresh_run(
-    output: Path,
-    *,
-    invalidated_artifact_dirs: list[Path],
-) -> Path:
-    """reviewed contract와 fresh/invalidated lineage를 실행 전에 고정한다."""
-    resolved = output.expanduser().resolve()
-    if resolved.exists() and any(resolved.iterdir()):
-        raise FileExistsError("fresh private output directory must be empty")
-    invalidated = []
-    for artifact_dir in invalidated_artifact_dirs:
-        artifact = artifact_dir.expanduser().resolve()
-        if artifact == resolved:
-            raise ValueError("fresh output cannot be an invalidated artifact")
-        marker = artifact / "INVALIDATED.json"
-        if not marker.is_file():
-            raise FileNotFoundError(f"missing invalidation marker: {marker}")
-        marker_payload = _read_json(marker)
-        if marker_payload.get("status") != "invalidated":
-            raise ValueError(f"invalid invalidation marker: {marker}")
-        invalidated.append({
-            "directory_name": artifact.name,
-            "marker_file_sha256": file_sha256(marker),
-        })
-    ensure_private_output_dir(resolved)
-    write_private_json(resolved / "run-manifest.json", {
-        "run_contract_version": RUN_CONTRACT_VERSION,
-        "run_contract_fingerprint": RUN_CONTRACT_FINGERPRINT,
-        "run_contract": RUN_CONTRACT,
-        "invalidated_artifacts_excluded": invalidated,
-        "training_process_invocation_count": 0,
-        "training_adapter_path": None,
-        "status": "initialized",
-    })
-    return resolved
-
-
-def _require_run_contract(output: Path) -> dict[str, Any]:
-    manifest_path = output / "run-manifest.json"
-    if not manifest_path.is_file():
-        raise RuntimeError("missing BIZ-515 run manifest")
-    manifest = _read_json(manifest_path)
-    if (
-        manifest.get("run_contract_version") != RUN_CONTRACT_VERSION
-        or manifest.get("run_contract_fingerprint") != RUN_CONTRACT_FINGERPRINT
-    ):
-        raise RuntimeError("reviewed FunctionGemma contract mismatch")
-    return manifest
-
-
-def _request_payload(request: Any) -> dict[str, Any]:
-    schema = request.response_schema
-    if not isinstance(schema, dict):
-        schema = None
-    return {
-        "system_prompt": request.system_prompt,
-        "user_message": request.user_message,
-        "route_name": request.route_name,
-        "backend_name": request.backend_name,
-        "max_tokens": request.max_tokens,
-        "response_mime_type": request.response_mime_type,
-        "response_schema": schema,
-        "require_structured_output": request.require_structured_output,
-        "reasoning": request.reasoning,
-        "required_capabilities": sorted(request.required_capabilities),
-    }
 
 
 def _excluded_fingerprints() -> set[str]:
@@ -404,7 +321,7 @@ def _provider_prompt_diagnostic(
         candidates=_context_set(case),
         catalog=_bounded_catalog(catalog, candidates),
     )
-    if any(pattern.search(prompt) for pattern in _PROVIDER_IDENTIFIER_PATTERNS):
+    if contains_provider_identifier(prompt):
         raise ValueError("provider_prompt_identifier_leak")
     return prompt
 
@@ -420,7 +337,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
     runtime_assets = tuple(
         asset for asset in catalog.assets if asset.runtime_visible
     )
-    provider_payload_fingerprints: list[str] = []
+    provider_payload_audit = ProviderPayloadAudit()
 
     class UsageCapturingRouter(LLMRouter):
         def __init__(self, wrapped: LLMRouter) -> None:
@@ -429,21 +346,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
             self.usage_supported = True
 
         async def send_validated(self, request, validate_response):
-            payload = _request_payload(request)
-            rendered = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            if any(
-                pattern.search(rendered)
-                for pattern in _PROVIDER_IDENTIFIER_PATTERNS
-            ):
-                raise ValueError("provider_payload_identifier_leak")
-            provider_payload_fingerprints.append(
-                hashlib.sha256(rendered.encode("utf-8")).hexdigest()
-            )
+            provider_payload_audit.record(request)
 
             def capture_and_validate(response):
                 usage = getattr(response, "usage", None)
@@ -522,20 +425,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
         "max_tokens": args.max_provider_tokens,
     }
     lineage["provider_usage"] = summary
-    lineage["provider_payload_audit"] = {
-        "payload_count": len(provider_payload_fingerprints),
-        "accepted_target_out_of_pre_call_set_count": 0,
-        "raw_identifier_match_count": 0,
-        "fingerprint_algorithm": "SHA-256",
-        "canonicalization": (
-            "UTF-8 JSON; sort_keys=true; separators=(',', ':'); "
-            "provider-neutral LLMRequest fields"
-        ),
-        "payload_set_fingerprint": canonical_json_sha256(
-            provider_payload_fingerprints
-        ),
-        "payload_fingerprints": provider_payload_fingerprints,
-    }
+    lineage["provider_payload_audit"] = provider_payload_audit.to_manifest()
     write_private_json(output / "lineage-manifest.json", lineage)
     print(json.dumps(summary, sort_keys=True))
 
@@ -613,12 +503,6 @@ def augment_command(args: argparse.Namespace) -> None:
 
 def train_command(args: argparse.Namespace) -> None:
     output = ensure_private_output_dir(args.private_output_dir)
-    run_manifest = _require_run_contract(output)
-    invocation_count = int(
-        run_manifest.get("training_process_invocation_count", 0)
-    )
-    if invocation_count != 0:
-        raise RuntimeError("training process was already invoked for this run")
     model = resolve_model_snapshot(
         output / "model-4bit",
         allow_download=args.allow_model_download,
@@ -626,10 +510,7 @@ def train_command(args: argparse.Namespace) -> None:
     train_rows = _read_jsonl(output / "mlx-data/train.jsonl")
     steps = min(args.training_steps, MAX_STEPS, max(2, len(train_rows) * 3))
     adapter_path = output / "adapter-function-format"
-    run_manifest["training_process_invocation_count"] = 1
-    run_manifest["training_adapter_path"] = str(adapter_path.resolve())
-    run_manifest["status"] = "training_invoked"
-    write_private_json(output / "run-manifest.json", run_manifest)
+    begin_training_invocation(output, adapter_path=adapter_path)
     try:
         manifest = run_training(TrainingConfig(
             model_path=str(model),
@@ -657,103 +538,8 @@ def train_command(args: argparse.Namespace) -> None:
     lineage = _read_json(output / "lineage-manifest.json")
     lineage["training_budget"] = summary
     write_private_json(output / "lineage-manifest.json", lineage)
-    run_manifest["status"] = "training_completed"
-    run_manifest["training_stop_reason"] = manifest["stop_reason"]
-    run_manifest["training_consumed_budget"] = manifest["consumed_budget"]
-    write_private_json(output / "run-manifest.json", run_manifest)
+    complete_training_invocation(output, training_manifest=manifest)
     print(json.dumps(summary, sort_keys=True))
-
-
-def _record_training_failure(
-    output: Path,
-    *,
-    manifest: dict[str, Any],
-    error_code: str,
-) -> dict[str, Any]:
-    """추가 process 없이 단일 학습 실패를 final hard-failure로 고정한다."""
-    budget_summary = {
-        key: manifest.get(key)
-        for key in (
-            "stop_reason",
-            "returncode",
-            "elapsed_seconds",
-            "artifact_bytes",
-            "peak_artifact_bytes",
-            "artifact_cap_bytes",
-            "process_invocation_count",
-            "adapter_path",
-            "consumed_budget",
-        )
-    }
-    if manifest.get("returncode"):
-        budget_summary["stop_reason"] = "process_error"
-        manifest["stop_reason"] = "process_error"
-        write_private_json(output / "training-manifest.json", manifest)
-    lineage = _read_json(output / "lineage-manifest.json")
-    lineage["training_budget"] = budget_summary
-    write_private_json(output / "lineage-manifest.json", lineage)
-    payload_audit = lineage.get("provider_payload_audit", {})
-    failure_report = {
-        "status": "hard_failure",
-        "hard_failures": {"training.process_error": 1},
-        "training_budget": budget_summary,
-        "provider_usage": lineage.get("provider_usage", {}),
-        "provider_payload_audit": {
-            "payload_count": payload_audit.get("payload_count", 0),
-            "accepted_target_out_of_pre_call_set_count": payload_audit.get(
-                "accepted_target_out_of_pre_call_set_count",
-                0,
-            ),
-            "raw_identifier_match_count": payload_audit.get(
-                "raw_identifier_match_count",
-                0,
-            ),
-            "payload_set_fingerprint": payload_audit.get(
-                "payload_set_fingerprint"
-            ),
-            "fingerprint_algorithm": payload_audit.get(
-                "fingerprint_algorithm"
-            ),
-            "canonicalization": payload_audit.get("canonicalization"),
-        },
-        "evaluation_skipped": True,
-        "evaluation_skip_reason": "training_adapter_unavailable",
-        "recommend_shadow_integration": False,
-        "raw_text_rows": 0,
-        "error_code": error_code,
-    }
-    private_report_path = write_private_json(
-        output / "private-hard-failure-report.json",
-        failure_report,
-    )
-    public_report = {
-        **failure_report,
-        "report_fingerprints": {
-            "canonical_payload": {
-                "algorithm": "SHA-256",
-                "canonicalization": (
-                    "UTF-8 JSON; ensure_ascii=false; sort_keys=true; "
-                    "separators=(',', ':')"
-                ),
-                "value": canonical_json_sha256(failure_report),
-            },
-            "private_report_file_bytes": {
-                "algorithm": "SHA-256",
-                "canonicalization": "none; exact file byte sequence",
-                "value": file_sha256(private_report_path),
-            },
-        },
-    }
-    write_private_json(output / "aggregate-report.json", public_report)
-    run_manifest = _require_run_contract(output)
-    run_manifest["status"] = "training_failed"
-    run_manifest["training_stop_reason"] = budget_summary["stop_reason"]
-    run_manifest["training_consumed_budget"] = manifest.get("consumed_budget")
-    run_manifest["hard_failure_report_canonical_payload_sha256"] = (
-        canonical_json_sha256(public_report)
-    )
-    write_private_json(output / "run-manifest.json", run_manifest)
-    return budget_summary
 
 
 def _extract_generated_json(stdout: str) -> object:
@@ -843,48 +629,7 @@ def evaluate_command(args: argparse.Namespace) -> None:
     tuned = evaluate_predictions(cases, tuned_results)
     report = comparison_report(base, tuned)
     report["privacy_hard_failures"] = 0
-    private_report_path = write_private_json(
-        output / "private-comparison-report.json",
-        report,
-    )
-    public_report = {
-        **report,
-        "report_fingerprints": {
-            "canonical_payload": {
-                "algorithm": "SHA-256",
-                "canonicalization": (
-                    "UTF-8 JSON; ensure_ascii=false; sort_keys=true; "
-                    "separators=(',', ':')"
-                ),
-                "value": canonical_json_sha256(report),
-            },
-            "private_report_file_bytes": {
-                "algorithm": "SHA-256",
-                "canonicalization": "none; exact file byte sequence",
-                "value": file_sha256(private_report_path),
-            },
-        },
-        "raw_text_rows": 0,
-    }
-    training_manifest_path = output / "training-manifest.json"
-    if training_manifest_path.is_file():
-        training = _read_json(training_manifest_path)
-        public_report["training_budget"] = {
-            "stop_reason": training.get("stop_reason"),
-            "elapsed_seconds": training.get("elapsed_seconds"),
-            "artifact_bytes": training.get("artifact_bytes"),
-            "peak_artifact_bytes": training.get("peak_artifact_bytes"),
-            "artifact_cap_bytes": training.get("artifact_cap_bytes"),
-        }
-    labeling_summary_path = output / "labeling-summary.json"
-    if labeling_summary_path.is_file():
-        public_report["provider_usage"] = _read_json(labeling_summary_path)
-    write_private_json(output / "aggregate-report.json", public_report)
-    run_manifest["status"] = "completed"
-    run_manifest["aggregate_report_canonical_payload_sha256"] = (
-        canonical_json_sha256(public_report)
-    )
-    write_private_json(output / "run-manifest.json", run_manifest)
+    public_report = finalize_comparison_report(output, report=report)
     print(json.dumps(public_report, sort_keys=True))
 
 

@@ -1,0 +1,15 @@
+{
+  "algorithm": "SHA-256",
+  "canonicalization": "exact file byte sequence",
+  "files": {
+    "scripts/dev/run_functiongemma_intent_poc.py": "edb2f24903524a87637a5e1a9cb155e988df80c8920331ee827cc7fb0d49e62a",
+    "src/simpleclaw/evaluation/functiongemma_augmentation.py": "12b55b2eb9e0ed051486b5c8f03d92bb1cc391f2a72c77b03985115c2199be4e",
+    "src/simpleclaw/evaluation/functiongemma_contract.py": "f28f79973b7755e73277e71bbb6e0da0e50214303b57eb3e837bd1f0124c5deb",
+    "src/simpleclaw/evaluation/functiongemma_dataset.py": "0b28711a218cfd57bc7f6385a827892b8b9f833669d2d9cf13d44d55e6f0ca34",
+    "src/simpleclaw/evaluation/functiongemma_eval.py": "aa766f089c001e620af405a1ae19bf027436fca931bf3e54f9eb838caaaecdc7",
+    "src/simpleclaw/evaluation/functiongemma_labeling.py": "b03e9707103757400cc9f04deef38a31b7e81d21f797427b1be2e3e9fccaba2a",
+    "src/simpleclaw/evaluation/functiongemma_poc.py": "35115598a5be79a3df1ecac81bde11e050d9b1aed3d5e7b48e23a8f89d73775d",
+    "src/simpleclaw/evaluation/functiongemma_training.py": "f4f4c9700fb3d44362b59aa04ef632099741a13db220ee1c3257f7e7e2758572"
+  },
+  "version": 1
+}

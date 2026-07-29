@@ -11,14 +11,9 @@ import pytest
 
 import scripts.dev.run_functiongemma_intent_poc as intent_poc
 from scripts.dev.run_functiongemma_intent_poc import (
-    RUN_CONTRACT,
-    RUN_CONTRACT_FINGERPRINT,
-    RUN_CONTRACT_VERSION,
     _bounded_catalog,
     _parser,
-    _preflight_fresh_run,
     _provider_prompt_diagnostic,
-    _record_training_failure,
 )
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
@@ -48,6 +43,16 @@ from simpleclaw.evaluation.functiongemma_labeling import (
     label_cases,
     labeling_public_summary,
 )
+from simpleclaw.evaluation.functiongemma_poc import (
+    PREREQUISITE_MERGE_SHA,
+    RUN_CONTRACT,
+    RUN_CONTRACT_FINGERPRINT,
+    preflight_fresh_run,
+    record_unverifiable_execution_provenance,
+    record_training_failure,
+    require_run_contract,
+    verify_current_source,
+)
 from simpleclaw.llm.models import LLMResponse, LLMRoute
 from simpleclaw.llm.router import LLMRouter
 
@@ -66,12 +71,16 @@ def test_cli_default_propagates_token_hard_cap() -> None:
 
 
 def _write_run_manifest(output) -> None:
-    (output / "run-manifest.json").write_text(json.dumps({
-        "run_contract_version": RUN_CONTRACT_VERSION,
-        "run_contract_fingerprint": RUN_CONTRACT_FINGERPRINT,
-        "run_contract": RUN_CONTRACT,
-        "training_process_invocation_count": 0,
-    }), encoding="utf-8")
+    invalidated = output.parent / f"{output.name}-invalidated"
+    invalidated.mkdir()
+    (invalidated / "INVALIDATED.json").write_text(
+        '{"status":"invalidated"}',
+        encoding="utf-8",
+    )
+    preflight_fresh_run(
+        output,
+        invalidated_artifact_dirs=[invalidated],
+    )
 
 
 def test_clean_rerun_requires_empty_output_and_invalidation_marker(
@@ -84,7 +93,7 @@ def test_clean_rerun_requires_empty_output_and_invalidation_marker(
         encoding="utf-8",
     )
     output = tmp_path / "fresh"
-    resolved = _preflight_fresh_run(
+    resolved = preflight_fresh_run(
         output,
         invalidated_artifact_dirs=[invalidated],
     )
@@ -92,21 +101,58 @@ def test_clean_rerun_requires_empty_output_and_invalidation_marker(
         (resolved / "run-manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["run_contract_fingerprint"] == RUN_CONTRACT_FINGERPRINT
+    assert RUN_CONTRACT["reviewed_prerequisite"]["merge_sha"] == (
+        PREREQUISITE_MERGE_SHA
+    )
+    assert manifest["execution_source_provenance"]["status"] == "verified"
+    assert manifest["execution_source_provenance"][
+        "task_owned_source_hashes"
+    ]
     assert manifest["training_process_invocation_count"] == 0
     assert len(manifest["invalidated_artifacts_excluded"]) == 1
 
     with pytest.raises(FileExistsError, match="fresh"):
-        _preflight_fresh_run(
+        preflight_fresh_run(
             output,
             invalidated_artifact_dirs=[invalidated],
         )
 
 
-def test_training_failure_report_is_redacted_and_has_distinct_hashes(
+def test_run_contract_rejects_missing_source_provenance(tmp_path) -> None:
+    output = tmp_path / "private"
+    _write_run_manifest(output)
+    manifest_path = output / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("execution_source_provenance")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="source provenance"):
+        require_run_contract(output)
+
+
+def test_source_lock_mismatch_fails_closed() -> None:
+    relative_name = next(iter(RUN_CONTRACT["task_owned_source"]["files"]))
+    with pytest.raises(RuntimeError, match="source hash mismatch"):
+        verify_current_source(source_lock={
+            "files": {relative_name: "0" * 64},
+        })
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "returncode", "failure_key"),
+    (
+        ("disk_cap", -15, "training.disk_cap"),
+        ("time_cap", -15, "training.time_cap"),
+        ("completed", 1, "training.process_error"),
+    ),
+)
+def test_training_failure_report_preserves_real_boundary_reason(
     tmp_path,
+    stop_reason,
+    returncode,
+    failure_key,
 ) -> None:
     output = tmp_path / "private"
-    output.mkdir()
     _write_run_manifest(output)
     (output / "lineage-manifest.json").write_text(json.dumps({
         "provider_usage": {"provider_calls": 1},
@@ -120,9 +166,9 @@ def test_training_failure_report_is_redacted_and_has_distinct_hashes(
         },
     }), encoding="utf-8")
 
-    _record_training_failure(output, manifest={
-        "returncode": 1,
-        "stop_reason": "completed",
+    record_training_failure(output, manifest={
+        "returncode": returncode,
+        "stop_reason": stop_reason,
         "elapsed_seconds": 1.0,
         "artifact_bytes": 0,
         "peak_artifact_bytes": 0,
@@ -135,10 +181,64 @@ def test_training_failure_report_is_redacted_and_has_distinct_hashes(
     report = json.loads(
         (output / "aggregate-report.json").read_text(encoding="utf-8")
     )
-    assert report["hard_failures"] == {"training.process_error": 1}
+    assert report["hard_failures"] == {failure_key: 1}
+    assert report["training_budget"]["stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
     assert report["recommend_shadow_integration"] is False
     assert report["raw_text_rows"] == 0
     assert report["report_fingerprints"]["canonical_payload"]["value"] != (
+        report["report_fingerprints"]["private_report_file_bytes"]["value"]
+    )
+    training_manifest = json.loads(
+        (output / "training-manifest.json").read_text(encoding="utf-8")
+    )
+    assert training_manifest["stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
+    run_manifest = json.loads(
+        (output / "run-manifest.json").read_text(encoding="utf-8")
+    )
+    assert run_manifest["training_stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
+
+
+def test_existing_uncommitted_run_records_lineage_hard_failure(
+    tmp_path,
+) -> None:
+    output = tmp_path / "private"
+    output.mkdir()
+    (output / "run-manifest.json").write_text(
+        json.dumps({"status": "training_failed"}),
+        encoding="utf-8",
+    )
+    (output / "lineage-manifest.json").write_text("{}", encoding="utf-8")
+    (output / "private-hard-failure-report.json").write_text(
+        json.dumps({
+            "status": "hard_failure",
+            "hard_failures": {"training.process_error": 1},
+            "recommend_shadow_integration": False,
+        }),
+        encoding="utf-8",
+    )
+
+    result = record_unverifiable_execution_provenance(
+        output,
+        checkout_base_commit_sha=PREREQUISITE_MERGE_SHA,
+        first_persisted_post_run_commit_sha="8" * 40,
+        evidence=["Multica run messages", "Git commit history"],
+    )
+
+    report = json.loads(
+        (output / "aggregate-report.json").read_text(encoding="utf-8")
+    )
+    assert report["hard_failures"] == {
+        "lineage.execution_source_unverifiable": 1,
+        "training.process_error": 1,
+    }
+    assert report["execution_source_provenance"]["status"] == "unverifiable"
+    assert result["private_hard_failure_report_file_sha256"] == (
         report["report_fingerprints"]["private_report_file_bytes"]["value"]
     )
 

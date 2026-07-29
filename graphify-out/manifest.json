@@ -1,12 +1,12 @@
 {
   "tool": "graphifyy",
-  "generated_at": "2026-07-28T12:49:39.269678+00:00",
-  "git_commit": "8c47e8cecc2c99c389925547d2f5205ad389cda7",
+  "generated_at": "2026-07-29T04:10:07.879436+00:00",
+  "git_commit": "b8670558b15febe5da0d72bf1b1edb4c2f1b8795",
   "target": ".",
   "mode": "code-only",
   "cluster": "--no-label --no-viz",
-  "nodes": 12910,
-  "edges": 25292,
+  "nodes": 13161,
+  "edges": 26010,
   "tracked_outputs": [
     "graphify-out/GRAPH_REPORT.md",
     "graphify-out/graph.json",
