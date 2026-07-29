@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 import scripts.dev.run_functiongemma_intent_poc as intent_poc
-import simpleclaw.evaluation.functiongemma_poc as functiongemma_poc
 from scripts.dev.run_functiongemma_intent_poc import (
     _bounded_catalog,
     _parser,
     _provider_prompt_diagnostic,
 )
+from simpleclaw.evaluation import functiongemma_poc
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
     AssetRef,
