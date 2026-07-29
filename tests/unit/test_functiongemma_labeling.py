@@ -27,6 +27,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.evaluation import functiongemma_poc
 from simpleclaw.evaluation.functiongemma_contract import (
     NO_ASSET,
     CandidateAsset,
@@ -35,6 +36,7 @@ from simpleclaw.evaluation.functiongemma_dataset import (
     SanitizedCase,
     SanitizedMessage,
 )
+from simpleclaw.evaluation.functiongemma_eval import canonical_json_sha256
 from simpleclaw.evaluation.functiongemma_labeling import (
     MAX_PROVIDER_TOKENS,
     LabelingBudget,
@@ -43,8 +45,37 @@ from simpleclaw.evaluation.functiongemma_labeling import (
     label_cases,
     labeling_public_summary,
 )
+from simpleclaw.evaluation.functiongemma_poc import (
+    PREREQUISITE_MERGE_SHA,
+    RUN_CONTRACT,
+    RUN_CONTRACT_FINGERPRINT,
+    preflight_fresh_run,
+    record_training_failure,
+    record_unverifiable_execution_provenance,
+    require_run_contract,
+    verify_current_source,
+)
 from simpleclaw.llm.models import LLMResponse, LLMRoute
 from simpleclaw.llm.router import LLMRouter
+
+
+@pytest.fixture(autouse=True)
+def _stub_verified_source_for_artifact_boundary_tests(monkeypatch) -> None:
+    """CI shallow clone과 무관하게 artifact/report 경계만 격리 검증한다."""
+    source_hashes = RUN_CONTRACT["task_owned_source"]["files"]
+    provenance = {
+        "status": "verified",
+        "prerequisite_merge_sha": PREREQUISITE_MERGE_SHA,
+        "task_owned_source_hashes": source_hashes,
+        "task_owned_source_set_fingerprint": canonical_json_sha256(
+            source_hashes
+        ),
+    }
+    monkeypatch.setattr(
+        functiongemma_poc,
+        "verify_current_source",
+        lambda *_args, **_kwargs: provenance,
+    )
 
 
 def test_default_budget_enforces_token_hard_cap() -> None:
@@ -58,6 +89,179 @@ def test_cli_default_propagates_token_hard_cap() -> None:
         "/tmp/functiongemma-private",
     ])
     assert args.max_provider_tokens == LabelingBudget().max_tokens
+
+
+def _write_run_manifest(output) -> None:
+    invalidated = output.parent / f"{output.name}-invalidated"
+    invalidated.mkdir()
+    (invalidated / "INVALIDATED.json").write_text(
+        '{"status":"invalidated"}',
+        encoding="utf-8",
+    )
+    preflight_fresh_run(
+        output,
+        invalidated_artifact_dirs=[invalidated],
+    )
+
+
+def test_clean_rerun_requires_empty_output_and_invalidation_marker(
+    tmp_path,
+) -> None:
+    invalidated = tmp_path / "old"
+    invalidated.mkdir()
+    (invalidated / "INVALIDATED.json").write_text(
+        '{"status":"invalidated"}',
+        encoding="utf-8",
+    )
+    output = tmp_path / "fresh"
+    resolved = preflight_fresh_run(
+        output,
+        invalidated_artifact_dirs=[invalidated],
+    )
+    manifest = json.loads(
+        (resolved / "run-manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["run_contract_fingerprint"] == RUN_CONTRACT_FINGERPRINT
+    assert RUN_CONTRACT["reviewed_prerequisite"]["merge_sha"] == (
+        PREREQUISITE_MERGE_SHA
+    )
+    assert manifest["execution_source_provenance"]["status"] == "verified"
+    assert manifest["execution_source_provenance"][
+        "task_owned_source_hashes"
+    ]
+    assert manifest["training_process_invocation_count"] == 0
+    assert len(manifest["invalidated_artifacts_excluded"]) == 1
+
+    with pytest.raises(FileExistsError, match="fresh"):
+        preflight_fresh_run(
+            output,
+            invalidated_artifact_dirs=[invalidated],
+        )
+
+
+def test_run_contract_rejects_missing_source_provenance(tmp_path) -> None:
+    output = tmp_path / "private"
+    _write_run_manifest(output)
+    manifest_path = output / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("execution_source_provenance")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(TypeError, match="source provenance"):
+        require_run_contract(output)
+
+
+def test_source_lock_mismatch_fails_closed() -> None:
+    relative_name = next(iter(RUN_CONTRACT["task_owned_source"]["files"]))
+    with pytest.raises(RuntimeError, match="source hash mismatch"):
+        verify_current_source(source_lock={
+            "files": {relative_name: "0" * 64},
+        })
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "returncode", "failure_key"),
+    (
+        ("disk_cap", -15, "training.disk_cap"),
+        ("time_cap", -15, "training.time_cap"),
+        ("completed", 1, "training.process_error"),
+    ),
+)
+def test_training_failure_report_preserves_real_boundary_reason(
+    tmp_path,
+    stop_reason,
+    returncode,
+    failure_key,
+) -> None:
+    output = tmp_path / "private"
+    _write_run_manifest(output)
+    (output / "lineage-manifest.json").write_text(json.dumps({
+        "provider_usage": {"provider_calls": 1},
+        "provider_payload_audit": {
+            "payload_count": 1,
+            "accepted_target_out_of_pre_call_set_count": 0,
+            "raw_identifier_match_count": 0,
+            "payload_set_fingerprint": "a" * 64,
+            "fingerprint_algorithm": "SHA-256",
+            "canonicalization": "canonical",
+        },
+    }), encoding="utf-8")
+
+    record_training_failure(output, manifest={
+        "returncode": returncode,
+        "stop_reason": stop_reason,
+        "elapsed_seconds": 1.0,
+        "artifact_bytes": 0,
+        "peak_artifact_bytes": 0,
+        "artifact_cap_bytes": 10,
+        "process_invocation_count": 1,
+        "adapter_path": str(output / "adapter"),
+        "consumed_budget": {"steps_requested": 2},
+    }, error_code="RuntimeError")
+
+    report = json.loads(
+        (output / "aggregate-report.json").read_text(encoding="utf-8")
+    )
+    assert report["hard_failures"] == {failure_key: 1}
+    assert report["training_budget"]["stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
+    assert report["recommend_shadow_integration"] is False
+    assert report["raw_text_rows"] == 0
+    assert report["report_fingerprints"]["canonical_payload"]["value"] != (
+        report["report_fingerprints"]["private_report_file_bytes"]["value"]
+    )
+    training_manifest = json.loads(
+        (output / "training-manifest.json").read_text(encoding="utf-8")
+    )
+    assert training_manifest["stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
+    run_manifest = json.loads(
+        (output / "run-manifest.json").read_text(encoding="utf-8")
+    )
+    assert run_manifest["training_stop_reason"] == failure_key.removeprefix(
+        "training."
+    )
+
+
+def test_existing_uncommitted_run_records_lineage_hard_failure(
+    tmp_path,
+) -> None:
+    output = tmp_path / "private"
+    output.mkdir()
+    (output / "run-manifest.json").write_text(
+        json.dumps({"status": "training_failed"}),
+        encoding="utf-8",
+    )
+    (output / "lineage-manifest.json").write_text("{}", encoding="utf-8")
+    (output / "private-hard-failure-report.json").write_text(
+        json.dumps({
+            "status": "hard_failure",
+            "hard_failures": {"training.process_error": 1},
+            "recommend_shadow_integration": False,
+        }),
+        encoding="utf-8",
+    )
+
+    result = record_unverifiable_execution_provenance(
+        output,
+        checkout_base_commit_sha=PREREQUISITE_MERGE_SHA,
+        first_persisted_post_run_commit_sha="8" * 40,
+        evidence=["Multica run messages", "Git commit history"],
+    )
+
+    report = json.loads(
+        (output / "aggregate-report.json").read_text(encoding="utf-8")
+    )
+    assert report["hard_failures"] == {
+        "lineage.execution_source_unverifiable": 1,
+        "training.process_error": 1,
+    }
+    assert report["execution_source_provenance"]["status"] == "unverifiable"
+    assert result["private_hard_failure_report_file_sha256"] == (
+        report["report_fingerprints"]["private_report_file_bytes"]["value"]
+    )
 
 
 def _case(number: int) -> SanitizedCase:
@@ -332,6 +536,7 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
 ) -> None:
     output = tmp_path / "private"
     output.mkdir()
+    _write_run_manifest(output)
     (output / "sanitized-cases.jsonl").write_text(
         json.dumps(_case(1).to_dict()) + "\n",
         encoding="utf-8",
@@ -371,6 +576,13 @@ async def test_production_label_wrapper_preserves_unknown_asset_reason(
         ),
         output,
     )
+    lineage = json.loads(
+        (output / "lineage-manifest.json").read_text(encoding="utf-8")
+    )
+    audit = lineage["provider_payload_audit"]
+    assert audit["payload_count"] > 0
+    assert audit["raw_identifier_match_count"] == 0
+    assert all(len(value) == 64 for value in audit["payload_fingerprints"])
 
     summary = json.loads(
         (output / "labeling-summary.json").read_text(encoding="utf-8")

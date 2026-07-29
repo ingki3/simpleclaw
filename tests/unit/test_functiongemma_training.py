@@ -103,6 +103,28 @@ def test_normal_completion_does_not_terminate(tmp_path: Path) -> None:
     assert not process.terminated
 
 
+def test_nonzero_exit_is_process_error_and_preserves_private_logs(
+    tmp_path: Path,
+) -> None:
+    class FailedProcess(_Process):
+        def poll(self):
+            self.returncode = 1
+            return self.returncode
+
+    with pytest.raises(RuntimeError, match="process_error"):
+        run_training(
+            _config(tmp_path),
+            process_factory=lambda *args, **kwargs: FailedProcess(),
+            size_reader=lambda path: 0,
+            preflight_fn=_preflight,
+        )
+    manifest = (
+        tmp_path / "training-manifest.json"
+    ).read_text(encoding="utf-8")
+    assert '"stop_reason": "process_error"' in manifest
+    assert (tmp_path / "training-stderr.log").is_file()
+
+
 @pytest.mark.parametrize(
     ("finish_after_polls", "sizes"),
     [
@@ -177,3 +199,31 @@ def test_timeout_uses_kill_after_terminate_grace(tmp_path: Path) -> None:
         )
     assert process.terminated
     assert process.killed
+
+
+def test_manifest_records_exactly_one_invocation_and_adapter(
+    tmp_path: Path,
+) -> None:
+    process = _Process(finish_after_polls=1)
+    adapter = tmp_path / "adapter"
+
+    def size(path):
+        (adapter / "adapter.safetensors").write_bytes(b"x")
+        return 1
+
+    result = run_training(
+        _config(tmp_path),
+        process_factory=lambda *args, **kwargs: process,
+        size_reader=size,
+        preflight_fn=_preflight,
+    )
+    assert result["process_invocation_count"] == 1
+    assert result["adapter_path"] == str(adapter.resolve())
+    assert result["consumed_budget"]["steps_requested"] == 2
+
+    with pytest.raises(ValueError, match="exactly one"):
+        run_training(
+            _config(tmp_path / "second"),
+            process_invocation_count=2,
+            preflight_fn=_preflight,
+        )

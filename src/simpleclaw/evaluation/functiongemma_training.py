@@ -92,6 +92,7 @@ def _stop_process(
 def run_training(
     config: TrainingConfig,
     *,
+    process_invocation_count: int = 1,
     process_factory: Callable[..., Any] = subprocess.Popen,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
@@ -101,6 +102,8 @@ def run_training(
     preflight_fn: Callable[[], dict[str, Any]] = preflight,
 ) -> dict[str, Any]:
     """resume을 거부하고 tracker 업로드를 끈 단일 MLX QLoRA run을 실행한다."""
+    if process_invocation_count != 1:
+        raise ValueError("PoC requires exactly one training process invocation")
     preflight_data = preflight_fn()
     adapter = Path(config.adapter_path)
     if adapter.exists() and any(adapter.iterdir()):
@@ -135,31 +138,40 @@ def run_training(
         "SWANLAB_MODE": "disabled",
     }
     started = clock()
-    process = process_factory(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        env=environment,
-    )
-    stop_reason = "completed"
-    peak_size = 0
-    while process.poll() is None:
-        elapsed = clock() - started
-        size = size_reader(adapter)
-        peak_size = max(peak_size, size)
-        if size >= config.max_artifact_bytes:
-            stop_reason = "disk_cap"
-            _stop_process(process, grace_seconds=terminate_grace_seconds)
-            break
-        if elapsed >= config.max_seconds:
-            stop_reason = "time_cap"
-            _stop_process(process, grace_seconds=terminate_grace_seconds)
-            break
-        sleeper(poll_interval)
-    stdout, stderr = process.communicate()
-    stdout = stdout or ""
-    stderr = stderr or ""
+    stdout_path = adapter.parent / "training-stdout.log"
+    stderr_path = adapter.parent / "training-stderr.log"
+    stdout_fd = os.open(stdout_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(stdout_fd, "w", encoding="utf-8") as stdout_handle, os.fdopen(
+        stderr_fd,
+        "w",
+        encoding="utf-8",
+    ) as stderr_handle:
+        process = process_factory(
+            command,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+            env=environment,
+        )
+        stop_reason = "completed"
+        peak_size = 0
+        while process.poll() is None:
+            elapsed = clock() - started
+            size = size_reader(adapter)
+            peak_size = max(peak_size, size)
+            if size >= config.max_artifact_bytes:
+                stop_reason = "disk_cap"
+                _stop_process(process, grace_seconds=terminate_grace_seconds)
+                break
+            if elapsed >= config.max_seconds:
+                stop_reason = "time_cap"
+                _stop_process(process, grace_seconds=terminate_grace_seconds)
+                break
+            sleeper(poll_interval)
+        process.communicate()
+    stdout = stdout_path.read_text(encoding="utf-8", errors="replace")
+    stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
     elapsed = clock() - started
     size = size_reader(adapter)
     peak_size = max(peak_size, size)
@@ -168,16 +180,26 @@ def run_training(
             stop_reason = "disk_cap"
         elif elapsed >= config.max_seconds:
             stop_reason = "time_cap"
+        elif process.returncode:
+            stop_reason = "process_error"
     manifest = {
         **preflight_data,
         "config": asdict(config),
         "command": command,
+        "process_invocation_count": process_invocation_count,
+        "adapter_path": str(adapter.resolve()),
         "elapsed_seconds": elapsed,
         "returncode": process.returncode,
         "artifact_bytes": size,
         "peak_artifact_bytes": peak_size,
         "artifact_cap_bytes": config.max_artifact_bytes,
         "stop_reason": stop_reason,
+        "consumed_budget": {
+            "elapsed_seconds": elapsed,
+            "steps_requested": config.steps,
+            "artifact_bytes": size,
+            "peak_artifact_bytes": peak_size,
+        },
         "stdout_tail": stdout[-4000:],
         "stderr_tail": stderr[-4000:],
     }

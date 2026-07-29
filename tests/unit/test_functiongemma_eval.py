@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 from simpleclaw.evaluation.functiongemma_contract import (
     NO_ASSET,
     CandidateAsset,
@@ -10,8 +14,10 @@ from simpleclaw.evaluation.functiongemma_contract import (
 from simpleclaw.evaluation.functiongemma_dataset import SanitizedCase
 from simpleclaw.evaluation.functiongemma_eval import (
     InferenceResult,
+    canonical_json_sha256,
     comparison_report,
     evaluate_predictions,
+    file_sha256,
 )
 from simpleclaw.evaluation.functiongemma_labeling import LabeledCase
 
@@ -83,3 +89,24 @@ def test_input_order_must_match() -> None:
         assert "order" in str(exc)
     else:
         raise AssertionError("order mismatch must fail")
+
+
+def test_canonical_payload_and_file_byte_hashes_are_independent(
+    tmp_path: Path,
+) -> None:
+    value = {"한글": "값", "count": 1}
+    canonical = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    path = tmp_path / "report.json"
+    path.write_text(
+        json.dumps(value, ensure_ascii=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    assert canonical_json_sha256(value) == hashlib.sha256(canonical).hexdigest()
+    assert file_sha256(path) == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert canonical_json_sha256(value) != file_sha256(path)
