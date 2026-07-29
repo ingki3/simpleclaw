@@ -1,4 +1,4 @@
-"""BIZ-519 embedding pre-warm startup contract tests."""
+"""BIZ-519 embedding pre-warm 시작 순서와 fail-open 계약 테스트."""
 
 from __future__ import annotations
 
