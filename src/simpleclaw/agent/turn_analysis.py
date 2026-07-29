@@ -81,6 +81,7 @@ _TURN_ANALYSIS_FIELDS = [
     "intents",
     "route",
     "complexity_score",
+    "evidence_required",
     "needs_current_facts",
     "needs_rules",
     "needs_remaining_variables",
@@ -173,6 +174,13 @@ TURN_ANALYSIS_RESPONSE_SCHEMA: dict = {
             "maximum": 10,
             "description": "Overall complexity score from 0 to 10.",
         },
+        "evidence_required": {
+            "type": "boolean",
+            "description": (
+                "Whether externally verifiable current-turn evidence is required "
+                "before a factual final answer."
+            ),
+        },
         "needs_current_facts": {"type": "boolean"},
         "needs_rules": {"type": "boolean"},
         "needs_remaining_variables": {"type": "boolean"},
@@ -217,6 +225,9 @@ class TurnAnalysis:
     intents: tuple[str, ...] = ()
     route: ResponseRoute = ResponseRoute.STANDARD_TOOL_LOOP
     complexity_score: int = 0
+    # BIZ-520 rollback-window adapter. UnifiedTurnPlan.fact_check.required가
+    # primary SoT이며 BIZ-497 legacy cleanup에서 이 필드는 함께 제거한다.
+    evidence_required: bool = False
     needs_current_facts: bool = False
     needs_rules: bool = False
     needs_remaining_variables: bool = False
@@ -301,6 +312,15 @@ def _build_turn_analysis(data: dict, *, original_text: str) -> TurnAnalysis:
         if route_value in _ALLOWED_ROUTES
         else ResponseRoute.STANDARD_TOOL_LOOP
     )
+    needs_current_facts = bool(data.get("needs_current_facts", False))
+    if route is ResponseRoute.CURRENT_FACT_GUARDED_LOOP:
+        needs_current_facts = True
+    if (
+        needs_current_facts
+        and route is ResponseRoute.STANDARD_TOOL_LOOP
+    ):
+        route = ResponseRoute.CURRENT_FACT_GUARDED_LOOP
+    evidence_required = bool(data.get("evidence_required", False)) or needs_current_facts
 
     # 정규화 질문이 비면 원문으로 되돌린다 — 실행 입력이 비는 사고 방지.
     normalized = str(data.get("normalized_question") or original_text).strip() or original_text
@@ -324,7 +344,8 @@ def _build_turn_analysis(data: dict, *, original_text: str) -> TurnAnalysis:
         intents=tuple(_string_list(data.get("intents"))),
         route=route,
         complexity_score=max(0, min(10, _int(data.get("complexity_score"), 0))),
-        needs_current_facts=bool(data.get("needs_current_facts", False)),
+        evidence_required=evidence_required,
+        needs_current_facts=needs_current_facts,
         needs_rules=bool(data.get("needs_rules", False)),
         needs_remaining_variables=bool(data.get("needs_remaining_variables", False)),
         needs_calculation=bool(data.get("needs_calculation", False)),
@@ -463,6 +484,11 @@ def repair_turn_analysis_payload(
         return None
     if any(field_name not in data for field_name in _REPAIR_REQUIRED_FIELDS):
         return None
+    # BIZ-521 — evidence decision 이전에서 잘린 LLM payload를 optional로
+    # 복구하면 검증되지 않은 factual final이 통과한다. 결정 필드가 없으면
+    # current turn은 required로 fail-closed한다.
+    if "evidence_required" not in data:
+        data["evidence_required"] = True
     return _build_turn_analysis(data, original_text=original_text)
 
 

@@ -130,6 +130,103 @@ async def test_orchestrator_uses_llm_normalized_question_for_tool_loop(
 
 
 @pytest.mark.asyncio
+async def test_legacy_two_turn_drama_followup_preserves_collector_query(
+    config_file,
+    monkeypatch,
+):
+    """legacy analyzer도 실제 최근 대화에서 네 단서를 분리해 보존한다."""
+
+    orch = AgentOrchestrator(config_file)
+    analyzer_inputs = []
+
+    async def fake_analyzer(text, *, recent_messages, **_kwargs):
+        analyzer_inputs.append((text, recent_messages))
+        prior_users = [
+            message["content"]
+            for message in recent_messages
+            if message["role"] == "user"
+            and "이런 엿같은 사랑" in message["content"]
+        ]
+        if not prior_users:
+            normalized_question = (
+                '"이런 엿같은 사랑"에서 정해영이 맡은 등장인물을 찾아줘'
+            )
+            is_followup = False
+        else:
+            assert len(prior_users) == 1
+            assert "정해영" in prior_users[0]
+            assert "Netflix" in text
+            assert "하영" in text
+            normalized_question = (
+                '"이런 엿같은 사랑" Netflix 드라마에서 하영과 '
+                "정해영 등장인물을 찾아줘"
+            )
+            is_followup = True
+        return TurnAnalysis(
+            original_text=text,
+            normalized_question=normalized_question,
+            is_followup=is_followup,
+            confidence=0.94,
+            domains=("entertainment",),
+            intents=("drama_info",),
+            route=ResponseRoute.STANDARD_TOOL_LOOP,
+            evidence_required=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        fake_analyzer,
+    )
+    collector = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: drama (1 results)\n"
+            '1. "이런 엿같은 사랑" Netflix 등장인물\n'
+            "URL: https://www.netflix.com/example\n"
+            "Snippet: 하영과 정해영 cast metadata"
+        )
+    )
+    monkeypatch.setattr(orch, "_dispatch_tool_call", collector)
+    orch._router.send = AsyncMock(
+        return_value=LLMResponse(text="검증된 등장인물 답변", model="test")
+    )
+
+    initial = await orch.process_message(
+        '"이런 엿같은 사랑"에서 정해영이 맡은 등장인물을 찾아줘.',
+        user_id=1,
+        chat_id=1,
+    )
+    followup = await orch.process_message(
+        "Netflix에서 봤고 하영이 나왔어. 그 작품 등장인물 다시 찾아줘.",
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert initial == "검증된 등장인물 답변"
+    assert followup == initial
+    assert len(analyzer_inputs) == 2
+    assert any(
+        message["role"] == "user"
+        and "이런 엿같은 사랑" in message["content"]
+        and "정해영" in message["content"]
+        for message in analyzer_inputs[1][1]
+    )
+    assert collector.await_count == 2
+    call = collector.await_args_list[-1].args[0]
+    assert call.name == "web_search"
+    final_query = call.arguments["query"]
+    for clue in ("이런 엿같은 사랑", "Netflix", "하영", "정해영"):
+        assert clue in final_query
+    assert "하영(정해영)" not in final_query
+    request = orch._router.send.await_args_list[-1].args[0]
+    assert "https://www.netflix.com/example" not in request.system_prompt
+    assert any(
+        "https://www.netflix.com/example" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_original_text_is_saved_not_normalized_question(
     config_file, monkeypatch
 ):

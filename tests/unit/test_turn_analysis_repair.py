@@ -104,6 +104,19 @@ def test_repair_rejects_payload_cut_before_core_fields():
     assert repair_turn_analysis_payload(payload, original_text="원문") is None
 
 
+def test_repair_missing_evidence_decision_fails_closed() -> None:
+    payload = (
+        '{"normalized_question":"\\"이런 엿같은 사랑\\" 등장인물을 찾아줘",'
+        '"route":"standard_tool_loop","complexity_score":1,'
+    )
+
+    analysis = repair_turn_analysis_payload(payload, original_text="원문")
+
+    assert analysis is not None
+    assert analysis.source == "llm"
+    assert analysis.evidence_required is True
+
+
 def test_repair_rejects_non_object_payload():
     assert repair_turn_analysis_payload('["not","an","obj', original_text="x") is None
     assert repair_turn_analysis_payload("plain text", original_text="x") is None

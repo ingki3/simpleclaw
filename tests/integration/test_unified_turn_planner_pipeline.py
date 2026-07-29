@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
@@ -240,3 +243,133 @@ async def test_canary_direct_answer_runs_plan_gate_and_primary_execution(
 
     assert result == "정적 설명입니다."
     assert planner_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_two_turn_drama_followup_preserves_context_in_collector_query(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """실제 2턴 후보에서 제목·플랫폼·서로 다른 인물 단서를 보존한다."""
+
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    planner_inputs = []
+
+    async def fake_planner(text, *, candidates, catalog, **_kwargs):
+        planner_inputs.append((text, candidates))
+        initial_candidates = [
+            candidate
+            for candidate in candidates.candidates
+            if candidate.role == "user"
+            and "이런 엿같은 사랑" in candidate.content
+        ]
+        if not initial_candidates:
+            selected_ids = ()
+            standalone_question = (
+                '"이런 엿같은 사랑"에서 정해영이 맡은 등장인물을 찾아줘'
+            )
+            entities = ("이런 엿같은 사랑", "정해영")
+            search_query = '"이런 엿같은 사랑" 정해영 등장인물'
+            required_claims = ("정해영",)
+        else:
+            assert len(initial_candidates) == 1
+            initial_candidate = initial_candidates[0]
+            assert "정해영" in initial_candidate.content
+            assert "Netflix" in text
+            assert "하영" in text
+            selected_ids = (initial_candidate.turn_id,)
+            standalone_question = (
+                '"이런 엿같은 사랑" Netflix 드라마에서 하영과 '
+                "정해영 등장인물을 찾아줘"
+            )
+            entities = ("이런 엿같은 사랑", "Netflix", "하영", "정해영")
+            search_query = '"이런 엿같은 사랑" Netflix 하영 정해영 등장인물'
+            required_claims = ("하영", "정해영")
+
+        plan = _plan(
+            fingerprint=catalog.fingerprint,
+            selected_ids=selected_ids,
+        )
+        return replace(
+            plan,
+            original_text=text,
+            context=replace(
+                plan.context,
+                standalone_question=standalone_question,
+            ),
+            domains=("entertainment",),
+            intents=("drama_info",),
+            fact_check=replace(
+                plan.fact_check,
+                domain="entertainment",
+                entities=entities,
+                search_query=search_query,
+                required_claims=required_claims,
+                freshness_required=False,
+            ),
+            execution=replace(
+                plan.execution,
+                mode=ExecutionMode.FACT_CHECK,
+            ),
+        )
+
+    search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: drama (1 results)\n"
+            '1. "이런 엿같은 사랑" Netflix 등장인물\n'
+            "URL: https://www.netflix.com/example\n"
+            "Snippet: 하영과 정해영 cast metadata"
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        search,
+    )
+
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return LLMResponse(text="검증된 등장인물 답변", model="test")
+
+    orchestrator._router.send = fake_send
+    initial = await orchestrator.process_message(
+        '"이런 엿같은 사랑"에서 정해영이 맡은 등장인물을 찾아줘.',
+        user_id=1,
+        chat_id=1,
+    )
+    followup = await orchestrator.process_message(
+        "Netflix에서 봤고 하영이 나왔어. 그 작품 등장인물 다시 찾아줘.",
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert initial == "검증된 등장인물 답변"
+    assert followup == initial
+    assert len(planner_inputs) == 2
+    second_candidates = planner_inputs[1][1].candidates
+    assert any(
+        candidate.role == "user"
+        and "이런 엿같은 사랑" in candidate.content
+        and "정해영" in candidate.content
+        for candidate in second_candidates
+    )
+    assert search.await_count == 2
+    final_query = search.await_args_list[-1].args[0]["query"]
+    for clue in ("이런 엿같은 사랑", "Netflix", "하영", "정해영"):
+        assert clue in final_query
+    assert "하영(정해영)" not in final_query
+    assert len(seen_requests) == 2
+    assert all(
+        "Validated Current-Turn Evidence" not in request.system_prompt
+        for request in seen_requests
+    )
+    assert any(
+        "https://www.netflix.com/example" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in seen_requests[-1].messages
+    )

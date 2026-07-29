@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
     ContextRelation,
@@ -95,7 +96,7 @@ class PlanGate:
             )
 
         self._validate_context(plan, candidates, violations)
-        self._validate_execution_and_facts(plan, violations)
+        self._validate_execution_and_facts(plan, catalog, violations)
         self._validate_catalog_scope(
             plan,
             catalog,
@@ -244,10 +245,19 @@ class PlanGate:
     @staticmethod
     def _validate_execution_and_facts(
         plan: UnifiedTurnPlan,
+        catalog: PlannerCatalog,
         violations: list[PlanViolation],
     ) -> None:
         mode = plan.execution.mode
         fact_check = plan.fact_check
+        approved_collectors = approved_collectors_from_plan(plan, catalog=catalog)
+        has_applicable_collector = (
+            bool(approved_collectors - {"web_fetch"})
+            or (
+                "web_fetch" in approved_collectors
+                and fact_check.search_query.startswith(("http://", "https://"))
+            )
+        )
         if (
             mode is ExecutionMode.EXECUTE_ASSET
             and plan.execution.primary_asset is None
@@ -272,6 +282,17 @@ class PlanGate:
                 )
             )
         if (
+            fact_check.required
+            and fact_check.owner is EvidenceOwner.NONE
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.owner_required",
+                    "fact_check.owner",
+                    "Required evidence must have a planner or asset owner.",
+                )
+            )
+        if (
             current_fact_mode
             and fact_check.owner is not EvidenceOwner.PLANNER
         ):
@@ -282,12 +303,51 @@ class PlanGate:
                     "Current-fact execution must be owned by the planner.",
                 )
             )
-        if current_fact_mode and not fact_check.search_query.strip():
+        if (
+            fact_check.required
+            and fact_check.owner is EvidenceOwner.PLANNER
+            and mode
+            not in {
+                ExecutionMode.TOOL_LOOP,
+                ExecutionMode.FACT_CHECK,
+                ExecutionMode.COMPLEX_FACT,
+            }
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.evidence_capable_mode_required",
+                    "execution.mode",
+                    "Planner-owned required evidence needs an evidence-capable execution mode.",
+                )
+            )
+        if (
+            fact_check.required
+            and fact_check.owner is EvidenceOwner.PLANNER
+            and not fact_check.search_query.strip()
+        ):
             violations.append(
                 _violation(
                     "fact_check.search_query_required",
                     "fact_check.search_query",
-                    "Current-fact execution requires a bounded search query.",
+                    "Planner-owned required evidence needs a bounded search query.",
+                )
+            )
+        if (
+            fact_check.required
+            and fact_check.owner is EvidenceOwner.PLANNER
+            and mode
+            in {
+                ExecutionMode.TOOL_LOOP,
+                ExecutionMode.FACT_CHECK,
+                ExecutionMode.COMPLEX_FACT,
+            }
+            and not has_applicable_collector
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.collector_required",
+                    "execution.allowed_tools",
+                    "Planner-owned required evidence needs an allowed collector.",
                 )
             )
         if mode is ExecutionMode.RECIPE:

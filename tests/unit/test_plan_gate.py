@@ -282,6 +282,132 @@ def test_current_fact_invariants_fail_closed(
     assert code in {item.code for item in result.violations}
 
 
+@pytest.mark.parametrize(
+    ("mode", "allowed_tools", "code"),
+    [
+        (
+            ExecutionMode.DIRECT_ANSWER,
+            ("web_search",),
+            "fact_check.evidence_capable_mode_required",
+        ),
+        (
+            ExecutionMode.TOOL_LOOP,
+            (),
+            "fact_check.collector_required",
+        ),
+        (
+            ExecutionMode.TOOL_LOOP,
+            ("web_fetch",),
+            "fact_check.collector_required",
+        ),
+    ],
+)
+def test_required_fact_check_reverse_invariant_fails_closed(
+    mode: ExecutionMode,
+    allowed_tools: tuple[str, ...],
+    code: str,
+) -> None:
+    assets = tuple(
+        _asset(name, asset_type="native_tool")
+        for name in allowed_tools
+    )
+    result = PlanGate().evaluate(
+        _plan(
+            mode=mode,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="낯선 작품 등장인물",
+            allowed_tools=allowed_tools,
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(*assets),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert code in {item.code for item in result.violations}
+
+
+def test_required_fact_check_accepts_approved_non_web_collector() -> None:
+    file_read = _asset("file_read", asset_type="native_tool")
+    result = PlanGate().evaluate(
+        _plan(
+            mode=ExecutionMode.TOOL_LOOP,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="workspace drama catalog",
+            allowed_tools=("file_read",),
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(file_read),
+    )
+
+    assert result.status is GateStatus.PASS
+
+
+def test_required_fact_check_rejects_side_effecting_non_web_collector() -> None:
+    unsafe_file_read = _asset(
+        "file_read",
+        asset_type="native_tool",
+        read_only=False,
+        side_effects=True,
+    )
+    result = PlanGate().evaluate(
+        _plan(
+            mode=ExecutionMode.TOOL_LOOP,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="workspace drama catalog",
+            allowed_tools=("file_read",),
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(unsafe_file_read),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.collector_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_required_fact_check_accepts_selected_read_only_skill_collector() -> None:
+    execute_skill = _asset("execute_skill", asset_type="native_tool")
+    calendar_skill = _asset("google-calendar-skill", asset_type="skill")
+    result = PlanGate().evaluate(
+        _plan(
+            mode=ExecutionMode.TOOL_LOOP,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="calendar events today",
+            allowed_assets=(AssetRef("skill", "google-calendar-skill"),),
+            allowed_tools=("execute_skill",),
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(execute_skill, calendar_skill),
+    )
+
+    assert result.status is GateStatus.PASS
+
+
+def test_required_fact_check_rejects_unbound_skill_adapter() -> None:
+    execute_skill = _asset("execute_skill", asset_type="native_tool")
+    result = PlanGate().evaluate(
+        _plan(
+            mode=ExecutionMode.TOOL_LOOP,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="calendar events today",
+            allowed_tools=("execute_skill",),
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(execute_skill),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.collector_required" in {
+        item.code for item in result.violations
+    }
+
+
 def test_unknown_asset_and_recipe_type_mismatch_request_repair() -> None:
     unknown = AssetRef("skill", "missing")
     result = PlanGate().evaluate(
