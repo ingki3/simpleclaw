@@ -282,6 +282,51 @@ def test_current_fact_invariants_fail_closed(
     assert code in {item.code for item in result.violations}
 
 
+@pytest.mark.parametrize(
+    ("mode", "allowed_tools", "code"),
+    [
+        (
+            ExecutionMode.DIRECT_ANSWER,
+            ("web_search",),
+            "fact_check.evidence_capable_mode_required",
+        ),
+        (
+            ExecutionMode.TOOL_LOOP,
+            (),
+            "fact_check.collector_required",
+        ),
+        (
+            ExecutionMode.TOOL_LOOP,
+            ("web_fetch",),
+            "fact_check.collector_required",
+        ),
+    ],
+)
+def test_required_fact_check_reverse_invariant_fails_closed(
+    mode: ExecutionMode,
+    allowed_tools: tuple[str, ...],
+    code: str,
+) -> None:
+    assets = tuple(
+        _asset(name, asset_type="native_tool")
+        for name in allowed_tools
+    )
+    result = PlanGate().evaluate(
+        _plan(
+            mode=mode,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="낯선 작품 등장인물",
+            allowed_tools=allowed_tools,
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(*assets),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert code in {item.code for item in result.violations}
+
+
 def test_unknown_asset_and_recipe_type_mismatch_request_repair() -> None:
     unknown = AssetRef("skill", "missing")
     result = PlanGate().evaluate(

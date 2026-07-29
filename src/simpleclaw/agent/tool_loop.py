@@ -26,6 +26,15 @@ from simpleclaw.agent.clarify import (
     clarify_chat_id_var,
     normalize_options,
 )
+from simpleclaw.agent.evidence_policy import (
+    EvidenceRequirement,
+    EvidenceState,
+    EvidenceStatus,
+    assess_tool_result,
+    format_evidence_context,
+    limited_fallback,
+    no_evidence_requirement,
+)
 from simpleclaw.agent.file_mutation_tracker import format_footer
 from simpleclaw.agent.progress import (
     ProgressCallback,
@@ -169,6 +178,11 @@ class ToolLoopState:
     on_progress: ProgressCallback | None = None
     operator_tools: bool = False
     allow_cron_mutation: bool = True
+    evidence_requirement: EvidenceRequirement = field(
+        default_factory=no_evidence_requirement
+    )
+    evidence_state: EvidenceState | None = None
+    attempted_collectors: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -448,6 +462,130 @@ class ToolLoopRunner:
         """tool loop를 실행하고 생성된 final 및 실행 실패 상태를 그대로 반환한다."""
         return await self._run(state)
 
+    @staticmethod
+    def _inject_evidence_context(state: ToolLoopState) -> None:
+        evidence = state.evidence_state
+        if evidence is None or not evidence.usable:
+            return
+        context = format_evidence_context(evidence)
+        if "## Validated Current-Turn Evidence" in state.system_prompt:
+            return
+        state.system_prompt = "\n\n".join(
+            part for part in (state.system_prompt, context) if part
+        )
+        state.system_blocks = [*state.system_blocks, SystemBlock(text=context)]
+
+    async def _collect_required_evidence(
+        self,
+        state: ToolLoopState,
+        *,
+        action_ledger: ActionResultLedger,
+        trace: list[ToolTraceStep],
+        tool_results_for_empty_final: list[tuple[str, str]],
+    ) -> ToolLoopResult | None:
+        """Collect once before generation, without synthetic assistant tool history."""
+
+        requirement = state.evidence_requirement
+        if not requirement.required:
+            return None
+        if state.evidence_state is None:
+            state.evidence_state = requirement.initial_state()
+        if state.evidence_state.usable:
+            self._inject_evidence_context(state)
+            return None
+        if (
+            state.evidence_state.attempted
+            and state.evidence_state.status is EvidenceStatus.NOT_FOUND
+        ):
+            return ToolLoopResult(
+                limited_fallback(state.evidence_state),
+                trace=trace,
+                success=False,
+            )
+
+        collector = ""
+        arguments: dict[str, Any] = {}
+        if (
+            "web_search" in requirement.allowed_collectors
+            and "web_search" not in state.attempted_collectors
+        ):
+            collector = "web_search"
+            arguments = {"query": requirement.query, "limit": 5}
+        elif (
+            "web_fetch" in requirement.allowed_collectors
+            and "web_fetch" not in state.attempted_collectors
+            and requirement.query.startswith(("http://", "https://"))
+        ):
+            collector = "web_fetch"
+            arguments = {"url": requirement.query}
+
+        if not collector:
+            return ToolLoopResult(
+                limited_fallback(state.evidence_state),
+                trace=trace,
+                success=False,
+            )
+
+        tool_call = ToolCall(
+            id=f"evidence-controller-{collector}",
+            name=collector,
+            arguments=arguments,
+        )
+        state.attempted_collectors.add(collector)
+        try:
+            dispatch = self._orchestrator._dispatch_tool_call
+            dispatch_params = inspect.signature(dispatch).parameters
+            dispatch_kwargs: dict[str, Any] = {}
+            if "operator_tools" in dispatch_params:
+                dispatch_kwargs["operator_tools"] = state.operator_tools
+            if "allow_cron_mutation" in dispatch_params:
+                dispatch_kwargs["allow_cron_mutation"] = state.allow_cron_mutation
+            if (
+                state.execution_scope is not None
+                and "execution_scope" in dispatch_params
+            ):
+                dispatch_kwargs["execution_scope"] = state.execution_scope
+            result = (
+                await dispatch(tool_call, **dispatch_kwargs)
+                if dispatch_kwargs
+                else await dispatch(tool_call)
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = f"Error: {collector} failed — {type(exc).__name__}"
+
+        sanitized = sanitize_tool_output(result)
+        state.evidence_state = assess_tool_result(
+            requirement,
+            tool_name=collector,
+            output=sanitized,
+        )
+        trace.append(
+            ToolTraceStep(
+                tool_name=collector,
+                arguments=_redacted_arguments(arguments),
+                observation_preview=sanitized[:1200],
+                success=state.evidence_state.usable,
+            )
+        )
+        tool_results_for_empty_final.append((collector, sanitized))
+        action_ledger.append(
+            infer_action_result(
+                step_index=len(action_ledger.results) + 1,
+                tool_name=collector,
+                tool_call_id=tool_call.id,
+                arguments=arguments,
+                sanitized_output=sanitized,
+            )
+        )
+        if not state.evidence_state.usable:
+            return ToolLoopResult(
+                limited_fallback(state.evidence_state),
+                trace=trace,
+                success=False,
+            )
+        self._inject_evidence_context(state)
+        return None
+
     async def _run(self, state: ToolLoopState) -> ToolLoopResult:
         """LLM 호출과 tool observation 누적을 반복하고 최종 텍스트를 반환한다."""
         logger.info(
@@ -461,6 +599,14 @@ class ToolLoopRunner:
         trace: list[ToolTraceStep] = []
         agent_browser_call_count = 0
         prev_snapshot = state.previous_mutation_snapshot
+        evidence_blocked = await self._collect_required_evidence(
+            state,
+            action_ledger=action_ledger,
+            trace=trace,
+            tool_results_for_empty_final=tool_results_for_empty_final,
+        )
+        if evidence_blocked is not None:
+            return evidence_blocked
 
         for i in range(self._orchestrator._max_tool_iterations):
             try:
@@ -503,6 +649,23 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
+                    if (
+                        state.evidence_requirement.required
+                        and (
+                            state.evidence_state is None
+                            or not state.evidence_state.usable
+                        )
+                    ):
+                        evidence = (
+                            state.evidence_state
+                            or state.evidence_requirement.initial_state()
+                        )
+                        return ToolLoopResult(
+                            limited_fallback(evidence),
+                            trace=trace,
+                            iterations=i + 1,
+                            success=False,
+                        )
                     return ToolLoopResult(final_text, trace=trace, iterations=i + 1)
                 if tool_results_for_empty_final:
                     logger.warning(
@@ -591,24 +754,32 @@ class ToolLoopRunner:
                     ProgressEvent(progress_kind, progress_name, "start", tc.arguments),
                 )
                 try:
-                    dispatch = self._orchestrator._dispatch_tool_call
-                    dispatch_params = inspect.signature(dispatch).parameters
-                    dispatch_kwargs: dict[str, Any] = {}
-                    if "operator_tools" in dispatch_params:
-                        dispatch_kwargs["operator_tools"] = state.operator_tools
-                    if "allow_cron_mutation" in dispatch_params:
-                        dispatch_kwargs["allow_cron_mutation"] = state.allow_cron_mutation
                     if (
-                        state.execution_scope is not None
-                        and "execution_scope" in dispatch_params
+                        state.evidence_requirement.required
+                        and state.evidence_state is not None
+                        and state.evidence_state.usable
+                        and tc.name in {"web_search", "web_fetch"}
                     ):
-                        dispatch_kwargs["execution_scope"] = state.execution_scope
-                    if dispatch_kwargs:
-                        result = await dispatch(tc, **dispatch_kwargs)
+                        result = state.evidence_state.evidence_text
                     else:
-                        # 기존 테스트/플러그인이 _dispatch_tool_call(tc) 형태로
-                        # monkeypatch한 경우를 보존한다.
-                        result = await dispatch(tc)
+                        dispatch = self._orchestrator._dispatch_tool_call
+                        dispatch_params = inspect.signature(dispatch).parameters
+                        dispatch_kwargs: dict[str, Any] = {}
+                        if "operator_tools" in dispatch_params:
+                            dispatch_kwargs["operator_tools"] = state.operator_tools
+                        if "allow_cron_mutation" in dispatch_params:
+                            dispatch_kwargs["allow_cron_mutation"] = state.allow_cron_mutation
+                        if (
+                            state.execution_scope is not None
+                            and "execution_scope" in dispatch_params
+                        ):
+                            dispatch_kwargs["execution_scope"] = state.execution_scope
+                        if dispatch_kwargs:
+                            result = await dispatch(tc, **dispatch_kwargs)
+                        else:
+                            # 기존 테스트/플러그인이 _dispatch_tool_call(tc) 형태로
+                            # monkeypatch한 경우를 보존한다.
+                            result = await dispatch(tc)
                 except Exception as exc:
                     await emit_progress_event(
                         state.on_progress,
@@ -646,6 +817,18 @@ class ToolLoopRunner:
                         sanitized_output=sanitized,
                     )
                 )
+                if (
+                    state.evidence_requirement.required
+                    and tc.name in {"web_search", "web_fetch"}
+                ):
+                    state.attempted_collectors.add(tc.name)
+                    state.evidence_state = assess_tool_result(
+                        state.evidence_requirement,
+                        tool_name=tc.name,
+                        output=sanitized,
+                    )
+                    if state.evidence_state.usable:
+                        self._inject_evidence_context(state)
                 state.messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -677,6 +860,23 @@ class ToolLoopRunner:
                 prev_snapshot=prev_snapshot,
             )
 
+        if (
+            state.evidence_requirement.required
+            and (
+                state.evidence_state is None
+                or not state.evidence_state.usable
+            )
+        ):
+            evidence = (
+                state.evidence_state
+                or state.evidence_requirement.initial_state()
+            )
+            return ToolLoopResult(
+                limited_fallback(evidence),
+                trace=trace,
+                iterations=self._orchestrator._max_tool_iterations,
+                success=False,
+            )
         forced_text = await self._force_final_answer(state, invoked_tool_sequence)
         return ToolLoopResult(forced_text, trace=trace, iterations=self._orchestrator._max_tool_iterations)
 

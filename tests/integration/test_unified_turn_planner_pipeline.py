@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
@@ -240,3 +243,73 @@ async def test_canary_direct_answer_runs_plan_gate_and_primary_execution(
 
     assert result == "정적 설명입니다."
     assert planner_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_required_fact_plan_collects_before_no_tool_final(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """fact_check.required가 collector와 finalization gate까지 연결된다."""
+
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        plan = _plan(fingerprint=catalog.fingerprint, selected_ids=())
+        return replace(
+            plan,
+            context=replace(
+                plan.context,
+                standalone_question='"이런 엿같은 사랑" Netflix 등장인물을 확인해줘',
+            ),
+            domains=("entertainment",),
+            intents=("drama_info",),
+            fact_check=replace(
+                plan.fact_check,
+                domain="entertainment",
+                entities=("이런 엿같은 사랑", "Netflix", "하영", "정해영"),
+                search_query='"이런 엿같은 사랑" Netflix 하영 정해영 등장인물',
+                freshness_required=False,
+            ),
+            execution=replace(
+                plan.execution,
+                mode=ExecutionMode.FACT_CHECK,
+            ),
+        )
+
+    search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: drama (1 results)\n"
+            "1. Netflix cast page\n"
+            "URL: https://www.netflix.com/example\n"
+            "Snippet: cast metadata"
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        search,
+    )
+
+    seen_requests = []
+
+    async def fake_send(request):
+        seen_requests.append(request)
+        return LLMResponse(text="검증된 등장인물 답변", model="test")
+
+    orchestrator._router.send = fake_send
+    result = await orchestrator.process_message(
+        '"이런 엿같은 사랑"이라는 드라마 등장인물 찾아줘.',
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert result == "검증된 등장인물 답변"
+    search.assert_awaited_once()
+    assert "이런 엿같은 사랑" in search.call_args.args[0]["query"]
+    assert len(seen_requests) == 1
+    assert "Validated Current-Turn Evidence" in seen_requests[0].system_prompt
+    assert "https://www.netflix.com/example" in seen_requests[0].system_prompt

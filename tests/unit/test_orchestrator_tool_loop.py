@@ -16,6 +16,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent.evidence_policy import (
+    EvidenceFreshness,
+    EvidenceRequirement,
+    EvidenceSourceType,
+    EvidenceState,
+    EvidenceStatus,
+)
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
@@ -95,6 +102,116 @@ def test_tool_loop_runner_contract_is_importable():
         "selected_turn_ids",
     }
     assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
+
+
+@pytest.mark.asyncio
+async def test_required_evidence_collects_before_accepting_no_tool_final(
+    config_file,
+    monkeypatch,
+):
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: query (1 results)\n"
+            "1. Netflix cast\n"
+            "URL: https://www.netflix.com/example"
+        )
+    )
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        return_value=_text_response("검증된 검색 근거에 따른 등장인물 답변")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" Netflix 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset({"web_search"}),
+    )
+    state = ToolLoopState(
+        user_content='"이런 엿같은 사랑" 등장인물 찾아줘',
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "검증된 검색 근거에 따른 등장인물 답변"
+    dispatch.assert_awaited_once()
+    assert dispatch.call_args.args[0].name == "web_search"
+    request = orch._router.send.call_args.args[0]
+    assert "https://www.netflix.com/example" in request.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_required_evidence_no_collector_fails_closed_before_final_llm(
+    config_file,
+):
+    orch = AgentOrchestrator(config_file)
+    orch._router.send = AsyncMock(
+        return_value=_text_response("검색해보니 그런 작품은 없습니다")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query='"이런 엿같은 사랑" 등장인물',
+        domain="entertainment",
+        allowed_collectors=frozenset(),
+    )
+    state = ToolLoopState(
+        user_content="등장인물 찾아줘",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert "조회 도구를 사용할 수 없어" in result.text
+    assert "작품은 없습니다" not in result.text
+    orch._router.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fresh_current_turn_evidence_skips_duplicate_search(config_file, monkeypatch):
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(side_effect=AssertionError("duplicate collector called"))
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(return_value=_text_response("구조화 근거 기반 답변"))
+    requirement = EvidenceRequirement(
+        required=True,
+        query="KBO 오늘 경기",
+        domain="sports",
+        allowed_collectors=frozenset({"web_search"}),
+        freshness_required=True,
+    )
+    state = ToolLoopState(
+        user_content="KBO 오늘 경기",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=EvidenceState(
+            required=True,
+            attempted=True,
+            status=EvidenceStatus.FOUND,
+            source_type=EvidenceSourceType.STRUCTURED_REALTIME,
+            freshness=EvidenceFreshness.CURRENT_TURN,
+            evidence_text='{"lookup_status":"found","facts":[{"type":"sports_score"}]}',
+        ),
+        attempted_collectors={"structured_realtime"},
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "구조화 근거 기반 답변"
+    dispatch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -545,17 +662,21 @@ async def test_forced_final_ignores_legacy_evidence_flags(config_file, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answer(
+async def test_live_sports_query_collects_without_synthetic_tool_history(
     config_file, monkeypatch,
 ):
-    """실시간 경기 질문에서도 Gemini-breaking synthetic web_fetch를 만들지 않는다."""
+    """실시간 경기 조회는 direct collector를 쓰고 synthetic history를 만들지 않는다."""
     orch = AgentOrchestrator(config_file)
 
     dispatch_calls: list[ToolCall] = []
 
     async def fake_dispatch(tc):
         dispatch_calls.append(tc)
-        return "네이버 스포츠 확인 결과: KT 7:3 SSG"
+        return (
+            "WEB_SEARCH_RESULTS: sports (1 results)\n"
+            "1. 네이버 스포츠 경기 결과\n"
+            "URL: https://sports.example/game"
+        )
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
     call_idx = {"i": 0}
@@ -570,7 +691,7 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
 
     assert result == "LG가 두산을 7:4로 이겼습니다."
     assert call_idx["i"] == 1
-    assert dispatch_calls == []
+    assert [call.name for call in dispatch_calls] == ["web_search"]
 
 
 @pytest.mark.asyncio
@@ -582,32 +703,36 @@ async def test_live_sports_query_does_not_synthesize_web_fetch_before_final_answ
         "AI 최신 뉴스 찾아줘",
     ],
 )
-async def test_live_market_weather_news_queries_do_not_synthesize_web_fetch(
+async def test_live_market_weather_news_queries_collect_without_synthetic_history(
     config_file, monkeypatch, message,
 ):
-    """주가·날씨·뉴스 질문도 synthetic web_fetch 없이 모델/스킬 경로에 맡긴다."""
+    """주가·날씨·뉴스도 direct collector 근거 뒤에 final을 생성한다."""
     orch = AgentOrchestrator(config_file)
 
     dispatch_calls: list[ToolCall] = []
 
     async def fake_dispatch(tc):
         dispatch_calls.append(tc)
-        return f"웹 확인 결과: {message}"
+        return (
+            f"WEB_SEARCH_RESULTS: {message} (1 results)\n"
+            "1. 공식 조회 결과\n"
+            "URL: https://example.com/current"
+        )
 
     monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
     call_idx = {"i": 0}
 
     async def fake_send(_request):
         call_idx["i"] += 1
-        return _text_response("조회 없이 만든 답변")
+        return _text_response("검증 근거 기반 답변")
 
     orch._router.send = fake_send
 
     result = await orch.process_cron_message(message)
 
-    assert result == "조회 없이 만든 답변"
+    assert result == "검증 근거 기반 답변"
     assert call_idx["i"] == 1
-    assert dispatch_calls == []
+    assert [call.name for call in dispatch_calls] == ["web_search"]
 
 
 @pytest.mark.asyncio

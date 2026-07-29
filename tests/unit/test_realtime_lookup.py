@@ -206,15 +206,18 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
         '{"kind":"sports","confidence":"medium","facts":[]}',
     ],
 )
-async def test_low_or_empty_realtime_evidence_does_not_replace_final(
+async def test_low_or_empty_realtime_evidence_blocks_unverified_final(
     config_file,
     tmp_path,
     evidence,
+    monkeypatch,
 ):
-    """realtime prefetch 품질은 final을 강제로 교체하는 hard gate가 아니다."""
+    """낮은 품질/빈 evidence는 score·LIVE 단정을 통과시키지 않는다."""
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(return_value=evidence)
+    web_search = AsyncMock(return_value="Error: web_search failed — offline test")
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", web_search)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(
         return_value=_text_response("롯데가 2:1로 승리했고 현재 LIVE입니다.")
@@ -222,8 +225,12 @@ async def test_low_or_empty_realtime_evidence_does_not_replace_final(
 
     result = await orchestrator.process_message("롯데 야구 어케 되었나?", 1, 1)
 
-    assert result == "롯데가 2:1로 승리했고 현재 LIVE입니다."
+    assert "사실을 확정할 수 없습니다" in result
+    assert "2:1" not in result
+    assert "LIVE" not in result
     orchestrator._execute_skill.assert_awaited_once()
+    web_search.assert_awaited_once()
+    orchestrator._router.send.assert_not_awaited()
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -366,12 +373,21 @@ async def test_market_impact_question_triggers_realtime_lookup(
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
-async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
+async def test_live_fact_without_realtime_skill_uses_allowed_web_search(
     config_file,
+    monkeypatch,
 ):
-    """스킬이 없더라도 Gemini-breaking synthetic web_fetch는 만들지 않는다."""
+    """structured provider가 없으면 synthetic history 없이 web_search를 선실행한다."""
     orchestrator = AgentOrchestrator(config_file)
     orchestrator._execute_skill = AsyncMock()
+    web_search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: query (1 results)\n"
+            "1. AI latest news\n"
+            "URL: https://example.com/latest"
+        )
+    )
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", web_search)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(return_value=_text_response("직접 답변"))
 
@@ -379,6 +395,8 @@ async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
 
     assert result == "직접 답변"
     orchestrator._execute_skill.assert_not_called()
+    web_search.assert_awaited_once()
+    assert web_search.call_args.args[0].name == "web_search"
     assert orchestrator._router.send.call_count == 1
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert not any(m.get("role") == "tool" for m in request.messages)

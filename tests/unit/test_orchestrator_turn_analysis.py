@@ -130,6 +130,56 @@ async def test_orchestrator_uses_llm_normalized_question_for_tool_loop(
 
 
 @pytest.mark.asyncio
+async def test_legacy_drama_lookup_collects_before_accepting_final(
+    config_file,
+    monkeypatch,
+):
+    """legacy evidence_required도 no-tool factual final 우회를 허용하지 않는다."""
+
+    orch = AgentOrchestrator(config_file)
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(
+            original_text='"이런 엿같은 사랑"이라는 드라마 등장인물 찾아줘.',
+            normalized_question='"이런 엿같은 사랑" Netflix 등장인물 찾아줘',
+            confidence=0.94,
+            domains=("entertainment",),
+            intents=("drama_info",),
+            route=ResponseRoute.STANDARD_TOOL_LOOP,
+            evidence_required=True,
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        analyzer,
+    )
+    collector = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: drama (1 results)\n"
+            "1. Netflix cast\n"
+            "URL: https://www.netflix.com/example"
+        )
+    )
+    monkeypatch.setattr(orch, "_dispatch_tool_call", collector)
+    orch._router.send = AsyncMock(
+        return_value=LLMResponse(text="검증된 등장인물 답변", model="test")
+    )
+
+    result = await orch.process_message(
+        '"이런 엿같은 사랑"이라는 드라마 등장인물 찾아줘.',
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert result == "검증된 등장인물 답변"
+    collector.assert_awaited_once()
+    call = collector.call_args.args[0]
+    assert call.name == "web_search"
+    assert "이런 엿같은 사랑" in call.arguments["query"]
+    request = orch._router.send.call_args.args[0]
+    assert "https://www.netflix.com/example" in request.system_prompt
+
+
+@pytest.mark.asyncio
 async def test_original_text_is_saved_not_normalized_question(
     config_file, monkeypatch
 ):

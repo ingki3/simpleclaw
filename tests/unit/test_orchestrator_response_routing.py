@@ -6,6 +6,12 @@ from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
+_VERIFIED_WEB_RESULT = (
+    "WEB_SEARCH_RESULTS: current fact (1 results)\n"
+    "1. 공식 현재 정보\n"
+    "URL: https://example.com/current-fact"
+)
+
 
 def _seed_turn(orch, user_text: str, assistant_text: str) -> None:
     """대화 저장소에 user/assistant 한 turn 을 직접 적재한다."""
@@ -85,6 +91,7 @@ memory:
 @pytest.mark.asyncio
 async def test_disabled_complex_workflow_falls_back_to_tool_loop(config_file):
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="기존 루프 답변"))
 
@@ -102,6 +109,7 @@ async def test_smalltalk_does_not_enter_complex_workflow_when_enabled(config_fil
         "complex_fact_workflow:\n    enabled: true",
     ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="안녕하세요 형님."))
 
@@ -119,6 +127,7 @@ async def test_enabled_complex_question_uses_complex_workflow(config_file, monke
         "complex_fact_workflow:\n    enabled: true",
     ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="should not be direct loop"))
 
@@ -146,6 +155,7 @@ async def test_current_fact_question_does_not_use_complex_workflow_when_enabled(
         "complex_fact_workflow:\n    enabled: true",
     ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="근거 기반 현재 날씨"))
 
@@ -200,6 +210,7 @@ async def test_market_impact_question_does_not_use_complex_but_not_standard(
         "complex_fact_workflow:\n    enabled: true",
     ), encoding="utf-8")
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="근거 기반 답변"))
 
@@ -355,6 +366,7 @@ async def test_read_only_capability_preempts_complex_fact_route(
     ), encoding="utf-8")
     _write_capability_skill(config_file)
     orch = AgentOrchestrator(config_file)
+    orch._dispatch_tool_call = AsyncMock(return_value=_VERIFIED_WEB_RESULT)
     orch._router = MagicMock()
     orch._router.send = AsyncMock(return_value=LLMResponse(text="순위표 답변"))
 

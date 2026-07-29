@@ -543,10 +543,10 @@ async def test_runner_keeps_blocked_call_as_observation_without_execution(
 
 
 @pytest.mark.asyncio
-async def test_fact_check_plan_does_not_create_evidence_gate_state(
+async def test_fact_check_plan_creates_common_evidence_gate_state(
     primary_config,
 ):
-    """R8: fact-check plan은 조회를 유도하되 final hard-gate state를 만들지 않는다."""
+    """BIZ-520: fact-check plan은 공통 evidence contract로 변환된다."""
     orchestrator = AgentOrchestrator(primary_config)
     state = await orchestrator._prepare_tool_loop_state(
         "원문",
@@ -568,9 +568,11 @@ async def test_fact_check_plan_does_not_create_evidence_gate_state(
     )
 
     assert state.messages[0]["role"] == "assistant"
-    assert "live_evidence_seen" not in state.__dataclass_fields__
-    assert "live_fact_requires_evidence" not in state.__dataclass_fields__
-    assert "evidence_guard_blocked" not in state.__dataclass_fields__
+    assert state.evidence_requirement.required is True
+    assert state.evidence_requirement.query == "롯데 오늘 경기 결과"
+    assert state.evidence_requirement.allowed_collectors == frozenset({"web_fetch"})
+    assert state.evidence_state is not None
+    assert state.evidence_state.status.value == "not_searched"
     assert state.execution_scope is not None
     assert state.execution_scope.allowed_tools == frozenset({"web_fetch"})
 
@@ -580,7 +582,7 @@ async def test_fact_check_plan_still_executes_web_search(
     primary_config,
     monkeypatch,
 ):
-    """planner fact-check는 hard gate 제거 후에도 허용된 조회 도구를 실행한다."""
+    """planner fact-check는 허용된 조회 도구를 한 번만 실행해 근거를 재사용한다."""
     orchestrator = AgentOrchestrator(primary_config)
     search = AsyncMock(
         return_value=(
@@ -644,16 +646,17 @@ async def test_fact_check_plan_still_executes_web_search(
         "Error: web search backend unavailable",
     ],
 )
-async def test_web_search_empty_or_error_does_not_replace_final(
+async def test_web_search_empty_or_error_blocks_unverified_final(
     primary_config,
     monkeypatch,
     search_result,
 ):
-    """R8: 자동 조회가 실패해도 후속 LLM final을 hard fallback으로 교체하지 않는다."""
+    """empty와 failed를 구분하고 근거 없는 LLM final을 실행하지 않는다."""
     orchestrator = AgentOrchestrator(primary_config)
+    search = AsyncMock(return_value=search_result)
     monkeypatch.setattr(
         "simpleclaw.agent.tool_dispatch.handle_web_search",
-        AsyncMock(return_value=search_result),
+        search,
     )
     plan = _plan(
         fingerprint="unused",
@@ -672,28 +675,15 @@ async def test_web_search_empty_or_error_does_not_replace_final(
         plan=plan,
         candidates=_candidate_set(),
     )
-    responses = [
-        LLMResponse(
-            text="",
-            model="test",
-            tool_calls=[
-                ToolCall(
-                    id="search-call",
-                    name="web_search",
-                    arguments={"query": "롯데 오늘 경기 결과"},
-                )
-            ],
-        ),
-        LLMResponse(text="근거 없이 단정한 결과", model="test"),
-    ]
-
-    async def fake_send(_request):
-        return responses.pop(0)
-
-    orchestrator._router.send = fake_send
+    orchestrator._router.send = AsyncMock(
+        return_value=LLMResponse(text="근거 없이 단정한 결과", model="test")
+    )
     result = await ToolLoopRunner(orchestrator).run(state)
 
-    assert result.text == "근거 없이 단정한 결과"
+    assert "근거 없이 단정한 결과" not in result.text
+    assert "찾지 못했습니다" in result.text or "조회가 실패" in result.text
+    search.assert_awaited_once()
+    orchestrator._router.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -703,14 +693,25 @@ async def test_fact_required_primary_path_suppresses_streaming_but_preserves_fin
 ):
     """fact-check 조회 경로는 streaming을 억제해도 생성된 final은 보존한다."""
     orchestrator = AgentOrchestrator(primary_config)
+    search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: query (1 results)\n"
+            "1. 공식 경기 결과\n"
+            "URL: https://example.com/official-result"
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        search,
+    )
 
     async def fake_planner(_text, *, catalog, **_kwargs):
         return _plan(
             fingerprint=catalog.fingerprint,
             standalone_question="롯데 오늘 경기 결과",
             mode=ExecutionMode.FACT_CHECK,
-            allowed_assets=(AssetRef("native_tool", "web_fetch"),),
-            allowed_tools=("web_fetch",),
+            allowed_assets=(AssetRef("native_tool", "web_search"),),
+            allowed_tools=("web_search",),
             fact_required=True,
         )
 
@@ -740,3 +741,4 @@ async def test_fact_required_primary_path_suppresses_streaming_but_preserves_fin
     assert send_callbacks == [None]
     assert deltas == []
     assert result == "근거 없는 점수"
+    search.assert_awaited_once()

@@ -287,14 +287,21 @@ class TestMultiTurnExecution:
 
 
 class TestRealtimeFinalPreservation:
-    """BIZ-505 — realtime 조회 상태와 무관하게 생성된 final을 보존한다."""
+    """BIZ-520 — realtime final은 current-turn usable evidence 뒤에 보존한다."""
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     @pytest.mark.asyncio
-    async def test_sports_schedule_final_answer_is_preserved_without_evidence(
+    async def test_sports_schedule_final_answer_is_preserved_with_evidence(
         self, config_file, tmp_path,
     ):
         orchestrator = _make_orchestrator_with_skills(config_file, tmp_path)
+        orchestrator._dispatch_tool_call = AsyncMock(
+            return_value=(
+                "WEB_SEARCH_RESULTS: schedule (1 results)\n"
+                "1. 공식 중계 일정\n"
+                "URL: https://sports.example/world-cup-schedule"
+            )
+        )
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(
             return_value=_text_response("한국은 6월 12일 20:00에 경기합니다.")
