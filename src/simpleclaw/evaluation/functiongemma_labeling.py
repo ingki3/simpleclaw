@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from collections.abc import Awaitable, Callable, Iterable, Sequence
@@ -22,21 +23,49 @@ from simpleclaw.evaluation.functiongemma_dataset import SanitizedCase
 
 MAX_PROVIDER_CALLS = 300
 MAX_PROVIDER_SECONDS = 60 * 60
-PlannerCallable = Callable[
-    [SanitizedCase, tuple[CandidateAsset, ...]], Awaitable[UnifiedTurnPlan]
-]
+MAX_PROVIDER_TOKENS = 300 * 2048
 
 
 @dataclass(frozen=True)
 class LabelingBudget:
     max_calls: int = MAX_PROVIDER_CALLS
     max_seconds: float = MAX_PROVIDER_SECONDS
+    max_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_calls <= MAX_PROVIDER_CALLS:
             raise ValueError("max_calls exceeds provider hard cap")
         if not 0 < self.max_seconds <= MAX_PROVIDER_SECONDS:
             raise ValueError("max_seconds exceeds provider hard cap")
+        if self.max_tokens is not None and not 1 <= self.max_tokens <= MAX_PROVIDER_TOKENS:
+            raise ValueError("max_tokens exceeds provider hard cap")
+
+
+@dataclass(frozen=True)
+class PlannerResponse:
+    """Provider가 반환한 plan과 해당 호출의 실제 token 소비량."""
+
+    plan: UnifiedTurnPlan
+    token_count: int
+
+    def __post_init__(self) -> None:
+        if self.token_count < 0:
+            raise ValueError("token_count must be non-negative")
+
+
+PlannerCallable = Callable[
+    [SanitizedCase, tuple[CandidateAsset, ...]],
+    Awaitable[UnifiedTurnPlan | PlannerResponse],
+]
+
+
+@dataclass
+class ProviderUsage:
+    """한 labeling 실행에서만 변경되는 provider budget ledger."""
+
+    calls: int = 0
+    tokens: int = 0
+    token_usage_supported: bool = True
 
 
 @dataclass(frozen=True)
@@ -60,6 +89,8 @@ class LabelingResult:
     labeled: tuple[LabeledCase, ...]
     adjudication_queue: tuple[AdjudicationItem, ...]
     provider_calls: int
+    provider_tokens: int
+    token_usage_supported: bool
     elapsed_seconds: float
 
 
@@ -156,47 +187,88 @@ async def label_cases(
     allow_provider_calls: bool,
     budget: LabelingBudget | None = None,
     minimum_confidence: float = 0.55,
+    clock: Callable[[], float] = time.monotonic,
 ) -> LabelingResult:
     """sanitized case만 planner에 보내고 오류/저신뢰 결과를 queue로 분리한다."""
     if not allow_provider_calls:
         raise PermissionError("provider calls require explicit opt-in")
     effective_budget = budget or LabelingBudget()
-    started = time.monotonic()
-    calls = 0
+    started = clock()
+    usage = ProviderUsage()
     labeled: list[LabeledCase] = []
     queue: list[AdjudicationItem] = []
     for case in cases:
+        elapsed = clock() - started
+        if usage.calls >= effective_budget.max_calls:
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=("budget.call_exhausted",),
+            ))
+            continue
+        if elapsed >= effective_budget.max_seconds:
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=("budget.time_exhausted",),
+            ))
+            continue
         if (
-            calls >= effective_budget.max_calls
-            or time.monotonic() - started >= effective_budget.max_seconds
+            effective_budget.max_tokens is not None
+            and usage.tokens >= effective_budget.max_tokens
         ):
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
                 source_group_id=case.source_group_id,
-                reason_codes=("budget.exhausted",),
+                reason_codes=("budget.token_exhausted",),
             ))
             continue
         candidates = select_candidate_assets(case, catalog_assets)
-        calls += 1
+        usage.calls += 1
         reasons: list[str] = []
         try:
-            plan = await planner(case, candidates)
-            primary = plan.execution.primary_asset
-            target_id = (
-                None
-                if primary is None
-                else candidate_id(primary.asset_type, primary.name)
+            remaining = effective_budget.max_seconds - (clock() - started)
+            response = await asyncio.wait_for(
+                planner(case, candidates),
+                timeout=max(0.0, remaining),
             )
-            candidates = select_candidate_assets(
-                case,
-                catalog_assets,
-                target_asset_id=target_id,
+            if isinstance(response, PlannerResponse):
+                plan = response.plan
+                usage.tokens += response.token_count
+            else:
+                plan = response
+                usage.token_usage_supported = False
+                if effective_budget.max_tokens is not None:
+                    reasons.append("budget.token_usage_unavailable")
+            if clock() - started >= effective_budget.max_seconds:
+                reasons.append("budget.time_exhausted")
+            if (
+                effective_budget.max_tokens is not None
+                and usage.tokens > effective_budget.max_tokens
+            ):
+                reasons.append("budget.token_exhausted")
+            budget_reasons = tuple(
+                reason for reason in reasons if reason.startswith("budget.")
             )
+            if budget_reasons:
+                queue.append(AdjudicationItem(
+                    case_id=case.case_id,
+                    source_group_id=case.source_group_id,
+                    reason_codes=budget_reasons,
+                ))
+                continue
             compact = compact_from_unified_plan(plan, candidates=candidates)
             if plan.confidence < minimum_confidence:
                 reasons.append("confidence.low")
             if plan.execution.mode.value == "recipe" and "create" in plan.intents:
                 reasons.append("boundary.creation_vs_execution")
+        except TimeoutError:
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=("budget.time_exhausted",),
+            ))
+            continue
         except Exception as exc:  # noqa: BLE001 - private 원문 없이 종류만 queue에 남김.
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
@@ -221,8 +293,10 @@ async def label_cases(
     return LabelingResult(
         labeled=tuple(labeled),
         adjudication_queue=tuple(queue),
-        provider_calls=calls,
-        elapsed_seconds=time.monotonic() - started,
+        provider_calls=usage.calls,
+        provider_tokens=usage.tokens,
+        token_usage_supported=usage.token_usage_supported,
+        elapsed_seconds=clock() - started,
     )
 
 
@@ -234,6 +308,8 @@ def labeling_public_summary(result: LabelingResult) -> dict[str, Any]:
             reasons[reason] = reasons.get(reason, 0) + 1
     return {
         "provider_calls": result.provider_calls,
+        "provider_tokens": result.provider_tokens,
+        "token_usage_supported": result.token_usage_supported,
         "elapsed_seconds": round(result.elapsed_seconds, 3),
         "labeled_count": len(result.labeled),
         "adjudication_count": len(result.adjudication_queue),

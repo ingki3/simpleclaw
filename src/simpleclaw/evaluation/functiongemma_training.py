@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ class TrainingConfig:
     quantization_group_size: int = 64
     lora_layers: int = -1
     mask_prompt: bool = True
+    max_artifact_bytes: int = MAX_ARTIFACT_BYTES
 
     def __post_init__(self) -> None:
         if not 1 <= self.steps <= MAX_STEPS:
@@ -47,6 +49,8 @@ class TrainingConfig:
             raise ValueError("training time exceeds hard cap")
         if self.seed != SEED:
             raise ValueError("PoC permits only seed 42")
+        if not 1 <= self.max_artifact_bytes <= MAX_ARTIFACT_BYTES:
+            raise ValueError("training artifact size exceeds hard cap")
 
 
 def preflight() -> dict[str, Any]:
@@ -72,9 +76,32 @@ def artifact_size(path: str | Path) -> int:
     return sum(item.stat().st_size for item in root.rglob("*") if item.is_file())
 
 
-def run_training(config: TrainingConfig) -> dict[str, Any]:
+def _stop_process(
+    process: Any,
+    *,
+    grace_seconds: float,
+) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def run_training(
+    config: TrainingConfig,
+    *,
+    process_factory: Callable[..., Any] = subprocess.Popen,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    size_reader: Callable[[str | Path], int] = artifact_size,
+    poll_interval: float = 1.0,
+    terminate_grace_seconds: float = 10.0,
+    preflight_fn: Callable[[], dict[str, Any]] = preflight,
+) -> dict[str, Any]:
     """resume을 거부하고 tracker 업로드를 끈 단일 MLX QLoRA run을 실행한다."""
-    preflight_data = preflight()
+    preflight_data = preflight_fn()
     adapter = Path(config.adapter_path)
     if adapter.exists() and any(adapter.iterdir()):
         raise FileExistsError("adapter path is non-empty; resume is forbidden")
@@ -107,33 +134,54 @@ def run_training(config: TrainingConfig) -> dict[str, Any]:
         "MLFLOW_TRACKING_URI": "",
         "SWANLAB_MODE": "disabled",
     }
-    started = time.monotonic()
-    completed = subprocess.run(
+    started = clock()
+    process = process_factory(
         command,
-        check=False,
-        capture_output=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         text=True,
-        timeout=config.max_seconds,
         env=environment,
     )
-    elapsed = time.monotonic() - started
-    size = artifact_size(adapter)
-    if size > MAX_ARTIFACT_BYTES:
-        raise RuntimeError("training artifact exceeded 10GB hard cap")
+    stop_reason = "completed"
+    peak_size = 0
+    while process.poll() is None:
+        elapsed = clock() - started
+        size = size_reader(adapter)
+        peak_size = max(peak_size, size)
+        if size >= config.max_artifact_bytes:
+            stop_reason = "disk_cap"
+            _stop_process(process, grace_seconds=terminate_grace_seconds)
+            break
+        if elapsed >= config.max_seconds:
+            stop_reason = "time_cap"
+            _stop_process(process, grace_seconds=terminate_grace_seconds)
+            break
+        sleeper(poll_interval)
+    stdout, stderr = process.communicate()
+    stdout = stdout or ""
+    stderr = stderr or ""
+    elapsed = clock() - started
+    size = size_reader(adapter)
+    peak_size = max(peak_size, size)
     manifest = {
         **preflight_data,
         "config": asdict(config),
         "command": command,
         "elapsed_seconds": elapsed,
-        "returncode": completed.returncode,
+        "returncode": process.returncode,
         "artifact_bytes": size,
-        "stdout_tail": completed.stdout[-4000:],
-        "stderr_tail": completed.stderr[-4000:],
+        "peak_artifact_bytes": peak_size,
+        "artifact_cap_bytes": config.max_artifact_bytes,
+        "stop_reason": stop_reason,
+        "stdout_tail": stdout[-4000:],
+        "stderr_tail": stderr[-4000:],
     }
     write_private_json(adapter.parent / "training-manifest.json", manifest)
-    if completed.returncode:
+    if stop_reason != "completed":
+        raise RuntimeError(f"MLX training stopped at {stop_reason}")
+    if process.returncode:
         raise RuntimeError(
-            f"MLX training failed with return code {completed.returncode}"
+            f"MLX training failed with return code {process.returncode}"
         )
     if not any(adapter.iterdir()):
         raise RuntimeError("MLX training produced no adapter artifact")

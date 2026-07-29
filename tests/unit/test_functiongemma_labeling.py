@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from simpleclaw.agent.planner_catalog import PlannerAsset
@@ -19,6 +21,7 @@ from simpleclaw.agent.turn_plan import (
 from simpleclaw.evaluation.functiongemma_dataset import SanitizedCase
 from simpleclaw.evaluation.functiongemma_labeling import (
     LabelingBudget,
+    PlannerResponse,
     label_cases,
     labeling_public_summary,
 )
@@ -104,7 +107,99 @@ async def test_budget_stops_calls_and_low_confidence_goes_to_queue() -> None:
     assert len(result.labeled) == 1
     assert {reason for item in result.adjudication_queue for reason in item.reason_codes} == {
         "confidence.low",
-        "budget.exhausted",
+        "budget.call_exhausted",
     }
     summary = labeling_public_summary(result)
     assert "private-1" not in str(summary)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_timeout_cancels_and_rejects_label() -> None:
+    cancelled = False
+
+    async def planner(case, candidates):
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        return _plan()
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_seconds=0.01),
+    )
+    assert cancelled
+    assert result.labeled == ()
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.time_exhausted",
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_deadline_result_is_rejected() -> None:
+    times = iter((0.0, 0.0, 0.0, 0.02, 0.02))
+
+    async def planner(case, candidates):
+        return _plan()
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_seconds=0.01),
+        clock=lambda: next(times),
+    )
+    assert result.labeled == ()
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.time_exhausted",
+    )
+
+
+@pytest.mark.asyncio
+async def test_token_cap_rejects_overshoot_and_stops_next_call() -> None:
+    calls = 0
+
+    async def planner(case, candidates):
+        nonlocal calls
+        calls += 1
+        return PlannerResponse(_plan(), token_count=6)
+
+    result = await label_cases(
+        [_case(1), _case(2)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_tokens=5),
+    )
+    assert calls == 1
+    assert result.labeled == ()
+    assert result.provider_tokens == 6
+    assert all(
+        item.reason_codes == ("budget.token_exhausted",)
+        for item in result.adjudication_queue
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_token_usage_fails_closed_when_cap_enabled() -> None:
+    async def planner(case, candidates):
+        return _plan()
+
+    result = await label_cases(
+        [_case(1)],
+        catalog_assets=[_asset()],
+        planner=planner,
+        allow_provider_calls=True,
+        budget=LabelingBudget(max_tokens=10),
+    )
+    assert result.labeled == ()
+    assert not result.token_usage_supported
+    assert result.adjudication_queue[0].reason_codes == (
+        "budget.token_usage_unavailable",
+    )

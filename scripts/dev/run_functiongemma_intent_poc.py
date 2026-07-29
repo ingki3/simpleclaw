@@ -48,6 +48,7 @@ from simpleclaw.evaluation.functiongemma_eval import (
 from simpleclaw.evaluation.functiongemma_labeling import (
     LabeledCase,
     LabelingBudget,
+    PlannerResponse,
     label_cases,
     labeling_public_summary,
 )
@@ -58,7 +59,7 @@ from simpleclaw.evaluation.functiongemma_training import (
     resolve_model_snapshot,
     run_training,
 )
-from simpleclaw.llm.router import create_router
+from simpleclaw.llm.router import LLMRouter, create_router
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
@@ -273,18 +274,51 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
     router = create_router(args.config)
     catalog = _runtime_catalog(Path(args.config))
 
+    class UsageCapturingRouter(LLMRouter):
+        def __init__(self, wrapped: LLMRouter) -> None:
+            self.wrapped = wrapped
+            self.token_count = 0
+            self.usage_supported = True
+
+        async def send_validated(self, request, validate_response):
+            def capture_and_validate(response):
+                usage = getattr(response, "usage", None)
+                if not isinstance(usage, dict):
+                    self.usage_supported = False
+                else:
+                    counts = (
+                        usage.get("input_tokens"),
+                        usage.get("output_tokens"),
+                    )
+                    if not all(
+                        isinstance(count, int) and count >= 0
+                        for count in counts
+                    ):
+                        self.usage_supported = False
+                    else:
+                        self.token_count += sum(counts)
+                return validate_response(response)
+
+            return await self.wrapped.send_validated(
+                request,
+                capture_and_validate,
+            )
+
     async def planner(case: SanitizedCase, _compact_candidates):
         context = _context_set(case)
+        tracking_router = UsageCapturingRouter(router)
         plan = await plan_turn_with_llm(
             case.current,
             candidates=context,
             catalog=catalog,
-            router=router,
+            router=tracking_router,
             max_tokens=2048,
         )
         gate = PlanGate().evaluate(plan, candidates=context, catalog=catalog)
         if gate.status in {GateStatus.REPAIR, GateStatus.REJECT}:
             raise ValueError(f"plan_gate_{gate.status.value}")
+        if tracking_router.usage_supported:
+            return PlannerResponse(plan, tracking_router.token_count)
         return plan
 
     result = await label_cases(
@@ -292,7 +326,11 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
         catalog_assets=catalog.assets,
         planner=planner,
         allow_provider_calls=args.allow_provider_calls,
-        budget=LabelingBudget(max_calls=args.max_provider_calls),
+        budget=LabelingBudget(
+            max_calls=args.max_provider_calls,
+            max_seconds=args.max_provider_seconds,
+            max_tokens=args.max_provider_tokens,
+        ),
     )
     write_private_jsonl(
         output / "labeled.jsonl",
@@ -304,6 +342,14 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
     )
     summary = labeling_public_summary(result)
     write_private_json(output / "labeling-summary.json", summary)
+    lineage = _read_json(output / "lineage-manifest.json")
+    lineage["provider_budget"] = {
+        "max_calls": args.max_provider_calls,
+        "max_seconds": args.max_provider_seconds,
+        "max_tokens": args.max_provider_tokens,
+    }
+    lineage["provider_usage"] = summary
+    write_private_json(output / "lineage-manifest.json", lineage)
     print(json.dumps(summary, sort_keys=True))
 
 
@@ -361,6 +407,19 @@ def augment_command(args: argparse.Namespace) -> None:
     manifest["train_duplicate_fingerprints_dropped"] = leakage_dropped
     manifest["source_group_leakage_count"] = 0
     manifest["augmentation_seed"] = 42
+    manifest["augmentation_strata_counts"] = {
+        stratum: sum(f":{stratum}" in item.case.case_id for item in augmented)
+        for stratum in (
+            "entity_placeholder",
+            "recipe_creation",
+            "recipe_execution",
+            "no_asset_ood",
+            "spoken",
+            "typo",
+            "elliptical_followup",
+            "topic_shift",
+        )
+    }
     write_private_json(output / "lineage-manifest.json", manifest)
     print(json.dumps(manifest, sort_keys=True))
 
@@ -373,17 +432,50 @@ def train_command(args: argparse.Namespace) -> None:
     )
     train_rows = _read_jsonl(output / "mlx-data/train.jsonl")
     steps = min(args.training_steps, MAX_STEPS, max(2, len(train_rows) * 3))
-    manifest = run_training(TrainingConfig(
-        model_path=str(model),
-        data_dir=str(output / "mlx-data"),
-        adapter_path=str(output / "adapter-function-format"),
-        steps=steps,
-    ))
-    print(json.dumps({
+    try:
+        manifest = run_training(TrainingConfig(
+            model_path=str(model),
+            data_dir=str(output / "mlx-data"),
+            adapter_path=str(output / "adapter-function-format"),
+            steps=steps,
+        ))
+    except RuntimeError:
+        manifest = _read_json(output / "training-manifest.json")
+        budget_summary = {
+            key: manifest.get(key)
+            for key in (
+                "stop_reason",
+                "elapsed_seconds",
+                "artifact_bytes",
+                "peak_artifact_bytes",
+                "artifact_cap_bytes",
+            )
+        }
+        lineage = _read_json(output / "lineage-manifest.json")
+        lineage["training_budget"] = budget_summary
+        write_private_json(output / "lineage-manifest.json", lineage)
+        write_private_json(
+            output / "aggregate-report.json",
+            {
+                "training_budget": budget_summary,
+                "evaluation_skipped": True,
+                "raw_text_rows": 0,
+            },
+        )
+        print(json.dumps(budget_summary, sort_keys=True))
+        raise
+    summary = {
         "returncode": manifest["returncode"],
         "elapsed_seconds": manifest["elapsed_seconds"],
         "artifact_bytes": manifest["artifact_bytes"],
-    }, sort_keys=True))
+        "peak_artifact_bytes": manifest["peak_artifact_bytes"],
+        "artifact_cap_bytes": manifest["artifact_cap_bytes"],
+        "stop_reason": manifest["stop_reason"],
+    }
+    lineage = _read_json(output / "lineage-manifest.json")
+    lineage["training_budget"] = summary
+    write_private_json(output / "lineage-manifest.json", lineage)
+    print(json.dumps(summary, sort_keys=True))
 
 
 def _extract_generated_json(stdout: str) -> object:
@@ -476,6 +568,19 @@ def evaluate_command(args: argparse.Namespace) -> None:
         "report_fingerprint": text_fingerprint(json.dumps(report, sort_keys=True)),
         "raw_text_rows": 0,
     }
+    training_manifest_path = output / "training-manifest.json"
+    if training_manifest_path.is_file():
+        training = _read_json(training_manifest_path)
+        public_report["training_budget"] = {
+            "stop_reason": training.get("stop_reason"),
+            "elapsed_seconds": training.get("elapsed_seconds"),
+            "artifact_bytes": training.get("artifact_bytes"),
+            "peak_artifact_bytes": training.get("peak_artifact_bytes"),
+            "artifact_cap_bytes": training.get("artifact_cap_bytes"),
+        }
+    labeling_summary_path = output / "labeling-summary.json"
+    if labeling_summary_path.is_file():
+        public_report["provider_usage"] = _read_json(labeling_summary_path)
     write_private_json(output / "aggregate-report.json", public_report)
     print(json.dumps(public_report, sort_keys=True))
 
@@ -492,6 +597,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-source-cases", type=int, default=300)
     parser.add_argument("--allow-provider-calls", action="store_true")
     parser.add_argument("--max-provider-calls", type=int, default=300)
+    parser.add_argument("--max-provider-seconds", type=float, default=3600)
+    parser.add_argument(
+        "--max-provider-tokens",
+        type=int,
+        help=(
+            "Optional total token cap. If planner usage metadata is unavailable, "
+            "labeling fails closed into adjudication."
+        ),
+    )
     parser.add_argument("--allow-model-download", action="store_true")
     parser.add_argument("--training-steps", type=int, default=100)
     return parser
