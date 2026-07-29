@@ -10,6 +10,7 @@ from typing import Any
 
 from simpleclaw.agent.planner_catalog import PlannerAsset
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
+from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.evaluation.functiongemma_contract import (
     MAX_CANDIDATES,
     NO_ASSET,
@@ -186,6 +187,18 @@ async def label_cases(
                 case_id=case.case_id,
                 source_group_id=case.source_group_id,
                 reason_codes=(exc.code,),
+            ))
+            continue
+        except PlannerUnavailable as exc:
+            reason = (
+                "boundary.unknown_asset"
+                if exc.boundary_code == "unknown_or_internal_asset"
+                else "planner.PlannerUnavailable"
+            )
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=(reason,),
             ))
             continue
         except Exception as exc:  # noqa: BLE001 - private 원문 없이 종류만 queue에 남김.

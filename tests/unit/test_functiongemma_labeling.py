@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from argparse import Namespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+import scripts.dev.run_functiongemma_intent_poc as intent_poc
 from scripts.dev.run_functiongemma_intent_poc import (
     _bounded_catalog,
     _provider_prompt_diagnostic,
@@ -36,6 +39,8 @@ from simpleclaw.evaluation.functiongemma_labeling import (
     label_cases,
     labeling_public_summary,
 )
+from simpleclaw.llm.models import LLMResponse, LLMRoute
+from simpleclaw.llm.router import LLMRouter
 
 
 def _case(number: int) -> SanitizedCase:
@@ -85,6 +90,54 @@ def _plan(
         confidence=confidence,
         decision_summary="",
     )
+
+
+def _planner_response(
+    *,
+    primary_asset: str,
+    allowed_assets: tuple[str, ...],
+) -> str:
+    def asset_ref(name: str) -> dict[str, str]:
+        return {"asset_type": "skill", "asset_name": name}
+
+    return json.dumps({
+        "context": {
+            "relation": "standalone",
+            "use_prior_context": False,
+            "selected_turn_ids": [],
+            "standalone_question": "현재 질문",
+            "unresolved_references": [],
+            "ignored_context_reason": "",
+        },
+        "clarification": {
+            "required": False,
+            "question": "",
+            "options": [],
+            "reason": "",
+        },
+        "domains": ["news"],
+        "intents": ["lookup"],
+        "fact_check": {
+            "required": False,
+            "owner": "none",
+            "domain": "",
+            "entities": [],
+            "search_query": "",
+            "required_claims": [],
+            "freshness_required": False,
+            "reason": "",
+        },
+        "execution": {
+            "mode": "execute_asset",
+            "primary_asset": asset_ref(primary_asset),
+            "allowed_assets": [asset_ref(name) for name in allowed_assets],
+            "allowed_tools": ["execute_skill"],
+            "requires_confirmation": False,
+            "reason": "",
+        },
+        "confidence": 0.9,
+        "decision_summary": "",
+    })
 
 
 @pytest.mark.asyncio
@@ -148,6 +201,76 @@ async def test_out_of_set_target_is_not_promoted_after_planner_call() -> None:
     assert result.adjudication_queue[0].reason_codes == (
         "boundary.unknown_asset",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("primary_asset", "allowed_assets"),
+    (
+        ("outside", ("outside",)),
+        ("search", ("search", "outside")),
+    ),
+    ids=("out-of-set-primary", "out-of-set-allowed"),
+)
+async def test_production_label_wrapper_preserves_unknown_asset_reason(
+    tmp_path,
+    monkeypatch,
+    primary_asset: str,
+    allowed_assets: tuple[str, ...],
+) -> None:
+    output = tmp_path / "private"
+    output.mkdir()
+    (output / "sanitized-cases.jsonl").write_text(
+        json.dumps(_case(1).to_dict()) + "\n",
+        encoding="utf-8",
+    )
+    catalog = PlannerCatalog(assets=(_asset(),), fingerprint="full")
+    response = LLMResponse(text=_planner_response(
+        primary_asset=primary_asset,
+        allowed_assets=allowed_assets,
+    ))
+    primary = AsyncMock()
+    primary.send = AsyncMock(return_value=response)
+    retry = AsyncMock()
+    retry.send = AsyncMock(return_value=response)
+    router = LLMRouter(
+        backends={},
+        providers={"primary": primary, "retry": retry},
+        default_backend="primary",
+        routes={
+            "turn_analysis": LLMRoute(
+                "turn_analysis",
+                "primary",
+                "retry",
+            )
+        },
+    )
+    monkeypatch.setattr(intent_poc, "create_router", lambda _config: router)
+    monkeypatch.setattr(intent_poc, "_runtime_catalog", lambda _config: catalog)
+
+    await intent_poc._label_async(
+        Namespace(
+            config="unused.yaml",
+            allow_provider_calls=True,
+            max_provider_calls=1,
+        ),
+        output,
+    )
+
+    summary = json.loads(
+        (output / "labeling-summary.json").read_text(encoding="utf-8")
+    )
+    queue = [
+        json.loads(line)
+        for line in (output / "adjudication-queue.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert summary["labeled_count"] == 0
+    assert summary["adjudication_reasons"] == {"boundary.unknown_asset": 1}
+    assert queue[0]["reason_codes"] == ["boundary.unknown_asset"]
+    primary.send.assert_awaited_once()
+    retry.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
