@@ -27,6 +27,12 @@ response, private path, credential은 Git, Multica, public report에 기록하�
 상세 artifact는 기본 `0700` 디렉터리와 `0600` 파일로만 저장한다. 공개 가능한
 산출물은 aggregate count, metric, 비가역 SHA-256 fingerprint뿐이다.
 
+DB row ID는 source case와 context turn ID에 사용하지 않는다. 동일 seed와
+추출 순서로 만든 run-local opaque ID만 provider-facing case에 남기며, source
+lineage에는 sanitized text의 비가역 fingerprint만 보존한다. 실제 Unified
+Planner request 조립 결과는 provider 호출 전에 raw `msg:*`/`live:*` 및
+user/chat/message ID 패턴이 없는지 fail-closed 진단한다.
+
 ## Teacher/student 계약
 
 weak label은 sanitized case를 production-native Unified Planner에 보내 생성한다.
@@ -34,6 +40,10 @@ Telegram send, skill/tool/recipe 실행, mutation, conversation persistence는 �
 않는다. provider call은 명시적 `--allow-provider-calls`가 있어야 하며 300회와
 60분 중 먼저 도달한 cap에서 멈춘다. schema/boundary/PlanGate 실패, 낮은
 confidence, creation-vs-execution 경계는 adjudication queue로 분리한다.
+case별 candidate set과 fingerprint는 provider 호출 전에 한 번만 고정한다.
+Unified Planner에는 그 set에 대응하는 runtime-visible catalog만 노출하며, 호출
+뒤 target을 candidate에 추가하거나 재정렬하지 않는다. set 밖 target은
+`boundary.unknown_asset` adjudication으로 분리한다.
 
 teacher와의 점수는 절대 정확도가 아니라
 `Gemini/Unified emulation quality`로만 해석한다.
@@ -73,6 +83,13 @@ schema/boundary 위반, missing fallback은 soft 평균과 별도 hard failure�
 수행하지 않는다.
 
 ## BIZ-512 실제 결과
+
+> **Invalidated (BIZ-513):** 아래 44개 weak label 중 41개는 planner에 노출된
+> 최초 candidate set 밖 target을 호출 후 candidate 재작성으로 수용했다. 또한
+> raw DB row ID가 provider context turn ID에 포함됐다. 따라서 해당 label 44개,
+> 그 파생 augmentation, 두 adapter, aggregate report와 아래 수치는 bounded
+> candidate/privacy PoC 근거로 사용할 수 없다. artifact는 삭제하지 않고
+> lineage상 invalidated 상태로만 보존한다.
 
 - live DB: non-deleted row 938건은 추출 전후 동일했다. user turn 469건을
   scan하고 source case 300건을 만들었다.

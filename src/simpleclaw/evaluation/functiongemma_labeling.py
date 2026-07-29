@@ -11,11 +11,13 @@ from typing import Any
 
 from simpleclaw.agent.planner_catalog import PlannerAsset
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
+from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.evaluation.functiongemma_contract import (
     MAX_CANDIDATES,
     NO_ASSET,
     CandidateAsset,
     CompactIntentCall,
+    FunctionCallContractError,
     candidate_id,
     parse_function_call,
 )
@@ -104,10 +106,8 @@ def _overlap_score(case: SanitizedCase, asset: PlannerAsset) -> tuple[int, str]:
 def select_candidate_assets(
     case: SanitizedCase,
     catalog_assets: Iterable[PlannerAsset],
-    *,
-    target_asset_id: str | None = None,
 ) -> tuple[CandidateAsset, ...]:
-    """target와 metadata 유사 hard negative를 deterministic하게 최대 12개 선택한다."""
+    """metadata 유사 hard negative를 호출 전에 deterministic하게 고정한다."""
     ranked = sorted(
         catalog_assets,
         key=lambda asset: (
@@ -115,11 +115,6 @@ def select_candidate_assets(
             _overlap_score(case, asset)[1],
         ),
     )
-    if target_asset_id:
-        ranked.sort(
-            key=lambda asset: candidate_id(asset.asset_type, asset.name)
-            != target_asset_id
-        )
     selected = ranked[: MAX_CANDIDATES - 1]
     candidates = [
         CandidateAsset(
@@ -221,6 +216,7 @@ async def label_cases(
             ))
             continue
         candidates = select_candidate_assets(case, catalog_assets)
+        fingerprint = candidate_fingerprint(candidates)
         usage.calls += 1
         reasons: list[str] = []
         try:
@@ -262,6 +258,25 @@ async def label_cases(
                 reason_codes=("budget.time_exhausted",),
             ))
             continue
+        except FunctionCallContractError as exc:
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=(exc.code,),
+            ))
+            continue
+        except PlannerUnavailable as exc:
+            reason = (
+                "boundary.unknown_asset"
+                if exc.boundary_code == "unknown_or_internal_asset"
+                else "planner.PlannerUnavailable"
+            )
+            queue.append(AdjudicationItem(
+                case_id=case.case_id,
+                source_group_id=case.source_group_id,
+                reason_codes=(reason,),
+            ))
+            continue
         except Exception as exc:  # noqa: BLE001 - private 원문 없이 종류만 queue에 남김.
             queue.append(AdjudicationItem(
                 case_id=case.case_id,
@@ -280,7 +295,7 @@ async def label_cases(
             case=case,
             candidates=candidates,
             label=compact,
-            candidate_fingerprint=candidate_fingerprint(candidates),
+            candidate_fingerprint=fingerprint,
             confidence=plan.confidence,
         ))
     return LabelingResult(
