@@ -317,6 +317,127 @@ async def test_fresh_current_turn_evidence_skips_duplicate_search(config_file, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_collectors", "collector_output", "expected_status"),
+    [
+        (frozenset(), None, EvidenceStatus.NOT_SEARCHED),
+        (frozenset({"web_search"}), "", EvidenceStatus.FAILED),
+        (
+            frozenset({"web_search"}),
+            "WEB_SEARCH_RESULTS: 롯데 홍민기 (0 results)",
+            EvidenceStatus.NOT_FOUND,
+        ),
+    ],
+)
+async def test_player_status_unsatisfied_evidence_blocks_hallucinated_final(
+    config_file,
+    monkeypatch,
+    allowed_collectors,
+    collector_output,
+    expected_status,
+):
+    """SP-03/SP-05: 미조회·실패·명시적 empty는 선수 수치 final을 차단한다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(return_value=collector_output)
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    hallucinated = (
+        "홍민기는 2002년생 좌완으로 이번 시즌 ERA 2.31, "
+        "8승 3패와 97탈삼진을 기록했습니다."
+    )
+    orch._router.send = AsyncMock(return_value=_text_response(hallucinated))
+    requirement = EvidenceRequirement(
+        required=True,
+        query=query,
+        domain="sports",
+        allowed_collectors=allowed_collectors,
+        freshness_required=True,
+    )
+    state = ToolLoopState(
+        user_content=query,
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is expected_status
+    assert result.success is False
+    assert hallucinated not in result.text
+    assert "ERA 2.31" not in result.text
+    orch._router.send.assert_not_awaited()
+    if allowed_collectors:
+        dispatch.assert_awaited_once()
+    else:
+        dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_player_status_usable_evidence_preserves_source_and_skips_duplicate_search(
+    config_file,
+    monkeypatch,
+):
+    """SP-04: usable 선수 근거는 source/as-of를 보존하고 한 번만 조회한다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    collector_output = (
+        "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
+        "1. 롯데 홍민기 현재 시즌 선수 상태\n"
+        "URL: https://sports.example/players/hong-min-ki\n"
+        "Snippet: 2026-07-30 기준 공식 선수 정보와 현재 시즌 기록"
+    )
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(return_value=collector_output)
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        return_value=_text_response("검증된 현재 시즌 근거 기반 답변")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query=query,
+        domain="sports",
+        allowed_collectors=frozenset({"web_search"}),
+        freshness_required=True,
+    )
+    state = ToolLoopState(
+        user_content=query,
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.text == "검증된 현재 시즌 근거 기반 답변"
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is EvidenceStatus.FOUND
+    assert state.evidence_state.usable is True
+    assert state.evidence_state.freshness is EvidenceFreshness.CURRENT_TURN
+    assert "https://sports.example/players/hong-min-ki" in (
+        state.evidence_state.evidence_text
+    )
+    assert "2026-07-30 기준" in state.evidence_state.evidence_text
+    dispatch.assert_awaited_once()
+    request = orch._router.send.await_args.args[0]
+    evidence_messages = [
+        message
+        for message in request.messages
+        if message.get("_evidence_context") is True
+    ]
+    assert len(evidence_messages) == 1
+    assert "source_type: web_search" in evidence_messages[0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_untrusted_evidence_is_not_promoted_to_system_instruction(
     config_file,
     monkeypatch,

@@ -13,7 +13,7 @@
 #   v1: BIZ-426 — 프롬프트-only JSON 지시. live 에서 Unterminated string
 #   파싱 실패가 발생해 schema-constrained 출력으로 전환.)
 name: turn_analysis
-version: 4
+version: 5
 description: >-
   Decide whether the current user turn depends on recent context, produce an
   internal normalized question, and classify execution complexity for SimpleClaw.
@@ -38,8 +38,15 @@ system_prompt: |-
   - complex_fact_workflow: multi-step factual/scenario reasoning requiring several evidence slots, rules, remaining variables, calculation, comparison, conflict resolution, or impact analysis.
 
   Decide evidence_required semantically, not with a keyword rule:
-  - true for a request to find or verify named external facts, including unfamiliar
-    entertainment/OTT titles, cast or person metadata, products, schedules, and current facts.
+  - true for a request to find or verify specific named external facts, including
+    unfamiliar entertainment/OTT titles, cast or person metadata, products,
+    schedules, and current facts.
+  - true for changeable athlete/player status such as "요즘 어떤 상태야",
+    "최근 폼은 어때", or "현재 시즌 성적 알려줘"; classify these as
+    current_fact_guarded_loop with needs_current_facts=true.
+  - false for an ordinary high-level static identity question such as
+    "홍민기는 누구야?" when it does not request specific metadata or verification;
+    keep it on standard_tool_loop with needs_current_facts=false.
   - true whenever needs_current_facts=true or route=current_fact_guarded_loop.
   - false for ordinary conversation, rewriting, calculation from user-provided inputs,
     or static explanation that does not need an external factual lookup.

@@ -12,7 +12,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.orchestrator import (
+    AgentOrchestrator,
+    _looks_like_live_fact_request,
+    _realtime_lookup_skill_payload,
+)
 from simpleclaw.agent.response_router import ResponseRoute
 from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.agent.turn_analysis import TurnAnalysis
@@ -224,6 +228,100 @@ async def test_legacy_two_turn_drama_followup_preserves_collector_query(
         and message.get("_evidence_context") is True
         for message in request.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_player_status_semantic_analysis_reaches_common_evidence_controller(
+    config_file,
+    monkeypatch,
+):
+    """SP-01/SP-02: lexical false여도 legacy semantic 계약이 조회를 소유한다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    assert _looks_like_live_fact_request(query) is False
+    assert _realtime_lookup_skill_payload(query, object()) is None
+
+    analysis = TurnAnalysis(
+        original_text=query,
+        normalized_question=query,
+        confidence=0.98,
+        domains=("sports",),
+        intents=("realtime_lookup", "player_status"),
+        route=ResponseRoute.CURRENT_FACT_GUARDED_LOOP,
+        evidence_required=True,
+        needs_current_facts=True,
+    )
+    analyzer = AsyncMock(return_value=analysis)
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        analyzer,
+    )
+    collector = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
+            "1. 롯데 홍민기 현재 시즌 선수 상태\n"
+            "URL: https://sports.example/players/hong-min-ki\n"
+            "Snippet: 공식 선수 정보와 현재 시즌 기록"
+        )
+    )
+    orch = AgentOrchestrator(config_file)
+    monkeypatch.setattr(orch, "_dispatch_tool_call", collector)
+    orch._router.send = AsyncMock(
+        return_value=LLMResponse(
+            text="현재 근거에서 확인되는 범위로 선수 상태를 설명합니다.",
+            model="test",
+        )
+    )
+
+    result = await orch.process_message(query, user_id=1, chat_id=1)
+
+    assert analysis.route is ResponseRoute.CURRENT_FACT_GUARDED_LOOP
+    assert analysis.needs_current_facts is True
+    assert analysis.evidence_required is True
+    assert result.startswith("현재 근거에서")
+    analyzer.assert_awaited_once()
+    collector.assert_awaited_once()
+    call = collector.await_args.args[0]
+    assert call.name == "web_search"
+    assert call.arguments["query"] == query
+
+
+@pytest.mark.asyncio
+async def test_static_player_identity_is_not_forced_into_current_evidence_collection(
+    config_file,
+    monkeypatch,
+):
+    """SP-06: 정적 선수 소개는 current-fact 조회로 과승격하지 않는다."""
+
+    query = "홍민기는 누구야?"
+    analysis = TurnAnalysis(
+        original_text=query,
+        normalized_question=query,
+        confidence=0.96,
+        domains=("sports",),
+        intents=("player_identity",),
+        route=ResponseRoute.STANDARD_TOOL_LOOP,
+        evidence_required=False,
+        needs_current_facts=False,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        AsyncMock(return_value=analysis),
+    )
+    orch = AgentOrchestrator(config_file)
+    collector = AsyncMock(side_effect=AssertionError("unexpected current-fact lookup"))
+    monkeypatch.setattr(orch, "_dispatch_tool_call", collector)
+    orch._router.send = AsyncMock(
+        return_value=LLMResponse(text="홍민기에 대한 일반 소개입니다.", model="test")
+    )
+
+    result = await orch.process_message(query, user_id=1, chat_id=1)
+
+    assert result == "홍민기에 대한 일반 소개입니다."
+    assert analysis.route is ResponseRoute.STANDARD_TOOL_LOOP
+    assert analysis.needs_current_facts is False
+    assert analysis.evidence_required is False
+    collector.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent.orchestrator import _REALTIME_LOOKUP_CONTEXT_HEADER
+from simpleclaw.agent.evidence_policy import (
+    EvidenceRequirement,
+    EvidenceStatus,
+)
+from simpleclaw.agent.orchestrator import (
+    _REALTIME_LOOKUP_CONTEXT_HEADER,
+    _looks_like_live_fact_request,
+    _realtime_lookup_skill_payload,
+)
+from simpleclaw.agent.tool_loop import ToolLoopRunner
 from simpleclaw.skills.models import SkillDefinition, SkillScope
 
 
@@ -232,6 +241,55 @@ async def test_low_or_empty_realtime_evidence_blocks_unverified_final(
     orchestrator._execute_skill.assert_awaited_once()
     web_search.assert_awaited_once()
     orchestrator._router.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_semantic_evidence_contract_owns_player_status_when_lexical_gate_is_false(
+    config_file,
+    monkeypatch,
+):
+    """SP-02: legacy lexical detector와 무관하게 공통 controller가 조회한다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    assert _looks_like_live_fact_request(query) is False
+    assert _realtime_lookup_skill_payload(query, object()) is None
+
+    orchestrator = AgentOrchestrator(config_file)
+    collector = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
+            "1. 롯데 홍민기 현재 시즌 선수 상태\n"
+            "URL: https://sports.example/players/hong-min-ki"
+        )
+    )
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", collector)
+    orchestrator._router.send = AsyncMock(
+        return_value=_text_response("검증된 선수 상태 답변")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query=query,
+        domain="sports",
+        allowed_collectors=frozenset({"web_search"}),
+        freshness_required=True,
+        origin="legacy_turn_analysis",
+    )
+
+    state = await orchestrator._prepare_tool_loop_state(
+        query,
+        isolated=True,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        evidence_requirement=requirement,
+    )
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert result.text == "검증된 선수 상태 답변"
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is EvidenceStatus.FOUND
+    collector.assert_awaited_once()
+    assert collector.await_args.args[0].name == "web_search"
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
