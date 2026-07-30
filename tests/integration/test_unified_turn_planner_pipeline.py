@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.response_router import ResponseRoute
+from simpleclaw.agent.turn_analysis import TurnAnalysis
 from simpleclaw.agent.turn_plan import (
     ClarificationPlan,
     ContextRelation,
@@ -373,3 +375,95 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
         and message.get("_evidence_context") is True
         for message in seen_requests[-1].messages
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["off", "primary"])
+async def test_player_status_requires_current_turn_evidence_in_legacy_and_unified(
+    tmp_path,
+    monkeypatch,
+    mode,
+) -> None:
+    """SP-01/SP-06: legacy와 Unified가 exact 선수 상태 질의를 같은 gate로 보낸다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    orchestrator = AgentOrchestrator(_config(tmp_path, mode=mode))
+    analyzer = AsyncMock(
+        return_value=TurnAnalysis(
+            original_text=query,
+            normalized_question=query,
+            confidence=0.98,
+            domains=("sports",),
+            intents=("realtime_lookup", "player_status"),
+            route=ResponseRoute.CURRENT_FACT_GUARDED_LOOP,
+            evidence_required=True,
+            needs_current_facts=True,
+        )
+    )
+
+    async def fake_planner(text, *, catalog, **_kwargs):
+        assert text == query
+        plan = _plan(fingerprint=catalog.fingerprint, selected_ids=())
+        return replace(
+            plan,
+            original_text=query,
+            context=replace(plan.context, standalone_question=query),
+            domains=("sports",),
+            intents=("realtime_lookup", "player_status"),
+            fact_check=replace(
+                plan.fact_check,
+                domain="sports",
+                entities=("롯데", "홍민기"),
+                search_query=query,
+                required_claims=("선수 상태",),
+                freshness_required=True,
+            ),
+            execution=replace(
+                plan.execution,
+                mode=ExecutionMode.FACT_CHECK,
+            ),
+        )
+
+    planner = AsyncMock(side_effect=fake_planner)
+    search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
+            "1. 롯데 홍민기 선수 상태\n"
+            "URL: https://sports.example/players/hong-min-ki\n"
+            "Snippet: 선수 상태 2026-07-30 기준"
+        )
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
+        analyzer,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        planner,
+    )
+    monkeypatch.setattr(
+        "simpleclaw.agent.tool_dispatch.handle_web_search",
+        search,
+    )
+    orchestrator._router.send = AsyncMock(
+        return_value=LLMResponse(
+            text="검증된 현재 선수 상태 근거 기반 답변",
+            model="test",
+        )
+    )
+
+    result = await orchestrator.process_message(
+        query,
+        user_id=1,
+        chat_id=1,
+    )
+
+    assert result == "검증된 현재 선수 상태 근거 기반 답변"
+    search.assert_awaited_once()
+    assert search.await_args.args[0]["query"] == query
+    if mode == "primary":
+        planner.assert_awaited_once()
+        analyzer.assert_not_awaited()
+    else:
+        analyzer.assert_awaited_once()
+        planner.assert_not_awaited()
