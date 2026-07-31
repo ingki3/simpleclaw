@@ -98,6 +98,8 @@ class ConversationMessage:
     timestamp: datetime = field(default_factory=datetime.now)
     token_count: int = 0
     channel: str | None = None
+    session_key: str = "legacy-default"
+    turn_id: str | None = None
 
 
 @dataclass

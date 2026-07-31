@@ -245,7 +245,8 @@ async def main():
         message_handler=orchestrator.process_message,
         # BIZ-260: clarify 도구 호출 시 인라인 키보드 렌더용 — 오케스트레이터의
         # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
-        clarify_provider=orchestrator.pop_pending_clarify,
+        clarify_provider=orchestrator.get_pending_clarify,
+        clarify_consumer=orchestrator.consume_pending_clarify,
         streaming_config=streaming_config,
         attachment_dir=attachment_dir,
         # BIZ-442 — drain 중 새 메시지에 짧은 점검 안내로 즉답.

@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **BIZ-523: Turn/Session/Evidence typed state 통합** — ordinary turn을 UnifiedTurnPlanner primary 단일 경로로 전환하고, session-scoped message/pending persistence, typed realtime request, verified-evidence finalization gate를 구현한다. 코드·오프라인 검증과 필수 리뷰 후 `dev`에 반영하며 live config/restart/smoke는 별도 운영자 승인 단계로 남긴다. (진행: 2026-07-31)
+
 - [>] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm — 코드·오프라인 검증 완료** — RAG 활성 runtime은 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작한다. disabled/load failure는 `embedding_prewarm` status/model/duration을 원문 없이 기록하고 fail-open하며, 반복·동시 호출과 첫 query는 같은 model instance를 재사용한다. PR #533의 focused/전체 unit·Ruff·diff-check 및 GitHub CI를 통과했다. **미완료 운영 단계:** Review gate와 squash merge 후 별도 운영자 승인으로 live rollout/restart를 수행하고 startup log 순서, 첫 turn 재로드 부재, notifier 없는 no-send smoke를 확인한다. (진행: 2026-07-29)
 
 - [x] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환** — PR #522를 `dev`에 squash merge(SHA `c5e84cb97b37818545096dfeabdf880c013746ae`)하고 release PR #530을 merge commit(SHA `4fbbc377950b5ee04219f362a89f4b3e76a634d7`)으로 `main`에 반영해 `v2026.07.29`를 발행했다. Live `realtime-lookup-skill`은 timestamp backup 후 Naver Sports schedule schema·typed `lookup_status` 계약으로 갱신했고, LaunchAgent restart(`67645 → 72755`), Admin·Webhook·Telegram health, notifier 없는 no-send smoke(`found`, 롯데 3:5 한화, `live`, winner `null`)를 완료했다. 표시 문구·고정 키워드 없이 `STARTED → live`, `ENDED|RESULT → final`, 조회 실패와 명시적 경기 없음 분리를 운영에서 확인했다. (2026-07-29)

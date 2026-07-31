@@ -585,7 +585,8 @@ class TelegramBot:
         whitelist_user_ids: list[int] | None = None,
         whitelist_chat_ids: list[int] | None = None,
         message_handler: Callable[..., Awaitable[str]] | None = None,
-        clarify_provider: Callable[[int], ClarifyRequest | None] | None = None,
+        clarify_provider: Callable[..., ClarifyRequest | None] | None = None,
+        clarify_consumer: Callable[..., ClarifyRequest | None] | None = None,
         streaming_config: dict | None = None,
         proactive_callback_handler: Callable[..., Awaitable[str]] | None = None,
         attachment_dir: str | Path | None = None,
@@ -600,6 +601,7 @@ class TelegramBot:
         # None 이면 인라인 키보드 렌더 경로가 꺼져 기존 텍스트 응답만 동작 — 봇 호환
         # 모드(테스트, 다른 채널) 에서 의존성을 줄이기 위한 옵셔널.
         self._clarify_provider = clarify_provider
+        self._clarify_consumer = clarify_consumer
         # BIZ-260: (chat_id, message_id) → list[ClarifyOption] LRU 캐시.
         # 콜백 페이로드에는 옵션 인덱스만 실리고, 본문은 여기서 조회한다.
         self._clarify_cache: OrderedDict[
@@ -710,6 +712,7 @@ class TelegramBot:
         user_id: int,
         chat_id: int,
         *,
+        thread_id: int | None = None,
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
         on_progress: ProgressCallback | None = None,
@@ -752,6 +755,8 @@ class TelegramBot:
         if self._message_handler:
             try:
                 kwargs = {}
+                if thread_id is not None:
+                    kwargs["thread_id"] = thread_id
                 if attachments:
                     kwargs["attachments"] = attachments
                 if on_text_delta is not None:
@@ -844,7 +849,13 @@ class TelegramBot:
         return InlineKeyboardMarkup(rows)
 
     async def _send_response(
-        self, update, response: str, *, chat_id: int
+        self,
+        update,
+        response: str,
+        *,
+        chat_id: int,
+        user_id: int | None = None,
+        thread_id: int | None = None,
     ) -> None:
         """일반 텍스트 응답 또는 clarify 인라인 키보드를 보낸다.
 
@@ -857,6 +868,12 @@ class TelegramBot:
         request: ClarifyRequest | None = None
         if self._clarify_provider is not None:
             try:
+                request = (
+                    self._clarify_provider(user_id, chat_id, thread_id)
+                    if user_id is not None
+                    else self._clarify_provider(chat_id)
+                )
+            except TypeError:
                 request = self._clarify_provider(chat_id)
             except Exception:
                 logger.exception("clarify_provider raised; falling back to text")
@@ -905,6 +922,7 @@ class TelegramBot:
         user_id = from_user.id
         chat_id = message.chat_id
         message_id = message.message_id
+        thread_id = getattr(message, "message_thread_id", None)
         data = query.data or ""
 
         # 화이트리스트 재검증 — 보안 회귀 면 (DoD #3). 인바운드 텍스트와 동일 가드.
@@ -954,6 +972,13 @@ class TelegramBot:
             return
 
         option = self._lookup_clarify_option(chat_id, message_id, option_index)
+        if option is None and self._clarify_provider is not None:
+            try:
+                durable = self._clarify_provider(user_id, chat_id, thread_id)
+            except TypeError:
+                durable = self._clarify_provider(chat_id)
+            if durable is not None and option_index < len(durable.options):
+                option = durable.options[option_index]
         if option is None:
             try:
                 await query.answer(
@@ -982,6 +1007,25 @@ class TelegramBot:
             return
 
         try:
+            if self._clarify_consumer is not None:
+                try:
+                    self._clarify_consumer(user_id, chat_id, thread_id)
+                except TypeError:
+                    self._clarify_consumer(chat_id)
+            if thread_id is None:
+                response = await self._message_handler(
+                    option.body,
+                    user_id,
+                    chat_id,
+                )
+            else:
+                response = await self._message_handler(
+                    option.body,
+                    user_id,
+                    chat_id,
+                    thread_id=thread_id,
+                )
+        except TypeError:
             response = await self._message_handler(option.body, user_id, chat_id)
         except Exception:
             logger.exception("clarify callback message handler error")
@@ -993,7 +1037,13 @@ class TelegramBot:
         # callback_query 의 ``message`` 는 봇이 보낸 원본 (질문 메시지) 이므로
         # ``reply_text`` 가 같은 chat 에 답변을 이어준다. 응답이 clarify 후속이면
         # 또 키보드가 붙는다.
-        await self._send_response(query, response, chat_id=chat_id)
+        await self._send_response(
+            query,
+            response,
+            chat_id=chat_id,
+            user_id=user_id,
+            thread_id=thread_id,
+        )
 
     @staticmethod
     def _default_message_text_for_attachments(
@@ -1131,6 +1181,7 @@ class TelegramBot:
                     message_text = update.message.text or update.message.caption or ""
                     user_id = update.message.from_user.id
                     chat_id = update.message.chat_id
+                    thread_id = getattr(update.message, "message_thread_id", None)
                     authorized = self.is_authorized(user_id, chat_id)
                     attachments = (
                         await self._download_message_attachments(
@@ -1174,6 +1225,7 @@ class TelegramBot:
                         await sink.start()
                         response = await self.handle_message(
                             message_text, user_id, chat_id,
+                            thread_id=thread_id,
                             attachments=attachments,
                             on_text_delta=sink.on_text_delta,
                             on_progress=(
@@ -1189,6 +1241,12 @@ class TelegramBot:
                         pending_request = None
                         if self._clarify_provider is not None:
                             try:
+                                pending_request = self._clarify_provider(
+                                    user_id,
+                                    chat_id,
+                                    thread_id,
+                                )
+                            except TypeError:
                                 pending_request = self._clarify_provider(chat_id)
                             except Exception:
                                 logger.exception(
@@ -1228,12 +1286,20 @@ class TelegramBot:
 
                     # 비스트리밍 경로 — 기존 동작 유지(완성 후 BIZ-253 분할 전송).
                     response = await self.handle_message(
-                        message_text, user_id, chat_id, attachments=attachments
+                        message_text,
+                        user_id,
+                        chat_id,
+                        thread_id=thread_id,
+                        attachments=attachments,
                     )
                     if response is None:
                         return
                     await self._send_response(
-                        update, response, chat_id=chat_id,
+                        update,
+                        response,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        thread_id=thread_id,
                     )
 
             self._application.add_handler(

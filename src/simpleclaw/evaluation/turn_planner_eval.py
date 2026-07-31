@@ -93,6 +93,11 @@ class CaseEvaluation:
     output_tokens: int
     context_reduction_rate: float | None
     error_codes: tuple[str, ...] = ()
+    keyword_fallback_count: int = 0
+    fact_required_without_action: int = 0
+    unverified_final_count: int = 0
+    planner_call_count: int = 1
+    cross_session_selected_count: int = 0
 
     @property
     def macro_score(self) -> float:
@@ -128,6 +133,11 @@ class CaseEvaluation:
             },
             "context_reduction_rate": self.context_reduction_rate,
             "error_codes": list(self.error_codes),
+            "keyword_fallback_count": self.keyword_fallback_count,
+            "fact_required_without_action": self.fact_required_without_action,
+            "unverified_final_count": self.unverified_final_count,
+            "planner_call_count": self.planner_call_count,
+            "cross_session_selected_count": self.cross_session_selected_count,
         }
 
 
@@ -806,6 +816,21 @@ def aggregate_results(
             ),
         },
         "context_reduction_rate": _mean(context_reductions),
+        "keyword_fallback_count": sum(
+            result.keyword_fallback_count for result in ordered_results
+        ),
+        "fact_required_without_action": sum(
+            result.fact_required_without_action for result in ordered_results
+        ),
+        "unverified_final_count": sum(
+            result.unverified_final_count for result in ordered_results
+        ),
+        "planner_call_count": sum(
+            result.planner_call_count for result in ordered_results
+        ),
+        "session_context_contamination": sum(
+            result.cross_session_selected_count for result in ordered_results
+        ),
     }
     if catalog_metrics is not None:
         expected_keys = {"asset_count", "character_count", "estimated_tokens"}

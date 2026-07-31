@@ -48,6 +48,7 @@ def _fact_plan(*, required: bool = True) -> UnifiedTurnPlan:
             domain="entertainment" if required else "none",
             entities=("이런 엿같은 사랑",),
             search_query='"이런 엿같은 사랑" Netflix 등장인물',
+            intents=("drama_info",) if required else (),
             freshness_required=False,
         ),
         execution=ExecutionPlan(
@@ -121,7 +122,12 @@ def test_explicit_empty_and_provider_failure_are_not_coerced() -> None:
 
     not_found = assess_realtime_result(
         requirement,
-        {"lookup_status": "not_found", "confidence": "high", "facts": []},
+        {
+            "lookup_status": "not_found",
+            "authoritative_empty": True,
+            "confidence": "high",
+            "facts": [],
+        },
         usable=False,
     )
     failed = assess_realtime_result(
@@ -134,6 +140,16 @@ def test_explicit_empty_and_provider_failure_are_not_coerced() -> None:
     assert not_found.status is EvidenceStatus.NOT_FOUND
     assert failed.status is EvidenceStatus.FAILED
     assert failed.failure_reason == "provider timeout"
+
+
+def test_not_found_without_authoritative_empty_evidence_is_unusable() -> None:
+    requirement = EvidenceRequirement(required=True, query="경기", domain="sports")
+    state = assess_realtime_result(
+        requirement,
+        {"lookup_status": "not_found", "confidence": "high", "facts": []},
+        usable=False,
+    )
+    assert state.status is EvidenceStatus.UNUSABLE
 
 
 @pytest.mark.parametrize(

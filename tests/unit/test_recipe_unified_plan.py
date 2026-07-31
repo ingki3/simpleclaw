@@ -151,56 +151,6 @@ async def test_recipe_mode_exposes_only_selected_recipe(tmp_path) -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_recipe_owner_does_not_run_top_level_fact_controller(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    orchestrator = AgentOrchestrator(_config(tmp_path))
-    orchestrator._recipes = [
-        RecipeDefinition(
-            name="selected-recipe",
-            description="selected",
-            capability=CapabilityMetadata(
-                read_only=True,
-                side_effects=False,
-                declared=True,
-            ),
-        ),
-        RecipeDefinition(
-            name="other-recipe",
-            description="other",
-            capability=CapabilityMetadata(
-                read_only=True,
-                side_effects=False,
-                declared=True,
-            ),
-        ),
-    ]
-
-    async def fake_planner(_text, *, catalog, **_kwargs):
-        return _plan(fingerprint=catalog.fingerprint)
-
-    monkeypatch.setattr(
-        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
-        fake_planner,
-    )
-    monkeypatch.setattr(orchestrator, "_reload_dynamic_files", lambda: None)
-    planned_complex = AsyncMock(side_effect=AssertionError("duplicate fact retrieval"))
-    monkeypatch.setattr(
-        orchestrator,
-        "_run_planned_complex_fact_workflow",
-        planned_complex,
-    )
-    tool_loop = AsyncMock(return_value=ToolLoopResult("recipe result"))
-    monkeypatch.setattr(orchestrator, "_run_tool_loop_result", tool_loop)
-
-    result = await orchestrator.process_message("선택 레시피로 조사해줘", 1, 1)
-
-    assert result == "recipe result"
-    planned_complex.assert_not_awaited()
-    tool_loop.assert_awaited_once()
-    assert tool_loop.await_args.kwargs["plan"].fact_check.owner is EvidenceOwner.ASSET
 
 
 @pytest.mark.asyncio

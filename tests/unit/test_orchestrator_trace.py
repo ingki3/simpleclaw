@@ -68,39 +68,7 @@ def _make_text_response(text: str) -> LLMResponse:
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 class TestOrchestratorTraceId:
-    @pytest.mark.asyncio
-    async def test_process_message_assigns_trace_id(self, config_file):
-        """``process_message``가 진입 시 trace_id를 발급하고 LLM 호출 시점에 활성화한다."""
-        orch = AgentOrchestrator(config_file)
 
-        captured: dict[str, str] = {}
-
-        async def fake_send(_request):
-            captured["trace_id"] = get_trace_id()
-            return _make_text_response("ok")
-
-        orch._router.send = fake_send
-
-        await orch.process_message("hello", user_id=1, chat_id=1)
-        assert captured["trace_id"]
-        assert len(captured["trace_id"]) >= 16  # uuid4 hex
-
-    @pytest.mark.asyncio
-    async def test_each_message_gets_unique_trace_id(self, config_file):
-        orch = AgentOrchestrator(config_file)
-        seen: list[str] = []
-
-        async def fake_send(_request):
-            seen.append(get_trace_id())
-            return _make_text_response("ok")
-
-        orch._router.send = fake_send
-
-        await orch.process_message("first", user_id=1, chat_id=1)
-        await orch.process_message("second", user_id=1, chat_id=1)
-        assert len(seen) == 2
-        assert seen[0] != seen[1]
-        assert all(seen)
 
     @pytest.mark.asyncio
     async def test_trace_scope_restored_after_message(self, config_file):

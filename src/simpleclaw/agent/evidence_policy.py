@@ -86,11 +86,13 @@ _MAX_EVIDENCE_CHARS = 16_000
 class EvidenceStatus(str, Enum):
     """Outcome of the required current-turn evidence attempt."""
 
+    SEARCHING = "searching"
     FOUND = "found"
     NOT_FOUND = "not_found"
     FAILED = "failed"
     NOT_SEARCHED = "not_searched"
     UNUSABLE = "unusable"
+    VERIFIED = "verified"
 
 
 class EvidenceSourceType(str, Enum):
@@ -127,7 +129,7 @@ class EvidenceState:
 
     @property
     def usable(self) -> bool:
-        return self.status is EvidenceStatus.FOUND
+        return self.status in {EvidenceStatus.FOUND, EvidenceStatus.VERIFIED}
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,8 @@ class EvidenceRequirement:
     origin: str = ""
     owner: str = "none"
     entities: tuple[str, ...] = ()
+    intents: tuple[str, ...] = ()
+    reference_date: str = ""
     required_claims: tuple[str, ...] = ()
     collector_validators: tuple[tuple[str, str], ...] = ()
 
@@ -282,7 +286,9 @@ def requirement_from_turn_plan(
         freshness_required=fact_check.freshness_required,
         origin="unified_fact_check_plan",
         owner=fact_check.owner.value,
-        entities=tuple(fact_check.entities),
+        entities=tuple(entity.value for entity in fact_check.entities),
+        intents=tuple(fact_check.intents),
+        reference_date=fact_check.reference_date,
         required_claims=tuple(fact_check.required_claims),
         collector_validators=validators,
     )
@@ -366,6 +372,8 @@ def assess_realtime_result(
         EvidenceStatus.FOUND.value,
         EvidenceStatus.NOT_FOUND.value,
         EvidenceStatus.FAILED.value,
+        "unsupported",
+        EvidenceStatus.UNUSABLE.value,
     }:
         schema_failure = "structured evidence schema failure: invalid lookup_status"
     if not schema_failure and not isinstance(facts, list):
@@ -408,9 +416,15 @@ def assess_realtime_result(
             as_of=as_of,
         )
     if lookup_status == EvidenceStatus.NOT_FOUND.value:
-        status = EvidenceStatus.NOT_FOUND
+        status = (
+            EvidenceStatus.NOT_FOUND
+            if (parsed or {}).get("authoritative_empty") is True
+            else EvidenceStatus.UNUSABLE
+        )
     elif lookup_status == EvidenceStatus.FAILED.value:
         status = EvidenceStatus.FAILED
+    elif lookup_status in {"unsupported", EvidenceStatus.UNUSABLE.value}:
+        status = EvidenceStatus.UNUSABLE
     elif lookup_status == EvidenceStatus.FOUND.value and usable:
         status = EvidenceStatus.FOUND
     elif lookup_status == EvidenceStatus.FOUND.value:
@@ -425,6 +439,14 @@ def assess_realtime_result(
             reason = str(limitations[0])[:240]
         else:
             reason = "structured provider failed"
+    if not reason and lookup_status == "unsupported":
+        reason = "structured provider does not support this request"
+    if (
+        not reason
+        and lookup_status == EvidenceStatus.NOT_FOUND.value
+        and status is EvidenceStatus.UNUSABLE
+    ):
+        reason = "not_found lacked authoritative empty-result evidence"
     return EvidenceState(
         required=requirement.required,
         attempted=True,

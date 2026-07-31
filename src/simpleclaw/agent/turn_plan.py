@@ -93,17 +93,46 @@ class ClarificationPlan:
 
 
 @dataclass(frozen=True)
+class FactEntity:
+    """Typed entity needed by a fact source adapter."""
+
+    kind: str
+    value: str
+
+
+@dataclass(frozen=True)
 class FactCheckPlan:
     """현재 사실 검증의 owner·검색 입력·필수 claim 계약."""
 
     required: bool
     owner: EvidenceOwner
     domain: str
-    entities: tuple[str, ...]
+    entities: tuple[FactEntity, ...]
     search_query: str
+    intents: tuple[str, ...] = ()
+    reference_date: str = ""
     required_claims: tuple[str, ...] = ()
     freshness_required: bool = False
     reason: str = ""
+
+    def __post_init__(self) -> None:
+        """Normalize one-release programmatic string entities to typed values."""
+        normalized = tuple(
+            item
+            if isinstance(item, FactEntity)
+            else FactEntity(kind="legacy", value=str(item))
+            for item in self.entities
+            if isinstance(item, FactEntity) or str(item).strip()
+        )
+        if normalized != self.entities:
+            object.__setattr__(self, "entities", normalized)
+
+    def entity(self, kind: str) -> str:
+        """Return the first exact value for a typed entity kind."""
+        return next(
+            (item.value for item in self.entities if item.kind == kind),
+            "",
+        )
 
 
 @dataclass(frozen=True)
@@ -189,7 +218,15 @@ class UnifiedTurnPlan:
             "fact_check": {
                 "required": self.fact_check.required,
                 "domain": self.fact_check.domain,
-                "entities": list(self.fact_check.entities),
+                "intents": list(self.fact_check.intents),
+                # Keep the BIZ-488 evaluator's compact string projection while
+                # exposing the typed records separately for newer evaluators.
+                "entities": [item.value for item in self.fact_check.entities],
+                "entity_details": [
+                    {"kind": item.kind, "value": item.value}
+                    for item in self.fact_check.entities
+                ],
+                "reference_date": self.fact_check.reference_date,
                 "search_query": self.fact_check.search_query,
             },
             "execution": {
@@ -284,11 +321,22 @@ _FACT_CHECK_SCHEMA = _strict_object(
             "enum": [item.value for item in EvidenceOwner],
         },
         "domain": {"type": "string"},
-        "entities": {
+        "intents": {
             "type": "array",
             "items": {"type": "string"},
+            "maxItems": _MAX_INTENTS,
+        },
+        "entities": {
+            "type": "array",
+            "items": _strict_object(
+                {
+                    "kind": {"type": "string"},
+                    "value": {"type": "string"},
+                }
+            ),
             "maxItems": _MAX_ENTITIES,
         },
+        "reference_date": {"type": "string"},
         "search_query": {"type": "string"},
         "required_claims": {
             "type": "array",
@@ -447,6 +495,31 @@ def _asset_refs(value: object) -> tuple[AssetRef, ...]:
         selected.append(asset)
         seen.add(identity)
         if len(selected) >= _MAX_ALLOWED_ASSETS:
+            break
+    return tuple(selected)
+
+
+def _fact_entities(value: object) -> tuple[FactEntity, ...]:
+    """Parse typed entities while accepting one-release legacy strings."""
+    if not isinstance(value, list | tuple):
+        return ()
+    selected: list[FactEntity] = []
+    seen: set[tuple[str, str]] = set()
+    for item in value:
+        if isinstance(item, Mapping):
+            kind = _string(item.get("kind"), limit=80)
+            entity_value = _string(item.get("value"), limit=_MAX_SHORT_TEXT)
+        else:
+            kind = "legacy"
+            entity_value = _string(item, limit=_MAX_SHORT_TEXT)
+        if not entity_value:
+            continue
+        identity = (kind or "unknown", entity_value)
+        if identity in seen:
+            continue
+        selected.append(FactEntity(*identity))
+        seen.add(identity)
+        if len(selected) >= _MAX_ENTITIES:
             break
     return tuple(selected)
 
@@ -610,9 +683,14 @@ def parse_turn_plan_data(
             _string(fact_data.get("domain"), limit=80)
             or ("general" if fact_required else "none")
         ),
-        entities=_string_tuple(
-            fact_data.get("entities"),
-            limit=_MAX_ENTITIES,
+        intents=_string_tuple(
+            fact_data.get("intents", data.get("intents")),
+            limit=_MAX_INTENTS,
+        ),
+        entities=_fact_entities(fact_data.get("entities")),
+        reference_date=_string(
+            fact_data.get("reference_date"),
+            limit=40,
         ),
         search_query=_string(
             fact_data.get("search_query"),

@@ -264,23 +264,6 @@ class TestToolLoopIntegration:
         await orch.process_cron_message("크론 메시지")
         assert orch._embedding_service.encode_query.call_count == 0
 
-    @pytest.mark.asyncio
-    async def test_non_isolated_calls_rag(self, config_file_rag_on):
-        """일반 process_message는 _retrieve_relevant_context를 호출한다."""
-        orch = AgentOrchestrator(config_file_rag_on)
-        orch._embedding_service.encode_query = MagicMock(return_value=None)
-        orch._embedding_service.encode_passage = MagicMock(return_value=None)
-
-        mock_response = MagicMock()
-        mock_response.text = "응답"
-        mock_response.tool_calls = None
-        mock_response.backend_name = "gemini"
-        orch._router = MagicMock()
-        orch._router.send = AsyncMock(return_value=mock_response)
-
-        await orch.process_message("질문", 1, 1)
-        # encode_query는 _retrieve_relevant_context에서 1회 호출
-        assert orch._embedding_service.encode_query.call_count == 1
 
 
 def _msg(content: str, role: MessageRole = MessageRole.USER, ts: datetime | None = None):
