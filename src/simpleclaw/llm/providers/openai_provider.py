@@ -18,6 +18,7 @@ Structured Output (BIZ-450):
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 
@@ -27,6 +28,7 @@ from simpleclaw.llm.models import (
     LLMAuthError,
     LLMProviderError,
     LLMResponse,
+    MultimodalAttachment,
     SystemBlock,
     ToolCall,
     ToolDefinition,
@@ -58,6 +60,41 @@ def _max_tokens_field(model: str) -> str:
 # OpenAI/OpenRouter json_schema 모드는 더 엄격한 JSON Schema subset 만 받으므로
 # 검증 계약은 보존하면서 확장 키만 재귀 제거한다.
 _OPENAI_SCHEMA_DROP_KEYS = frozenset({"propertyOrdering"})
+
+# OpenRouter ``file`` part는 기존 native Gemini 첨부 경로가 허용한 문서 MIME으로
+# 제한한다. 알 수 없는 binary를 문서로 오인하거나 prompt에서 조용히 누락하지 않고
+# 네트워크 호출 전에 실패시키기 위한 공통 허용 목록이다.
+_OPENAI_CHAT_FILE_ATTACHMENT_MIME_TYPES = frozenset(
+    {
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "application/json",
+        "application/rtf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+)
+
+_OPENAI_CHAT_FILE_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "text/plain": ".txt",
+    "text/markdown": ".md",
+    "text/csv": ".csv",
+    "application/json": ".json",
+    "application/rtf": ".rtf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
 
 
 def _sanitize_json_schema_for_openai(schema: object) -> object:
@@ -162,7 +199,9 @@ class OpenAIProvider(LLMProvider):
             LLMAuthError: API 키가 비어있는 경우.
         """
         if not api_key:
-            raise LLMAuthError(f"API key missing for provider '{name}' (env var not set)")
+            raise LLMAuthError(
+                f"API key missing for provider '{name}' (env var not set)"
+            )
         self._model = model
         self._extra_body = dict(extra_body or {})
         self._profile = profile or get_provider_profile("openai")
@@ -188,49 +227,191 @@ class OpenAIProvider(LLMProvider):
                 "function": {
                     "name": td.name,
                     "description": td.description,
-                    "parameters": td.parameters if td.parameters else {"type": "object", "properties": {}},
+                    "parameters": td.parameters
+                    if td.parameters
+                    else {"type": "object", "properties": {}},
                 },
             }
             for td in tools
         ]
 
     @staticmethod
-    def _convert_messages(messages: list[dict]) -> list[dict]:
+    def _coerce_multimodal_attachment(
+        raw: object, *, provider_name: str = "openai"
+    ) -> MultimodalAttachment:
+        """첨부를 검증하고 OpenAI-compatible payload용 값으로 정규화한다.
+
+        OpenRouter 전용 profile의 capability gate를 통과한 요청은 attachment를
+        조용히 누락할 수 없다. 따라서 지원하지 않는 shape/MIME과 빈 bytes는
+        모두 provider error로 fail-closed한다.
+        """
+        if isinstance(raw, MultimodalAttachment):
+            attachment = raw
+        elif isinstance(raw, dict):
+            data = raw.get("data")
+            mime_type = raw.get("mime_type") or raw.get("mimeType")
+            attachment = MultimodalAttachment(
+                data=data,  # type: ignore[arg-type]
+                mime_type=mime_type or "",
+                name=raw.get("name") or raw.get("file_name"),
+                path=raw.get("path"),
+                size_bytes=raw.get("size_bytes") or raw.get("sizeBytes"),
+            )
+        else:
+            raise LLMProviderError(
+                f"Provider '{provider_name}' received an invalid attachment object"
+            )
+
+        if not isinstance(attachment.data, (bytes, bytearray, memoryview)):
+            raise LLMProviderError(
+                f"Provider '{provider_name}' attachment data must be bytes"
+            )
+        data = bytes(attachment.data)
+        if not data:
+            raise LLMProviderError(
+                f"Provider '{provider_name}' attachment data must not be empty"
+            )
+
+        mime_type = attachment.mime_type
+        if not isinstance(mime_type, str) or not mime_type.strip():
+            raise LLMProviderError(
+                f"Provider '{provider_name}' attachment MIME type is required"
+            )
+        mime_type = mime_type.strip().lower()
+        if not (
+            mime_type.startswith("image/")
+            or mime_type in _OPENAI_CHAT_FILE_ATTACHMENT_MIME_TYPES
+        ):
+            raise LLMProviderError(
+                f"Provider '{provider_name}' does not support attachment MIME type "
+                f"'{mime_type}'"
+            )
+
+        return MultimodalAttachment(
+            data=data,
+            mime_type=mime_type,
+            name=attachment.name,
+            path=attachment.path,
+            size_bytes=attachment.size_bytes,
+        )
+
+    @staticmethod
+    def _attachment_data_url(attachment: MultimodalAttachment) -> str:
+        """첨부 bytes를 OpenAI/OpenRouter가 받는 base64 data URL로 만든다."""
+        encoded = base64.b64encode(attachment.data).decode("ascii")
+        return f"data:{attachment.mime_type};base64,{encoded}"
+
+    @staticmethod
+    def _attachment_filename(attachment: MultimodalAttachment) -> str:
+        """파일명이 없을 때 MIME 기반의 비민감한 안정적 이름을 제공한다."""
+        if isinstance(attachment.name, str) and attachment.name.strip():
+            return attachment.name.strip()
+        suffix = _OPENAI_CHAT_FILE_SUFFIXES.get(attachment.mime_type, ".bin")
+        return f"attachment{suffix}"
+
+    @classmethod
+    def _content_for_message(
+        cls, msg: dict, *, provider_name: str = "openai"
+    ) -> object:
+        """메시지 텍스트와 첨부를 Chat Completions content로 변환한다."""
+        raw_attachments = msg.get("attachments") or []
+        if not raw_attachments:
+            return msg.get("content", "")
+        if msg.get("role", "user") != "user":
+            raise LLMProviderError(
+                f"Provider '{provider_name}' only supports attachments on user messages"
+            )
+
+        text = msg.get("content", "")
+        if not isinstance(text, str):
+            raise LLMProviderError(
+                f"Provider '{provider_name}' attachment message content must be text"
+            )
+        parts: list[dict] = []
+        if text:
+            parts.append({"type": "text", "text": text})
+
+        for raw_attachment in raw_attachments:
+            attachment = cls._coerce_multimodal_attachment(
+                raw_attachment, provider_name=provider_name
+            )
+            data_url = cls._attachment_data_url(attachment)
+            if attachment.mime_type.startswith("image/"):
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    }
+                )
+            else:
+                parts.append(
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": cls._attachment_filename(attachment),
+                            "file_data": data_url,
+                        },
+                    }
+                )
+        return parts
+
+    @classmethod
+    def _convert_messages(
+        cls, messages: list[dict], *, provider_name: str = "openai"
+    ) -> list[dict]:
         """generic 메시지 리스트를 OpenAI Chat Completions 형식으로 변환한다.
 
         assistant의 tool_calls는 OpenAI 네이티브 형식으로 변환하고,
-        tool result는 그대로 사용한다 (OpenAI 네이티브 형식과 동일).
+        tool result는 그대로 사용한다 (OpenAI 네이티브 형식과 동일). user
+        attachment는 OpenRouter가 지원하는 image/file content part로 변환한다.
         """
         result = []
         for msg in messages:
             role = msg.get("role", "user")
+            if msg.get("attachments") and role != "user":
+                raise LLMProviderError(
+                    f"Provider '{provider_name}' only supports attachments on user messages"
+                )
 
             if role == "tool":
                 # OpenAI는 {"role": "tool", "tool_call_id": ..., "content": ...} 그대로 사용
-                result.append({
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                    "content": msg.get("content", ""),
-                })
+                result.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.get("tool_call_id", ""),
+                        "content": msg.get("content", ""),
+                    }
+                )
             elif role == "assistant" and msg.get("tool_calls"):
                 # assistant의 도구 호출 → OpenAI tool_calls 형식
                 openai_tcs = []
                 for tc in msg["tool_calls"]:
-                    openai_tcs.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc.get("arguments", {})),
-                        },
-                    })
-                result.append({
-                    "role": "assistant",
-                    "content": msg.get("content", "") or None,
-                    "tool_calls": openai_tcs,
-                })
+                    openai_tcs.append(
+                        {
+                            "id": tc["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc.get("arguments", {})),
+                            },
+                        }
+                    )
+                result.append(
+                    {
+                        "role": "assistant",
+                        "content": msg.get("content", "") or None,
+                        "tool_calls": openai_tcs,
+                    }
+                )
             else:
-                result.append({"role": role, "content": msg.get("content", "")})
+                result.append(
+                    {
+                        "role": role,
+                        "content": cls._content_for_message(
+                            msg, provider_name=provider_name
+                        ),
+                    }
+                )
 
         return result
 
@@ -275,7 +456,9 @@ class OpenAIProvider(LLMProvider):
         if effective_system:
             msg_list.append({"role": "system", "content": effective_system})
         if messages is not None:
-            msg_list.extend(self._convert_messages(messages))
+            msg_list.extend(
+                self._convert_messages(messages, provider_name=self._name)
+            )
         else:
             msg_list.append({"role": "user", "content": user_message})
 
@@ -327,7 +510,11 @@ class OpenAIProvider(LLMProvider):
             tc_list = []
             for tc in choice.message.tool_calls:
                 try:
-                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                    args = (
+                        json.loads(tc.function.arguments)
+                        if tc.function.arguments
+                        else {}
+                    )
                 except json.JSONDecodeError:
                     args = {}
                 tc_list.append(
@@ -403,7 +590,9 @@ class OpenAIProvider(LLMProvider):
         if effective_system:
             msg_list.append({"role": "system", "content": effective_system})
         if messages is not None:
-            msg_list.extend(self._convert_messages(messages))
+            msg_list.extend(
+                self._convert_messages(messages, provider_name=self._name)
+            )
         else:
             msg_list.append({"role": "user", "content": user_message})
 

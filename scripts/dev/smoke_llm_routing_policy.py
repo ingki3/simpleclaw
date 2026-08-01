@@ -1,157 +1,275 @@
 #!/usr/bin/env python3
-"""SimpleClaw LLM 라우팅 정책(no-secret) 스모크 스크립트 (BIZ-448/450).
+"""OpenRouter Gemini routing no-send smoke (BIZ-524).
 
-/tmp 아래 임시 config 를 만들어 실제 LLMRouter 경로로 다음을 검증한다:
-  - text-only 암묵 요청 → DeepSeek default (또는 empty 시 Gemini fallback)
-  - 첨부 포함 암묵 요청 → Gemini multimodal
-  - required structured JSON 요청 → DeepSeek default 가 fallback 없이 처리 (BIZ-450)
-live config.yaml 은 절대 수정하지 않으며, API key 값은 존재 여부/길이만
-출력한다 — 값 자체는 어떤 경로로도 출력 금지.
+임시 config와 실제 ``LLMRouter``를 사용해 text, required structured output,
+tool call, PNG image, PDF file 경로를 검증한다. Telegram/channel 코드는 호출하지
+않으며 응답 본문과 credential 값은 출력하지 않는다. 성공 로그에는 backend,
+model, status, marker 일치 여부만 남긴다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import os
 import tempfile
 from pathlib import Path
 
-from simpleclaw.llm.models import LLMRequest, MultimodalAttachment
+from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
+from simpleclaw.llm.models import (
+    LLMRequest,
+    LLMResponse,
+    MultimodalAttachment,
+    ToolDefinition,
+)
 from simpleclaw.llm.router import create_router
 
 DEV_ENV = Path("/Users/simplist/Dev/SimpleClaw/.env")
 LIVE_ENV = Path("/Users/simplist/.simpleclaw/.env")
+OPENROUTER_BACKEND = "openrouter_gemini_3_6_flash"
+OPENROUTER_MODEL = "google/gemini-3.6-flash"
+
+# 1x1 PNG. 파일 자체의 수용 여부를 검증하며 원문 bytes는 로그에 남기지 않는다.
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUB"
+    "AScY42YAAAAASUVORK5CYII="
+)
 
 
-def _env_status(path: Path, key: str) -> tuple[bool, int]:
-    """`.env` 파일에서 key 존재 여부와 값 길이만 확인한다 — 값은 반환/출력 금지."""
-    if not path.exists():
-        return False, 0
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if line.strip().startswith(key + "="):
-            value = line.split("=", 1)[1].strip().strip("'\"")
-            return bool(value), len(value)
-    return False, 0
+def _read_secret(key: str) -> str | None:
+    """환경 또는 승인된 .env에서 secret을 읽되 값/길이/경로를 노출하지 않는다."""
+    if value := os.environ.get(key):
+        return value
+    for path in (DEV_ENV, LIVE_ENV):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.strip().startswith(key + "="):
+                value = line.split("=", 1)[1].strip().strip("'\"")
+                if value:
+                    return value
+    return None
 
 
-def _write_temp_config(directory: Path) -> Path:
-    """임시 디렉터리에 라우팅 정책 config 와 병합 .env 사본을 작성한다."""
+def _write_temp_config(directory: Path, api_key: str) -> Path:
+    """OpenRouter 전용 임시 route config와 최소 credential 파일을 작성한다."""
     config = directory / "config.yaml"
     config.write_text(
         """
 llm:
-  default: openrouter_deepseek_v4_pro
-  fallback: gemini
-  multimodal: gemini
+  routes:
+    default: {primary: openrouter_deepseek_v4_pro, retry: openrouter_gemini_3_6_flash}
+    turn_analysis: {primary: openrouter_gemini_3_6_flash}
+    multimodal: {primary: openrouter_gemini_3_6_flash}
   providers:
     openrouter_deepseek_v4_pro:
-      provider: openai
       type: api
       model: deepseek/deepseek-v4-pro
+      transport: openai_chat
+      profile: openrouter
       api_key_env: OPENROUTER_API_KEY
       base_url: https://openrouter.ai/api/v1
-      default_headers:
-        HTTP-Referer: https://simpleclaw.local
-        X-Title: SimpleClaw routing smoke
       extra_body:
         reasoning:
           enabled: false
-    gemini:
+    openrouter_gemini_3_6_flash:
       type: api
-      model: gemini-3.5-flash
-      api_key_env: GEMINI_API_KEY
+      model: google/gemini-3.6-flash
+      transport: openai_chat
+      profile: openrouter-multimodal
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
 """.strip(),
         encoding="utf-8",
     )
-    # load_llm_config 는 config.yaml 옆의 .env 에서 api_key_env 를 해소하므로
-    # dev/live .env 를 임시 디렉터리로 병합 복사한다 (임시 파일은 컨텍스트
-    # 종료 시 삭제).
-    env_lines = []
-    for source in (DEV_ENV, LIVE_ENV):
-        if source.exists():
-            env_lines.extend(source.read_text(encoding="utf-8", errors="ignore").splitlines())
-    (directory / ".env").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+    # TemporaryDirectory 자체가 소유자 전용이며 종료 시 credential 사본이 삭제된다.
+    (directory / ".env").write_text(f"OPENROUTER_API_KEY={api_key}\n", encoding="utf-8")
     return config
 
 
+def _pdf_with_marker(marker: str) -> bytes:
+    """외부 PDF 라이브러리 없이 단일 페이지 marker PDF를 생성한다."""
+    escaped = marker.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT /F1 18 Tf 72 720 Td ({escaped}) Tj ET".encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length "
+        + str(len(stream)).encode("ascii")
+        + b" >>\nstream\n"
+        + stream
+        + b"\nendstream",
+    ]
+    output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode("ascii"))
+        output.extend(obj)
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode("ascii")
+    )
+    return bytes(output)
+
+
+def _record(label: str, response: LLMResponse, *, marker_ok: bool = True) -> None:
+    """응답 본문 없이 attribution과 검증 상태만 출력한다."""
+    attribution_ok = (
+        response.backend_name == OPENROUTER_BACKEND
+        and response.model == OPENROUTER_MODEL
+    )
+    print(
+        f"case={label} backend={response.backend_name} model={response.model} "
+        f"status={'ok' if attribution_ok and marker_ok else 'failed'} "
+        f"marker={marker_ok}"
+    )
+    if not attribution_ok or not marker_ok:
+        raise RuntimeError(f"{label} smoke contract failed")
+
+
 async def main() -> int:
-    for key in ("OPENROUTER_API_KEY", "GEMINI_API_KEY"):
-        found = False
-        for path in (DEV_ENV, LIVE_ENV):
-            ok, length = _env_status(path, key)
-            if ok:
-                print(key, "set", "len=", length, "source=", path)
-                found = True
-                break
-        if not found:
-            print(key, "missing")
-            return 2
+    """Credential-gated OpenRouter Gemini parity smoke를 실행한다."""
+    api_key = _read_secret("OPENROUTER_API_KEY")
+    if not api_key:
+        print("credential=missing")
+        return 2
+    print("credential=available")
 
-    with tempfile.TemporaryDirectory(prefix="simpleclaw-llm-routing-") as tmp:
-        config = _write_temp_config(Path(tmp))
-        router = create_router(config)
-        print("default=", router.get_default_backend())
-        print("fallback=", router.get_fallback_backend())
-        print("multimodal=", router.get_multimodal_backend())
-        print("backends=", router.list_backends())
+    with tempfile.TemporaryDirectory(prefix="simpleclaw-openrouter-gemini-") as tmp:
+        router = create_router(_write_temp_config(Path(tmp), api_key))
 
+        text_marker = "BIZ524_TEXT_OK"
         text_response = await router.send(
             LLMRequest(
-                user_message="회의 준비 체크리스트 3개를 한국어로 짧게 알려주세요.",
+                route_name="turn_analysis",
+                user_message=f"Return exactly {text_marker} and nothing else.",
+                reasoning={"enabled": True, "effort": "low"},
                 max_tokens=500,
             )
         )
-        print("text_backend=", text_response.backend_name)
-        print("text_model=", text_response.model)
-        print("text_len=", len(text_response.text or ""))
-        print("text_usage=", text_response.usage)
-        print((text_response.text or "")[:500])
+        _record(text_marker, text_response, marker_ok=text_marker in text_response.text)
 
-        multimodal_response = await router.send(
+        structured_response = await router.send(
             LLMRequest(
+                route_name="turn_analysis",
+                system_prompt="Return only JSON matching the provided schema.",
+                user_message="Analyze this ordinary conversational turn: 안녕하세요",
+                response_mime_type="application/json",
+                response_schema=TURN_ANALYSIS_RESPONSE_SCHEMA,
+                require_structured_output=True,
+                reasoning={"enabled": True, "effort": "low"},
+                max_tokens=1200,
+            )
+        )
+        structured = json.loads(structured_response.text)
+        structured_ok = all(
+            key in structured for key in TURN_ANALYSIS_RESPONSE_SCHEMA["required"]
+        )
+        _record("required_structured", structured_response, marker_ok=structured_ok)
+
+        tool_marker = "BIZ524_TOOL_OK"
+        tool_response = await router.send(
+            LLMRequest(
+                route_name="turn_analysis",
+                system_prompt="You must call the only available tool exactly once.",
+                user_message=f"Call smoke_marker with marker={tool_marker}.",
+                tools=[
+                    ToolDefinition(
+                        name="smoke_marker",
+                        description="Return a fixed smoke-test marker.",
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "marker": {"type": "string", "enum": [tool_marker]}
+                            },
+                            "required": ["marker"],
+                            "additionalProperties": False,
+                        },
+                    )
+                ],
+                reasoning={"enabled": True, "effort": "low"},
+                max_tokens=500,
+            )
+        )
+        tool_ok = bool(
+            tool_response.tool_calls
+            and tool_response.tool_calls[0].name == "smoke_marker"
+            and tool_response.tool_calls[0].arguments.get("marker") == tool_marker
+        )
+        _record("forced_tool", tool_response, marker_ok=tool_ok)
+
+        image_marker = "BIZ524_IMAGE_OK"
+        image_response = await router.send(
+            LLMRequest(
+                route_name="multimodal",
                 messages=[
                     {
                         "role": "user",
-                        "content": "첨부 파일 형식을 보고 가능한 분석을 설명해 주세요.",
+                        "content": (
+                            "Confirm the attached PNG can be read, then return exactly "
+                            f"{image_marker}."
+                        ),
                         "attachments": [
                             MultimodalAttachment(
-                                data=b"fake text file",
-                                mime_type="text/plain",
-                                name="note.txt",
+                                data=_PNG_BYTES,
+                                mime_type="image/png",
+                                name="pixel.png",
                             )
                         ],
                     }
                 ],
+                reasoning={"enabled": True, "effort": "low"},
                 max_tokens=500,
             )
         )
-        print("multimodal_backend=", multimodal_response.backend_name)
-        print("multimodal_model=", multimodal_response.model)
-        print("multimodal_len=", len(multimodal_response.text or ""))
+        _record(
+            image_marker, image_response, marker_ok=image_marker in image_response.text
+        )
 
-        # BIZ-450 — required structured output 이 default(DeepSeek) 에서 fallback
-        # 없이 처리되는지 검증. TurnAnalysis 실제 schema 를 그대로 사용한다.
-        from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
-
-        structured_response = await router.send(
+        pdf_marker = "BIZ524_PDF_OK"
+        pdf_response = await router.send(
             LLMRequest(
-                system_prompt="Return only JSON matching the schema.",
-                user_message=(
-                    "Analyze this turn: 방금 질문에 대한 대응을 어떤 모델이 "
-                    "했는지 확인해봐"
-                ),
-                response_mime_type="application/json",
-                response_schema=TURN_ANALYSIS_RESPONSE_SCHEMA,
-                require_structured_output=True,
-                max_tokens=1200,
+                route_name="multimodal",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Return exactly the marker written in the PDF.",
+                        "attachments": [
+                            MultimodalAttachment(
+                                data=_pdf_with_marker(pdf_marker),
+                                mime_type="application/pdf",
+                                name="marker.pdf",
+                            )
+                        ],
+                    }
+                ],
+                reasoning={"enabled": True, "effort": "low"},
+                max_tokens=500,
             )
         )
-        print("structured_backend=", structured_response.backend_name)
-        print("structured_model=", structured_response.model)
-        print("structured_len=", len(structured_response.text or ""))
-        print("structured_usage=", structured_response.usage)
+        _record(pdf_marker, pdf_response, marker_ok=pdf_marker in pdf_response.text)
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except Exception as exc:  # noqa: BLE001 - secret-safe CLI failure boundary
+        print(f"smoke_error_type={type(exc).__name__}")
+        raise SystemExit(1) from None

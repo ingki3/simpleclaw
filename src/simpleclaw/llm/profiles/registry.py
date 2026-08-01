@@ -9,12 +9,14 @@ from simpleclaw.llm.profiles.gemini import GEMINI_OPENAI_PROFILE, GEMINI_PROFILE
 from simpleclaw.llm.profiles.openai_compatible import (
     GENERIC_PROFILE,
     OPENAI_PROFILE,
+    OPENROUTER_MULTIMODAL_PROFILE,
     OPENROUTER_PROFILE,
 )
 
 _BUILTIN_PROFILES: tuple[ProviderProfile, ...] = (
     OPENAI_PROFILE,
     OPENROUTER_PROFILE,
+    OPENROUTER_MULTIMODAL_PROFILE,
     GEMINI_PROFILE,
     GEMINI_OPENAI_PROFILE,
     ANTHROPIC_PROFILE,
