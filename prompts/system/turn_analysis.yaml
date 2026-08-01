@@ -13,7 +13,7 @@
 #   v1: BIZ-426 — 프롬프트-only JSON 지시. live 에서 Unterminated string
 #   파싱 실패가 발생해 schema-constrained 출력으로 전환.)
 name: turn_analysis
-version: 3
+version: 5
 description: >-
   Decide whether the current user turn depends on recent context, produce an
   internal normalized question, and classify execution complexity for SimpleClaw.
@@ -24,6 +24,10 @@ system_prompt: |-
 
   Preserve the user's original meaning. Do not invent facts.
   Use recent conversation only to resolve omitted references such as "그거", "아까", "그럼", "현재 순위".
+  When building a follow-up normalized_question, preserve every exact title, platform, and
+  distinct person clue from the selected context. Never merge two people into one identity
+  (for example, keep "하영" and "정해영" separate rather than writing "하영(정해영)").
+  Preserve an exact title such as "이런 엿같은 사랑" verbatim.
   Write normalized_question in the same language as the user message.
   Use normalized_question only as internal execution input; do not rewrite the user's persisted original text.
   If multiple recent contexts are plausible and the current turn cannot be resolved confidently, set needs_clarification=true and provide 2-4 concise ambiguity_options (each a short Korean label of a candidate context).
@@ -33,10 +37,28 @@ system_prompt: |-
   - current_fact_guarded_loop: latest/current facts such as weather, stocks, sports results/standings, news, schedules, live status.
   - complex_fact_workflow: multi-step factual/scenario reasoning requiring several evidence slots, rules, remaining variables, calculation, comparison, conflict resolution, or impact analysis.
 
+  Decide evidence_required semantically, not with a keyword rule:
+  - true for a request to find or verify specific named external facts, including
+    unfamiliar entertainment/OTT titles, cast or person metadata, products,
+    schedules, and current facts.
+  - true for changeable athlete/player status such as "요즘 어떤 상태야",
+    "최근 폼은 어때", or "현재 시즌 성적 알려줘"; classify these as
+    current_fact_guarded_loop with needs_current_facts=true.
+  - false for an ordinary high-level static identity question such as
+    "홍민기는 누구야?" when it does not request specific metadata or verification;
+    keep it on standard_tool_loop with needs_current_facts=false.
+  - true whenever needs_current_facts=true or route=current_fact_guarded_loop.
+  - false for ordinary conversation, rewriting, calculation from user-provided inputs,
+    or static explanation that does not need an external factual lookup.
+  evidence_required means a current-turn provider/collector must produce usable evidence
+  before factual finalization. Past assistant messages, generic RAG text, and model memory
+  cannot satisfy it. A collector failure is not "not found", and no collector call is
+  "not searched".
+
   domains: coarse topic tags such as "sports", "market", "weather", "news", "study". Empty if unclear.
   intents: coarse action tags such as "standings", "current_result", "schedule", "quote", "weather", "news", "daily_report", "realtime_lookup", "scenario_analysis". Empty if unclear.
   confidence: 0.0-1.0 — how confident you are that normalized_question preserves the intended meaning and target context.
 
-  Core routing fields (route, complexity_score, confidence, needs_* flags) matter more than descriptive fields; never let long explanations grow the output.
+  Core routing fields (route, complexity_score, confidence, evidence_required, needs_* flags) matter more than descriptive fields; never let long explanations grow the output.
   context_summary: one short sentence, under 120 characters, or empty when no context was used.
   reasons: at most 3 short bullet-style strings; keep each under 10 words. Do not write paragraphs.

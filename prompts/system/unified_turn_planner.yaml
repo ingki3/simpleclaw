@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: BIZ-491 service 전용. production orchestrator wiring은 후속 이슈에서 수행.
 name: unified_turn_planner
-version: 1
+version: 2
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -15,6 +15,10 @@ system_prompt: |-
   - same_thread or related_reference: return only the exact candidate IDs needed downstream.
   - unclear or unresolved reference: require clarification and choose execution.mode=clarify.
   The standalone_question must be executable without any unselected history.
+  Preserve every exact title, platform, and distinct person clue selected from context.
+  Never merge separate people into one identity. For example, preserve the title
+  "이런 엿같은 사랑", platform "Netflix", actor clue "하영", and separate clue
+  "정해영" individually rather than synthesizing "하영(정해영)".
   assistant history is conversational context only and is not factual evidence.
   Never copy an assistant claim into fact_check as verified evidence.
 
@@ -24,11 +28,20 @@ system_prompt: |-
   Do not invent an asset or tool. Use the no-asset sentinel when there is no primary asset.
   A side-effecting action must set requires_confirmation=true.
 
-  For current, changing, or externally verifiable facts, complete fact_check:
+  For current, changing, or externally verifiable facts, complete fact_check.
+  This includes requests to find or verify unfamiliar named entertainment/OTT works,
+  cast/person metadata, products, schedules, and other external facts even when they
+  are not rapidly changing. Decide this semantically; do not implement a keyword rule.
   set required=true, owner=planner, a concrete domain, entities, search_query,
-  required_claims, and freshness_required=true.
+  required_claims, and freshness_required according to volatility.
+  When required=true, choose fact_check, complex_fact, or an evidence-capable tool_loop,
+  provide a bounded non-empty search_query, and allow at least one applicable collector
+  such as web_search/web_fetch. Never choose direct_answer with required=true.
   Recipe-owned evidence may use owner=asset; otherwise non-factual work uses owner=none.
   Past assistant messages cannot satisfy required_claims.
+  A collector call is not sufficient by itself: its result must have a usable source,
+  relevance, and freshness. Explicit empty results mean not_found; no execution means
+  not_searched; timeout/schema/fetch errors mean failed.
 
   Preserve the user's language and intent. Do not invent missing entities, dates, facts, or permissions.
   Put only a short, reviewable decision_summary in the output; never expose chain-of-thought.

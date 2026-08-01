@@ -1746,6 +1746,13 @@ class TestToolLoop:
 
         orchestrator._router = MagicMock()
         orchestrator._router.send = AsyncMock(return_value=final_response)
+        orchestrator._dispatch_tool_call = AsyncMock(
+            return_value=(
+                "WEB_SEARCH_RESULTS: pitcher (1 results)\n"
+                "1. 롯데 선발투수 공식 정보\n"
+                "URL: https://sports.example/starting-pitcher"
+            )
+        )
 
         await orchestrator.process_message(
             "오늘 롯데 선발투수 누구지?", 123, 456

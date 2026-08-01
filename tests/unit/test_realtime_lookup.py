@@ -15,7 +15,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent.orchestrator import _REALTIME_LOOKUP_CONTEXT_HEADER
+from simpleclaw.agent.evidence_policy import (
+    EvidenceRequirement,
+    EvidenceStatus,
+)
+from simpleclaw.agent.orchestrator import (
+    _REALTIME_LOOKUP_CONTEXT_HEADER,
+    _looks_like_live_fact_request,
+    _realtime_lookup_skill_payload,
+)
+from simpleclaw.agent.tool_loop import ToolLoopRunner
 from simpleclaw.skills.models import SkillDefinition, SkillScope
 
 
@@ -169,7 +178,7 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"news","confidence":"medium",'
+            '{"kind":"news","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"AI 뉴스 근거"}]}'
         )
@@ -188,11 +197,12 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
     assert isinstance(payload, str) and " " not in payload
 
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
-    assert "AI 뉴스 근거" in request.system_prompt
-    # BIZ-383: timeline validation 사용 규칙이 evidence context에 포함된다.
-    assert "timeline_validation" in request.system_prompt
-    assert "stale_or_pre_event" in request.system_prompt
+    assert "AI 뉴스 근거" not in request.system_prompt
+    assert any(
+        "AI 뉴스 근거" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert not any(m.get("role") == "tool" for m in request.messages)
     assert not any(m.get("tool_calls") for m in request.messages)
 
@@ -206,15 +216,18 @@ async def test_live_fact_uses_realtime_lookup_context_without_synthetic_tool_cal
         '{"kind":"sports","confidence":"medium","facts":[]}',
     ],
 )
-async def test_low_or_empty_realtime_evidence_does_not_replace_final(
+async def test_low_or_empty_realtime_evidence_blocks_unverified_final(
     config_file,
     tmp_path,
     evidence,
+    monkeypatch,
 ):
-    """realtime prefetch 품질은 final을 강제로 교체하는 hard gate가 아니다."""
+    """낮은 품질/빈 evidence는 score·LIVE 단정을 통과시키지 않는다."""
     orchestrator = AgentOrchestrator(config_file)
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(return_value=evidence)
+    web_search = AsyncMock(return_value="Error: web_search failed — offline test")
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", web_search)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(
         return_value=_text_response("롯데가 2:1로 승리했고 현재 LIVE입니다.")
@@ -222,8 +235,61 @@ async def test_low_or_empty_realtime_evidence_does_not_replace_final(
 
     result = await orchestrator.process_message("롯데 야구 어케 되었나?", 1, 1)
 
-    assert result == "롯데가 2:1로 승리했고 현재 LIVE입니다."
+    assert "사실을 확정할 수 없습니다" in result
+    assert "2:1" not in result
+    assert "LIVE" not in result
     orchestrator._execute_skill.assert_awaited_once()
+    web_search.assert_awaited_once()
+    orchestrator._router.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_semantic_evidence_contract_owns_player_status_when_lexical_gate_is_false(
+    config_file,
+    monkeypatch,
+):
+    """SP-02: legacy lexical detector와 무관하게 공통 controller가 조회한다."""
+
+    query = "롯데 홍민기 요즘 어떤 상태야??"
+    assert _looks_like_live_fact_request(query) is False
+    assert _realtime_lookup_skill_payload(query, object()) is None
+
+    orchestrator = AgentOrchestrator(config_file)
+    collector = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
+            "1. 롯데 홍민기 현재 시즌 선수 상태\n"
+            "URL: https://sports.example/players/hong-min-ki"
+        )
+    )
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", collector)
+    orchestrator._router.send = AsyncMock(
+        return_value=_text_response("검증된 선수 상태 답변")
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query=query,
+        domain="sports",
+        allowed_collectors=frozenset({"web_search"}),
+        freshness_required=True,
+        origin="legacy_turn_analysis",
+    )
+
+    state = await orchestrator._prepare_tool_loop_state(
+        query,
+        isolated=True,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        evidence_requirement=requirement,
+    )
+    result = await ToolLoopRunner(orchestrator).run(state)
+
+    assert result.text == "검증된 선수 상태 답변"
+    assert state.evidence_state is not None
+    assert state.evidence_state.status is EvidenceStatus.FOUND
+    collector.assert_awaited_once()
+    assert collector.await_args.args[0].name == "web_search"
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
@@ -241,6 +307,7 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
         return json.dumps(
             {
                 "kind": "sports",
+                "lookup_status": "found",
                 "confidence": "high",
                 "facts": [
                     {
@@ -271,12 +338,12 @@ async def test_one_sports_score_fact_allows_only_its_exact_result(
 
     assert result == "KT가 롯데를 5:4로 이겼고 경기는 종료됐습니다."
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert "same `type: sports_score` fact" in request.system_prompt
-    assert "Never merge values across snippets" in request.system_prompt
-    assert "`lookup_status=failed` or an empty `facts` list" in request.system_prompt
-    assert "Only `lookup_status=not_found`" in request.system_prompt
-    assert "Do not mention system prompts" in request.system_prompt
-    assert "raw internal field names" in request.system_prompt
+    assert "Naver Sports Game Card" not in request.system_prompt
+    assert any(
+        "Naver Sports Game Card" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert _REALTIME_LOOKUP_CONTEXT_HEADER not in result
 
 
@@ -343,7 +410,7 @@ async def test_market_impact_question_triggers_realtime_lookup(
     _register_realtime_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"market","confidence":"medium",'
+            '{"kind":"market","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"증시 영향 근거"}]}'
         )
@@ -360,18 +427,31 @@ async def test_market_impact_question_triggers_realtime_lookup(
     skill_name, _payload = orchestrator._execute_skill.await_args.args
     assert skill_name == "realtime-lookup-skill"
     request = orchestrator._router.send.call_args_list[0][0][0]
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
-    assert "증시 영향 근거" in request.system_prompt
+    assert "증시 영향 근거" not in request.system_prompt
+    assert any(
+        "증시 영향 근거" in message.get("content", "")
+        and message.get("_evidence_context") is True
+        for message in request.messages
+    )
 
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 @pytest.mark.asyncio
-async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
+async def test_live_fact_without_realtime_skill_uses_allowed_web_search(
     config_file,
+    monkeypatch,
 ):
-    """스킬이 없더라도 Gemini-breaking synthetic web_fetch는 만들지 않는다."""
+    """structured provider가 없으면 synthetic history 없이 web_search를 선실행한다."""
     orchestrator = AgentOrchestrator(config_file)
     orchestrator._execute_skill = AsyncMock()
+    web_search = AsyncMock(
+        return_value=(
+            "WEB_SEARCH_RESULTS: query (1 results)\n"
+            "1. AI 최신 뉴스\n"
+            "URL: https://example.com/latest"
+        )
+    )
+    monkeypatch.setattr(orchestrator, "_dispatch_tool_call", web_search)
     orchestrator._router = MagicMock()
     orchestrator._router.send = AsyncMock(return_value=_text_response("직접 답변"))
 
@@ -379,6 +459,8 @@ async def test_live_fact_without_realtime_skill_does_not_force_web_fetch(
 
     assert result == "직접 답변"
     orchestrator._execute_skill.assert_not_called()
+    web_search.assert_awaited_once()
+    assert web_search.call_args.args[0].name == "web_search"
     assert orchestrator._router.send.call_count == 1
     request = orchestrator._router.send.call_args_list[0][0][0]
     assert not any(m.get("role") == "tool" for m in request.messages)
@@ -397,7 +479,7 @@ async def test_internal_realtime_skill_not_exposed_as_llm_callable(
     normal = _register_normal_skill(orchestrator, tmp_path)
     orchestrator._execute_skill = AsyncMock(
         return_value=(
-            '{"kind":"news","confidence":"medium",'
+            '{"kind":"news","lookup_status":"found","confidence":"medium",'
             '"facts":[{"type":"source_document","source":"Example",'
             '"url":"https://example.com","title":"근거"}]}'
         )
@@ -415,8 +497,11 @@ async def test_internal_realtime_skill_not_exposed_as_llm_callable(
     await orchestrator.process_message("오늘 AI 최신 뉴스 알려줘", 1, 1)
 
     request = orchestrator._router.send.call_args_list[0][0][0]
-    # evidence 블록은 주입되지만 callable skill 목록엔 internal skill 이름이 없다.
-    assert _REALTIME_LOOKUP_CONTEXT_HEADER in request.system_prompt
+    # evidence는 untrusted data message로 주입되고 callable 목록에는 없다.
+    assert any(
+        message.get("_evidence_context") is True
+        for message in request.messages
+    )
     assert "realtime-lookup-skill" not in request.system_prompt
     assert normal.name in request.system_prompt
 

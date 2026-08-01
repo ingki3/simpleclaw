@@ -2,7 +2,8 @@
 
 주요 동작 흐름:
 1. EmbeddingService 인스턴스 생성 시 모델 이름과 enabled 플래그만 보관한다(모델은 즉시 로드하지 않음).
-2. 첫 ``encode_query()`` / ``encode_passage()`` 호출 시 lazy하게 SentenceTransformer를 로드한다.
+2. ``prewarm()`` 또는 첫 ``encode_query()`` / ``encode_passage()`` 호출 시
+   SentenceTransformer를 로드한다.
 3. e5 계열 모델 규격에 따라 query는 ``"query: "``, passage는 ``"passage: "`` 프리픽스로 인코딩한다.
 4. 모델 로드 실패, sentence-transformers 미설치, 인코딩 예외 등 어떤 실패든 None을 반환하여
    상위 레이어가 슬라이딩 윈도우 모드로 자연 fallback 하도록 설계한다(서비스 가용성 보존).
@@ -10,7 +11,8 @@
 설계 결정:
 - ``sentence-transformers``는 PyTorch를 끌고 오는 무거운 의존성이라 import도 lazy로 처리한다.
   로컬 봇 기동 시간을 보호하고, 일부 환경(CI 등)에서 미설치 시에도 봇이 동작하게 한다.
-- 모델 다운로드는 첫 인코딩 호출에서 발생하며, 이후 메모리 캐시에 상주한다.
+- Telegram runtime은 polling 전에 ``prewarm()``으로 모델을 준비한다. 그 외
+  호출자는 첫 인코딩 시 lazy load하며, 이후에는 같은 메모리 캐시를 재사용한다.
 - ``encode_query`` / ``encode_passage`` 분리는 e5 계열의 비대칭 검색 규격을 따른다.
   대칭 모델로 교체할 경우 하위 호환을 위해 두 메서드를 동일하게 동작시키도록 model_name을
   검사하는 식으로 진화시킬 수 있다(현재는 e5 단일 가정).
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -68,6 +71,39 @@ class EmbeddingService:
     def model_name(self) -> str:
         return self._model_name
 
+    def prewarm(self) -> bool:
+        """모델만 준비하고 성공 여부를 반환한다.
+
+        query/passage 인코딩이나 DB 쓰기는 수행하지 않는다. ``_ensure_model()``의
+        double-checked lock과 failure latch를 그대로 사용하므로 반복/동시 호출에도
+        모델 constructor는 최대 한 번만 실행된다.
+        """
+        started_at = time.perf_counter()
+        if not self._enabled:
+            logger.info(
+                "Embedding pre-warm skipped: model=%s status=disabled duration_ms=%.2f",
+                self._model_name,
+                (time.perf_counter() - started_at) * 1000.0,
+            )
+            return False
+
+        logger.info("Embedding pre-warm started: model=%s", self._model_name)
+        ready = self._ensure_model()
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        if ready:
+            logger.info(
+                "Embedding pre-warm completed: model=%s duration_ms=%.2f",
+                self._model_name,
+                duration_ms,
+            )
+        else:
+            logger.warning(
+                "Embedding pre-warm failed: model=%s duration_ms=%.2f",
+                self._model_name,
+                duration_ms,
+            )
+        return ready
+
     def _ensure_model(self) -> bool:
         """필요 시 SentenceTransformer를 로드하고 성공 여부를 반환한다.
 
@@ -91,7 +127,9 @@ class EmbeddingService:
             except ImportError as exc:
                 # 의존성 미설치 → 조용히 비활성화 (CI/경량 환경 보호)
                 logger.warning(
-                    "sentence-transformers not installed; RAG disabled (%s)", exc
+                    "sentence-transformers not installed; RAG disabled "
+                    "(error_type=%s)",
+                    type(exc).__name__,
                 )
                 self._load_failed = True
                 return False
@@ -104,8 +142,9 @@ class EmbeddingService:
             except Exception as exc:
                 # 네트워크/디스크 오류, 모델 호환성 등 — RAG만 비활성화하고 봇은 계속
                 logger.error(
-                    "Failed to load embedding model '%s': %s",
-                    self._model_name, exc,
+                    "Failed to load embedding model '%s' (error_type=%s)",
+                    self._model_name,
+                    type(exc).__name__,
                 )
                 self._load_failed = True
                 return False

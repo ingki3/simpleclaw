@@ -35,6 +35,7 @@ def test_parse_valid_turn_analysis_payload():
           "intents": ["standings", "realtime_lookup"],
           "route": "current_fact_guarded_loop",
           "complexity_score": 1,
+          "evidence_required": true,
           "needs_current_facts": true,
           "needs_rules": false,
           "needs_remaining_variables": false,
@@ -52,6 +53,7 @@ def test_parse_valid_turn_analysis_payload():
     assert "KBO" in analysis.normalized_question
     assert analysis.is_followup is True
     assert analysis.route == ResponseRoute.CURRENT_FACT_GUARDED_LOOP
+    assert analysis.evidence_required is True
     assert analysis.needs_current_facts is True
     assert analysis.domains == ("sports",)
     assert analysis.intents == ("standings", "realtime_lookup")
@@ -66,6 +68,56 @@ def test_parse_clamps_invalid_route_and_confidence():
     )
     assert analysis.route == ResponseRoute.STANDARD_TOOL_LOOP
     assert analysis.confidence == 1.0
+
+
+def test_external_named_drama_lookup_requires_evidence_without_current_route():
+    analysis = parse_turn_analysis_payload(
+        (
+            '{"normalized_question":"\\"이런 엿같은 사랑\\" 등장인물을 찾아줘",'
+            '"route":"standard_tool_loop","confidence":0.95,'
+            '"domains":["entertainment"],"intents":["drama_info"],'
+            '"evidence_required":true,"needs_current_facts":false}'
+        ),
+        original_text='"이런 엿같은 사랑"이라는 드라마 등장인물 찾아줘.',
+    )
+
+    assert analysis.evidence_required is True
+    assert analysis.route is ResponseRoute.STANDARD_TOOL_LOOP
+    assert "이런 엿같은 사랑" in analysis.normalized_question
+
+
+def test_current_fact_flag_repairs_evidence_requirement_fail_closed():
+    analysis = parse_turn_analysis_payload(
+        (
+            '{"normalized_question":"현재 KBO 순위","route":"standard_tool_loop",'
+            '"confidence":0.9,"evidence_required":false,'
+            '"needs_current_facts":true}'
+        ),
+        original_text="현재 순위는?",
+    )
+
+    assert analysis.evidence_required is True
+    assert analysis.route is ResponseRoute.CURRENT_FACT_GUARDED_LOOP
+
+
+def test_drama_followup_preserves_title_platform_and_distinct_actor_clues():
+    analysis = parse_turn_analysis_payload(
+        (
+            '{"is_followup":true,'
+            '"normalized_question":"\\"이런 엿같은 사랑\\" Netflix 드라마에서 '
+            '배우 하영과 별도 단서 정해영을 기준으로 등장인물을 찾아줘",'
+            '"route":"standard_tool_loop","confidence":0.92,'
+            '"domains":["entertainment"],"intents":["drama_info"],'
+            '"evidence_required":true,"needs_current_facts":false}'
+        ),
+        original_text="넷플릭스 드라마이고 하영 이라는 배우가 나와.",
+    )
+
+    assert "이런 엿같은 사랑" in analysis.normalized_question
+    assert "Netflix" in analysis.normalized_question
+    assert "하영" in analysis.normalized_question
+    assert "정해영" in analysis.normalized_question
+    assert "하영(정해영)" not in analysis.normalized_question
 
 
 def test_parse_markdown_json_fence():
@@ -160,6 +212,8 @@ def test_turn_analysis_system_prompt_loads():
     assert "schema" in spec.system_prompt.lower()
     assert "normalized_question" in spec.system_prompt
     assert "complex_fact_workflow" in spec.system_prompt
+    assert "evidence_required" in spec.system_prompt
+    assert "exact title" in spec.system_prompt.lower()
     # 분석기는 사용자에게 답하지 않는다는 계약이 프롬프트에 명시돼야 한다.
     assert "Do not answer the user" in spec.system_prompt
 
@@ -283,7 +337,8 @@ _VALID_ANALYSIS_JSON = (
     '{"is_followup":false,"normalized_question":"안녕","context_summary":"",'
     '"confidence":1,"needs_clarification":false,"ambiguity_options":[],'
     '"domains":[],"intents":[],"route":"standard_tool_loop",'
-    '"complexity_score":0,"needs_current_facts":false,"needs_rules":false,'
+    '"complexity_score":0,"evidence_required":false,'
+    '"needs_current_facts":false,"needs_rules":false,'
     '"needs_remaining_variables":false,"needs_calculation":false,'
     '"needs_comparison_or_conditions":false,"needs_conflict_resolution":false,'
     '"needs_impact_analysis":false,"reasons":["greeting"]}'

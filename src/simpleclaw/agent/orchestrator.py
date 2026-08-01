@@ -64,6 +64,14 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.evidence_policy import (
+    EvidenceRequirement,
+    EvidenceState,
+    assess_realtime_result,
+    no_evidence_requirement,
+    requirement_from_turn_analysis,
+    requirement_from_turn_plan,
+)
 from simpleclaw.agent.execution_router import (
     ExecutionCallbacks,
     ExecutionRouter,
@@ -890,6 +898,7 @@ class AgentOrchestrator:
         memory_config = load_memory_config(config_path)
         rag_cfg = memory_config["rag"]
         self._rag_enabled: bool = bool(rag_cfg["enabled"])
+        self._rag_model_name: str = str(rag_cfg["model"])
         self._rag_top_k: int = int(rag_cfg["top_k"])
         self._rag_threshold: float = float(rag_cfg["similarity_threshold"])
         long_term_cfg = memory_config.get("long_term", {})
@@ -918,7 +927,7 @@ class AgentOrchestrator:
         )
         self._embedding_service: EmbeddingService | None = (
             EmbeddingService(
-                model_name=str(rag_cfg["model"]),
+                model_name=self._rag_model_name,
                 enabled=self._rag_enabled,
             )
             if self._rag_enabled
@@ -1106,6 +1115,56 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    async def prewarm_embedding(self) -> bool:
+        """Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.
+
+        disabled/load failure/예상 밖 예외는 모두 ``False``로 축약해 startup을
+        fail-open으로 유지한다. 구조화 이벤트에는 model/status/duration과
+        원문 미포함 표식만 기록한다.
+        """
+        started_at = time.perf_counter()
+        service = self._embedding_service
+        model_name = (
+            service.model_name if service is not None else self._rag_model_name
+        )
+        status = "disabled"
+        ready = False
+
+        if service is not None:
+            try:
+                ready = await asyncio.to_thread(service.prewarm)
+                status = "success" if ready else "failure"
+            except Exception as exc:
+                status = "failure"
+                logger.warning(
+                    "Embedding pre-warm boundary failed: model=%s error_type=%s",
+                    model_name,
+                    type(exc).__name__,
+                )
+
+        duration_ms = (time.perf_counter() - started_at) * 1000.0
+        logger.info(
+            "Embedding pre-warm startup result: status=%s model=%s duration_ms=%.2f",
+            status,
+            model_name,
+            duration_ms,
+        )
+        if self._structured_logger is not None:
+            try:
+                self._structured_logger.log(
+                    action_type="embedding_prewarm",
+                    status=status,
+                    duration_ms=duration_ms,
+                    model=model_name,
+                    raw_text_included=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Embedding pre-warm structured log failed (error_type=%s)",
+                    type(exc).__name__,
+                )
+        return ready
 
     async def process_cron_action(self, text: str) -> CronActionResult:
         """크론 잡 메시지를 격리 처리하고 의미 상태를 보존해 반환한다.
@@ -1421,12 +1480,14 @@ class AgentOrchestrator:
                     )
                     logger.info(
                         "TurnAnalysis built: source=%s backend=%s route=%s "
-                        "confidence=%.2f original_len=%d normalized_len=%d "
+                        "confidence=%.2f evidence_required=%s "
+                        "original_len=%d normalized_len=%d "
                         "ambiguity=%d intents=%s domains=%s",
                         turn_analysis.source,
                         "turn_analysis",
                         turn_analysis.route.value,
                         turn_analysis.confidence,
+                        turn_analysis.evidence_required,
                         len(turn_analysis.original_text),
                         len(turn_analysis.normalized_question),
                         len(turn_analysis.ambiguity_options),
@@ -1518,6 +1579,22 @@ class AgentOrchestrator:
                         ),
                         study_context=study_context_for_routing,
                     )
+                evidence_requirement = (
+                    requirement_from_turn_analysis(turn_analysis)
+                    if turn_analysis is not None
+                    else EvidenceRequirement(
+                        required=route_decision.needs_current_facts,
+                        query=route_input,
+                        domain="general",
+                        allowed_collectors=(
+                            frozenset({"web_search", "web_fetch"})
+                            if route_decision.needs_current_facts
+                            else frozenset()
+                        ),
+                        freshness_required=route_decision.needs_current_facts,
+                        origin="legacy_route_fallback",
+                    )
+                )
                 # BIZ-425 — read-only capability 로 직접 해결 가능한 조회성
                 # 질문은 complex 과승격 대신 tool loop(강한 자산 힌트)로 보낸다.
                 # 단, 남은 변수(경우의 수/시나리오)가 필요한 질문은 단일 조회로
@@ -1556,6 +1633,7 @@ class AgentOrchestrator:
                         on_text_delta=on_text_delta,
                         on_progress=on_progress,
                         capability_hint=capability_decision,
+                        evidence_requirement=evidence_requirement,
                     )
                     response_text = tool_loop_result.text
                 else:
@@ -1565,6 +1643,7 @@ class AgentOrchestrator:
                         on_text_delta=on_text_delta,
                         on_progress=on_progress,
                         capability_hint=capability_decision,
+                        evidence_requirement=evidence_requirement,
                     )
                     tool_loop_result = ToolLoopResult(response_text)
 
@@ -1746,6 +1825,10 @@ class AgentOrchestrator:
                 operator_tools=operator_tools,
                 plan=callback_plan,
                 candidates=candidates,
+                evidence_requirement=requirement_from_turn_plan(
+                    callback_plan,
+                    catalog=catalog,
+                ),
             )
             return routed_result.text
 
@@ -2442,6 +2525,7 @@ class AgentOrchestrator:
         capability_hint: CapabilityDecision | None = None,
         plan: UnifiedTurnPlan | None = None,
         candidates: ContextCandidateSet | None = None,
+        evidence_requirement: EvidenceRequirement | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -2459,6 +2543,14 @@ class AgentOrchestrator:
         """
         if plan is not None and candidates is None:
             raise ValueError("planned tool loop requires context candidates")
+        if evidence_requirement is None:
+            evidence_requirement = (
+                requirement_from_turn_plan(plan)
+                if plan is not None
+                else no_evidence_requirement()
+            )
+        evidence_state: EvidenceState = evidence_requirement.initial_state()
+        attempted_collectors: set[str] = set()
 
         # 현재 시각을 KST로 주입
         from datetime import datetime, timedelta, timezone
@@ -2653,14 +2745,32 @@ class AgentOrchestrator:
 
         realtime_lookup_context = ""
         realtime_lookup_usable = False
-        realtime_lookup_payload = (
-            None
-            if plan is not None
-            else _realtime_lookup_skill_payload(
-                text,
-                now_kst,
-                prior_context=prior_context,
+        detected_realtime_payload = _realtime_lookup_skill_payload(
+            execution_text,
+            now_kst,
+            prior_context=prior_context,
+        )
+        if (
+            plan is None
+            and detected_realtime_payload is not None
+            and not evidence_requirement.required
+        ):
+            # Legacy deterministic fallback already identified a live-fact turn.
+            # Promote that existing signal to the common outcome contract; do
+            # not introduce a new user-text classifier here.
+            evidence_requirement = EvidenceRequirement(
+                required=True,
+                query=execution_text,
+                domain="general",
+                allowed_collectors=frozenset({"web_search", "web_fetch"}),
+                freshness_required=True,
+                origin="legacy_realtime_detector",
             )
+            evidence_state = evidence_requirement.initial_state()
+        realtime_lookup_payload = (
+            detected_realtime_payload
+            if evidence_requirement.required
+            else None
         )
         if (
             realtime_lookup_payload is not None
@@ -2676,6 +2786,13 @@ class AgentOrchestrator:
                     realtime_lookup_result,
                     payload,
                 )
+                evidence_state = assess_realtime_result(
+                    evidence_requirement,
+                    realtime_lookup_result,
+                    usable=realtime_lookup_usable,
+                    as_of=payload.get("as_of_kst", ""),
+                )
+                attempted_collectors.add("structured_realtime")
                 realtime_lookup_context = _format_realtime_lookup_context(
                     sanitize_tool_output(realtime_lookup_result or ""),
                 )
@@ -2685,22 +2802,26 @@ class AgentOrchestrator:
                     realtime_lookup_usable,
                 )
             except Exception as exc:
-                realtime_lookup_context = _format_realtime_lookup_context(
-                    json.dumps(
-                        {
-                            "kind": "realtime_lookup",
-                            "confidence": "low",
-                            "facts": [],
-                            "limitations": [
-                                f"realtime lookup failed: {str(exc)[:200]}"
-                            ],
-                        },
-                        ensure_ascii=False,
-                    ),
+                failed_result = {
+                    "kind": "realtime_lookup",
+                    "lookup_status": "failed",
+                    "confidence": "low",
+                    "facts": [],
+                    "limitations": [
+                        f"realtime lookup failed: {type(exc).__name__}"
+                    ],
+                }
+                evidence_state = assess_realtime_result(
+                    evidence_requirement,
+                    failed_result,
+                    usable=False,
+                    failure_reason=f"structured provider failed: {type(exc).__name__}",
                 )
+                attempted_collectors.add("structured_realtime")
                 logger.warning("BIZ-480: realtime lookup failed: %s", exc)
-        if realtime_lookup_context:
-            rag_context = "\n\n".join(part for part in [rag_context, realtime_lookup_context] if part)
+        # Structured provider output is untrusted observation data. The common
+        # evidence gate passes its validated payload through a user-role data
+        # envelope; never append raw provider text to trusted RAG/system blocks.
 
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
@@ -2764,6 +2885,9 @@ class AgentOrchestrator:
             on_progress=on_progress,
             operator_tools=operator_tools,
             allow_cron_mutation=allow_cron_mutation,
+            evidence_requirement=evidence_requirement,
+            evidence_state=evidence_state,
+            attempted_collectors=attempted_collectors,
         )
 
     async def _run_tool_loop_result(
@@ -2779,6 +2903,7 @@ class AgentOrchestrator:
         capability_hint: CapabilityDecision | None = None,
         plan: UnifiedTurnPlan | None = None,
         candidates: ContextCandidateSet | None = None,
+        evidence_requirement: EvidenceRequirement | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
@@ -2807,6 +2932,7 @@ class AgentOrchestrator:
             capability_hint=capability_hint,
             plan=plan,
             candidates=candidates,
+            evidence_requirement=evidence_requirement,
         )
         result = await ToolLoopRunner(self).run(state)
         return result
@@ -2822,6 +2948,7 @@ class AgentOrchestrator:
         operator_tools: bool = False,
         allow_cron_mutation: bool = True,
         capability_hint: CapabilityDecision | None = None,
+        evidence_requirement: EvidenceRequirement | None = None,
     ) -> str:
         """기존 호출자를 위한 문자열 compatibility wrapper."""
         result = await self._run_tool_loop_result(
@@ -2833,6 +2960,7 @@ class AgentOrchestrator:
             operator_tools=operator_tools,
             allow_cron_mutation=allow_cron_mutation,
             capability_hint=capability_hint,
+            evidence_requirement=evidence_requirement,
         )
         return result.text
 

@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm — 코드·오프라인 검증 완료** — RAG 활성 runtime은 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작한다. disabled/load failure는 `embedding_prewarm` status/model/duration을 원문 없이 기록하고 fail-open하며, 반복·동시 호출과 첫 query는 같은 model instance를 재사용한다. PR #533의 focused/전체 unit·Ruff·diff-check 및 GitHub CI를 통과했다. **미완료 운영 단계:** Review gate와 squash merge 후 별도 운영자 승인으로 live rollout/restart를 수행하고 startup log 순서, 첫 turn 재로드 부재, notifier 없는 no-send smoke를 확인한다. (진행: 2026-07-29)
+
 - [x] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환** — PR #522를 `dev`에 squash merge(SHA `c5e84cb97b37818545096dfeabdf880c013746ae`)하고 release PR #530을 merge commit(SHA `4fbbc377950b5ee04219f362a89f4b3e76a634d7`)으로 `main`에 반영해 `v2026.07.29`를 발행했다. Live `realtime-lookup-skill`은 timestamp backup 후 Naver Sports schedule schema·typed `lookup_status` 계약으로 갱신했고, LaunchAgent restart(`67645 → 72755`), Admin·Webhook·Telegram health, notifier 없는 no-send smoke(`found`, 롯데 3:5 한화, `live`, winner `null`)를 완료했다. 표시 문구·고정 키워드 없이 `STARTED → live`, `ENDED|RESULT → final`, 조회 실패와 명시적 경기 없음 분리를 운영에서 확인했다. (2026-07-29)
 
 - [x] **BIZ-512: FunctionGemma 축소 intent·asset classifier QLoRA PoC** — BIZ-513/514의 candidate boundary·privacy·hard cap 보완은 canonical PR #527로 `dev`에 squash merge(SHA `b1c659b5821fe45368596e92a8d67464503e7fd6`)했고, BIZ-515 clean rerun 감사 결과는 PR #528로 squash merge(SHA `72b25d0c3b6d05d95632e221c98fff8fbd182048`)했다. superseded 구현 PR #525는 merge 없이 닫았다. 최초 44 label·augmentation·adapter 2개·report는 invalidated marker와 SHA-256으로 격리했다. clean rerun은 provider 300회에서 accepted 4건·raw identifier/out-of-set accepted 0을 확인했으나, 단일 QLoRA process가 return code 1로 종료되어 adapter를 생성하지 못했다. 따라서 base/tuned 비교는 N/A이며 shadow integration은 추천하지 않는다. live runtime 연결·config 변경·restart·deploy는 수행하지 않았다. (2026-07-29)
@@ -132,6 +134,12 @@
 ---
 
 ## Done
+
+### 2026-07-30
+
+- [x] **[BIZ-520](mention://issue/c30858d5-f1fa-40ee-a883-99852fbaf6b5): evidence_required를 실행·최종 gate에 연결** — [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)해 evidence relevance·claim coverage·source·freshness 검증, typed empty/schema failure 분리, truncated analysis fail-closed, asset-owned provider 실행, untrusted evidence 경계를 코드·오프라인 테스트로 완료했다. Live config·배포·재시작은 [BIZ-497](mention://issue/599386f6-1aa4-4d1f-85a4-68d804342851) 운영 gate가 소유한다. (2026-07-30)
+- [x] **[BIZ-521](mention://issue/3a00bfdf-1463-40ab-842b-e481ddb367b2): PR #534 evidence gate review blocker 해소** — required review의 blocker 재현 7건과 actual unified·legacy 2턴 회귀를 보완하고 focused `158 passed`, Ruff, `git diff --check`, GitHub CI 3개 SUCCESS를 확인한 뒤 [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)했다. 코드·오프라인 작업은 완료했으며 live config·배포·재시작은 BIZ-497 운영 gate 범위다. (2026-07-30)
+- [>] **[BIZ-522](mention://issue/87302faa-6047-40a6-8ef6-461add3205ba): 실시간 선수 상태 evidence gate 회귀 고정 및 live 반영** — exact fixture `롯데 홍민기 요즘 어떤 상태야??`를 BIZ-520 공통 계약의 legacy/Unified 경계, collector 상태, final fail-closed, no-duplicate-search에 추가한다. 코드·review와 feature→dev merge를 먼저 완료하고, `dev→main` release 및 drain/restart/live no-send smoke는 BIZ-519 startup prewarm 운영 게이트 승인과 분리해 추적한다. (진행: 2026-07-30)
 
 ### 2026-07-28
 
