@@ -16,8 +16,8 @@ from simpleclaw.llm.models import (
     MultimodalAttachment,
     ToolDefinition,
 )
-from simpleclaw.llm.profiles.base import ProviderProfile
 from simpleclaw.llm.profiles import get_provider_profile
+from simpleclaw.llm.profiles.base import ProviderProfile
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
 
