@@ -48,6 +48,20 @@ OPENROUTER_PROFILE = OpenRouterProfile(
     request_extra_keys=_OPENAI_COMPATIBLE_EXTRAS,
 )
 
+OPENROUTER_MULTIMODAL_PROFILE = OpenRouterProfile(
+    name="openrouter-multimodal",
+    default_transport="openai_chat",
+    aliases=("openrouter_multimodal",),
+    capabilities=LLMCapabilities(
+        tools=True,
+        streaming=True,
+        structured_output=True,
+        multimodal=True,
+        native_replay=True,
+    ),
+    request_extra_keys=_OPENAI_COMPATIBLE_EXTRAS,
+)
+
 GENERIC_PROFILE = ProviderProfile(
     name="generic",
     default_transport="openai_chat",
