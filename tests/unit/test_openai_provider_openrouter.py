@@ -12,9 +12,213 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from simpleclaw.llm.models import LLMProviderError
+from simpleclaw.llm.models import LLMProviderError, MultimodalAttachment
 from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
+
+
+def _multimodal_provider(monkeypatch) -> OpenAIProvider:
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: MagicMock(),
+    )
+    return OpenAIProvider(
+        model="google/gemini-3.6-flash",
+        api_key="test-key",
+        name="openrouter_gemini_3_6_flash",
+        profile=get_provider_profile("openrouter-multimodal"),
+    )
+
+
+def test_openrouter_multimodal_maps_image_after_text(monkeypatch):
+    provider = _multimodal_provider(monkeypatch)
+
+    converted = provider._convert_messages(
+        [
+            {
+                "role": "user",
+                "content": "Describe the image.",
+                "attachments": [
+                    MultimodalAttachment(data=b"\x89PNG", mime_type="image/png")
+                ],
+            }
+        ]
+    )
+
+    assert converted == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe the image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw=="},
+                },
+            ],
+        }
+    ]
+
+
+def test_openrouter_multimodal_maps_documents_and_filename_fallback(monkeypatch):
+    provider = _multimodal_provider(monkeypatch)
+
+    converted = provider._convert_messages(
+        [
+            {
+                "role": "user",
+                "content": "Read both files.",
+                "attachments": [
+                    MultimodalAttachment(
+                        data=b"%PDF", mime_type="application/pdf", name="brief.pdf"
+                    ),
+                    MultimodalAttachment(data=b"notes", mime_type="text/plain"),
+                ],
+            }
+        ]
+    )
+
+    parts = converted[0]["content"]
+    assert parts[1] == {
+        "type": "file",
+        "file": {
+            "filename": "brief.pdf",
+            "file_data": "data:application/pdf;base64,JVBERg==",
+        },
+    }
+    assert parts[2] == {
+        "type": "file",
+        "file": {
+            "filename": "attachment.txt",
+            "file_data": "data:text/plain;base64,bm90ZXM=",
+        },
+    }
+
+
+def test_openrouter_multimodal_preserves_mixed_attachment_order(monkeypatch):
+    provider = _multimodal_provider(monkeypatch)
+
+    converted = provider._convert_messages(
+        [
+            {
+                "role": "user",
+                "content": "Inspect these in order.",
+                "attachments": [
+                    MultimodalAttachment(data=b"image", mime_type="image/jpeg"),
+                    MultimodalAttachment(data=b"doc", mime_type="text/markdown"),
+                    MultimodalAttachment(data=b"more", mime_type="image/webp"),
+                ],
+            }
+        ]
+    )
+
+    assert [part["type"] for part in converted[0]["content"]] == [
+        "text",
+        "image_url",
+        "file",
+        "image_url",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("attachment", "match"),
+    [
+        (
+            MultimodalAttachment(data=b"", mime_type="image/png"),
+            "must not be empty",
+        ),
+        ({"data": b"payload"}, "MIME type is required"),
+        (
+            MultimodalAttachment(data=b"payload", mime_type="application/octet-stream"),
+            "does not support attachment MIME type",
+        ),
+    ],
+)
+def test_openrouter_multimodal_rejects_invalid_attachments(
+    monkeypatch, attachment, match
+):
+    provider = _multimodal_provider(monkeypatch)
+
+    with pytest.raises(LLMProviderError, match=match):
+        provider._convert_messages(
+            [{"role": "user", "content": "Inspect.", "attachments": [attachment]}]
+        )
+
+
+def test_openrouter_multimodal_keeps_plain_message_payloads_unchanged(monkeypatch):
+    provider = _multimodal_provider(monkeypatch)
+    source = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "lookup", "arguments": {"q": "x"}}],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+    ]
+
+    assert provider._convert_messages(source) == [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"q": "x"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "result"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openrouter_multimodal_send_and_stream_share_attachment_mapping(
+    monkeypatch,
+):
+    send_response = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+        usage=None,
+    )
+
+    class _Stream:
+        def __aiter__(self):
+            async def gen():
+                chunk = MagicMock()
+                chunk.usage = None
+                chunk.choices = []
+                yield chunk
+
+            return gen()
+
+    create = AsyncMock(side_effect=[send_response, _Stream()])
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+    provider = OpenAIProvider(
+        model="google/gemini-3.6-flash",
+        api_key="test-key",
+        profile=get_provider_profile("openrouter-multimodal"),
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": "Inspect.",
+            "attachments": [MultimodalAttachment(data=b"image", mime_type="image/png")],
+        }
+    ]
+
+    await provider.send(system_prompt="", user_message="", messages=messages)
+    await provider.stream(system_prompt="", user_message="", messages=messages)
+
+    send_messages = create.await_args_list[0].kwargs["messages"]
+    stream_messages = create.await_args_list[1].kwargs["messages"]
+    assert send_messages == stream_messages
+    assert send_messages[0]["content"][1]["type"] == "image_url"
 
 
 def test_openai_provider_passes_base_url_and_default_headers(monkeypatch):
@@ -195,6 +399,7 @@ async def test_openai_provider_stream_includes_extra_body(monkeypatch):
         def __aiter__(self):
             async def gen():
                 yield _chunk("ok")
+
             return gen()
 
     create = AsyncMock(return_value=_Iter())
@@ -222,7 +427,9 @@ async def test_openai_provider_stream_includes_extra_body(monkeypatch):
 async def test_openai_provider_send_maps_required_schema_to_json_schema(monkeypatch):
     create = AsyncMock(
         return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content='{"ok":true}', tool_calls=None))],
+            choices=[
+                MagicMock(message=MagicMock(content='{"ok":true}', tool_calls=None))
+            ],
             usage=MagicMock(prompt_tokens=5, completion_tokens=3),
         )
     )
@@ -259,7 +466,10 @@ async def test_openai_provider_send_maps_required_schema_to_json_schema(monkeypa
     assert response.text == '{"ok":true}'
     kwargs = create.call_args.kwargs
     assert kwargs["response_format"]["type"] == "json_schema"
-    assert kwargs["response_format"]["json_schema"]["name"] == "simpleclaw_structured_response"
+    assert (
+        kwargs["response_format"]["json_schema"]["name"]
+        == "simpleclaw_structured_response"
+    )
     assert kwargs["response_format"]["json_schema"]["strict"] is True
     outgoing_schema = kwargs["response_format"]["json_schema"]["schema"]
     assert outgoing_schema["type"] == "object"
@@ -271,7 +481,9 @@ async def test_openai_provider_send_maps_required_schema_to_json_schema(monkeypa
 async def test_openai_provider_send_maps_optional_json_mime_to_json_object(monkeypatch):
     create = AsyncMock(
         return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content='{"ok":true}', tool_calls=None))],
+            choices=[
+                MagicMock(message=MagicMock(content='{"ok":true}', tool_calls=None))
+            ],
             usage=MagicMock(prompt_tokens=5, completion_tokens=3),
         )
     )
@@ -384,6 +596,7 @@ async def test_openai_provider_stream_includes_response_format(monkeypatch):
         def __aiter__(self):
             async def gen():
                 yield _chunk("ok")
+
             return gen()
 
     create = AsyncMock(return_value=_Iter())

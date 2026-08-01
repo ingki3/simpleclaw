@@ -39,6 +39,19 @@ def test_gemini_openai_profile_uses_openai_chat_transport():
     assert profile.capabilities.reasoning is False
 
 
+def test_openrouter_multimodal_profile_is_distinct_from_conservative_google_profile():
+    profile = get_provider_profile("openrouter-multimodal")
+
+    assert profile.default_transport == "openai_chat"
+    assert profile.capabilities.tools is True
+    assert profile.capabilities.streaming is True
+    assert profile.capabilities.structured_output is True
+    assert profile.capabilities.multimodal is True
+    assert profile.capabilities.native_replay is True
+    assert get_provider_profile("openrouter").capabilities.multimodal is False
+    assert get_provider_profile("gemini-openai").capabilities.multimodal is False
+
+
 def test_gemini_openai_schema_removes_native_ordering_without_mutating_source():
     source = copy.deepcopy(TURN_ANALYSIS_RESPONSE_SCHEMA)
 
@@ -116,7 +129,9 @@ llm:
 
 
 @pytest.mark.asyncio
-async def test_gemini_openai_attachment_is_rejected_before_silent_payload_drop(tmp_path):
+async def test_gemini_openai_attachment_is_rejected_before_silent_payload_drop(
+    tmp_path,
+):
     config = tmp_path / "config.yaml"
     config.write_text(
         """

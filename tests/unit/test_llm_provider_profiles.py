@@ -16,12 +16,14 @@ def test_builtin_profiles_are_explicitly_registered():
         "generic",
         "openai",
         "openrouter",
+        "openrouter-multimodal",
     ]
 
 
 def test_profile_aliases_resolve_to_canonical_profiles():
     assert get_provider_profile("openai").name == "openai"
     assert get_provider_profile("openrouter").name == "openrouter"
+    assert get_provider_profile("openrouter_multimodal").name == "openrouter-multimodal"
     assert get_provider_profile("google").name == "gemini"
     assert get_provider_profile("claude").name == "anthropic"
 
