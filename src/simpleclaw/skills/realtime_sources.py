@@ -612,8 +612,10 @@ async def collect_sources_for_request(
                 "unsupported",
                 [],
                 [
-                    "No registered structured realtime adapter for "
-                    f"sports league {request.entity('league') or 'unknown'}."
+                    (
+                        "No registered structured realtime adapter for "
+                        f"sports league {request.entity('league') or 'unknown'}."
+                    )
                 ],
             )
         team = request.entity("team")

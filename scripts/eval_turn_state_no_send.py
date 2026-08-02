@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Bounded actual-provider planner/gate evaluation with no side effects."""
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _load_cases(path: Path, max_cases: int) -> list[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
-        raise ValueError("fixture must be a JSON array")
+        raise TypeError("fixture must be a JSON array")
     cases = [
         row
         for row in data
