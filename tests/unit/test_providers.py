@@ -51,9 +51,7 @@ class TestClaudeProvider:
 
     @pytest.mark.asyncio
     async def test_send_returns_response(self):
-        provider = ClaudeProvider(
-            model="claude-sonnet-4-20250514", api_key="test-key"
-        )
+        provider = ClaudeProvider(model="claude-sonnet-4-20250514", api_key="test-key")
 
         mock_message = MagicMock()
         text_block = MagicMock(type="text", text="Hello from Claude")
@@ -70,6 +68,7 @@ class TestClaudeProvider:
     @pytest.mark.asyncio
     async def test_auth_error(self):
         import anthropic
+
         provider = ClaudeProvider(model="test", api_key="bad-key")
         provider._client.messages.create = AsyncMock(
             side_effect=anthropic.AuthenticationError(
@@ -124,7 +123,11 @@ class TestClaudeProvider:
                 "role": "assistant",
                 "content": "Let me check the weather.",
                 "tool_calls": [
-                    {"id": "tc_1", "name": "get_weather", "arguments": {"location": "Seoul"}},
+                    {
+                        "id": "tc_1",
+                        "name": "get_weather",
+                        "arguments": {"location": "Seoul"},
+                    },
                 ],
             },
         ]
@@ -253,9 +256,13 @@ class TestClaudeProvider:
         assert kwargs["system"][1]["cache_control"]["ttl"] == "1h"
         assert "cache_control" not in kwargs["system"][2]
         # 1h TTL 은 베타 surface — 헤더 부재 시 API 가 400 으로 거절한다.
-        assert kwargs["extra_headers"]["anthropic-beta"] == "extended-cache-ttl-2025-04-11"
+        assert (
+            kwargs["extra_headers"]["anthropic-beta"] == "extended-cache-ttl-2025-04-11"
+        )
         # usage 에 cache 메트릭이 노출되어야 운영자가 hit rate 를 추적할 수 있다
+        assert result.usage["input_tokens"] == 2058
         assert result.usage["cache_creation_input_tokens"] == 2048
+        assert result.usage["cache_write_input_tokens"] == 2048
         assert result.usage["cache_read_input_tokens"] == 0
 
     @pytest.mark.asyncio
@@ -295,6 +302,7 @@ class TestClaudeProvider:
         )
         assert result.usage["cache_read_input_tokens"] == 2048
         assert result.usage["cache_creation_input_tokens"] == 0
+        assert result.usage["input_tokens"] == 2058
 
     # -- BIZ-259: Streaming --
 
@@ -313,7 +321,8 @@ class TestClaudeProvider:
         final_msg = MagicMock()
         final_msg.content = []
         final_msg.usage = MagicMock(
-            input_tokens=12, output_tokens=4,
+            input_tokens=12,
+            output_tokens=4,
         )
         # cache_* 속성 부재 시 getattr 가 None 을 돌려주도록 spec 제한.
         del final_msg.usage.cache_creation_input_tokens
@@ -334,6 +343,7 @@ class TestClaudeProvider:
                 async def gen():
                     for e in self._events:
                         yield e
+
                 return gen()
 
             async def get_final_message(self):
@@ -348,7 +358,9 @@ class TestClaudeProvider:
             collected.append(d)
 
         result = await provider.stream(
-            "system", "hi", on_text_delta=on_delta,
+            "system",
+            "hi",
+            on_text_delta=on_delta,
         )
         assert collected == ["Hello", ", world"]
         assert result.text == "Hello, world"
@@ -380,6 +392,7 @@ class TestClaudeProvider:
             def __aiter__(self):
                 async def gen():
                     yield evt
+
                 return gen()
 
             async def get_final_message(self):
@@ -416,7 +429,9 @@ class TestClaudeProvider:
             collected.append(d)
 
         result = await provider.stream(
-            "sys", "msg", on_text_delta=on_delta,
+            "sys",
+            "msg",
+            on_text_delta=on_delta,
         )
         assert collected == ["full answer"]
         assert result.text == "full answer"
@@ -460,15 +475,26 @@ class TestOpenAIProvider:
         mock_choice.message.content = "Hello from OpenAI"
         mock_response = MagicMock()
         mock_response.choices = [mock_choice]
-        mock_response.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
-
-        provider._client.chat.completions.create = AsyncMock(
-            return_value=mock_response
+        mock_response.usage = MagicMock(
+            prompt_tokens=8,
+            completion_tokens=4,
+            prompt_tokens_details=MagicMock(cached_tokens=3),
+            completion_tokens_details=MagicMock(reasoning_tokens=2),
+            cost="0.0001234",
         )
+
+        provider._client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         result = await provider.send("system", "hello")
         assert result.text == "Hello from OpenAI"
         assert result.backend_name == "openai"
+        assert result.usage == {
+            "input_tokens": 8,
+            "output_tokens": 4,
+            "cache_read_input_tokens": 3,
+            "reasoning_tokens": 2,
+            "provider_reported_cost_microusd": 123,
+        }
 
     # -- Function Calling tests --
 
@@ -483,7 +509,10 @@ class TestOpenAIProvider:
         assert func["description"] == "Get current weather for a location"
         assert func["parameters"]["type"] == "object"
         # 빈 파라미터는 기본 스키마로 변환되어야 한다
-        assert result[1]["function"]["parameters"] == {"type": "object", "properties": {}}
+        assert result[1]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {},
+        }
 
     def test_convert_messages_assistant_tool_calls(self):
         """assistant 메시지의 tool_calls가 OpenAI 형식(function.arguments=JSON 문자열)으로 변환되어야 한다.
@@ -604,6 +633,7 @@ class TestOpenAIProvider:
         SDK 는 코루틴이 AsyncStream 을 반환 → ``async for`` 로 순회. AsyncMock 의
         ``return_value`` 에 ``__aiter__`` 를 단 객체를 둔다.
         """
+
         class _Iter:
             def __init__(self, items):
                 self._items = list(items)
@@ -612,6 +642,7 @@ class TestOpenAIProvider:
                 async def gen():
                     for c in self._items:
                         yield c
+
                 return gen()
 
         return _Iter(chunks)
@@ -813,7 +844,7 @@ class TestOpenAIProvider:
                 index=0,
                 tc_id="call_broken",
                 name="get_weather",
-                arguments='{not-json',
+                arguments="{not-json",
             ),
             self._make_usage_chunk(prompt_tokens=2, completion_tokens=2),
         ]
@@ -865,7 +896,10 @@ class TestGeminiProvider:
         mock_response = MagicMock()
         mock_response.candidates = [candidate]
         mock_response.usage_metadata = MagicMock(
-            prompt_token_count=7, candidates_token_count=3
+            prompt_token_count=7,
+            candidates_token_count=3,
+            cached_content_token_count=2,
+            thoughts_token_count=1,
         )
 
         provider._client.aio.models.generate_content = AsyncMock(
@@ -875,6 +909,12 @@ class TestGeminiProvider:
         result = await provider.send("system", "hello")
         assert result.text == "Hello from Gemini"
         assert result.backend_name == "gemini"
+        assert result.usage == {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 2,
+            "reasoning_tokens": 1,
+        }
 
     # -- Function Calling tests --
 
@@ -975,7 +1015,11 @@ class TestGeminiProvider:
                     "role": "user",
                     "content": "파일 확인",
                     "attachments": [
-                        {"data": b"pdf", "mime_type": "application/pdf", "name": "x.pdf"}
+                        {
+                            "data": b"pdf",
+                            "mime_type": "application/pdf",
+                            "name": "x.pdf",
+                        }
                     ],
                 }
             ]
@@ -1125,9 +1169,7 @@ class TestGeminiProvider:
         return part
 
     @staticmethod
-    def _make_fc_part(
-        name: str, args: dict, fc_id: str | None = "fc-1"
-    ) -> MagicMock:
+    def _make_fc_part(name: str, args: dict, fc_id: str | None = "fc-1") -> MagicMock:
         part = MagicMock()
         part.function_call = MagicMock()
         part.function_call.id = fc_id
@@ -1163,6 +1205,7 @@ class TestGeminiProvider:
         SDK 는 ``async def`` 가 ``AsyncIterator`` 를 반환하므로, AsyncMock 의
         ``return_value`` 에 ``__aiter__/__anext__`` 가 달린 객체를 둔다.
         """
+
         class _Iter:
             def __init__(self, items):
                 self._items = list(items)
@@ -1171,6 +1214,7 @@ class TestGeminiProvider:
                 async def gen():
                     for c in self._items:
                         yield c
+
                 return gen()
 
         return _Iter(chunks)
@@ -1256,9 +1300,7 @@ class TestGeminiProvider:
             self._make_chunk([self._make_text_part("Let me check.")]),
             self._make_chunk(
                 [
-                    self._make_fc_part(
-                        "get_weather", {"location": "Seoul"}, "fc-1"
-                    ),
+                    self._make_fc_part("get_weather", {"location": "Seoul"}, "fc-1"),
                 ],
                 usage_metadata=MagicMock(
                     prompt_token_count=20, candidates_token_count=8

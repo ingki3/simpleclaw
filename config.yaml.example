@@ -7,6 +7,28 @@
 # The Google ``gemini-openai`` profile remains a conservative A/B-only contract.
 
 llm:
+  # Content-free usage accounting is opt-in. Production prices and thresholds
+  # must be verified/approved before enabling; unknown prices remain unpriced.
+  usage:
+    enabled: false
+    db_path: "~/.simpleclaw-agent/default/llm_usage.db"
+    timezone: "Asia/Seoul"
+    retention_days: 400
+    alert_mode: "alert_only"
+    thresholds:
+      daily_usd: null
+      monthly_usd: null
+      # Failed Telegram claim retry delay (0..86400s); at most 3 attempts.
+      cooldown_seconds: 3600
+    pricing:
+      chat_primary:
+        version: "provider-price-YYYY-MM-DD"
+        source_url: "https://official-provider.example/pricing"
+        effective_from: "YYYY-MM-DD"
+        input_per_million_usd: null
+        output_per_million_usd: null
+        cache_read_per_million_usd: null
+        cache_write_per_million_usd: null
   routes:
     default: {primary: chat_primary, retry: utility_fast}
     turn_analysis: {primary: utility_fast}

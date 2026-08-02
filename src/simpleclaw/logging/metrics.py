@@ -10,6 +10,8 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 
+from simpleclaw.llm.usage import LLMUsageEvent
+
 
 @dataclass
 class MetricsSnapshot:
@@ -35,6 +37,12 @@ class MetricsSnapshot:
     skill_retries: int = 0           # 자동 재시도 시도 횟수 누적 (재시도 1회당 +1)
     skill_retry_exhausted: int = 0   # 정책 한도까지 모두 실패해 포기한 스킬 수
     skill_retry_recovered: int = 0   # 재시도 끝에 성공한 스킬 수
+    llm_calls: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_estimated_cost_microusd: int = 0
+    llm_unpriced_events: int = 0
+    llm_usage_record_failures: int = 0
     timestamp: str = ""
 
     def to_dict(self) -> dict:
@@ -55,6 +63,12 @@ class MetricsSnapshot:
             "skill_retries": self.skill_retries,
             "skill_retry_exhausted": self.skill_retry_exhausted,
             "skill_retry_recovered": self.skill_retry_recovered,
+            "llm_calls": self.llm_calls,
+            "llm_input_tokens": self.llm_input_tokens,
+            "llm_output_tokens": self.llm_output_tokens,
+            "llm_estimated_cost_microusd": self.llm_estimated_cost_microusd,
+            "llm_unpriced_events": self.llm_unpriced_events,
+            "llm_usage_record_failures": self.llm_usage_record_failures,
             "timestamp": self.timestamp,
         }
 
@@ -83,6 +97,29 @@ class MetricsCollector:
         self._skill_retries = 0
         self._skill_retry_exhausted = 0
         self._skill_retry_recovered = 0
+        self._llm_calls = 0
+        self._llm_input_tokens = 0
+        self._llm_output_tokens = 0
+        self._llm_estimated_cost_microusd = 0
+        self._llm_unpriced_events = 0
+        self._llm_usage_record_failures = 0
+
+    def record_llm_usage(self, event: LLMUsageEvent) -> None:
+        """Record one already-deduplicated provider attempt."""
+        usage = event.usage
+        cost = event.estimated_cost_microusd
+        with self._lock:
+            self._llm_calls += 1
+            self._llm_input_tokens += usage.input_tokens or 0
+            self._llm_output_tokens += usage.output_tokens or 0
+            if cost is None:
+                self._llm_unpriced_events += 1
+            else:
+                self._llm_estimated_cost_microusd += cost
+
+    def record_llm_usage_failure(self) -> None:
+        with self._lock:
+            self._llm_usage_record_failures += 1
 
     def record_execution(
         self,
@@ -173,6 +210,12 @@ class MetricsCollector:
                 skill_retries=self._skill_retries,
                 skill_retry_exhausted=self._skill_retry_exhausted,
                 skill_retry_recovered=self._skill_retry_recovered,
+                llm_calls=self._llm_calls,
+                llm_input_tokens=self._llm_input_tokens,
+                llm_output_tokens=self._llm_output_tokens,
+                llm_estimated_cost_microusd=self._llm_estimated_cost_microusd,
+                llm_unpriced_events=self._llm_unpriced_events,
+                llm_usage_record_failures=self._llm_usage_record_failures,
                 timestamp=datetime.now().isoformat(),
             )
 
@@ -192,3 +235,9 @@ class MetricsCollector:
             self._skill_retries = 0
             self._skill_retry_exhausted = 0
             self._skill_retry_recovered = 0
+            self._llm_calls = 0
+            self._llm_input_tokens = 0
+            self._llm_output_tokens = 0
+            self._llm_estimated_cost_microusd = 0
+            self._llm_unpriced_events = 0
+            self._llm_usage_record_failures = 0

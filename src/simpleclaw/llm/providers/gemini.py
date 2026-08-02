@@ -430,6 +430,12 @@ class GeminiProvider(LLMProvider):
                 "input_tokens": usage_metadata.prompt_token_count or 0,
                 "output_tokens": usage_metadata.candidates_token_count or 0,
             }
+            cached = self._safe_attr(usage_metadata, "cached_content_token_count")
+            thoughts = self._safe_attr(usage_metadata, "thoughts_token_count")
+            if isinstance(cached, int) and cached > 0:
+                usage["cache_read_input_tokens"] = cached
+            if isinstance(thoughts, int) and thoughts > 0:
+                usage["reasoning_tokens"] = thoughts
         finish_reason, diagnostics = self._extract_finish_diagnostics(
             response=response,
             candidate=candidate,
@@ -575,6 +581,12 @@ class GeminiProvider(LLMProvider):
                 "input_tokens": usage_metadata.prompt_token_count or 0,
                 "output_tokens": usage_metadata.candidates_token_count or 0,
             }
+            cached = self._safe_attr(usage_metadata, "cached_content_token_count")
+            thoughts = self._safe_attr(usage_metadata, "thoughts_token_count")
+            if isinstance(cached, int) and cached > 0:
+                usage["cache_read_input_tokens"] = cached
+            if isinstance(thoughts, int) and thoughts > 0:
+                usage["reasoning_tokens"] = thoughts
         finish_reason, diagnostics = self._extract_finish_diagnostics(
             response=last_chunk,
             candidate=last_candidate,

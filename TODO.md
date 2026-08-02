@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **BIZ-17: LLM 토큰 사용량·비용 추적 및 임계 경보** — 실제 provider attempt 단위의 content-free usage event, versioned backend pricing 기반 micro-USD 예상 비용, 별도 SQLite 일/월 집계와 durable alert claim, dashboard API/panel, alert-only Telegram 배선을 구현한다. production 가격·threshold·enable/restart는 운영자 승인 전 적용하지 않는다. (진행: 2026-08-02)
+
 - [>] **BIZ-525: Capability-first Goal Resolution과 4-mode 실행 구조** — full-coverage exact Skill/Recipe를 mode 이전에 typed `asset_result.v1`로 실행하고 Asset 상태와 Goal 상태를 분리한다. 미해결 gap은 bounded evidence/complex controller로 전환하며 모든 경로를 공통 Evidence/Action Validator에 합류시킨다. 기본 architecture는 `legacy_v2`로 유지하고 유한 budget이 설정된 `capability_first_v3`만 명시 활성화한다. live rollout/restart는 별도 운영 승인 범위다. (진행: 2026-08-02)
 - [x] **[BIZ-523](mention://issue/8f9d3edd-4755-43ba-9d7f-222aeaf52dbd): Turn/Session/Evidence typed state 통합 — 코드·오프라인 검증 완료** — [PR #537](https://github.com/ingki3/simpleclaw/pull/537)을 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)하고, late-finding 보정 [BIZ-529](mention://issue/c3d46b6a-cc05-4d42-b2fb-b1c3c87e957c)의 [PR #544](https://github.com/ingki3/simpleclaw/pull/544)를 squash merge(SHA `e0f2bf411bc239d402ee9ac5785547443c47701e`)한 뒤, 후속 정책 보정 [BIZ-531](mention://issue/da36b01c-94a0-44df-be39-46a7b9c91f54)의 [PR #546](https://github.com/ingki3/simpleclaw/pull/546)을 squash merge(SHA `867c9c467aaf9d334a43186b685eb3fc588c6b76`)해 코드·오프라인 검증을 완료했다. `dev`→`main` release와 live config·restart·deploy·smoke는 수행하지 않았으며, 운영자 승인 후 [BIZ-532](mention://issue/08da18c2-4a3d-4c6b-802a-acc0f8160fe1)가 해당 운영 gate를 소유한다. 중복 [BIZ-530](mention://issue/9c325c7a-17ff-4f18-ae06-2025843e6bb2)과 PR #545는 미머지 취소됐고 최종 policy-compliant canonical 이력은 BIZ-531/PR #546이다. (완료: 2026-08-02)
 

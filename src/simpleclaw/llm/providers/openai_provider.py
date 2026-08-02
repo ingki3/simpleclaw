@@ -39,6 +39,7 @@ from simpleclaw.llm.providers.base import (
     TextDeltaCallback,
     flatten_system_blocks,
 )
+from simpleclaw.llm.usage import provider_cost_usd_to_microusd
 
 logger = logging.getLogger(__name__)
 
@@ -456,9 +457,7 @@ class OpenAIProvider(LLMProvider):
         if effective_system:
             msg_list.append({"role": "system", "content": effective_system})
         if messages is not None:
-            msg_list.extend(
-                self._convert_messages(messages, provider_name=self._name)
-            )
+            msg_list.extend(self._convert_messages(messages, provider_name=self._name))
         else:
             msg_list.append({"role": "user", "content": user_message})
 
@@ -533,6 +532,21 @@ class OpenAIProvider(LLMProvider):
                 "input_tokens": response.usage.prompt_tokens,
                 "output_tokens": response.usage.completion_tokens,
             }
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            cached = getattr(prompt_details, "cached_tokens", None)
+            completion_details = getattr(
+                response.usage, "completion_tokens_details", None
+            )
+            reasoning = getattr(completion_details, "reasoning_tokens", None)
+            if isinstance(cached, int) and cached > 0:
+                usage["cache_read_input_tokens"] = cached
+            if isinstance(reasoning, int) and reasoning > 0:
+                usage["reasoning_tokens"] = reasoning
+            provider_cost = provider_cost_usd_to_microusd(
+                getattr(response.usage, "cost", None)
+            )
+            if provider_cost is not None:
+                usage["provider_reported_cost_microusd"] = provider_cost
 
         return LLMResponse(
             text=text,
@@ -590,9 +604,7 @@ class OpenAIProvider(LLMProvider):
         if effective_system:
             msg_list.append({"role": "system", "content": effective_system})
         if messages is not None:
-            msg_list.extend(
-                self._convert_messages(messages, provider_name=self._name)
-            )
+            msg_list.extend(self._convert_messages(messages, provider_name=self._name))
         else:
             msg_list.append({"role": "user", "content": user_message})
 
@@ -632,6 +644,21 @@ class OpenAIProvider(LLMProvider):
                         "input_tokens": chunk.usage.prompt_tokens,
                         "output_tokens": chunk.usage.completion_tokens,
                     }
+                    prompt_details = getattr(chunk.usage, "prompt_tokens_details", None)
+                    cached = getattr(prompt_details, "cached_tokens", None)
+                    completion_details = getattr(
+                        chunk.usage, "completion_tokens_details", None
+                    )
+                    reasoning = getattr(completion_details, "reasoning_tokens", None)
+                    if isinstance(cached, int) and cached > 0:
+                        usage["cache_read_input_tokens"] = cached
+                    if isinstance(reasoning, int) and reasoning > 0:
+                        usage["reasoning_tokens"] = reasoning
+                    provider_cost = provider_cost_usd_to_microusd(
+                        getattr(chunk.usage, "cost", None)
+                    )
+                    if provider_cost is not None:
+                        usage["provider_reported_cost_microusd"] = provider_cost
                 if not chunk.choices:
                     continue
                 # BIZ-452 — 종료 청크의 finish_reason 을 보존해 send() 와 동일한

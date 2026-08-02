@@ -51,7 +51,11 @@ from simpleclaw.config_sections.daemon import (
     _positive_int,
     load_daemon_config,
 )
-from simpleclaw.config_sections.llm import _LLM_DEFAULTS, load_llm_config
+from simpleclaw.config_sections.llm import (
+    _LLM_DEFAULTS,
+    load_llm_config,
+    load_llm_usage_config,
+)
 from simpleclaw.config_sections.mcp import _MCP_DEFAULTS, load_mcp_config
 from simpleclaw.config_sections.memory import _MEMORY_DEFAULTS, load_memory_config
 from simpleclaw.config_sections.review import _REVIEW_DEFAULTS, load_review_config
@@ -95,6 +99,7 @@ __all__ = [
     "load_asset_selection_config",
     "load_daemon_config",
     "load_llm_config",
+    "load_llm_usage_config",
     "load_mcp_config",
     "load_memory_config",
     "load_persona_config",

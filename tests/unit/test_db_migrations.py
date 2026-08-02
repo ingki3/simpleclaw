@@ -21,7 +21,17 @@ from simpleclaw.db.migrations import (
     MigrationRunner,
     run_conversations_migrations,
     run_daemon_migrations,
+    run_usage_migrations,
 )
+
+
+def test_usage_migration_is_idempotent(tmp_path):
+    db = tmp_path / "usage.db"
+    assert run_usage_migrations(db) == [1]
+    assert run_usage_migrations(db) == []
+    with sqlite3.connect(db) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"llm_usage_events", "llm_usage_alert_claims"}.issubset(tables)
 
 
 def _write_migration(dir_path: Path, version: int, name: str, sql: str) -> Path:

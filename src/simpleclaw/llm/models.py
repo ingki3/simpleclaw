@@ -140,6 +140,7 @@ class LLMRequest:
     require_structured_output: bool = False
     reasoning: dict | None = None
     required_capabilities: frozenset[str] = field(default_factory=frozenset)
+    usage_task: str | None = None
 
 
 @dataclass

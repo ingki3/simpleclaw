@@ -1,9 +1,17 @@
 """Tests for the web dashboard."""
 
+from datetime import UTC, datetime
+
 import pytest
 from aiohttp import web
 
+from simpleclaw.llm.usage import (
+    LLMUsageEvent,
+    NormalizedUsage,
+    sanitize_usage_dimension,
+)
 from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
+from simpleclaw.logging.llm_usage import LLMUsageStore
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
 
@@ -29,6 +37,8 @@ class TestDashboardServer:
         assert resp.status == 200
         text = await resp.text()
         assert "SimpleClaw Dashboard" in text
+        assert "LLM Usage &amp; Cost" in text
+        assert "llm-usage-period" in text
 
     @pytest.mark.asyncio
     async def test_metrics_api(self, dashboard, aiohttp_client):
@@ -83,6 +93,94 @@ class TestDashboardServer:
         memory = await client.get("/api/memory_stats")
         assert memory.status == 200
         assert await memory.json() == {"disabled": True}
+        usage = await client.get("/api/llm-usage")
+        assert usage.status == 200
+        assert await usage.json() == {"disabled": True}
+
+    @pytest.mark.asyncio
+    async def test_usage_api_summary_and_validation(self, tmp_path, aiohttp_client):
+        store = LLMUsageStore(tmp_path / "usage.db")
+        store.record(
+            LLMUsageEvent(
+                "one",
+                datetime.now(UTC).isoformat(),
+                "",
+                "primary",
+                "profile",
+                "model",
+                "default",
+                "chat",
+                "primary",
+                None,
+                "success",
+                1,
+                NormalizedUsage(10, 2),
+                14,
+                "v1",
+            )
+        )
+        dashboard = DashboardServer(
+            MetricsCollector(), StructuredLogger(tmp_path / "logs"), usage_store=store
+        )
+        app = web.Application()
+        dashboard.register_routes(app)
+        client = await aiohttp_client(app)
+        response = await client.get("/api/llm-usage?period=day&group_by=backend")
+        payload = await response.json()
+        assert payload["disabled"] is False
+        assert payload["estimated_cost_usd"] == "0.000014"
+        assert payload["groups"][0]["backend_name"] == sanitize_usage_dimension(
+            "primary", field="backend_name"
+        )
+        assert (await client.get("/api/llm-usage?group_by=sql")).status == 400
+
+    @pytest.mark.asyncio
+    async def test_usage_api_never_returns_unsafe_dimension_markers(
+        self, tmp_path, aiohttp_client
+    ):
+        markers = (
+            "private-user-message-marker-7f3a",
+            "AKIAFAKESYNTHETIC1234",
+            "ghp_FAKE_SYNTHETIC_MARKER_1234567890",
+            "xoxbFAKESYNTHETIC1234567890",
+        )
+        store = LLMUsageStore(tmp_path / "usage.db")
+        store.record(
+            LLMUsageEvent(
+                markers[0],
+                datetime.now(UTC).isoformat(),
+                markers[1],
+                markers[2],
+                markers[3],
+                markers[0],
+                markers[1],
+                markers[2],
+                markers[3],
+                markers[0],
+                markers[1],
+                1,
+                NormalizedUsage(1, 1),
+                1,
+                markers[2],
+                markers[3],
+            )
+        )
+        dashboard = DashboardServer(
+            MetricsCollector(),
+            StructuredLogger(tmp_path / "logs"),
+            usage_store=store,
+        )
+        app = web.Application()
+        dashboard.register_routes(app)
+        client = await aiohttp_client(app)
+
+        for group_by in ("backend", "model", "route", "task"):
+            response = await client.get(
+                f"/api/llm-usage?period=day&group_by={group_by}"
+            )
+            body = await response.text()
+            assert response.status == 200
+            assert all(marker not in body for marker in markers)
 
 
 class TestDashboardTraceTimeline:
