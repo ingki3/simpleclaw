@@ -12,6 +12,8 @@ from simpleclaw.agent.context_candidates import ContextCandidateBuilder
 from simpleclaw.agent.orchestrator import _planner_native_specs
 from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.resolution_types import ExecutionMode
+from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import PlannerUnavailable, plan_turn_with_llm
 from simpleclaw.config import load_agent_config
 from simpleclaw.llm.router import create_router
@@ -49,6 +51,14 @@ def _load_cases(path: Path, max_cases: int) -> list[dict]:
         and isinstance(row.get("user"), str)
     ]
     return cases[:max_cases]
+
+
+def _fact_action_planned(plan: UnifiedTurnPlan) -> bool:
+    """Canonical execution modes that schedule evidence-backed fact work."""
+    return plan.fact_check.required and plan.execution.mode in {
+        ExecutionMode.ANSWER_WITH_EVIDENCE,
+        ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+    }
 
 
 async def _run(args: argparse.Namespace) -> dict:
@@ -112,11 +122,7 @@ async def _run(args: argparse.Namespace) -> dict:
                         "plan_gate_status": gate.status.value,
                         "execution_mode": plan.execution.mode.value,
                         "fact_required": plan.fact_check.required,
-                        "fact_action_planned": bool(
-                            plan.fact_check.required
-                            and plan.execution.mode.value
-                            in {"fact_check", "complex_fact"}
-                        ),
+                        "fact_action_planned": _fact_action_planned(plan),
                         "execution_mode_accuracy": (
                             not case.get("expected_mode")
                             or plan.execution.mode.value
