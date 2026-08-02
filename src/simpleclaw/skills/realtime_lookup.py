@@ -26,6 +26,11 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.request import Request, urlopen
 
+from simpleclaw.skills.realtime_contracts import (
+    LookupStatus,
+    RealtimeLookupRequest,
+    RealtimeLookupResult,
+)
 from simpleclaw.skills.realtime_sources import (
     CollectionOutcome,
     FetchPage,
@@ -33,11 +38,6 @@ from simpleclaw.skills.realtime_sources import (
     SourceDocument,
     collect_sources_for_request,
     html_to_visible_text,
-)
-from simpleclaw.skills.realtime_contracts import (
-    LookupStatus,
-    RealtimeLookupRequest,
-    RealtimeLookupResult,
 )
 
 _SEARCH_TIMEOUT_SECONDS = 8

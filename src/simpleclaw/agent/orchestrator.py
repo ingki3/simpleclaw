@@ -73,16 +73,15 @@ from simpleclaw.agent.execution_router import (
     ExecutionCallbacks,
     ExecutionRouter,
 )
+from simpleclaw.agent.fact_check_controller import FactCheckController
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
-from simpleclaw.agent.fact_check_controller import FactCheckController
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
-from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.session_state import (
     PendingInteraction,
     SessionIdentity,
@@ -90,6 +89,7 @@ from simpleclaw.agent.session_state import (
     current_session_key_var,
     current_turn_id_var,
 )
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
@@ -106,13 +106,13 @@ from simpleclaw.agent.tool_schemas import (
 )
 from simpleclaw.agent.turn_plan import AssetRef, ExecutionMode, UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
-from simpleclaw.agent.turn_state import TurnExecutionState, TurnPhase
 from simpleclaw.agent.turn_planner_telemetry import (
     PlannerUsageCaptureRouter,
     build_turn_planner_shadow_event,
     build_turn_planner_shadow_failure_event,
     emit_turn_planner_shadow_event,
 )
+from simpleclaw.agent.turn_state import TurnExecutionState, TurnPhase
 from simpleclaw.config import (
     load_agent_config,
     load_asset_selection_config,

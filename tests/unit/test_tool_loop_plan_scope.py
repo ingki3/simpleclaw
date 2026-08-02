@@ -32,7 +32,6 @@ from simpleclaw.agent.turn_plan import (
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse, ToolCall
-from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.skills.models import SkillDefinition
 
 

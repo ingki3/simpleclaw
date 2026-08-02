@@ -26,7 +26,7 @@ from simpleclaw.agent.evidence_policy import (
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
-from simpleclaw.llm.models import LLMResponse, MultimodalAttachment, ToolCall
+from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
 @pytest.fixture

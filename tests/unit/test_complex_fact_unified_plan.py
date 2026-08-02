@@ -9,7 +9,6 @@ import pytest
 from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
 from simpleclaw.agent.fact_plan import fact_plan_from_turn_plan
 from simpleclaw.agent.fact_types import (
-    ComplexFactResult,
     EvidenceCoverage,
     EvidenceItem,
 )
@@ -17,7 +16,6 @@ from simpleclaw.agent.fact_workflow import (
     ComplexFactWorkflow,
     ComplexFactWorkflowConfig,
 )
-from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.turn_plan import (
     ClarificationPlan,
     ContextRelation,

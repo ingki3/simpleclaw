@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.models import FileType, PersonaFile, Section, SourceScope

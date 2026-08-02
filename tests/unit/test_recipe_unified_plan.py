@@ -9,7 +9,7 @@ import pytest
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner
+from simpleclaw.agent.tool_loop import ToolLoopRunner
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     ClarificationPlan,
