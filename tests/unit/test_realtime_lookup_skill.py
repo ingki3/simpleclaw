@@ -27,7 +27,6 @@ from simpleclaw.skills.realtime_sources import (
     SportsGameFact,
 )
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
