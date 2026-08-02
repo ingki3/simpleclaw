@@ -169,6 +169,30 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "decision_summary" in prompt
 
 
+def test_unified_schema_keeps_canonical_modes_and_typed_fact_contract() -> None:
+    properties = UNIFIED_TURN_PLAN_RESPONSE_SCHEMA["properties"]
+
+    assert properties["execution"]["properties"]["mode"]["enum"] == [
+        "clarify",
+        "direct_answer",
+        "answer_with_evidence",
+        "resolve_complex_problem",
+    ]
+    fact_properties = properties["fact_check"]["properties"]
+    assert {
+        "domain",
+        "intents",
+        "entities",
+        "reference_date",
+        "search_query",
+        "required_claims",
+        "freshness_required",
+    }.issubset(fact_properties)
+    assert fact_properties["entities"]["items"]["required"] == ["kind", "value"]
+    assert properties["context"]["properties"]["selected_turn_ids"]["maxItems"] > 0
+    assert properties["capability"]["properties"]["fallback_modes"]["maxItems"] == 4
+
+
 def test_user_prompt_assembles_current_context_and_catalog() -> None:
     """현재 질문·ID 후보·catalog fingerprint를 하나의 deterministic JSON으로 조립한다."""
     catalog = PlannerCatalog(assets=(), fingerprint="fingerprint-123")

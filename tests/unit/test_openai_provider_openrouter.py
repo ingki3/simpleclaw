@@ -12,9 +12,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
 from simpleclaw.llm.models import LLMProviderError, MultimodalAttachment
 from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.openai_provider import OpenAIProvider
+
+
+def _contains_key(node: object, key: str) -> bool:
+    if isinstance(node, dict):
+        return key in node or any(_contains_key(value, key) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_key(item, key) for item in node)
+    return False
 
 
 def _multimodal_provider(monkeypatch) -> OpenAIProvider:
@@ -475,6 +484,59 @@ async def test_openai_provider_send_maps_required_schema_to_json_schema(monkeypa
     assert outgoing_schema["type"] == "object"
     assert "propertyOrdering" not in outgoing_schema
     assert kwargs["extra_body"] == {"reasoning": {"enabled": False}}
+
+
+@pytest.mark.asyncio
+async def test_openrouter_send_adapts_unified_planner_schema_and_keeps_strict(monkeypatch):
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[
+                MagicMock(message=MagicMock(content="{}", tool_calls=None))
+            ],
+            usage=MagicMock(prompt_tokens=5, completion_tokens=1),
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+
+    provider = OpenAIProvider(
+        model="google/gemini-3.6-flash",
+        api_key="test-key",
+        name="openrouter_gemini_3_6_flash",
+        base_url="https://openrouter.ai/api/v1",
+        profile=get_provider_profile("openrouter-multimodal"),
+    )
+
+    await provider.send(
+        system_prompt="",
+        user_message="plan",
+        response_mime_type="application/json",
+        response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
+        require_structured_output=True,
+    )
+
+    response_format = create.call_args.kwargs["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    outgoing_schema = response_format["json_schema"]["schema"]
+    assert not _contains_key(outgoing_schema, "propertyOrdering")
+    assert not _contains_key(outgoing_schema, "maxItems")
+    assert outgoing_schema["properties"]["fact_check"]["required"] == [
+        "required",
+        "owner",
+        "domain",
+        "intents",
+        "entities",
+        "reference_date",
+        "search_query",
+        "required_claims",
+        "freshness_required",
+        "reason",
+    ]
 
 
 @pytest.mark.asyncio

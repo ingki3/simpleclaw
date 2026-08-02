@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
+from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
 from simpleclaw.llm.models import (
     LLMConfigError,
     LLMRequest,
@@ -50,6 +51,21 @@ def test_openrouter_multimodal_profile_is_distinct_from_conservative_google_prof
     assert profile.capabilities.native_replay is True
     assert get_provider_profile("openrouter").capabilities.multimodal is False
     assert get_provider_profile("gemini-openai").capabilities.multimodal is False
+
+
+def test_openrouter_profile_adapts_full_turn_plan_schema_without_mutating_source():
+    source = copy.deepcopy(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA)
+
+    adapted = get_provider_profile("openrouter-multimodal").adapt_schema(source)
+
+    assert not _contains_key(adapted, "propertyOrdering")
+    assert not _contains_key(adapted, "maxItems")
+    assert adapted["additionalProperties"] is False
+    assert adapted["properties"]["confidence"]["minimum"] == 0
+    assert adapted["properties"]["confidence"]["maximum"] == 1
+    assert UNIFIED_TURN_PLAN_RESPONSE_SCHEMA == source
+    assert _contains_key(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA, "propertyOrdering")
+    assert _contains_key(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA, "maxItems")
 
 
 def test_gemini_openai_schema_removes_native_ordering_without_mutating_source():
