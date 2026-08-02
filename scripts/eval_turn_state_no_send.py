@@ -63,7 +63,7 @@ def _fact_action_planned(
     fact_required: bool,
     execution_mode: ExecutionMode,
 ) -> bool:
-    """Recognize fact work after legacy payloads normalize to canonical modes."""
+    """legacy payload가 canonical mode로 정규화된 뒤 사실 작업인지 판정한다."""
     return bool(fact_required and execution_mode in _FACT_ACTION_MODES)
 
 
