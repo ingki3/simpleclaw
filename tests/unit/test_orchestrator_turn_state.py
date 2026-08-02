@@ -231,6 +231,60 @@ async def test_unsupported_fact_lookup_never_enters_composer(
 
 
 @pytest.mark.asyncio
+async def test_found_low_confidence_fact_returns_limited_final(
+    config_file,
+    monkeypatch,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+
+    async def planner(text, *, catalog, **_kwargs):
+        return _plan(
+            text,
+            catalog.fingerprint,
+            mode=ExecutionMode.FACT_CHECK,
+            fact=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        planner,
+    )
+
+    async def low_confidence_found(*_args, **_kwargs):
+        return json.dumps(
+            {
+                "lookup_status": "found",
+                "kind": "sports",
+                "confidence": "low",
+                "facts": [
+                    {
+                        "claim": "LPGA final score 68 and win",
+                        "source_url": "https://example.test/lpga",
+                    }
+                ],
+                "timeline_validation": {"status": "final"},
+                "limitations": ["low confidence"],
+            }
+        )
+
+    orchestrator._execute_skill = low_confidence_found
+    composer_called = False
+
+    async def composer(*_args, **_kwargs):
+        nonlocal composer_called
+        composer_called = True
+        return LLMResponse(text="invented 68 and win", model="test")
+
+    orchestrator._router.send = composer
+
+    result = await orchestrator.process_message("LPGA current result", 10, 20)
+
+    assert "확정할 수 없습니다" in result
+    assert "68" not in result
+    assert composer_called is False
+
+
+@pytest.mark.asyncio
 async def test_context_candidates_do_not_cross_session(
     config_file,
     monkeypatch,

@@ -21,6 +21,7 @@ import base64
 import json
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -365,10 +366,28 @@ def _parsed_result(value: object) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _request_value(
+    request: RealtimeLookupRequest | Mapping[str, object] | None,
+    name: str,
+) -> object | None:
+    if isinstance(request, RealtimeLookupRequest):
+        return getattr(request, name, None)
+    if isinstance(request, Mapping):
+        return request.get(name)
+    return None
+
+
 def _expected_event_date(
-    result: dict[str, Any], payload: dict[str, Any] | None
+    result: dict[str, Any],
+    request: RealtimeLookupRequest | Mapping[str, object] | None,
 ) -> str | None:
-    raw = payload.get("as_of_kst") if payload is not None else None
+    raw = _request_value(request, "reference_date")
+    if raw:
+        try:
+            return datetime.fromisoformat(str(raw)).date().isoformat()
+        except ValueError:
+            return None
+    raw = _request_value(request, "as_of_kst")
     freshness = result.get("freshness")
     if raw is None and isinstance(freshness, dict):
         raw = freshness.get("as_of_kst")
@@ -382,13 +401,13 @@ def _expected_event_date(
 
 def is_usable_realtime_evidence(
     result: object,
-    payload: dict[str, Any] | None = None,
+    request: RealtimeLookupRequest | Mapping[str, object] | None = None,
 ) -> bool:
     """live-fact final을 허용할 수 있는 구조화 realtime result인지 판정한다."""
     parsed = _parsed_result(result)
     if parsed is None or parsed.get("confidence") not in {"medium", "high"}:
         return False
-    if parsed.get("lookup_status") in {"not_found", "failed"}:
+    if parsed.get("lookup_status") != LookupStatus.FOUND.value:
         return False
     facts = parsed.get("facts")
     if not isinstance(facts, list) or not facts or not all(
@@ -396,10 +415,48 @@ def is_usable_realtime_evidence(
     ):
         return False
 
-    # source 일부 실패나 live/partial 설명 같은 limitation은 허용한다. confidence가
-    # low인 실패 envelope는 위에서 이미 차단하므로 raw context bool로 판정하지 않는다.
-    if parsed.get("kind") != "sports":
-        return True
+    domain = str(_request_value(request, "domain") or parsed.get("kind") or "")
+    if not domain or parsed.get("kind") != domain:
+        return False
+    required_claims = _request_value(request, "required_claims")
+    if required_claims is not None and (
+        not isinstance(required_claims, list | tuple)
+        or not required_claims
+        or any(not str(claim).strip() for claim in required_claims)
+    ):
+        return False
+    freshness_required = bool(
+        _request_value(request, "freshness_required")
+    )
+    timeline = parsed.get("timeline_validation")
+    if timeline is not None and not isinstance(timeline, dict):
+        return False
+    if (
+        (freshness_required or domain == "sports")
+        and isinstance(timeline, dict)
+        and timeline.get("status") in {
+            "stale_or_pre_event",
+            "current_pending",
+            "no_evidence",
+            "unknown",
+        }
+    ):
+        return False
+    if freshness_required and domain != "sports" and (
+        not isinstance(timeline, dict) or timeline.get("status") != "final"
+    ):
+        return False
+    if domain == "sports" and not isinstance(timeline, dict):
+        return False
+
+    # source 일부 실패 limitation은 허용한다. confidence가 low인 실패 envelope는
+    # 위에서 이미 차단하므로 raw context bool로 판정하지 않는다.
+    if domain != "sports":
+        return all(
+            str(fact.get("claim") or "").strip()
+            and str(fact.get("source_url") or fact.get("url") or "").strip()
+            for fact in facts
+        )
 
     sports_facts = [fact for fact in facts if fact.get("type") == "sports_score"]
     if len(sports_facts) != 1 or len(facts) != 1:
@@ -433,8 +490,27 @@ def is_usable_realtime_evidence(
         None,
     }:
         return False
-    expected_date = _expected_event_date(parsed, payload)
-    return expected_date is not None and fact["event_date"] == expected_date
+    entities = _request_value(request, "entities")
+    if isinstance(entities, (list, tuple)):
+        for entity in entities:
+            if isinstance(entity, Mapping):
+                kind = str(entity.get("kind") or "")
+                value = str(entity.get("value") or "")
+            else:
+                kind = str(getattr(entity, "kind", "") or "")
+                value = str(getattr(entity, "value", "") or "")
+            if kind == "league" and value.casefold() != str(fact["league"]).casefold():
+                return False
+            if kind in {"team", "athlete"} and value.casefold() not in {
+                str(fact["away_team"]).casefold(),
+                str(fact["home_team"]).casefold(),
+            }:
+                return False
+    expected_date = _expected_event_date(parsed, request)
+    if expected_date is None or fact["event_date"] != expected_date:
+        return False
+    expected_timeline = "final" if fact["status"] == "final" else "partial"
+    return isinstance(timeline, dict) and timeline.get("status") == expected_timeline
 
 
 # 이전 내부 import를 깨지 않되 production은 명시적인 이름을 사용한다.

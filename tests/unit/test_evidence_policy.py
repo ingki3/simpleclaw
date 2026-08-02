@@ -99,13 +99,31 @@ def test_structured_realtime_found_is_fresh_and_usable() -> None:
         domain="sports",
         allowed_collectors=frozenset({"web_search"}),
         freshness_required=True,
+        reference_date="2026-07-29",
+        required_claims=("최종 점수", "승패"),
     )
     state = assess_realtime_result(
         requirement,
         {
             "lookup_status": "found",
+            "kind": "sports",
             "confidence": "high",
-            "facts": [{"type": "sports_score", "source_url": "https://sports.example"}],
+            "facts": [
+                {
+                    "type": "sports_score",
+                    "league": "KBO",
+                    "event_date": "2026-07-29",
+                    "away_team": "롯데",
+                    "away_score": 5,
+                    "home_team": "한화",
+                    "home_score": 3,
+                    "status": "final",
+                    "winner": "롯데",
+                    "source": "Naver Sports",
+                    "source_url": "https://sports.example",
+                }
+            ],
+            "timeline_validation": {"status": "final"},
         },
         usable=True,
         as_of="2026-07-29T23:00:00+09:00",

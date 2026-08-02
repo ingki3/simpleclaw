@@ -90,13 +90,24 @@ def _result(status: LookupStatus) -> RealtimeLookupResult:
     if status is LookupStatus.FOUND:
         payload = {
             "lookup_status": "found",
+            "kind": "sports",
             "confidence": "high",
             "facts": [
                 {
-                    "claim": "유해란 1라운드 68타 공동 4위",
+                    "type": "sports_score",
+                    "league": "LPGA",
+                    "event_date": "2026-07-30",
+                    "away_team": "유해란",
+                    "away_score": 68,
+                    "home_team": "field",
+                    "home_score": 69,
+                    "status": "final",
+                    "winner": "유해란",
+                    "source": "LPGA",
                     "source_url": "https://example.test/lpga",
                 }
             ],
+            "timeline_validation": {"status": "final"},
             "limitations": [],
         }
         facts = tuple(payload["facts"])
@@ -177,3 +188,82 @@ async def test_unsupported_adapter_is_not_coerced_to_not_found() -> None:
     assert state.evidence.status is EvidenceStatus.UNUSABLE
     assert "확정할 수 없습니다" in (state.final_text or "")
     composer.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("payload_update", "fact_update"),
+    [
+        ({"confidence": "low"}, {}),
+        ({"timeline_validation": {"status": "stale_or_pre_event"}}, {}),
+        ({}, {"event_date": "2026-07-29"}),
+        (
+            {"timeline_validation": {"status": "partial"}},
+            {"status": "scheduled", "winner": None},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_found_semantically_unusable_payload_never_enters_composer(
+    payload_update: dict,
+    fact_update: dict,
+) -> None:
+    result = _result(LookupStatus.FOUND)
+    payload = dict(result.payload)
+    payload.update(payload_update)
+    facts = [dict(result.facts[0])]
+    facts[0].update(fact_update)
+    payload["facts"] = facts
+    unusable = RealtimeLookupResult(
+        request=result.request,
+        status=LookupStatus.FOUND,
+        evidence=tuple(facts),
+        facts=tuple(facts),
+        limitations=(),
+        payload=payload,
+    )
+    composer = AsyncMock()
+    controller = FactCheckController(
+        lookup=AsyncMock(return_value=unusable),
+        compose=composer,
+        max_attempts=1,
+        as_of=lambda: "2026-07-31T08:32:15+09:00",
+    )
+
+    state = await controller.run(_state())
+
+    assert state.evidence.status is EvidenceStatus.UNUSABLE
+    assert "확정할 수 없습니다" in (state.final_text or "")
+    composer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_live_sports_fact_can_enter_composer() -> None:
+    result = _result(LookupStatus.FOUND)
+    payload = dict(result.payload)
+    fact = dict(result.facts[0])
+    fact.update(status="live", winner=None)
+    payload.update(
+        confidence="medium",
+        facts=[fact],
+        timeline_validation={"status": "partial"},
+    )
+    live = RealtimeLookupResult(
+        request=result.request,
+        status=LookupStatus.FOUND,
+        evidence=(fact,),
+        facts=(fact,),
+        limitations=("경기 진행 중",),
+        payload=payload,
+    )
+    composer = AsyncMock(return_value="진행 중입니다.")
+    controller = FactCheckController(
+        lookup=AsyncMock(return_value=live),
+        compose=composer,
+        max_attempts=1,
+        as_of=lambda: "2026-07-31T08:32:15+09:00",
+    )
+
+    state = await controller.run(_state())
+
+    assert state.evidence.status is EvidenceStatus.VERIFIED
+    composer.assert_awaited_once()

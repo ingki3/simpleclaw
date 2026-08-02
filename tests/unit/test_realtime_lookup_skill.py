@@ -331,6 +331,85 @@ def test_lookup_sports_score_fact_keeps_all_values_together(monkeypatch):
     assert result["lookup_status"] == "found"
 
 
+def _usable_sports_payload(*, status: str = "final") -> dict:
+    winner = "롯데 자이언츠" if status == "final" else None
+    return {
+        "kind": "sports",
+        "lookup_status": "found",
+        "confidence": "high" if status == "final" else "medium",
+        "facts": [
+            {
+                "type": "sports_score",
+                "league": "KBO",
+                "event_date": "2026-07-28",
+                "status": status,
+                "away_team": "롯데 자이언츠",
+                "away_score": 8,
+                "home_team": "한화 이글스",
+                "home_score": 3,
+                "winner": winner,
+                "source": "Naver Sports Schedule API",
+                "source_url": "https://api-gw.sports.naver.com/schedule/games",
+            }
+        ],
+        "timeline_validation": {
+            "status": "final" if status == "final" else "partial"
+        },
+    }
+
+
+@pytest.mark.parametrize("status", ["final", "live"])
+def test_typed_current_sports_fact_is_usable(status):
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request["reference_date"] = "2026-07-28"
+    request["required_claims"] = ["점수", "승패"]
+
+    assert realtime_lookup.is_usable_realtime_evidence(
+        _usable_sports_payload(status=status),
+        request,
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload_update", "fact_update", "request_update"),
+    [
+        ({"confidence": "low"}, {}, {}),
+        ({"timeline_validation": {"status": "stale_or_pre_event"}}, {}, {}),
+        ({}, {"event_date": "2026-07-27"}, {}),
+        (
+            {"timeline_validation": {"status": "partial"}},
+            {"status": "scheduled", "winner": None},
+            {},
+        ),
+        ({}, {}, {"required_claims": []}),
+    ],
+)
+def test_stale_partial_or_incomplete_sports_fact_is_unusable(
+    payload_update,
+    fact_update,
+    request_update,
+):
+    payload = _usable_sports_payload()
+    payload.update(payload_update)
+    payload["facts"][0].update(fact_update)
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(
+        reference_date="2026-07-28",
+        required_claims=["점수", "승패"],
+    )
+    request.update(request_update)
+
+    assert not realtime_lookup.is_usable_realtime_evidence(payload, request)
+
+
 @pytest.mark.parametrize(
     ("fact_status", "source_text", "expected_timeline"),
     [

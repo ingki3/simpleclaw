@@ -127,6 +127,7 @@ class FactCheckController:
             payload,
             usable=result.status is LookupStatus.FOUND,
             as_of=result.request.as_of_kst,
+            request=result.request,
             failure_reason=(
                 result.limitations[0]
                 if result.status
