@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -23,9 +27,56 @@ from simpleclaw.skills.realtime_sources import (
     SportsGameFact,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC_ROOT = _REPO_ROOT / "src"
+
 # ----------------------------------------------------------------------
 # raw query fallback parser
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "import simpleclaw.skills.realtime_lookup",
+        "from simpleclaw.agent import AgentOrchestrator",
+    ),
+)
+def test_clean_process_import_contract(statement):
+    """공개 realtime/agent import는 clean process의 import 순서와 무관하다."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_SRC_ROOT)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", statement],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_installed_wrapper_imports_in_clean_process(tmp_path):
+    """설치 스크립트가 만든 runtime wrapper도 clean process에서 import된다."""
+    from scripts.install_realtime_lookup_skill import install
+
+    skill_dir = install(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_SRC_ROOT), str(skill_dir)))
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import realtime_lookup_skill"],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_parse_args_decodes_base64_payload():

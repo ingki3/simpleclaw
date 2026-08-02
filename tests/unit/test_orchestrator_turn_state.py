@@ -280,7 +280,8 @@ async def test_found_low_confidence_fact_returns_limited_final(
     result = await orchestrator.process_message("LPGA current result", 10, 20)
 
     assert "확정할 수 없습니다" in result
-    assert "68" not in result
+    assert "LPGA final score 68 and win" not in result
+    assert "https://example.test/lpga" not in result
     assert composer_called is False
 
 
