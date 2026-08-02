@@ -5,11 +5,11 @@ from datetime import UTC, datetime
 import pytest
 from aiohttp import web
 
+from simpleclaw.llm.usage import LLMUsageEvent, NormalizedUsage
 from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
+from simpleclaw.logging.llm_usage import LLMUsageStore
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
-from simpleclaw.logging.llm_usage import LLMUsageStore
-from simpleclaw.llm.usage import LLMUsageEvent, NormalizedUsage
 
 
 class TestDashboardServer:

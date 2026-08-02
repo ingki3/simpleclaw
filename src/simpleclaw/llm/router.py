@@ -14,8 +14,8 @@ import inspect
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 

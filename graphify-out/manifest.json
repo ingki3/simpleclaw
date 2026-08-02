@@ -1,12 +1,12 @@
 {
   "tool": "graphifyy",
-  "generated_at": "2026-08-02T05:06:59.667646+00:00",
-  "git_commit": "e5ef3e3c47587885915319e11823eefa5576a332",
+  "generated_at": "2026-08-02T05:14:31.548165+00:00",
+  "git_commit": "48a50dbd5d40abb6c5da87ef149570bdebc1fddb",
   "target": "src/simpleclaw",
   "mode": "code-only",
   "cluster": "--no-label --no-viz",
   "nodes": 4727,
-  "edges": 9456,
+  "edges": 9459,
   "tracked_outputs": [
     "graphify-out/GRAPH_REPORT.md",
     "graphify-out/graph.json",

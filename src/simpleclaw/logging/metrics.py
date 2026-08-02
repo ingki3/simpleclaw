@@ -10,6 +10,8 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 
+from simpleclaw.llm.usage import LLMUsageEvent
+
 
 @dataclass
 class MetricsSnapshot:
@@ -102,10 +104,10 @@ class MetricsCollector:
         self._llm_unpriced_events = 0
         self._llm_usage_record_failures = 0
 
-    def record_llm_usage(self, event: object) -> None:
+    def record_llm_usage(self, event: LLMUsageEvent) -> None:
         """Record one already-deduplicated provider attempt."""
-        usage = getattr(event, "usage")
-        cost = getattr(event, "estimated_cost_microusd")
+        usage = event.usage
+        cost = event.estimated_cost_microusd
         with self._lock:
             self._llm_calls += 1
             self._llm_input_tokens += usage.input_tokens or 0

@@ -15,7 +15,7 @@ def test_service_prices_persists_logs_and_metrics_content_free(tmp_path):
     store = LLMUsageStore(tmp_path / "usage.db")
     metrics = MetricsCollector()
     structured = StructuredLogger(tmp_path / "logs")
-    service = LLMUsageService(store, pricing={"primary": BackendPricing(version="v1", input_per_million_usd=Decimal("1"), output_per_million_usd=Decimal("2"))}, metrics=metrics, structured_logger=structured)
+    service = LLMUsageService(store, pricing={"primary": BackendPricing(version="v1", input_per_million_usd=Decimal(1), output_per_million_usd=Decimal(2))}, metrics=metrics, structured_logger=structured)
     service.record(_event())
     summary = store.summarize_day(datetime.now(UTC), timezone="Asia/Seoul")
     assert summary["estimated_cost_microusd"] == 14

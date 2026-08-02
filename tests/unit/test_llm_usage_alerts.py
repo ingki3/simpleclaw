@@ -17,7 +17,7 @@ async def test_daily_alert_claim_deduplicates_across_service_restart(tmp_path):
     sent = []
     async def callback(text):
         sent.append(text)
-    pricing = {"primary": BackendPricing(version="v1", input_per_million_usd=Decimal("1"), output_per_million_usd=Decimal("1"))}
+    pricing = {"primary": BackendPricing(version="v1", input_per_million_usd=Decimal(1), output_per_million_usd=Decimal(1))}
     path = tmp_path / "usage.db"
     LLMUsageService(LLMUsageStore(path), pricing=pricing, daily_usd=Decimal("0.01"), alert_callback=callback).record(_event("one"))
     await asyncio.sleep(0)

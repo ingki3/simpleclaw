@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
 
@@ -61,7 +61,7 @@ class LLMUsageEvent:
     pricing_version: str | None = None
     error_type: str | None = None
 
-    def with_cost(self, cost: int | None, version: str | None) -> "LLMUsageEvent":
+    def with_cost(self, cost: int | None, version: str | None) -> LLMUsageEvent:
         return replace(self, estimated_cost_microusd=cost, pricing_version=version)
 
 
@@ -101,7 +101,7 @@ def estimate_cost_microusd(
     if any(tokens > 0 and rate is None for tokens, rate in components):
         return None
     total = sum(Decimal(tokens) * (rate or Decimal(0)) for tokens, rate in components)
-    return int(total.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int(total.quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def microusd_to_decimal_usd(value: int) -> Decimal:

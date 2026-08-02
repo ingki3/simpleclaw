@@ -4,7 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from simpleclaw.llm.models import BackendType, LLMBackend, LLMConfigError, LLMRequest, LLMResponse, LLMRoute, SystemBlock
+from simpleclaw.llm.models import (
+    BackendType,
+    LLMBackend,
+    LLMConfigError,
+    LLMRequest,
+    LLMResponse,
+    LLMRoute,
+    SystemBlock,
+)
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
 

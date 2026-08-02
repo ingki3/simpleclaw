@@ -4,12 +4,12 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 4727 nodes · 9456 edges · 221 communities (192 shown, 29 thin omitted)
-- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 1123 edges (avg confidence: 0.65)
+- 4727 nodes · 9459 edges · 220 communities (191 shown, 29 thin omitted)
+- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 1125 edges (avg confidence: 0.65)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e5ef3e3c`
+- Built from commit: `48a50dbd`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -234,7 +234,6 @@
 - [[_COMMUNITY_Community 217|Community 217]]
 - [[_COMMUNITY_Community 218|Community 218]]
 - [[_COMMUNITY_Community 219|Community 219]]
-- [[_COMMUNITY_Community 220|Community 220]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `AgentOrchestrator` - 117 edges
@@ -263,11 +262,11 @@
 ## Import Cycles
 - None detected.
 
-## Communities (221 total, 29 thin omitted)
+## Communities (220 total, 29 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.04
-Nodes (53): DreamingTrigger, 드리밍 트리거: 자동 드리밍 파이프라인의 실행 조건 평가기.  드리밍(Dreaming)은 사용자가 비활성 상태일 때 대화 내용을 정리·요약하는, 자동 드리밍 조건을 평가하고, 충족 시 파이프라인을 기동한다.      실행 조건 (모두 충족해야 함):     1. 마지막 사용자 입력이 id, 기존 centroid에 신규 멤버 임베딩을 누적 평균으로 합친다.          공식: ``(old * n + new) / (n + 1)``., ConversationStore, 대화 이력을 SQLite 데이터베이스에 저장하고 조회하는 모듈.  주요 동작 흐름: 1. ConversationStore 인스턴스 생성 시 SQ, 임베딩 BLOB이 부착된 메시지 수를 반환한다.          ``count()``와의 비율이 곧 시맨틱 메모리 커버리지이다., ``cluster_id``가 부착된 메시지 수를 반환한다. (+45 more)
+Cohesion: 0.03
+Nodes (56): DreamingTrigger, 드리밍 트리거: 자동 드리밍 파이프라인의 실행 조건 평가기.  드리밍(Dreaming)은 사용자가 비활성 상태일 때 대화 내용을 정리·요약하는, 자동 드리밍 조건을 평가하고, 충족 시 파이프라인을 기동한다.      실행 조건 (모두 충족해야 함):     1. 마지막 사용자 입력이 id, 드리밍 실행 조건이 충족되었는지 확인한다., 드리밍 파이프라인을 실행하고 완료 시각을 기록한다., 데몬 상태에서 마지막 드리밍 실행 시각을 조회한다., 기존 centroid에 신규 멤버 임베딩을 누적 평균으로 합친다.          공식: ``(old * n + new) / (n + 1)``., ConversationStore (+48 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.05
@@ -399,27 +398,27 @@ Nodes (20): CronScheduler를 주입하여 cron 도구를 활성화한다., CronJ
 
 ### Community 33 - "Community 33"
 Cohesion: 0.07
-Nodes (38): _collect_admin_health(), Admin API /health를 GET으로 조회한다. 인증 토큰은 결과에 포함하지 않는다., _collect_admin_health(), _collect_fd(), _collect_git(), _collect_launchd(), _collect_ports(), _collect_process() (+30 more)
+Nodes (21): drain 상태/active operation 컨트롤러 — 채널·admin health 가 공유한다., DrainController 를 교체 주입한다 (테스트/커스텀 배선용)., DrainController, DrainState, _parse_iso(), LaunchAgent restart 를 위한 drain/quiesce 상태 관리 (BIZ-442).  runtime-affecting deplo, drain 상태 파일 + in-process active operation 카운터.      bot 프로세스와 deploy script 가 같은, drain 을 요청한다 — deadline 은 now + timeout.          기존 drain 요청이 있으면 새 요청으로 덮어쓴다(마 (+13 more)
 
 ### Community 34 - "Community 34"
 Cohesion: 0.08
-Nodes (37): 조회 전용 명령을 timeout과 함께 실행한다., _run_command(), _collect_process(), _command_summary(), _compact(), _cwd_check(), _dashboard_check(), _dump() (+29 more)
+Nodes (37): _collect_admin_health(), _collect_process(), _command_summary(), _compact(), _cwd_check(), _dashboard_check(), _dump(), _fd_check() (+29 more)
 
 ### Community 35 - "Community 35"
 Cohesion: 0.07
-Nodes (21): drain 상태/active operation 컨트롤러 — 채널·admin health 가 공유한다., DrainController 를 교체 주입한다 (테스트/커스텀 배선용)., DrainController, DrainState, _parse_iso(), LaunchAgent restart 를 위한 drain/quiesce 상태 관리 (BIZ-442).  runtime-affecting deplo, drain 상태 파일 + in-process active operation 카운터.      bot 프로세스와 deploy script 가 같은, drain 을 요청한다 — deadline 은 now + timeout.          기존 drain 요청이 있으면 새 요청으로 덮어쓴다(마 (+13 more)
+Nodes (19): AsyncIOScheduler, AgentDaemon, 에이전트 데몬: PID 잠금, 이벤트 루프, 스케줄러를 관리하는 메인 오케스트레이터.  데몬의 생명주기를 관리한다: 1. PID 파일로 단일 인, 데몬이 현재 실행 중인지 여부를 반환한다., 자동 드리밍 트리거를 설정한다 (start() 이후에 호출해야 함)., 데몬을 시작한다: PID 잠금 획득, 컴포넌트 초기화, 틱 루프 시작., 하트비트 모니터를 통해 틱을 실행한다., PID 잠금 파일을 획득한다. 다른 인스턴스가 실행 중이면 DaemonLockError 발생. (+11 more)
 
 ### Community 36 - "Community 36"
 Cohesion: 0.07
-Nodes (19): AsyncIOScheduler, AgentDaemon, 에이전트 데몬: PID 잠금, 이벤트 루프, 스케줄러를 관리하는 메인 오케스트레이터.  데몬의 생명주기를 관리한다: 1. PID 파일로 단일 인, 데몬이 현재 실행 중인지 여부를 반환한다., 자동 드리밍 트리거를 설정한다 (start() 이후에 호출해야 함)., 데몬을 시작한다: PID 잠금 획득, 컴포넌트 초기화, 틱 루프 시작., 하트비트 모니터를 통해 틱을 실행한다., PID 잠금 파일을 획득한다. 다른 인스턴스가 실행 중이면 DaemonLockError 발생. (+11 more)
-
-### Community 37 - "Community 37"
-Cohesion: 0.07
 Nodes (28): 레지스트리 상태를 영속 ``StudyTopic`` 목록으로 직렬화한다.      registry 가 소유하지 않는 필드(description/t, registry_to_study_topics(), daily_dir(), index_path(), init_wiki_root(), Study Wiki 디렉터리 레이아웃 규약과 초기화.  위키는 단일 루트 디렉터리 아래에 다음 구조로 자료를 둔다.      <root>/, 위키 루트 경로를 ``~`` 가 풀린 절대 경로로 반환한다.      Args:         base: 사용할 루트. ``None`` 이면 :, ``topics.yaml`` 레지스트리 파일 경로를 반환한다. (+20 more)
 
-### Community 38 - "Community 38"
+### Community 37 - "Community 37"
 Cohesion: 0.10
 Nodes (30): 오케스트레이터의 dispatch/router 상태를 재사용하기 위해 참조를 보관한다., _asset_schema(), BIZ-488 evaluator가 소비하는 compact prediction shape를 반환한다., Gemini/OpenAI 양쪽이 해석할 strict object schema를 만든다., nullable 차이를 피하는 고정 asset object schema를 만든다., _strict_object(), _build_ledger(), _build_subagent_ledger() (+22 more)
+
+### Community 38 - "Community 38"
+Cohesion: 0.08
+Nodes (35): _collect_admin_health(), _collect_fd(), _collect_git(), _collect_launchd(), _collect_ports(), _collect_process(), _collect_scheduler(), _compact_command() (+27 more)
 
 ### Community 39 - "Community 39"
 Cohesion: 0.08
@@ -442,32 +441,32 @@ Cohesion: 0.08
 Nodes (28): ContextCandidate, ContextCandidateBuilder, ContextTrust, Unified TurnPlanner에 전달할 ID 기반 대화 문맥 후보를 예산 안에서 구성한다., 메시지 역할별 허용 범위를 고정해 과거 응답의 근거 승격을 막는다., Planner가 문맥 후보를 신뢰하고 사용할 수 있는 범위를 구분한다., Planner의 문맥 선택에 사용할 안정적인 대화 행을 표현한다., Planner 입력의 필드 순서를 고정하기 위해 간결한 payload를 반환한다. (+20 more)
 
 ### Community 44 - "Community 44"
+Cohesion: 0.10
+Nodes (33): _changed_paths(), _collect_commit_range(), _collect_dirty(), _collect_open_prs(), _collect_origin_sync(), _collect_repo(), _error_text(), handle_deploy_status() (+25 more)
+
+### Community 45 - "Community 45"
 Cohesion: 0.07
 Nodes (19): 데몬 저장소 인스턴스를 반환한다. 데몬 미시작 시 RuntimeError., CronJobExecution, ExecutionStatus, 크론 작업의 단일 실행 기록.      한 스케줄 트리거 안에서 재시도가 발생하면 시도마다 별도 레코드를 남긴다.     ``attempt``는, DaemonStore, 데몬 서브시스템의 SQLite 영속화 계층.  크론 작업, 실행 로그, 대기 상태, 데몬 키-값 상태를 SQLite에 저장하고 조회한다. 테이블, 크론 작업을 삭제한다. 삭제 성공 여부를 반환한다., DB 행을 CronJob 데이터 클래스로 변환한다.          구버전 DB에서 마이그레이션된 직후의 행은 새 컬럼이 DEFAULT로 채워져 (+11 more)
 
-### Community 45 - "Community 45"
+### Community 46 - "Community 46"
 Cohesion: 0.10
 Nodes (30): AssetCandidate, AssetSelectionResult, build_selector_assets(), build_selector_prompt(), build_selector_tool_definition(), _coerce_candidates(), _extract_selection_payload(), filter_assets_by_selection() (+22 more)
 
-### Community 46 - "Community 46"
+### Community 47 - "Community 47"
 Cohesion: 0.09
 Nodes (28): _inject_env_secret_refs(), live 배포 repo와 런타임 state 경로를 시스템 프롬프트용으로 요약한다.          BIZ-313: 모델이 ``~/.simplec, config의 시크릿 참조를 스킬 실행용 환경변수로 주입한다.      런타임 스킬은 기존 CLI 생태계와 호환되도록 API 키를 환경변수로 읽, config.yaml에서 skills 섹션을 로드한다., _agent_with_defaults(), _coerce_float_config(), _coerce_int_config(), _coerce_optional_name() (+20 more)
 
-### Community 47 - "Community 47"
+### Community 48 - "Community 48"
 Cohesion: 0.09
 Nodes (28): _asset_from_capability(), _asset_from_native_spec(), build_planner_catalog(), _canonical_json(), catalog_prompt_metrics(), _compact_description(), _execute_skill_adapter_asset(), _normalized_tuple() (+20 more)
 
-### Community 48 - "Community 48"
+### Community 49 - "Community 49"
 Cohesion: 0.08
 Nodes (24): apply_interest_signals(), _category_for_hint(), _coerce_int(), _default_now(), EvolutionSummary, interest_signal_to_topic_signal(), merge_registry_into_raw_topics(), _parse_datetime() (+16 more)
 
-### Community 49 - "Community 49"
+### Community 50 - "Community 50"
 Cohesion: 0.12
 Nodes (31): _as_text(), _as_type_str(), _clamp(), _coerce_float(), _coerce_timestamp(), derive_topic_hint(), extract_keywords(), extract_topic_hints() (+23 more)
-
-### Community 50 - "Community 50"
-Cohesion: 0.11
-Nodes (30): _changed_paths(), _collect_commit_range(), _collect_dirty(), _collect_open_prs(), _collect_origin_sync(), _collect_repo(), _error_text(), handle_deploy_status() (+22 more)
 
 ### Community 51 - "Community 51"
 Cohesion: 0.09
@@ -547,7 +546,7 @@ Nodes (19): _extract_format_vars(), load_system_prompt(), _load_uncached(), _par
 
 ### Community 70 - "Community 70"
 Cohesion: 0.08
-Nodes (12): MetricsCollector, MetricsSnapshot, 에이전트 모니터링용 메트릭 수집기.  스레드 안전한 카운터로 실행 횟수, 성공/실패, 토큰 사용량, 서브에이전트 생성 수 등을 추적한다. get, Record one already-deduplicated provider attempt., ``kill_process_group`` 결과를 메트릭에 반영한다.          Args:             killed: SIGKILL, 현재 메트릭의 불변 스냅샷.      대시보드 API 응답 등에서 스레드 안전하게 전달하기 위해 사용한다., 스킬 자동 재시도 1회를 기록한다 (재시도 시도 직전 호출)., 재시도 끝에 스킬이 성공했음을 기록한다. (+4 more)
+Nodes (12): MetricsCollector, MetricsSnapshot, 에이전트 모니터링용 메트릭 수집기.  스레드 안전한 카운터로 실행 횟수, 성공/실패, 토큰 사용량, 서브에이전트 생성 수 등을 추적한다. get, Record one already-deduplicated provider attempt., ``kill_process_group`` 결과를 메트릭에 반영한다.          Args:             killed: SIGKILL, 스킬 자동 재시도 1회를 기록한다 (재시도 시도 직전 호출)., 현재 메트릭의 불변 스냅샷.      대시보드 API 응답 등에서 스레드 안전하게 전달하기 위해 사용한다., 재시도 끝에 스킬이 성공했음을 기록한다. (+4 more)
 
 ### Community 71 - "Community 71"
 Cohesion: 0.10
@@ -979,57 +978,53 @@ Nodes (5): Telegram 메시지의 첨부를 인증 후 LLM용 bytes로 다운로�
 
 ### Community 178 - "Community 178"
 Cohesion: 0.33
-Nodes (3): 드리밍 실행 조건이 충족되었는지 확인한다., 드리밍 파이프라인을 실행하고 완료 시각을 기록한다., 데몬 상태에서 마지막 드리밍 실행 시각을 조회한다.
-
-### Community 179 - "Community 179"
-Cohesion: 0.33
 Nodes (6): _fetch_raw(), fetch_text(), _html_to_text(), HTML에서 스크립트/페이지 chrome/태그를 제거해 본문 위주 텍스트로 축약한다.      SERP·기사 페이지 모두 내비/헤더/푸터/사이드, URL을 정적 GET으로 조회해 raw HTML과 limitation을 반환한다., URL을 정적 fetch로 조회하고 본문 텍스트와 limitation을 반환한다.
 
-### Community 180 - "Community 180"
+### Community 179 - "Community 179"
 Cohesion: 0.40
 Nodes (4): _format_web_search_results(), handle_web_search(), 질의어로 후보 URL을 검색하고 title/url/snippet(+상위 본문 발췌) 결과를 반환한다.      ``body_fetcher`` 가, 검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다.      상위 결과에 ``body`` 발췌가 채워져
 
-### Community 181 - "Community 181"
+### Community 180 - "Community 180"
 Cohesion: 0.50
 Nodes (4): ClaimVerificationResult, Lightweight final-answer claim guard for complex fact workflow., Conservatively block certainty when evidence slots are missing., verify_answer_claims()
 
-### Community 182 - "Community 182"
+### Community 181 - "Community 181"
 Cohesion: 0.50
 Nodes (4): _cron_list(), handle_cron_action(), ReAct 루프에서 발생한 cron 액션을 처리한다.      list, add, remove, enable, disable 액션을 지원한다., cron 작업 목록을 포맷팅하여 반환한다 (ReAct 핸들러와 /cron 명령이 공유).
 
-### Community 183 - "Community 183"
+### Community 182 - "Community 182"
 Cohesion: 0.50
 Nodes (4): _fetch_headless(), `agent-browser` CLI 절대 경로를 탐색한다.      탐색 순서:       (a) ``override`` — 운영자가 ``age, 헤드리스 브라우저(`agent-browser` CLI)로 페이지를 렌더링하고 본문 텍스트를 반환한다.      `agent-browser ope, _resolve_agent_browser()
 
-### Community 184 - "Community 184"
+### Community 183 - "Community 183"
 Cohesion: 0.50
 Nodes (3): Typed intent/domain metadata를 capability 선언과 비교하는 compatibility adapter.  안전 원칙:, 정규화 질문에 맞는 read-only 자동 실행 후보를 하나 고른다.      ``explicit_intents``/``explicit_doma, select_capability()
 
-### Community 185 - "Community 185"
+### Community 184 - "Community 184"
 Cohesion: 0.50
 Nodes (3): load_dspy_fact_program(), Optional DSPy backend for complex fact planning.  Phase 1 does not require DSPy., Load the optional DSPy backend, or explain why it is unavailable.
 
-### Community 186 - "Community 186"
+### Community 185 - "Community 185"
 Cohesion: 0.50
 Nodes (3): __getattr__(), 하위 호환을 위해 ``AgentOrchestrator``를 지연 노출하는 Agent 패키지., 에이전트 그래프를 즉시 import하지 않고 공개 오케스트레이터를 불러온다.
 
-### Community 187 - "Community 187"
+### Community 186 - "Community 186"
 Cohesion: 0.50
 Nodes (3): Active Memory tool dispatch 경계., `search_memory` 도구 호출을 처리해 장기기억/과거 대화를 온디맨드 회상한다., search_memory()
 
-### Community 189 - "Community 189"
+### Community 188 - "Community 188"
 Cohesion: 0.50
 Nodes (3): load_memory_config(), Semantic memory config loader.  RAG 및 long-term memory 설정을 기본값과 병합한다., config.yaml에서 시맨틱 메모리(RAG) 설정을 로드한다.      파일이 없거나 memory 키가 없으면 기본값(RAG 비활성)을 반환
 
-### Community 190 - "Community 190"
+### Community 189 - "Community 189"
 Cohesion: 0.50
 Nodes (3): __getattr__(), LLM routing layer with multi-provider support and CLI wrapping., Lazy router exports to avoid config-loader import cycles.
 
-### Community 191 - "Community 191"
+### Community 190 - "Community 190"
 Cohesion: 0.50
 Nodes (4): build_initial_template(), ensure_initialized(), 비어있는 파일에 쓸 1차 템플릿을 생성한다.      형식:         # {header}          <!-- managed:dream, 파일이 없거나 비어있으면 템플릿으로 초기화한다.      이미 콘텐츠가 있는 파일은 절대 손대지 않는다 — 마커 추가가 필요하면 운영자가
 
-### Community 192 - "Community 192"
+### Community 191 - "Community 191"
 Cohesion: 0.50
 Nodes (4): _fact_from_source(), 검증된 source를 최종 모델이 판별 가능한 구조화 fact로 변환한다., 검증을 통과해 realtime evidence로 사용할 수 있는 source body., SourceDocument
 
@@ -1041,9 +1036,9 @@ Nodes (4): _fact_from_source(), 검증된 source를 최종 모델이 판별 가�
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `AgentOrchestrator` connect `Community 3` to `Community 0`, `Community 6`, `Community 7`, `Community 8`, `Community 138`, `Community 139`, `Community 10`, `Community 16`, `Community 21`, `Community 22`, `Community 153`, `Community 25`, `Community 157`, `Community 158`, `Community 32`, `Community 35`, `Community 43`, `Community 45`, `Community 174`, `Community 46`, `Community 55`, `Community 58`, `Community 63`, `Community 64`, `Community 67`, `Community 68`, `Community 70`, `Community 73`, `Community 74`, `Community 81`, `Community 88`, `Community 92`, `Community 100`, `Community 108`, `Community 113`?**
-  _High betweenness centrality (0.163) - this node is a cross-community bridge._
-- **Why does `ConversationStore` connect `Community 0` to `Community 3`, `Community 39`, `Community 88`, `Community 105`, `Community 9`, `Community 46`, `Community 15`, `Community 52`, `Community 84`, `Community 56`, `Community 90`, `Community 123`, `Community 92`?**
+- **Why does `AgentOrchestrator` connect `Community 3` to `Community 0`, `Community 6`, `Community 7`, `Community 8`, `Community 138`, `Community 139`, `Community 10`, `Community 16`, `Community 21`, `Community 22`, `Community 153`, `Community 25`, `Community 157`, `Community 158`, `Community 32`, `Community 33`, `Community 43`, `Community 46`, `Community 174`, `Community 47`, `Community 55`, `Community 58`, `Community 63`, `Community 64`, `Community 67`, `Community 68`, `Community 70`, `Community 73`, `Community 74`, `Community 81`, `Community 88`, `Community 92`, `Community 100`, `Community 108`, `Community 113`?**
+  _High betweenness centrality (0.164) - this node is a cross-community bridge._
+- **Why does `ConversationStore` connect `Community 0` to `Community 3`, `Community 39`, `Community 88`, `Community 105`, `Community 9`, `Community 47`, `Community 15`, `Community 52`, `Community 84`, `Community 56`, `Community 90`, `Community 123`, `Community 92`?**
   _High betweenness centrality (0.081) - this node is a cross-community bridge._
 - **Why does `TelegramBot` connect `Community 160` to `Community 161`, `Community 3`, `Community 163`, `Community 168`, `Community 169`, `Community 177`, `Community 146`, `Community 86`, `Community 28`?**
   _High betweenness centrality (0.050) - this node is a cross-community bridge._
@@ -1054,4 +1049,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **What connects `SimpleClaw - Personal Assistant Agent.`, `하위 호환을 위해 ``AgentOrchestrator``를 지연 노출하는 Agent 패키지.`, `에이전트 그래프를 즉시 import하지 않고 공개 오케스트레이터를 불러온다.` to the rest of the system?**
   _2085 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.03546099290780142 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.032929292929292926 - nodes in this community are weakly interconnected._

@@ -42,11 +42,11 @@ from simpleclaw.config import (
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
-from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.llm.usage import BackendPricing
 from simpleclaw.logging.llm_usage import LLMUsageService, LLMUsageStore
+from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.redaction import install_telegram_token_redaction
 from simpleclaw.logging.structured_logger import StructuredLogger
-from simpleclaw.llm.usage import BackendPricing
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline

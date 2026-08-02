@@ -17,7 +17,7 @@ def test_negative_and_boolean_tokens_are_unknown():
 
 def test_cost_does_not_double_count_cache_or_reasoning():
     usage = normalize_usage({"input_tokens": 1000, "output_tokens": 200, "cache_read_input_tokens": 400, "cache_write_input_tokens": 100, "reasoning_tokens": 50})
-    pricing = BackendPricing(version="v1", input_per_million_usd=Decimal("3"), output_per_million_usd=Decimal("15"), cache_read_per_million_usd=Decimal("0.3"), cache_write_per_million_usd=Decimal("3.75"))
+    pricing = BackendPricing(version="v1", input_per_million_usd=Decimal(3), output_per_million_usd=Decimal(15), cache_read_per_million_usd=Decimal("0.3"), cache_write_per_million_usd=Decimal("3.75"))
     assert estimate_cost_microusd(usage, pricing) == 4995
 
 

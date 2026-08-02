@@ -166,7 +166,7 @@ class LLMUsageService:
                 self.metrics.record_llm_usage(persisted)
             self._log(persisted)
             self._check_thresholds(persisted)
-        except Exception as exc:  # accounting must never fail the LLM response
+        except Exception as exc:  # noqa: BLE001 — accounting is deliberately fail-open.
             if self.metrics and hasattr(self.metrics, "record_llm_usage_failure"):
                 self.metrics.record_llm_usage_failure()
             logger.warning("llm_usage_record_failed error_type=%s", type(exc).__name__)
@@ -202,7 +202,7 @@ class LLMUsageService:
             if asyncio.iscoroutine(result):
                 await result
             self.store.mark_alert_sent(claim)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — alert delivery is deliberately fail-open.
             self.store.mark_alert_failed(claim, type(exc).__name__)
 
 
