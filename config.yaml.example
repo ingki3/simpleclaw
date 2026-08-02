@@ -467,7 +467,10 @@ daemon:
   dreaming:
     overnight_hour: 3
     idle_threshold: 7200
-    model: "gemini"
+    # llm.providers에 등록된 backend alias를 지정한다(vendor/model명이 아님).
+    # 빈 값은 llm.routes.default를 사용한다. 변경 후에는 service restart가 필요하며,
+    # 등록되지 않은 alias는 restart preflight에서 fail-closed로 거부된다.
+    model: "utility_fast"
     # Phase 3 그래프형 드리밍 — IncrementalClusterer가 미클러스터 임베딩을 부착하고
     # MEMORY.md의 ``<!-- cluster:N -->`` 마커 영역을 in-place 갱신한다. 기본값은 안전
     # 측면에서 ``False``이며 명시적으로 켜야 활성화된다.

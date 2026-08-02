@@ -155,9 +155,9 @@ class TestDreamingPipeline:
 
     @pytest.mark.asyncio
     async def test_llm_model_routing(self, setup):
-        """Dreaming model is passed to LLM request."""
+        """Dreaming backend alias is passed to the LLM request."""
         store, pipeline, _, _ = setup
-        pipeline._dreaming_model = "gemini"
+        pipeline._dreaming_model = "utility_fast"
 
         mock_response = MagicMock()
         mock_response.text = '{"memory": "## test", "user_insights": ""}'
@@ -173,7 +173,25 @@ class TestDreamingPipeline:
 
         # Verify the request used the dreaming model
         call_args = mock_router.send.call_args[0][0]
-        assert call_args.backend_name == "gemini"
+        assert call_args.backend_name == "utility_fast"
+
+    @pytest.mark.asyncio
+    async def test_empty_llm_model_uses_default_route(self, setup):
+        """빈 Dreaming model은 명시 backend 없이 router default route를 사용한다."""
+        store, pipeline, _, _ = setup
+        pipeline._dreaming_model = None
+
+        mock_response = MagicMock()
+        mock_response.text = '{"memory": "## test", "user_insights": ""}'
+        mock_router = MagicMock()
+        mock_router.send = AsyncMock(return_value=mock_response)
+        pipeline._router = mock_router
+        store.add_message(ConversationMessage(role=MessageRole.USER, content="Hello"))
+
+        await pipeline.run()
+
+        call_args = mock_router.send.call_args[0][0]
+        assert call_args.backend_name is None
 
     def test_parse_llm_result_valid(self, setup):
         _, pipeline, _, _ = setup

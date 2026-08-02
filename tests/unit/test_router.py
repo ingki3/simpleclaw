@@ -274,6 +274,24 @@ class TestLLMRouter:
         with pytest.raises(LLMConfigError, match="Unknown backend"):
             await router.send(request)
 
+    def test_validate_backend_name_accepts_registered_alias(self, router):
+        router.validate_backend_name(
+            "provider_b", field_path="daemon.dreaming.model"
+        )
+
+    def test_validate_backend_name_rejects_unknown_alias_with_field_path(self, router):
+        with pytest.raises(
+            LLMConfigError,
+            match=r"daemon\.dreaming\.model: unknown backend alias 'nonexistent'",
+        ):
+            router.validate_backend_name(
+                "nonexistent", field_path="daemon.dreaming.model"
+            )
+
+    def test_validate_backend_name_allows_empty_default_route(self, router):
+        router.validate_backend_name("", field_path="daemon.dreaming.model")
+        router.validate_backend_name(None, field_path="daemon.dreaming.model")
+
     def test_list_backends(self, router):
         backends = router.list_backends()
         assert "provider_a" in backends

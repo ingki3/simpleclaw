@@ -592,6 +592,21 @@ daemon:
         assert result["dreaming"]["enable_clusters"] is False
         assert result["dreaming"]["cluster_threshold"] == 0.75
 
+    def test_empty_dreaming_model_preserves_default_route_contract(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    model: ""
+""",
+        )
+
+        result = load_daemon_config(cfg)
+
+        assert result["dreaming"]["model"] == ""
+
     # -- BIZ-297: dreaming.max_tokens --
 
     def test_dreaming_max_tokens_defaults(self, tmp_path: Path):

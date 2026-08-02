@@ -738,6 +738,10 @@ class AgentOrchestrator:
 
         # LLM router
         self._router = create_router(config_path, usage_sink=llm_usage_sink)
+        self._router.validate_backend_name(
+            daemon_config.get("dreaming", {}).get("model"),
+            field_path="daemon.dreaming.model",
+        )
 
         # Conversation store
         # BIZ-313: db_path 가 ``~/.simpleclaw-agent/default/...`` 형태로 오므로 expanduser 로 풀어준다.

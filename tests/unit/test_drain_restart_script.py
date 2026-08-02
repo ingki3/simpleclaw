@@ -239,6 +239,40 @@ class TestTimeoutDecision:
 
 
 class TestFailurePaths:
+    def test_unknown_dreaming_backend_fails_before_drain_or_restart(
+        self, script_module, tmp_path, capsys
+    ):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            f"""
+llm:
+  default: utility_fast
+  providers:
+    utility_fast:
+      type: cli
+      command: echo
+daemon:
+  dreaming:
+    model: missing_backend
+  drain:
+    state_file: "{tmp_path}/drain_state.json"
+"""
+        )
+        launchctl_calls: list[list[str]] = []
+        args = script_module.build_parser().parse_args(["--config", str(config)])
+
+        exit_code = script_module.run_drain_restart(
+            args,
+            runner=_make_runner(launchctl_calls),
+        )
+
+        assert exit_code == 2
+        assert launchctl_calls == []
+        assert not (tmp_path / "drain_state.json").exists()
+        assert "daemon.dreaming.model: unknown backend alias 'missing_backend'" in (
+            capsys.readouterr().out
+        )
+
     def test_kickstart_failure_records_failed_evidence(
         self, script_module, config_file, tmp_path
     ):
