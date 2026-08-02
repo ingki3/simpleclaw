@@ -54,6 +54,7 @@ async def compose_fact_answer(
         ),
         user_message=json.dumps(payload, ensure_ascii=False),
         max_tokens=2048,
+        usage_task="fact_answer",
     )
     response = await send(request)
     return (response.text or "").strip()

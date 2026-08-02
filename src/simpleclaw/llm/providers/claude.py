@@ -179,15 +179,18 @@ class ClaudeProvider(LLMProvider):
             if tc_list:
                 tool_calls = tc_list
 
+        cache_creation = getattr(message.usage, "cache_creation_input_tokens", None)
+        cache_read = getattr(message.usage, "cache_read_input_tokens", None)
+        cache_creation = cache_creation if isinstance(cache_creation, int) and not isinstance(cache_creation, bool) else None
+        cache_read = cache_read if isinstance(cache_read, int) and not isinstance(cache_read, bool) else None
         usage: dict = {
-            "input_tokens": message.usage.input_tokens,
+            "input_tokens": message.usage.input_tokens + (cache_creation or 0) + (cache_read or 0),
             "output_tokens": message.usage.output_tokens,
         }
         # BIZ-252 — prompt caching 메트릭. Anthropic SDK 가 두 필드를 반환할 때만 노출한다.
-        cache_creation = getattr(message.usage, "cache_creation_input_tokens", None)
-        cache_read = getattr(message.usage, "cache_read_input_tokens", None)
         if cache_creation is not None:
             usage["cache_creation_input_tokens"] = cache_creation
+            usage["cache_write_input_tokens"] = cache_creation
         if cache_read is not None:
             usage["cache_read_input_tokens"] = cache_read
         if has_cached_block and (cache_creation is not None or cache_read is not None):
@@ -309,16 +312,19 @@ class ClaudeProvider(LLMProvider):
                             )
                         )
             if final_message.usage is not None:
-                usage["input_tokens"] = final_message.usage.input_tokens
-                usage["output_tokens"] = final_message.usage.output_tokens
                 cache_creation = getattr(
                     final_message.usage, "cache_creation_input_tokens", None
                 )
                 cache_read = getattr(
                     final_message.usage, "cache_read_input_tokens", None
                 )
+                cache_creation = cache_creation if isinstance(cache_creation, int) and not isinstance(cache_creation, bool) else None
+                cache_read = cache_read if isinstance(cache_read, int) and not isinstance(cache_read, bool) else None
+                usage["input_tokens"] = final_message.usage.input_tokens + (cache_creation or 0) + (cache_read or 0)
+                usage["output_tokens"] = final_message.usage.output_tokens
                 if cache_creation is not None:
                     usage["cache_creation_input_tokens"] = cache_creation
+                    usage["cache_write_input_tokens"] = cache_creation
                 if cache_read is not None:
                     usage["cache_read_input_tokens"] = cache_read
                 if has_cached_block and (

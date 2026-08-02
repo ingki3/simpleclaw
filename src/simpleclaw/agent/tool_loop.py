@@ -661,6 +661,7 @@ class ToolLoopRunner:
                     messages=state.messages,
                     tools=state.tools,
                     system_blocks=state.system_blocks,
+                    usage_task="tool_loop",
                 )
                 text_delta_callback = (
                     state.on_text_delta
@@ -1007,6 +1008,7 @@ class ToolLoopRunner:
                 user_message=state.user_content,
                 messages=state.messages,
                 system_blocks=state.system_blocks,
+                usage_task="tool_loop",
             )
             if state.on_text_delta is not None:
                 final_send = self._orchestrator._router.send(

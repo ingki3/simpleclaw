@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
+import uuid
+from datetime import UTC, datetime
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -28,6 +31,8 @@ from simpleclaw.llm.models import (
 from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
 from simpleclaw.llm.transports import get_transport_class
+from simpleclaw.llm.usage import LLMUsageEvent, LLMUsageSink, normalize_usage
+from simpleclaw.logging.trace_context import get_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,7 @@ class LLMRouter:
         multimodal_backend: str | None = None,
         profiles: dict[str, ProviderProfile] | None = None,
         routes: dict[str, LLMRoute] | None = None,
+        usage_sink: LLMUsageSink | None = None,
     ) -> None:
         """라우터를 초기화한다.
 
@@ -113,12 +119,16 @@ class LLMRouter:
                     name="multimodal", primary=self._multimodal, retry=self._fallback
                 )
         self._routes = routes
+        self._usage_sink = usage_sink
 
     async def _send_to_backend(
         self,
         backend_name: str,
         request: LLMRequest,
         on_text_delta: TextDeltaCallback | None = None,
+        *,
+        attempt_role: str = "primary",
+        retry_reason: str | None = None,
     ) -> LLMResponse:
         """선택된 백엔드 provider 로 요청을 실제 전송한다."""
         provider = self._providers[backend_name]
@@ -130,9 +140,11 @@ class LLMRouter:
         if request.reasoning:
             extra_kwargs["reasoning"] = request.reasoning
 
-        if on_text_delta is not None:
-            logger.info("Routing streaming request to backend '%s'", backend_name)
-            return await provider.stream(
+        started = time.monotonic()
+        try:
+            if on_text_delta is not None:
+                logger.info("Routing streaming request to backend '%s'", backend_name)
+                response = await provider.stream(
                 request.system_prompt,
                 request.user_message,
                 request.messages,
@@ -143,11 +155,11 @@ class LLMRouter:
                 response_mime_type=request.response_mime_type,
                 response_schema=request.response_schema,
                 require_structured_output=request.require_structured_output,
-                **extra_kwargs,
-            )
-
-        logger.info("Routing request to backend '%s'", backend_name)
-        return await provider.send(
+                    **extra_kwargs,
+                )
+            else:
+                logger.info("Routing request to backend '%s'", backend_name)
+                response = await provider.send(
             request.system_prompt,
             request.user_message,
             request.messages,
@@ -157,8 +169,35 @@ class LLMRouter:
             response_mime_type=request.response_mime_type,
             response_schema=request.response_schema,
             require_structured_output=request.require_structured_output,
-            **extra_kwargs,
+                    **extra_kwargs,
+                )
+        except Exception as exc:
+            self._record_usage_event(backend_name, request, attempt_role, retry_reason, "error", time.monotonic() - started, None, type(exc).__name__)
+            raise
+        status = "empty" if _response_is_empty_final(response) else "success"
+        self._record_usage_event(backend_name, request, attempt_role, retry_reason, status, time.monotonic() - started, response, None)
+        return response
+
+    def _record_usage_event(self, backend_name: str, request: LLMRequest, attempt_role: str, retry_reason: str | None, status: str, elapsed: float, response: LLMResponse | None, error_type: str | None) -> None:
+        if self._usage_sink is None:
+            return
+        backend = self._backends[backend_name]
+        profile = self._profiles.get(backend_name)
+        event = LLMUsageEvent(
+            event_id=str(uuid.uuid4()), occurred_at_utc=datetime.now(UTC).isoformat(),
+            trace_id=get_trace_id(), backend_name=backend_name,
+            provider_profile=profile.name if profile else (backend.profile or "generic"),
+            model=(response.model if response else backend.model) or backend.model,
+            route_name="direct" if request.backend_name else (request.route_name or "default"),
+            task_name=request.usage_task or request.route_name or "chat",
+            attempt_role=attempt_role, retry_reason=retry_reason, status=status,
+            duration_ms=elapsed * 1000, usage=normalize_usage(response.usage if response else None),
+            error_type=error_type,
         )
+        try:
+            self._usage_sink.record(event)
+        except Exception as exc:  # fail-open telemetry boundary
+            logger.warning("llm_usage_record_failed backend=%s task=%s error_type=%s", backend_name, event.task_name, type(exc).__name__)
 
     def _resolve_request(self, request: LLMRequest) -> tuple[str, str | None]:
         """Resolve the mutually-exclusive backend/route selectors."""
@@ -276,7 +315,7 @@ class LLMRouter:
                     retry_name,
                     exc_info=True,
                 )
-                return await self._send_to_backend(retry_name, request, None)
+                return await self._send_to_backend(retry_name, request, None, attempt_role="retry", retry_reason="provider_error")
             raise
 
         if fallback_name and on_text_delta is None and _response_is_empty_final(response):
@@ -288,7 +327,7 @@ class LLMRouter:
                 backend_name,
                 retry_name,
             )
-            return await self._send_to_backend(retry_name, request, None)
+            return await self._send_to_backend(retry_name, request, None, attempt_role="retry", retry_reason="empty_final")
         return response
 
     async def send_validated(
@@ -322,7 +361,7 @@ class LLMRouter:
                 type(exc).__name__,
                 retry_name,
             )
-            return validate_response(await self._send_to_backend(retry_name, request))
+            return validate_response(await self._send_to_backend(retry_name, request, attempt_role="retry", retry_reason="validation_error"))
 
     def list_backends(self) -> list[str]:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""
@@ -349,7 +388,7 @@ class LLMRouter:
         return self._routes.get(route_name)
 
 
-def create_router(config_path: str | Path) -> LLMRouter:
+def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = None) -> LLMRouter:
     """config.yaml 설정으로부터 LLMRouter를 생성한다.
 
     Args:
@@ -545,4 +584,5 @@ def create_router(config_path: str | Path) -> LLMRouter:
         multimodal_backend=multimodal_name,
         profiles=profiles,
         routes=normalized_routes,
+        usage_sink=usage_sink,
     )

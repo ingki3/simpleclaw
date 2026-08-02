@@ -628,6 +628,7 @@ class AgentOrchestrator:
         *,
         metrics: MetricsCollector | None = None,
         structured_logger: StructuredLogger | None = None,
+        llm_usage_sink: object | None = None,
     ) -> None:
         self._config_path = Path(config_path)
         # 메트릭 수집기 — 서브프로세스 종료 결과를 누적하여 누수 추세를 모니터링.
@@ -712,7 +713,7 @@ class AgentOrchestrator:
         self._reload_dynamic_files()
 
         # LLM router
-        self._router = create_router(config_path)
+        self._router = create_router(config_path, usage_sink=llm_usage_sink)
 
         # Conversation store
         # BIZ-313: db_path 가 ``~/.simpleclaw-agent/default/...`` 형태로 오므로 expanduser 로 풀어준다.
@@ -2100,7 +2101,7 @@ class AgentOrchestrator:
         )
         response = None
         try:
-            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            request = LLMRequest(user_message=prompt, max_tokens=2048, usage_task="skill_suggestion")
             if structured_output:
                 request.response_mime_type = "application/json"
                 request.response_schema = SKILL_SUGGESTION_RESPONSE_SCHEMA
@@ -2196,7 +2197,7 @@ class AgentOrchestrator:
         )
         response = None
         try:
-            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            request = LLMRequest(user_message=prompt, max_tokens=2048, usage_task="recipe_suggestion")
             if structured_output:
                 request.response_mime_type = "application/json"
                 request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
@@ -2737,6 +2738,7 @@ class AgentOrchestrator:
                     backend_name=str(cfg["backend"]),
                     tools=[build_selector_tool_definition()],
                     max_tokens=int(cfg["max_tokens"]),
+                    usage_task="asset_selector",
                 )
             )
             result = normalize_selector_response(

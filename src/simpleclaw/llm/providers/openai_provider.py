@@ -533,6 +533,14 @@ class OpenAIProvider(LLMProvider):
                 "input_tokens": response.usage.prompt_tokens,
                 "output_tokens": response.usage.completion_tokens,
             }
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            cached = getattr(prompt_details, "cached_tokens", None)
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
+            reasoning = getattr(completion_details, "reasoning_tokens", None)
+            if isinstance(cached, int) and cached > 0:
+                usage["cache_read_input_tokens"] = cached
+            if isinstance(reasoning, int) and reasoning > 0:
+                usage["reasoning_tokens"] = reasoning
 
         return LLMResponse(
             text=text,
@@ -632,6 +640,14 @@ class OpenAIProvider(LLMProvider):
                         "input_tokens": chunk.usage.prompt_tokens,
                         "output_tokens": chunk.usage.completion_tokens,
                     }
+                    prompt_details = getattr(chunk.usage, "prompt_tokens_details", None)
+                    cached = getattr(prompt_details, "cached_tokens", None)
+                    completion_details = getattr(chunk.usage, "completion_tokens_details", None)
+                    reasoning = getattr(completion_details, "reasoning_tokens", None)
+                    if isinstance(cached, int) and cached > 0:
+                        usage["cache_read_input_tokens"] = cached
+                    if isinstance(reasoning, int) and reasoning > 0:
+                        usage["reasoning_tokens"] = reasoning
                 if not chunk.choices:
                     continue
                 # BIZ-452 — 종료 청크의 finish_reason 을 보존해 send() 와 동일한

@@ -418,6 +418,7 @@ async def plan_turn_with_llm(
             response_mime_type="application/json",
             response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
             require_structured_output=True,
+            usage_task="turn_planner",
         )
     except Exception as exc:  # noqa: BLE001 — raw 원문 없이 service 오류로 정규화.
         logger.warning(
