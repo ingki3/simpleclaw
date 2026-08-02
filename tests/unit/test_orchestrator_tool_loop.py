@@ -147,6 +147,10 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
 
     assert result.success is False
     assert result.text == "scoped_tool_call_cap_exceeded"
+    assert len(result.trace) == 1
+    assert result.trace[0].tool_name == "execute_skill"
+    assert result.trace[0].arguments["skill_name"] == "naver-sports-skill"
+    assert result.trace[0].success is True
     dispatch.assert_awaited_once()
 
 

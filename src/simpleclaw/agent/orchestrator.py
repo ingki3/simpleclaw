@@ -2695,6 +2695,19 @@ class AgentOrchestrator:
                         f"typed_recipe_nested_error:{type(exc).__name__}"
                     ],
                 }
+            delegate_trace = [
+                step
+                for step in nested.trace
+                if step.tool_name == "execute_skill"
+                and str(step.arguments.get("skill_name") or "") in recipe.skills
+                and step.success
+            ]
+            if len(nested.trace) != 1 or len(delegate_trace) != 1:
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["recipe_requires_one_successful_delegate"],
+                }
             if not nested.success:
                 return {
                     "schema": "asset_result.v1",
