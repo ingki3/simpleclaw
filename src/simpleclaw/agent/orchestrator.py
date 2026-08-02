@@ -60,6 +60,11 @@ from simpleclaw.agent.commands import (
     try_cron_command,
     try_recipe_command,
 )
+from simpleclaw.agent.complex_problem import (
+    ComplexProblemController,
+    ComplexProblemState,
+    ProblemNode,
+)
 from simpleclaw.agent.context_candidates import (
     ContextCandidateBuilder,
     ContextCandidateSet,
@@ -67,11 +72,6 @@ from simpleclaw.agent.context_candidates import (
 from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
-)
-from simpleclaw.agent.complex_problem import (
-    ComplexProblemController,
-    ComplexProblemState,
-    ProblemNode,
 )
 from simpleclaw.agent.evidence_investigation import (
     EvidenceInvestigationController,
@@ -98,8 +98,8 @@ from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
-from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
     AssetResult,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
