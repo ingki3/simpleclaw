@@ -21,6 +21,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeVar
 
+from simpleclaw.agent.resolution_types import (
+    CapabilityCoverage,
+    ComplexitySignal,
+    ExecutionMode,
+)
 from simpleclaw.agent.response_router import ResponseRoute, RouteDecision
 
 _ASSET_TYPES = frozenset({"native_tool", "skill", "recipe"})
@@ -48,18 +53,6 @@ class ContextRelation(str, Enum):
     RELATED_REFERENCE = "related_reference"
     TOPIC_SHIFT = "topic_shift"
     UNCLEAR = "unclear"
-
-
-class ExecutionMode(str, Enum):
-    """한 turn에서 선택할 유일한 상위 실행 경로."""
-
-    CLARIFY = "clarify"
-    DIRECT_ANSWER = "direct_answer"
-    EXECUTE_ASSET = "execute_asset"
-    TOOL_LOOP = "tool_loop"
-    FACT_CHECK = "fact_check"
-    COMPLEX_FACT = "complex_fact"
-    RECIPE = "recipe"
 
 
 class EvidenceOwner(str, Enum):
@@ -144,15 +137,32 @@ class AssetRef:
 
 
 @dataclass(frozen=True)
+class CapabilityPlan:
+    """Mode 선택과 분리된 capability coverage/allowlist 결정."""
+
+    coverage: CapabilityCoverage = CapabilityCoverage.NO_MATCH
+    primary_asset: AssetRef | None = None
+    supporting_assets: tuple[AssetRef, ...] = ()
+    fallback_modes: tuple[ExecutionMode, ...] = ()
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ExecutionPlan:
-    """선택 mode와 그 mode 안에서 허용할 자산·native tool 범위."""
+    """선택 mode와 그 mode 안에서 허용할 native tool 범위.
+
+    ``primary_asset``/``allowed_assets``는 한 릴리스 동안 parser/programmatic
+    caller 호환을 위한 adapter 필드다. Primary controller는
+    :class:`CapabilityPlan`만 읽는다.
+    """
 
     mode: ExecutionMode
-    primary_asset: AssetRef | None
-    allowed_assets: tuple[AssetRef, ...]
-    allowed_tools: tuple[str, ...]
-    requires_confirmation: bool
-    reason: str
+    primary_asset: AssetRef | None = None
+    allowed_assets: tuple[AssetRef, ...] = ()
+    allowed_tools: tuple[str, ...] = ()
+    requires_confirmation: bool = False
+    reason: str = ""
+    complexity_signals: tuple[ComplexitySignal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -168,15 +178,38 @@ class UnifiedTurnPlan:
     execution: ExecutionPlan
     confidence: float
     decision_summary: str
+    capability: CapabilityPlan = CapabilityPlan()
     source: str = "llm"
     catalog_fingerprint: str = ""
 
+    def __post_init__(self) -> None:
+        """Legacy execution asset fields를 capability adapter로 한 번 투영한다."""
+        if (
+            self.capability.coverage is CapabilityCoverage.NO_MATCH
+            and (self.execution.primary_asset or self.execution.allowed_assets)
+        ):
+            coverage = (
+                CapabilityCoverage.FULL
+                if self.execution.primary_asset is not None
+                else CapabilityCoverage.PARTIAL
+            )
+            object.__setattr__(
+                self,
+                "capability",
+                CapabilityPlan(
+                    coverage=coverage,
+                    primary_asset=self.execution.primary_asset,
+                    supporting_assets=self.execution.allowed_assets,
+                    reason=self.execution.reason,
+                ),
+            )
+
     def to_route_decision(self) -> RouteDecision:
         """기존 orchestrator가 읽는 RouteDecision을 execution.mode에서 파생한다."""
-        if self.execution.mode is ExecutionMode.FACT_CHECK:
+        if self.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE:
             route = ResponseRoute.CURRENT_FACT_GUARDED_LOOP
             complexity_score = 3
-        elif self.execution.mode is ExecutionMode.COMPLEX_FACT:
+        elif self.execution.mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM:
             route = ResponseRoute.COMPLEX_FACT_WORKFLOW
             complexity_score = 8
         else:
@@ -196,17 +229,17 @@ class UnifiedTurnPlan:
             ),
             needs_calculation="calculation" in self.intents,
             needs_comparison_or_conditions=(
-                self.execution.mode is ExecutionMode.COMPLEX_FACT
+                self.execution.mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM
                 and len(self.fact_check.required_claims) > 1
             ),
             needs_impact_analysis=(
-                self.execution.mode is ExecutionMode.COMPLEX_FACT
+                self.execution.mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM
             ),
         )
 
     def to_evaluator_payload(self) -> dict[str, Any]:
         """BIZ-488 evaluator가 소비하는 compact prediction shape를 반환한다."""
-        primary = self.execution.primary_asset
+        primary = self.capability.primary_asset
         return {
             "context": {
                 "relation": self.context.relation.value,
@@ -239,6 +272,18 @@ class UnifiedTurnPlan:
                         "name": primary.name,
                     }
                 ),
+            },
+            "capability": {
+                "coverage": self.capability.coverage.value,
+                "primary_asset": (
+                    None
+                    if primary is None
+                    else {"asset_type": primary.asset_type, "name": primary.name}
+                ),
+                "supporting_assets": [
+                    {"asset_type": item.asset_type, "name": item.name}
+                    for item in self.capability.supporting_assets
+                ],
             },
         }
 
@@ -348,17 +393,35 @@ _FACT_CHECK_SCHEMA = _strict_object(
     }
 )
 
+_CAPABILITY_SCHEMA = _strict_object(
+    {
+        "coverage": {
+            "type": "string",
+            "enum": [item.value for item in CapabilityCoverage],
+        },
+        "primary_asset": _asset_schema(allow_none=True),
+        "supporting_assets": {
+            "type": "array",
+            "items": _asset_schema(allow_none=False),
+            "maxItems": _MAX_ALLOWED_ASSETS,
+        },
+        "fallback_modes": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [item.value for item in ExecutionMode],
+            },
+            "maxItems": len(ExecutionMode),
+        },
+        "reason": {"type": "string"},
+    }
+)
+
 _EXECUTION_SCHEMA = _strict_object(
     {
         "mode": {
             "type": "string",
             "enum": [item.value for item in ExecutionMode],
-        },
-        "primary_asset": _asset_schema(allow_none=True),
-        "allowed_assets": {
-            "type": "array",
-            "items": _asset_schema(allow_none=False),
-            "maxItems": _MAX_ALLOWED_ASSETS,
         },
         "allowed_tools": {
             "type": "array",
@@ -366,6 +429,14 @@ _EXECUTION_SCHEMA = _strict_object(
             "maxItems": _MAX_ALLOWED_TOOLS,
         },
         "requires_confirmation": {"type": "boolean"},
+        "complexity_signals": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [item.value for item in ComplexitySignal],
+            },
+            "maxItems": len(ComplexitySignal),
+        },
         "reason": {"type": "string"},
     }
 )
@@ -385,6 +456,7 @@ UNIFIED_TURN_PLAN_RESPONSE_SCHEMA: dict[str, Any] = _strict_object(
             "maxItems": _MAX_INTENTS,
         },
         "fact_check": _FACT_CHECK_SCHEMA,
+        "capability": _CAPABILITY_SCHEMA,
         "execution": _EXECUTION_SCHEMA,
         "confidence": {
             "type": "number",
@@ -451,6 +523,37 @@ def _enum_value(
         return enum_type(str(value))
     except ValueError:
         return default
+
+
+_LEGACY_MODE_MAP = {
+    "execute_asset": ExecutionMode.DIRECT_ANSWER,
+    "recipe": ExecutionMode.DIRECT_ANSWER,
+    "tool_loop": ExecutionMode.ANSWER_WITH_EVIDENCE,
+    "fact_check": ExecutionMode.ANSWER_WITH_EVIDENCE,
+    "complex_fact": ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+}
+
+
+def _execution_mode(value: object) -> ExecutionMode:
+    """Legacy 7-mode payload를 4-mode wire contract로 보수 변환한다."""
+    raw = str(value or "")
+    if raw in _LEGACY_MODE_MAP:
+        return _LEGACY_MODE_MAP[raw]
+    return _enum_value(ExecutionMode, raw, default=ExecutionMode.CLARIFY)
+
+
+def _complexity_signals(value: object) -> tuple[ComplexitySignal, ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    selected: list[ComplexitySignal] = []
+    for item in value:
+        try:
+            signal = ComplexitySignal(str(item))
+        except ValueError:
+            continue
+        if signal not in selected:
+            selected.append(signal)
+    return tuple(selected)
 
 
 def _confidence(value: object) -> float:
@@ -628,23 +731,62 @@ def parse_turn_plan_data(
     )
 
     execution_data = _mapping(data.get("execution"))
-    mode = _enum_value(
-        ExecutionMode,
-        execution_data.get("mode"),
-        default=ExecutionMode.CLARIFY,
-    )
+    mode = _execution_mode(execution_data.get("mode"))
     if clarification_required:
         mode = ExecutionMode.CLARIFY
 
-    primary_asset = _asset_ref(execution_data.get("primary_asset"))
-    allowed_assets = _asset_refs(execution_data.get("allowed_assets"))
-    if mode in {ExecutionMode.CLARIFY, ExecutionMode.DIRECT_ANSWER}:
+    capability_data = _mapping(data.get("capability"))
+    legacy_primary = _asset_ref(execution_data.get("primary_asset"))
+    legacy_mode_payload = str(execution_data.get("mode") or "") in _LEGACY_MODE_MAP
+    primary_asset = (
+        _asset_ref(capability_data.get("primary_asset"))
+        if "primary_asset" in capability_data and not legacy_mode_payload
+        else legacy_primary
+    )
+    supporting_assets = _asset_refs(
+        capability_data.get(
+            "supporting_assets",
+            execution_data.get("allowed_assets"),
+        )
+    )
+    raw_coverage = (
+        None if legacy_mode_payload else capability_data.get("coverage")
+    )
+    if raw_coverage is None:
+        raw_coverage = "full_coverage" if legacy_primary else (
+            "partial_coverage" if supporting_assets else "no_match"
+        )
+    coverage = _enum_value(
+        CapabilityCoverage,
+        raw_coverage,
+        default=CapabilityCoverage.NO_MATCH,
+    )
+    if clarification_required:
+        coverage = CapabilityCoverage.NEEDS_INPUT
         primary_asset = None
+    if coverage is not CapabilityCoverage.FULL:
+        primary_asset = None
+    fallback_modes = tuple(
+        dict.fromkeys(
+            _execution_mode(item)
+            for item in capability_data.get("fallback_modes", ())
+        )
+    ) if isinstance(capability_data.get("fallback_modes"), list | tuple) else ()
+    capability = CapabilityPlan(
+        coverage=coverage,
+        primary_asset=primary_asset,
+        supporting_assets=supporting_assets,
+        fallback_modes=fallback_modes,
+        reason=_string(
+            capability_data.get("reason", execution_data.get("reason")),
+            limit=_MAX_SHORT_TEXT,
+        ),
+    )
 
     execution = ExecutionPlan(
         mode=mode,
         primary_asset=primary_asset,
-        allowed_assets=allowed_assets,
+        allowed_assets=supporting_assets,
         allowed_tools=_string_tuple(
             execution_data.get("allowed_tools"),
             limit=_MAX_ALLOWED_TOOLS,
@@ -656,12 +798,15 @@ def parse_turn_plan_data(
             execution_data.get("reason"),
             limit=_MAX_SHORT_TEXT,
         ),
+        complexity_signals=_complexity_signals(
+            execution_data.get("complexity_signals")
+        ),
     )
 
     fact_data = _mapping(data.get("fact_check"))
     fact_required = bool(fact_data.get("required", False)) or mode in {
-        ExecutionMode.FACT_CHECK,
-        ExecutionMode.COMPLEX_FACT,
+        ExecutionMode.ANSWER_WITH_EVIDENCE,
+        ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
     }
     default_owner = (
         EvidenceOwner.PLANNER if fact_required else EvidenceOwner.NONE
@@ -673,7 +818,7 @@ def parse_turn_plan_data(
     )
     if fact_required and owner is EvidenceOwner.NONE:
         owner = EvidenceOwner.PLANNER
-    if not fact_required and mode is not ExecutionMode.RECIPE:
+    if not fact_required:
         owner = EvidenceOwner.NONE
 
     fact_check = FactCheckPlan(
@@ -722,6 +867,7 @@ def parse_turn_plan_data(
             data.get("decision_summary"),
             limit=_MAX_SHORT_TEXT,
         ),
+        capability=capability,
         source="llm",
         catalog_fingerprint=catalog_fingerprint,
     )

@@ -201,7 +201,7 @@ async def test_planner_sends_one_structured_request() -> None:
         router=router,
     )
 
-    assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     assert plan.context.selected_turn_ids == ("msg:101",)
     assert plan.catalog_fingerprint == "fingerprint-123"
     router.send.assert_awaited_once()

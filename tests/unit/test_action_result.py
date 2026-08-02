@@ -15,6 +15,37 @@ from simpleclaw.agent.action_result import (
     fallback_for_empty_final_from_ledger,
     infer_action_result,
 )
+from simpleclaw.agent.resolution_types import AssetExecutionStatus
+
+
+def test_legacy_unknown_side_effect_adapts_to_unknown_effect() -> None:
+    result = ActionResult(
+        step_id="1",
+        tool_name="execute_skill",
+        tool_call_id="call",
+        skill_name="calendar",
+        status="unknown",
+        side_effect=True,
+        raw_preview="request sent",
+    )
+    adapted = result.to_asset_result(read_only=False)
+    assert adapted.status is AssetExecutionStatus.UNKNOWN_EFFECT
+    assert adapted.retryable is False
+
+
+def test_legacy_success_requires_typed_envelope_for_completed() -> None:
+    result = ActionResult(
+        step_id="1",
+        tool_name="execute_skill",
+        tool_call_id="call",
+        status="success",
+        raw_preview="done",
+    )
+    assert result.to_asset_result().status is AssetExecutionStatus.FAILED_TERMINAL
+    assert (
+        result.to_asset_result(typed_envelope=True).status
+        is AssetExecutionStatus.COMPLETED
+    )
 
 
 def test_action_result_ok_property():

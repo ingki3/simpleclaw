@@ -301,7 +301,7 @@ def _plan(
         intents=("lookup",),
         fact_check=FactCheckPlan(False, EvidenceOwner.NONE, "", (), ""),
         execution=ExecutionPlan(
-            ExecutionMode.EXECUTE_ASSET,
+            ExecutionMode.DIRECT_ANSWER,
             AssetRef("skill", asset_name),
             (AssetRef("skill", asset_name),),
             ("execute_skill",),

@@ -154,4 +154,5 @@ class ComplexFactWorkflow:
 
     @staticmethod
     def _query_for_slot(question: str, slot_name: str, slot_question: str) -> str:
-        return f"{question} {slot_name} {slot_question} official latest"
+        del question, slot_name
+        return slot_question

@@ -14,8 +14,10 @@ def fact_plan_from_turn_plan(
 ) -> FactPlan:
     """사용자 텍스트를 재분류하지 않고 Planner 소유 필수 주장을 변환한다."""
 
-    if plan.execution.mode is not ExecutionMode.COMPLEX_FACT:
-        raise ValueError("complex fact adapter requires complex_fact execution mode")
+    if plan.execution.mode is not ExecutionMode.RESOLVE_COMPLEX_PROBLEM:
+        raise ValueError(
+            "complex fact adapter requires resolve_complex_problem execution mode"
+        )
 
     slots = [
         EvidenceSlot(

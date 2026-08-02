@@ -23,11 +23,8 @@ class ExecutionCallbacks:
     """ExecutionMode별 실행 controller callback 묶음."""
 
     direct_answer: ExecutionCallback
-    execute_asset: ExecutionCallback
-    tool_loop: ExecutionCallback
-    fact_check: ExecutionCallback
-    complex_fact: ExecutionCallback
-    recipe: ExecutionCallback
+    answer_with_evidence: ExecutionCallback
+    resolve_complex_problem: ExecutionCallback
     clarify: ExecutionCallback
 
 
@@ -47,10 +44,7 @@ class ExecutionRouter:
         handlers = {
             ExecutionMode.CLARIFY: self._callbacks.clarify,
             ExecutionMode.DIRECT_ANSWER: self._callbacks.direct_answer,
-            ExecutionMode.EXECUTE_ASSET: self._callbacks.execute_asset,
-            ExecutionMode.TOOL_LOOP: self._callbacks.tool_loop,
-            ExecutionMode.FACT_CHECK: self._callbacks.fact_check,
-            ExecutionMode.COMPLEX_FACT: self._callbacks.complex_fact,
-            ExecutionMode.RECIPE: self._callbacks.recipe,
+            ExecutionMode.ANSWER_WITH_EVIDENCE: self._callbacks.answer_with_evidence,
+            ExecutionMode.RESOLVE_COMPLEX_PROBLEM: self._callbacks.resolve_complex_problem,
         }
         return await handlers[state.plan.execution.mode](state)

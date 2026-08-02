@@ -52,7 +52,11 @@ def _fact_plan(*, required: bool = True) -> UnifiedTurnPlan:
             freshness_required=False,
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.FACT_CHECK if required else ExecutionMode.DIRECT_ANSWER,
+            mode=(
+                ExecutionMode.ANSWER_WITH_EVIDENCE
+                if required
+                else ExecutionMode.DIRECT_ANSWER
+            ),
             primary_asset=None,
             allowed_assets=(),
             allowed_tools=("web_search",) if required else (),
@@ -346,7 +350,7 @@ def test_non_web_approved_collector_is_preserved_by_plan_adapter() -> None:
     plan = replace(
         _fact_plan(),
         execution=ExecutionPlan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             primary_asset=None,
             allowed_assets=(),
             allowed_tools=("file_read",),

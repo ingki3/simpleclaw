@@ -89,7 +89,7 @@ def _plan(
             search_query="",
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.RECIPE,
+            mode=ExecutionMode.DIRECT_ANSWER,
             primary_asset=selected,
             allowed_assets=(
                 selected,

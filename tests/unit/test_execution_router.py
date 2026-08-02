@@ -25,11 +25,8 @@ from simpleclaw.agent.turn_state import TurnExecutionState
 _MODE_CALLBACKS = (
     (ExecutionMode.CLARIFY, "clarify"),
     (ExecutionMode.DIRECT_ANSWER, "direct_answer"),
-    (ExecutionMode.EXECUTE_ASSET, "execute_asset"),
-    (ExecutionMode.TOOL_LOOP, "tool_loop"),
-    (ExecutionMode.FACT_CHECK, "fact_check"),
-    (ExecutionMode.COMPLEX_FACT, "complex_fact"),
-    (ExecutionMode.RECIPE, "recipe"),
+    (ExecutionMode.ANSWER_WITH_EVIDENCE, "answer_with_evidence"),
+    (ExecutionMode.RESOLVE_COMPLEX_PROBLEM, "resolve_complex_problem"),
 )
 
 
@@ -109,11 +106,11 @@ async def test_dispatches_each_mode_to_exact_callback(
 
 @pytest.mark.asyncio
 async def test_callback_result_is_returned_without_transformation() -> None:
-    state = _state(ExecutionMode.TOOL_LOOP)
-    routed = _state(ExecutionMode.TOOL_LOOP)
-    callbacks, _spies = _callbacks("tool_loop")
-    callbacks.tool_loop.return_value = routed
-    callbacks.tool_loop.side_effect = None
+    state = _state(ExecutionMode.ANSWER_WITH_EVIDENCE)
+    routed = _state(ExecutionMode.ANSWER_WITH_EVIDENCE)
+    callbacks, _spies = _callbacks("answer_with_evidence")
+    callbacks.answer_with_evidence.return_value = routed
+    callbacks.answer_with_evidence.side_effect = None
 
     dispatched = await ExecutionRouter(callbacks).dispatch(state)
 

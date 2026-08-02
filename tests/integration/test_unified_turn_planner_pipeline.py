@@ -90,7 +90,7 @@ def _plan(*, fingerprint: str, selected_ids: tuple[str, ...]) -> UnifiedTurnPlan
             freshness_required=True,
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.COMPLEX_FACT,
+            mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
             primary_asset=None,
             allowed_assets=(),
             allowed_tools=("web_search",),
@@ -311,7 +311,7 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
             ),
             execution=replace(
                 plan.execution,
-                mode=ExecutionMode.FACT_CHECK,
+                mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             ),
         )
 
@@ -420,7 +420,7 @@ async def test_player_status_requires_current_turn_evidence_in_legacy_and_unifie
             ),
             execution=replace(
                 plan.execution,
-                mode=ExecutionMode.FACT_CHECK,
+                mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             ),
         )
 

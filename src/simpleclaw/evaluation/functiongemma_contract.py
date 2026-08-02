@@ -223,7 +223,15 @@ def parse_function_call(
         raise FunctionCallContractError("schema.fields_mismatch")
 
     relation = arguments["context_relation"]
-    mode = arguments["execution_mode"]
+    raw_mode = arguments["execution_mode"]
+    legacy_modes = {
+        "execute_asset": "direct_answer",
+        "recipe": "direct_answer",
+        "tool_loop": "answer_with_evidence",
+        "fact_check": "answer_with_evidence",
+        "complex_fact": "resolve_complex_problem",
+    }
+    mode = legacy_modes.get(str(raw_mode), str(raw_mode))
     primary = arguments["primary_asset"]
     fallback = arguments["fallback_required"]
     if relation not in {item.value for item in ContextRelation}:
@@ -237,7 +245,11 @@ def parse_function_call(
     allowed = {NO_ASSET, *candidate_ids}
     if primary not in allowed:
         raise FunctionCallContractError("boundary.unknown_asset")
-    if primary == NO_ASSET and mode in {"execute_asset", "recipe"} and not fallback:
+    if (
+        primary == NO_ASSET
+        and (mode == "answer_with_evidence" or raw_mode in {"execute_asset", "recipe"})
+        and not fallback
+    ):
         raise FunctionCallContractError("boundary.missing_fallback")
 
     return CompactIntentCall(

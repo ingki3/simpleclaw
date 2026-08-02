@@ -142,6 +142,8 @@ agent:
   # BIZ-523 — ordinary turn의 유일한 semantic controller.
   unified_turn_planner:
     mode: primary
+    # capability_first_v3는 아래 budget 중 하나 이상이 유한할 때만 실행한다.
+    architecture: legacy_v2  # legacy_v2 | capability_first_v3
     sample_rate: 0.0          # deprecated rollout 값; ordinary 실행에는 사용하지 않음
     max_tokens: 2048
     # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
@@ -159,6 +161,13 @@ agent:
     examples_prompt: unified_turn_planner_examples
     planner_max_attempts: 2
     evidence_max_attempts: 2
+    resolution_budget:
+      max_steps: null
+      max_tool_calls: null
+      max_seconds: null
+      max_tokens: null
+    complex_escalation:
+      enabled: false
     on_planner_failure: fail_closed
     telemetry:
       enabled: true
