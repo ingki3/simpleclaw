@@ -1,0 +1,10 @@
+{"id":"lpga_exact","asset_name":"naver-sports-skill","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"resolved"}
+{"id":"kbo_exact","asset_name":"naver-sports-skill","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"resolved"}
+{"id":"empty_game","asset_name":"naver-sports-skill","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"needs_explanation","transition_mode":"answer_with_evidence"}
+{"id":"stock_quote","asset_name":"us-stock-skill","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"resolved"}
+{"id":"news_conflict","asset_name":"news-search-skill","coverage":"partial_coverage","mode":"resolve_complex_problem","goal_status":"partially_resolved"}
+{"id":"calculation","asset_name":"","coverage":"no_match","mode":"resolve_complex_problem","goal_status":"unresolved"}
+{"id":"side_effect_partial","asset_name":"calendar","coverage":"full_coverage","mode":"direct_answer","goal_status":"blocked"}
+{"id":"terminal_failure","asset_name":"lookup","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"blocked"}
+{"id":"ambiguous_entity","asset_name":"","coverage":"needs_input","mode":"clarify","goal_status":"needs_user_input"}
+{"id":"static_definition","asset_name":"","coverage":"no_match","mode":"direct_answer","goal_status":"resolved"}

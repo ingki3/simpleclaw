@@ -35,6 +35,7 @@ def _asset(
     read_only: bool = True,
     side_effects: bool = False,
     requires_confirmation: bool = False,
+    freshness_sensitive: bool = False,
 ) -> PlannerAsset:
     return PlannerAsset(
         asset_type=asset_type,
@@ -44,12 +45,14 @@ def _asset(
         intents=(),
         read_only=read_only,
         side_effects=side_effects,
-        freshness_sensitive=False,
+        freshness_sensitive=freshness_sensitive,
         direct_answer=True,
         requires_confirmation=requires_confirmation,
-        output_contract=None,
         declared=declared,
         runtime_visible=True,
+        coverage="full_coverage",
+        input_contract="query.v1",
+        output_contract="asset_result.v1",
     )
 
 
@@ -92,7 +95,12 @@ def _plan(
     fact_required: bool = False,
     owner: EvidenceOwner = EvidenceOwner.NONE,
     search_query: str = "",
+    intents: tuple[str, ...] | None = None,
+    freshness_required: bool | None = None,
 ) -> UnifiedTurnPlan:
+    resolved_intents = intents if intents is not None else (
+        ("current_weather",) if fact_required else ()
+    )
     return UnifiedTurnPlan(
         original_text="질문",
         context=ContextSelection(
@@ -107,15 +115,20 @@ def _plan(
             question="무엇을 뜻하시나요?" if clarification_required else "",
         ),
         domains=("weather",) if fact_required else (),
-        intents=("current_weather",) if fact_required else (),
+        intents=resolved_intents,
         fact_check=FactCheckPlan(
             required=fact_required,
             owner=owner,
             domain="weather" if fact_required else "none",
             entities=(),
             search_query=search_query,
-            intents=("current_weather",) if fact_required else (),
+            intents=resolved_intents,
             required_claims=("current conditions",) if fact_required else (),
+            freshness_required=(
+                fact_required
+                if freshness_required is None
+                else freshness_required
+            ),
         ),
         execution=ExecutionPlan(
             mode=mode,
@@ -233,28 +246,28 @@ def test_valid_clarification_returns_clarify() -> None:
     ("mode", "fact_required", "owner", "search_query", "code"),
     [
         (
-            ExecutionMode.FACT_CHECK,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
             False,
             EvidenceOwner.PLANNER,
             "서울 날씨",
             "fact_check.required",
         ),
         (
-            ExecutionMode.FACT_CHECK,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
             True,
             EvidenceOwner.ASSET,
             "서울 날씨",
             "fact_check.planner_owner_required",
         ),
         (
-            ExecutionMode.COMPLEX_FACT,
+            ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
             True,
             EvidenceOwner.ASSET,
             "시장 비교",
             "fact_check.planner_owner_required",
         ),
         (
-            ExecutionMode.FACT_CHECK,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
             True,
             EvidenceOwner.PLANNER,
             "",
@@ -284,6 +297,72 @@ def test_current_fact_invariants_fail_closed(
     assert code in {item.code for item in result.violations}
 
 
+def test_current_result_cannot_disable_freshness_at_plan_gate() -> None:
+    asset = _asset("scores")
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "scores"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("current_result",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.freshness_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_freshness_sensitive_asset_cannot_disable_freshness_at_plan_gate() -> None:
+    asset = _asset("live-catalog", freshness_sensitive=True)
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "live-catalog"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("definition",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.freshness_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_definition_is_not_forced_into_freshness_policy() -> None:
+    asset = _asset("dictionary")
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "dictionary"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("definition",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.PASS
+
+
 @pytest.mark.parametrize(
     ("mode", "allowed_tools", "code"),
     [
@@ -293,12 +372,12 @@ def test_current_fact_invariants_fail_closed(
             "fact_check.evidence_capable_mode_required",
         ),
         (
-            ExecutionMode.TOOL_LOOP,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
             (),
             "fact_check.collector_required",
         ),
         (
-            ExecutionMode.TOOL_LOOP,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
             ("web_fetch",),
             "fact_check.collector_required",
         ),
@@ -333,7 +412,7 @@ def test_required_fact_check_accepts_approved_non_web_collector() -> None:
     file_read = _asset("file_read", asset_type="native_tool")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact_required=True,
             owner=EvidenceOwner.PLANNER,
             search_query="workspace drama catalog",
@@ -355,7 +434,7 @@ def test_required_fact_check_rejects_side_effecting_non_web_collector() -> None:
     )
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact_required=True,
             owner=EvidenceOwner.PLANNER,
             search_query="workspace drama catalog",
@@ -376,7 +455,7 @@ def test_required_fact_check_accepts_selected_read_only_skill_collector() -> Non
     calendar_skill = _asset("google-calendar-skill", asset_type="skill")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact_required=True,
             owner=EvidenceOwner.PLANNER,
             search_query="calendar events today",
@@ -394,7 +473,7 @@ def test_required_fact_check_rejects_unbound_skill_adapter() -> None:
     execute_skill = _asset("execute_skill", asset_type="native_tool")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact_required=True,
             owner=EvidenceOwner.PLANNER,
             search_query="calendar events today",
@@ -414,7 +493,7 @@ def test_unknown_asset_and_recipe_type_mismatch_request_repair() -> None:
     unknown = AssetRef("skill", "missing")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.RECIPE,
+            mode=ExecutionMode.DIRECT_ANSWER,
             primary_asset=unknown,
             allowed_assets=(unknown,),
             owner=EvidenceOwner.NONE,
@@ -424,16 +503,13 @@ def test_unknown_asset_and_recipe_type_mismatch_request_repair() -> None:
     )
 
     assert result.status is GateStatus.REPAIR
-    assert {item.code for item in result.violations} >= {
-        "execution.recipe_asset_required",
-        "asset.unknown",
-    }
+    assert "asset.unknown" in {item.code for item in result.violations}
 
 
 def test_safe_declared_direct_asset_passes() -> None:
     ref = AssetRef("skill", "weather")
     plan = _plan(
-        mode=ExecutionMode.EXECUTE_ASSET,
+        mode=ExecutionMode.DIRECT_ANSWER,
         primary_asset=ref,
         allowed_assets=(ref,),
     )
@@ -451,7 +527,7 @@ def test_safe_declared_direct_asset_passes() -> None:
 def test_side_effecting_direct_asset_requires_confirmation() -> None:
     ref = AssetRef("skill", "writer")
     plan = _plan(
-        mode=ExecutionMode.EXECUTE_ASSET,
+        mode=ExecutionMode.DIRECT_ANSWER,
         primary_asset=ref,
         allowed_assets=(ref,),
         requires_confirmation=True,
@@ -481,7 +557,7 @@ def test_missing_side_effect_confirmation_flag_requests_repair() -> None:
     ref = AssetRef("skill", "writer")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.EXECUTE_ASSET,
+            mode=ExecutionMode.DIRECT_ANSWER,
             primary_asset=ref,
             allowed_assets=(ref,),
             requires_confirmation=False,
@@ -502,7 +578,7 @@ def test_undeclared_direct_asset_is_rejected() -> None:
     ref = AssetRef("skill", "legacy")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.EXECUTE_ASSET,
+            mode=ExecutionMode.DIRECT_ANSWER,
             primary_asset=ref,
             allowed_assets=(ref,),
         ),
@@ -529,21 +605,20 @@ def test_catalog_drift_requests_repair() -> None:
     assert result.violations[0].code == "catalog.fingerprint_mismatch"
 
 
-def test_execute_asset_requires_primary_asset() -> None:
+def test_direct_answer_without_capability_passes() -> None:
     result = PlanGate().evaluate(
-        _plan(mode=ExecutionMode.EXECUTE_ASSET),
+        _plan(mode=ExecutionMode.DIRECT_ANSWER),
         candidates=_candidates(),
         catalog=_catalog(),
     )
 
-    assert result.status is GateStatus.REPAIR
-    assert result.violations[0].code == "execution.primary_asset_required"
+    assert result.status is GateStatus.PASS
 
 
 def test_execute_skill_meta_tool_requires_allowed_skill() -> None:
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.DIRECT_ANSWER,
             allowed_tools=("execute_skill",),
         ),
         candidates=_candidates(),
@@ -560,7 +635,7 @@ def test_execute_skill_meta_tool_accepts_catalogued_allowed_skill() -> None:
     ref = AssetRef("skill", "weather")
     result = PlanGate().evaluate(
         _plan(
-            mode=ExecutionMode.TOOL_LOOP,
+            mode=ExecutionMode.DIRECT_ANSWER,
             allowed_assets=(ref,),
             allowed_tools=("execute_skill",),
         ),

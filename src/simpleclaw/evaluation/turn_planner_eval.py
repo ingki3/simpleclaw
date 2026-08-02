@@ -23,13 +23,22 @@ _EXECUTION_MODES = frozenset(
     {
         "clarify",
         "direct_answer",
-        "execute_asset",
-        "tool_loop",
-        "fact_check",
-        "complex_fact",
-        "recipe",
+        "answer_with_evidence",
+        "resolve_complex_problem",
     }
 )
+_LEGACY_EXECUTION_MODES = {
+    "execute_asset": "direct_answer",
+    "recipe": "direct_answer",
+    "tool_loop": "answer_with_evidence",
+    "fact_check": "answer_with_evidence",
+    "complex_fact": "resolve_complex_problem",
+}
+
+
+def _normalized_execution_mode(value: object) -> str:
+    raw = str(value or "")
+    return _LEGACY_EXECUTION_MODES.get(raw, raw)
 _MESSAGE_ROLES = frozenset({"user", "assistant"})
 
 
@@ -318,6 +327,7 @@ def parse_fixture(
         source=source,
         line_number=line_number,
     )
+    mode = _normalized_execution_mode(mode)
     if mode not in _EXECUTION_MODES:
         raise FixtureFormatError(
             f"{source} line {line_number}: unsupported execution mode {mode}"
@@ -521,7 +531,7 @@ def _prediction_shape_errors(
         errors.append("invalid:fact_check.entities")
     if not isinstance(fact_check.get("search_query"), str):
         errors.append("invalid:fact_check.search_query")
-    if execution.get("mode") not in _EXECUTION_MODES:
+    if _normalized_execution_mode(execution.get("mode")) not in _EXECUTION_MODES:
         errors.append("invalid:execution.mode")
     if (
         "primary_asset" not in execution
@@ -637,7 +647,10 @@ def score_prediction(
             clarification.get("required")
             is fixture.gold.clarification_required
         ),
-        "execution_mode": execution.get("mode") == fixture.gold.execution_mode,
+        "execution_mode": (
+            _normalized_execution_mode(execution.get("mode"))
+            == fixture.gold.execution_mode
+        ),
         "fact_required": (
             fact_check.get("required") is fixture.gold.fact_required
         ),

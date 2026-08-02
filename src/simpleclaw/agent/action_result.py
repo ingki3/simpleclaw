@@ -27,6 +27,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from simpleclaw.agent.resolution_types import AssetResult
+
 ActionStatus = Literal["success", "failure", "not_found", "unknown"]
 OverallStatus = Literal["all_success", "partial_success", "all_failed", "unknown"]
 
@@ -110,6 +112,48 @@ class ActionResult:
             return False
         return None
 
+    def to_asset_result(
+        self,
+        *,
+        read_only: bool = True,
+        typed_envelope: bool = False,
+    ) -> AssetResult:
+        """Legacy action observation을 새 typed contract로 보수 변환한다.
+
+        순환 import를 피하려고 지역 import를 사용한다. Heuristic success는 typed
+        envelope가 없으면 ``COMPLETED``로 과신하지 않으며, side-effect unknown은
+        재실행 불가능한 ``UNKNOWN_EFFECT``로 보존한다.
+        """
+        from simpleclaw.agent.resolution_types import (
+            AssetExecutionStatus,
+        )
+
+        asset_name = self.skill_name or self.tool_name
+        if self.side_effect and self.status in {"unknown", "success"} and not typed_envelope:
+            status = AssetExecutionStatus.UNKNOWN_EFFECT
+        elif self.status == "not_found":
+            status = AssetExecutionStatus.NOT_FOUND
+        elif self.status == "failure":
+            status = AssetExecutionStatus.FAILED_TERMINAL
+        elif self.status == "success" and typed_envelope:
+            status = AssetExecutionStatus.COMPLETED
+        elif not self.raw_preview:
+            status = AssetExecutionStatus.EMPTY
+        elif read_only:
+            status = AssetExecutionStatus.FAILED_TERMINAL
+        else:
+            status = AssetExecutionStatus.UNKNOWN_EFFECT
+        return AssetResult(
+            asset_type="skill" if self.skill_name else "native_tool",
+            asset_name=asset_name,
+            status=status,
+            data=dict(self.data),
+            side_effect=self.side_effect,
+            effect_id=str(self.data.get("effect_id") or self.data.get("event_id") or ""),
+            retryable=False,
+            limitations=("legacy_untyped_result",) if not typed_envelope else (),
+        )
+
 
 @dataclass
 class ActionResultLedger:
@@ -139,6 +183,21 @@ class ActionResultLedger:
         if failures and not successes and not unknowns:
             return "all_failed"
         return "unknown"
+
+    def to_asset_results(
+        self,
+        *,
+        read_only: bool = True,
+        typed_envelope: bool = False,
+    ) -> list[AssetResult]:
+        """Legacy ledger 전체를 typed 결과 목록으로 변환하는 호환 adapter."""
+        return [
+            result.to_asset_result(
+                read_only=read_only,
+                typed_envelope=typed_envelope,
+            )
+            for result in self.useful_results()
+        ]
 
 
 def looks_like_explicit_error_header(text: str) -> bool:

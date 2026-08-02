@@ -58,7 +58,7 @@ def _plan(
             freshness_required=True,
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.FACT_CHECK,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             primary_asset=None,
             allowed_assets=(),
             allowed_tools=("web_search",),

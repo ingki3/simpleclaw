@@ -55,7 +55,7 @@ def _plan(
             freshness_required=True,
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.COMPLEX_FACT,
+            mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
             primary_asset=None,
             allowed_assets=(),
             allowed_tools=allowed_tools,
