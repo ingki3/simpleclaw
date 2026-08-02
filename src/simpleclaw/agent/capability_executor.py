@@ -45,12 +45,12 @@ def decode_asset_result(
         except json.JSONDecodeError as exc:
             raise ValueError("asset result must be strict JSON") from exc
         if not isinstance(decoded, Mapping):
-            raise ValueError("asset result must be a JSON object")
+            raise TypeError("asset result must be a JSON object")
         data = decoded
     elif isinstance(payload, Mapping):
         data = payload
     else:
-        raise ValueError("asset result must be a mapping or JSON object")
+        raise TypeError("asset result must be a mapping or JSON object")
     schema = str(data.get("schema") or data.get("contract") or data.get("version") or "")
     if schema != "asset_result.v1":
         raise ValueError("asset result contract must be asset_result.v1")
@@ -207,4 +207,3 @@ class CapabilityExecutor:
             asset.read_only and not asset.side_effects and not asset.requires_confirmation
         ) or (asset.side_effects and asset.requires_confirmation)
         return typed and safe
-

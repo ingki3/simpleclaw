@@ -21,8 +21,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeVar
 
+from simpleclaw.agent.resolution_types import (
+    CapabilityCoverage,
+    ComplexitySignal,
+    ExecutionMode,
+)
 from simpleclaw.agent.response_router import ResponseRoute, RouteDecision
-from simpleclaw.agent.resolution_types import CapabilityCoverage, ComplexitySignal, ExecutionMode
 
 _ASSET_TYPES = frozenset({"native_tool", "skill", "recipe"})
 _MAX_SELECTED_TURNS = 16

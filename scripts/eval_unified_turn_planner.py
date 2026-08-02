@@ -10,12 +10,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
+from simpleclaw.eval.turn_planner import evaluate_capability_fixture_file
 from simpleclaw.evaluation.turn_planner_eval import (
     FixtureFormatError,
     evaluate_fixture_replays,
     load_fixtures,
 )
-from simpleclaw.eval.turn_planner import evaluate_capability_fixture_file
 
 _DEFAULT_FIXTURE = (
     Path(__file__).parents[1]

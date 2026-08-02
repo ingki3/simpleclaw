@@ -43,12 +43,12 @@ from simpleclaw.agent.asset_selector import (
     filter_assets_by_selection,
     normalize_selector_response,
 )
-from simpleclaw.agent.capability_router import (
-    CapabilityDecision,
-)
 from simpleclaw.agent.capability_executor import (
     CapabilityExecutor,
     decode_asset_result,
+)
+from simpleclaw.agent.capability_router import (
+    CapabilityDecision,
 )
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
@@ -168,6 +168,7 @@ from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
+from simpleclaw.recipes.executor import execute_recipe
 from simpleclaw.recipes.learning import (
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,
     RecipeSuggestion,
@@ -176,7 +177,6 @@ from simpleclaw.recipes.learning import (
     suggestion_from_recipe_payload,
 )
 from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.recipes.executor import execute_recipe
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.secrets import default_manager
@@ -2664,10 +2664,10 @@ class AgentOrchestrator:
 
         planned_allowed_assets: frozenset[tuple[str, str]] | None = None
         if plan is not None:
-            planned_asset_refs = set(
+            planned_asset_refs = {
                 (asset.asset_type, asset.name)
                 for asset in plan.capability.supporting_assets
-            )
+            }
             if plan.capability.primary_asset is not None:
                 planned_asset_refs.add(
                     (

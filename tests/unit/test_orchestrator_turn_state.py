@@ -11,6 +11,7 @@ from simpleclaw.agent.orchestrator import (
     _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
     AgentOrchestrator,
 )
+from simpleclaw.agent.resolution_types import CapabilityCoverage
 from simpleclaw.agent.session_state import SessionIdentity
 from simpleclaw.agent.turn_plan import (
     AssetRef,
@@ -25,9 +26,8 @@ from simpleclaw.agent.turn_plan import (
     FactEntity,
     UnifiedTurnPlan,
 )
-from simpleclaw.agent.resolution_types import CapabilityCoverage
-from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.agent.turn_planner import PlannerUnavailable
+from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.skills.models import SkillDefinition

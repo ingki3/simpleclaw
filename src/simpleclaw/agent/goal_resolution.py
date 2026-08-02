@@ -38,12 +38,14 @@ class GoalResolver:
 
         if result.status is AssetExecutionStatus.NEEDS_INPUT:
             status = GoalStatus.NEEDS_USER_INPUT
-        elif result.side_effect and result.status in {
-            AssetExecutionStatus.PARTIAL_SUCCESS,
-            AssetExecutionStatus.UNKNOWN_EFFECT,
-        }:
-            status = GoalStatus.BLOCKED
-        elif result.status in {
+        elif (
+            result.side_effect
+            and result.status
+            in {
+                AssetExecutionStatus.PARTIAL_SUCCESS,
+                AssetExecutionStatus.UNKNOWN_EFFECT,
+            }
+        ) or result.status in {
             AssetExecutionStatus.DENIED,
             AssetExecutionStatus.FAILED_TERMINAL,
             AssetExecutionStatus.UNSUPPORTED,
@@ -79,4 +81,3 @@ class GoalResolver:
             explanation_needed=explanation,
             blockers=blockers,
         )
-

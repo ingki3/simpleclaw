@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -78,7 +78,7 @@ def evaluate_capability_fixture_file(
             continue
         raw = json.loads(line)
         if not isinstance(raw, dict):
-            raise ValueError(f"capability fixture line {line_number} must be object")
+            raise TypeError(f"capability fixture line {line_number} must be object")
         required = {"id", "asset_name", "coverage", "mode", "goal_status"}
         if not required <= set(raw):
             raise ValueError(f"capability fixture line {line_number} missing fields")
