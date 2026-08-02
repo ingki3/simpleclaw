@@ -17,7 +17,7 @@
 
 - [>] **BIZ-523: Turn/Session/Evidence typed state 통합** — ordinary turn을 UnifiedTurnPlanner primary 단일 경로로 전환하고, session-scoped message/pending persistence, typed realtime request, verified-evidence finalization gate를 구현한다. 코드·오프라인 검증과 필수 리뷰 후 `dev`에 반영하며 live config/restart/smoke는 별도 운영자 승인 단계로 남긴다. (진행: 2026-07-31)
 
-- [>] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm — 코드·오프라인 검증 완료** — RAG 활성 runtime은 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작한다. disabled/load failure는 `embedding_prewarm` status/model/duration을 원문 없이 기록하고 fail-open하며, 반복·동시 호출과 첫 query는 같은 model instance를 재사용한다. PR #533의 focused/전체 unit·Ruff·diff-check 및 GitHub CI를 통과했다. **미완료 운영 단계:** Review gate와 squash merge 후 별도 운영자 승인으로 live rollout/restart를 수행하고 startup log 순서, 첫 turn 재로드 부재, notifier 없는 no-send smoke를 확인한다. (진행: 2026-07-29)
+- [x] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm** — RAG 활성 runtime이 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작하도록 구현했다. PR #533을 `dev`에 squash merge(SHA `cd37dd1aa76270569c6d4cbfad8251dd009a5737`)하고 release PR #538을 `main`에 merge commit(SHA `15a6041dafe754e9aa591af46e2b7905ed2d611d`)으로 반영해 `v2026.08.01`을 발행했다. Live restart 후 prewarm success(`29381.01ms`)가 scheduler·polling보다 먼저 완료됐고, no-send reuse probe에서 384차원 vector·동일 model instance·두 번째 prewarm `0.01ms`를 확인했다. Admin·Telegram·Dashboard·Scheduler·Webhook health 정상, FD 19, 재시작 이후 ERROR 및 Telegram send/edit 0건을 확인했다. (2026-08-01)
 
 - [x] **BIZ-508: 스포츠 상태 판정을 구조화 schema 기반으로 전환** — PR #522를 `dev`에 squash merge(SHA `c5e84cb97b37818545096dfeabdf880c013746ae`)하고 release PR #530을 merge commit(SHA `4fbbc377950b5ee04219f362a89f4b3e76a634d7`)으로 `main`에 반영해 `v2026.07.29`를 발행했다. Live `realtime-lookup-skill`은 timestamp backup 후 Naver Sports schedule schema·typed `lookup_status` 계약으로 갱신했고, LaunchAgent restart(`67645 → 72755`), Admin·Webhook·Telegram health, notifier 없는 no-send smoke(`found`, 롯데 3:5 한화, `live`, winner `null`)를 완료했다. 표시 문구·고정 키워드 없이 `STARTED → live`, `ENDED|RESULT → final`, 조회 실패와 명시적 경기 없음 분리를 운영에서 확인했다. (2026-07-29)
 
@@ -137,11 +137,15 @@
 
 ## Done
 
+### 2026-08-02
+
+- [x] **[BIZ-524](mention://issue/529b497b-ae11-4e82-818c-74fa36200f0d): 모든 Gemini 호출을 OpenRouter로 전환** — [PR #541](https://github.com/ingki3/simpleclaw/pull/541)을 `dev`에 squash merge(SHA `ef0dffb9d6f2677848d317eaf59ada5059f57af3`)하고 [release PR #542](https://github.com/ingki3/simpleclaw/pull/542)를 `main`에 merge commit(SHA `e3757f88d185c0d4f6aa7ff60967cf81058b8d53`)으로 반영해 `v2026.08.01.1`을 발행했다. live config backup 후 TurnAnalysis·Asset Selector·default retry·multimodal core route를 OpenRouter `google/gemini-3.6-flash`로 전환하고 LaunchAgent를 재시작했다. text/default·required structured·forced tool·image·PDF no-send, Admin UI·Webhook HTTP 200, Telegram polling·scheduler 정상, Telegram send/edit 0건, ERROR 0건, SimpleClaw core native Google Gemini 호출 0건을 확인했다. (완료: 2026-08-02)
+
 ### 2026-07-30
 
 - [x] **[BIZ-520](mention://issue/c30858d5-f1fa-40ee-a883-99852fbaf6b5): evidence_required를 실행·최종 gate에 연결** — [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)해 evidence relevance·claim coverage·source·freshness 검증, typed empty/schema failure 분리, truncated analysis fail-closed, asset-owned provider 실행, untrusted evidence 경계를 코드·오프라인 테스트로 완료했다. Live config·배포·재시작은 [BIZ-497](mention://issue/599386f6-1aa4-4d1f-85a4-68d804342851) 운영 gate가 소유한다. (2026-07-30)
 - [x] **[BIZ-521](mention://issue/3a00bfdf-1463-40ab-842b-e481ddb367b2): PR #534 evidence gate review blocker 해소** — required review의 blocker 재현 7건과 actual unified·legacy 2턴 회귀를 보완하고 focused `158 passed`, Ruff, `git diff --check`, GitHub CI 3개 SUCCESS를 확인한 뒤 [PR #534](https://github.com/ingki3/simpleclaw/pull/534)를 `dev`에 squash merge(SHA `84ab7744`)했다. 코드·오프라인 작업은 완료했으며 live config·배포·재시작은 BIZ-497 운영 gate 범위다. (2026-07-30)
-- [>] **[BIZ-522](mention://issue/87302faa-6047-40a6-8ef6-461add3205ba): 실시간 선수 상태 evidence gate 회귀 고정 및 live 반영** — exact fixture `롯데 홍민기 요즘 어떤 상태야??`를 BIZ-520 공통 계약의 legacy/Unified 경계, collector 상태, final fail-closed, no-duplicate-search에 추가한다. 코드·review와 feature→dev merge를 먼저 완료하고, `dev→main` release 및 drain/restart/live no-send smoke는 BIZ-519 startup prewarm 운영 게이트 승인과 분리해 추적한다. (진행: 2026-07-30)
+- [x] **[BIZ-522](mention://issue/87302faa-6047-40a6-8ef6-461add3205ba): 실시간 선수 상태 evidence gate 회귀 고정 및 live 반영** — exact sports evidence 회귀를 [PR #536](https://github.com/ingki3/simpleclaw/pull/536)으로 `dev`에 squash merge(SHA `34bdba5`)하고, [Release PR #538](https://github.com/ingki3/simpleclaw/pull/538)의 merge commit `15a6041` 및 tag `v2026.08.01`로 live 반영했다. live no-send 검증에서 semantic `evidence_required=true`, focused `16 passed`, evidence 없는 no-tool final 차단을 확인했으며, 재시작 후 health 정상·ERROR 0건·Telegram send/edit 0건을 확인했다. (완료: 2026-08-01)
 
 ### 2026-07-28
 

@@ -2,51 +2,43 @@
 # primary/retry backends; each backend explicitly selects its wire transport
 # and endpoint profile.  LLM changes take effect after a service restart.
 #
-# ``gemini-openai`` below is intentionally commented out.  It is an A/B-only
-# OpenAI-compatible endpoint and must not replace native Gemini until the live
-# parity matrix (schema/tools/reasoning/multimodal/replay) is accepted.
+# ``openrouter-multimodal`` is separate from the general ``openrouter`` profile:
+# only a backend/model combination with verified image/file support should opt in.
+# The Google ``gemini-openai`` profile remains a conservative A/B-only contract.
 
 llm:
   routes:
-    default: {primary: chat_primary, retry: chat_fallback}
-    turn_analysis: {primary: analysis_fast, retry: analysis_safe}
-    multimodal: {primary: vision_native}
+    default: {primary: chat_primary, retry: utility_fast}
+    turn_analysis: {primary: utility_fast}
+    multimodal: {primary: utility_fast}
   providers:
     chat_primary:
       type: "api"
-      model: "claude-sonnet-4-20250514"
-      transport: "anthropic"
-      profile: "anthropic"
+      model: "deepseek/deepseek-v4-pro"
+      transport: "openai_chat"
+      profile: "openrouter"
       # 시크릿 참조 문법:
       #   "env:NAME"       — OS 환경변수 NAME에서 읽기
       #   "keyring:NAME"   — macOS Keychain / Linux Secret Service에서 읽기
       #   "file:NAME"      — ~/.simpleclaw/secrets.enc 암호화 볼트에서 읽기
       # 평문 값(예: "sk-...")도 동작하지만 권장하지 않음. 자세한 사항은 README 참조.
-      api_key: "keyring:claude_api_key"
-    chat_fallback:
+      api_key: "keyring:openrouter_api_key"
+      base_url: "https://openrouter.ai/api/v1"
+      extra_body:
+        reasoning:
+          enabled: false
+    # TurnAnalysis, default retry, multimodal, Asset Selector가 공유하는 role
+    # alias. google/gemini-3.6-flash는 이 OpenRouter endpoint 조합에서
+    # structured output/tools/image/PDF가 검증된 경우에만 사용한다.
+    utility_fast:
       type: "api"
-      model: "gpt-4o"
+      model: "google/gemini-3.6-flash"
       transport: "openai_chat"
-      profile: "openai"
-      api_key: "keyring:openai_api_key"
-    analysis_fast:
-      type: "api"
-      model: "gemini-3.5-flash"
-      transport: "gemini"
-      profile: "gemini"
-      api_key: "env:GOOGLE_API_KEY"
-    analysis_safe:
-      type: "api"
-      model: "gpt-4o"
-      transport: "openai_chat"
-      profile: "openai"
-      api_key: "keyring:openai_api_key"
-    vision_native:
-      type: "api"
-      model: "gemini-3.5-flash"
-      transport: "gemini"
-      profile: "gemini"
-      api_key: "env:GOOGLE_API_KEY"
+      profile: "openrouter-multimodal"
+      api_key: "keyring:openrouter_api_key"
+      base_url: "https://openrouter.ai/api/v1"
+      # 이 모델은 reasoning.enabled=false를 HTTP 400으로 거부하므로
+      # static disable extra_body를 추가하지 않는다.
     # gemini_openai_ab:
     #   type: "api"
     #   model: "gemini-2.5-flash"
@@ -105,7 +97,7 @@ agent:
   # selector top-k 또는 fallback cap만 노출해 prompt bloat와 잡담 도구 남용을 줄인다.
   asset_selection:
     enabled: true
-    backend: "gemini"
+    backend: "utility_fast"
     skill_top_k: 5
     recipe_top_k: 3
     min_confidence: 0.5
