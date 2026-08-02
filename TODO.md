@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **BIZ-17: LLM 토큰 사용량·비용 추적 및 임계 경보** — 실제 provider attempt 단위의 content-free usage event, versioned backend pricing 기반 micro-USD 예상 비용, 별도 SQLite 일/월 집계와 durable alert claim, dashboard API/panel, alert-only Telegram 배선을 구현한다. production 가격·threshold·enable/restart는 운영자 승인 전 적용하지 않는다. (진행: 2026-08-02)
+
 - [>] **BIZ-523: Turn/Session/Evidence typed state 통합** — ordinary turn을 UnifiedTurnPlanner primary 단일 경로로 전환하고, session-scoped message/pending persistence, typed realtime request, verified-evidence finalization gate를 구현한다. 코드·오프라인 검증과 필수 리뷰 후 `dev`에 반영하며 live config/restart/smoke는 별도 운영자 승인 단계로 남긴다. (진행: 2026-07-31)
 
 - [x] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm** — RAG 활성 runtime이 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작하도록 구현했다. PR #533을 `dev`에 squash merge(SHA `cd37dd1aa76270569c6d4cbfad8251dd009a5737`)하고 release PR #538을 `main`에 merge commit(SHA `15a6041dafe754e9aa591af46e2b7905ed2d611d`)으로 반영해 `v2026.08.01`을 발행했다. Live restart 후 prewarm success(`29381.01ms`)가 scheduler·polling보다 먼저 완료됐고, no-send reuse probe에서 384차원 vector·동일 model instance·두 번째 prewarm `0.01ms`를 확인했다. Admin·Telegram·Dashboard·Scheduler·Webhook health 정상, FD 19, 재시작 이후 ERROR 및 Telegram send/edit 0건을 확인했다. (2026-08-01)

@@ -93,7 +93,30 @@ class LLMRequest:
     system_prompt: str       # 시스템 프롬프트 (페르소나 + 스킬 목록)
     user_message: str        # 사용자 메시지
     messages: list[dict]     # 대화 히스토리 (role + content)
+    usage_task: str | None   # content-free bounded task attribution
 ```
+
+## Usage accounting and cost alerts
+
+`llm.usage.enabled` is disabled by default. When enabled, the router emits one
+content-free event for every actual provider attempt, including retry and
+fallback calls. Events are stored in a standalone SQLite database and exposed
+through `/api/llm-usage?period=day|month&group_by=backend|model|route|task`.
+
+Prices are configured per backend with a version, source URL, and effective
+date. Rates are never hard-coded. Missing usage or pricing remains explicitly
+unknown/unpriced instead of being counted as zero; estimated cost is stored as
+integer micro-USD and provider-reported cost remains a separate field.
+
+Daily/monthly thresholds use the configured timezone and a durable database
+claim, so a restart cannot emit duplicate alerts for the same period and
+threshold. The MVP is alert-only: accounting, database, logging, or Telegram
+delivery failures never block an otherwise valid LLM response. Enablement,
+production rates, thresholds, database path, restart, and a real-provider smoke
+all require operator approval.
+
+Usage rows, logs, dashboard payloads, and alerts must not contain prompts,
+responses, tool arguments/results, chat/user/thread identifiers, or credentials.
 
 ## 에러 처리
 
@@ -108,4 +131,6 @@ LLM 에러 발생 시 사용자에게 "오류가 발생했습니다" 메시지�
 - `src/simpleclaw/llm/router.py` — 라우터 팩토리 및 라우팅 로직
 - `src/simpleclaw/llm/models.py` — LLMRequest, LLMResponse 모델
 - `src/simpleclaw/llm/providers/` — 프로바이더별 구현
+- `src/simpleclaw/llm/usage.py` — provider-neutral usage/pricing/event contracts
+- `src/simpleclaw/logging/llm_usage.py` — durable store, aggregation, and alerts
 - `docs/architecture/llm-transports.md` — transport/profile 경계와 Responses 확장 계약
