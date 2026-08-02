@@ -433,3 +433,12 @@ def run_daemon_migrations(db_path: str | Path) -> list[int]:
         baseline_tables=_BASELINE_TABLES["daemon"],
     )
     return runner.run()
+
+
+def run_usage_migrations(db_path: str | Path) -> list[int]:
+    """Apply migrations for the standalone durable LLM usage database."""
+    return MigrationRunner(
+        db_path,
+        _BUILTIN_MIGRATIONS_ROOT / "usage",
+        baseline_tables=None,
+    ).run()
