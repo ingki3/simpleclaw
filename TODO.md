@@ -15,6 +15,10 @@
 
 ## In Progress
 
+- [>] **BIZ-530: realtime late finding 세 blocker 보정** — `simpleclaw.agent`의 eager orchestrator re-export를 lazy resolution으로 전환해 clean-process realtime skill import cycle을 제거하고, wrapper entrypoint 회귀 테스트와 Graphify source SHA 정합성을 보정한다. 코드·오프라인 검증 뒤 fresh CI와 필수 Review Agent gate까지 통과해야 완료하며 main/live rollout은 수행하지 않는다. (진행: 2026-08-02)
+
+- [x] **BIZ-528: Unified fact claim capability gate 구현 — 코드·오프라인 범위 완료** — required claim별 provider capability를 검증하고 미충족 claim을 fail-closed 처리하는 범위를 PR #537로 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)했다. late finding 보정은 BIZ-530이 소유하며, 부모 BIZ-523은 BIZ-530의 fresh CI·필수 Review Agent PASS와 남은 `dev`→`main`/live acceptance를 계속 소유한다. (2026-08-02)
+
 - [>] **BIZ-523: Turn/Session/Evidence typed state 통합** — ordinary turn을 UnifiedTurnPlanner primary 단일 경로로 전환하고, session-scoped message/pending persistence, typed realtime request, verified-evidence finalization gate를 구현한다. 코드·오프라인 검증과 필수 리뷰 후 `dev`에 반영하며 live config/restart/smoke는 별도 운영자 승인 단계로 남긴다. (진행: 2026-07-31)
 
 - [x] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm** — RAG 활성 runtime이 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작하도록 구현했다. PR #533을 `dev`에 squash merge(SHA `cd37dd1aa76270569c6d4cbfad8251dd009a5737`)하고 release PR #538을 `main`에 merge commit(SHA `15a6041dafe754e9aa591af46e2b7905ed2d611d`)으로 반영해 `v2026.08.01`을 발행했다. Live restart 후 prewarm success(`29381.01ms`)가 scheduler·polling보다 먼저 완료됐고, no-send reuse probe에서 384차원 vector·동일 model instance·두 번째 prewarm `0.01ms`를 확인했다. Admin·Telegram·Dashboard·Scheduler·Webhook health 정상, FD 19, 재시작 이후 ERROR 및 Telegram send/edit 0건을 확인했다. (2026-08-01)

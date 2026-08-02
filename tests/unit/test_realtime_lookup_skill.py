@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -22,6 +26,37 @@ from simpleclaw.skills.realtime_sources import (
     SourceDocument,
     SportsGameFact,
 )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _run_clean_import(statement: str) -> subprocess.CompletedProcess[str]:
+    """Import through a fresh interpreter with only the repository source path."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_REPO_ROOT / "src")
+    return subprocess.run(
+        [sys.executable, "-c", statement],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_realtime_lookup_imports_in_clean_python_process():
+    result = _run_clean_import("import simpleclaw.skills.realtime_lookup")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_realtime_lookup_wrapper_entrypoint_imports_in_clean_python_process():
+    result = _run_clean_import(
+        "from simpleclaw.skills.realtime_lookup import main; assert callable(main)"
+    )
+
+    assert result.returncode == 0, result.stderr
 
 # ----------------------------------------------------------------------
 # raw query fallback parser
