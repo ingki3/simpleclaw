@@ -34,7 +34,6 @@ from simpleclaw.agent.turn_plan import (
 )
 from simpleclaw.recipes.loader import load_recipe
 
-
 SPORTS_RECIPE = (
     Path(__file__).parent.parent
     / "fixtures"

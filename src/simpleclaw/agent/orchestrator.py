@@ -2687,7 +2687,7 @@ class AgentOrchestrator:
                     forced_skill_names=frozenset(recipe.skills),
                     forced_tool_names=frozenset({"execute_skill"}),
                 )
-            except Exception as exc:  # noqa: BLE001 - typed fail-closed boundary
+            except Exception as exc:
                 return {
                     "schema": "asset_result.v1",
                     "status": "failed_terminal",

@@ -11,8 +11,7 @@ import pytest
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.tool_loop import ToolLoopRunner
-from simpleclaw.agent.tool_loop import ToolLoopResult
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     ClarificationPlan,
@@ -29,7 +28,6 @@ from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.models import SkillDefinition
-
 
 SPORTS_RECIPE = (
     Path(__file__).parent.parent
