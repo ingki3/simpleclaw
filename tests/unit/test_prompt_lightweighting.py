@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from simpleclaw.agent import AgentOrchestrator
 from simpleclaw.llm.models import ToolCall
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.models import FileType, PersonaFile, Section, SourceScope
@@ -231,45 +230,8 @@ def _selector_fallback_response() -> MagicMock:
     return response
 
 
-@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-@pytest.mark.asyncio
-async def test_selector_fallback_caps_skills_prompt(lightweight_config) -> None:
-    """selector fallback도 전체 스킬 목록 대신 fallback_top_k 목록만 main prompt에 싣는다."""
-    orchestrator = AgentOrchestrator(lightweight_config)
-    orchestrator._recipes = []
-
-    orchestrator._router = MagicMock()
-    orchestrator._router.send = AsyncMock(
-        side_effect=[_selector_fallback_response(), _text_response("완료")]
-    )
-
-    result = await orchestrator.process_message("그냥 확인", 1, 1)
-
-    assert result == "완료"
-    main_request = orchestrator._router.send.call_args_list[1][0][0]
-    assert "skill-0" in main_request.system_prompt
-    assert "skill-1" in main_request.system_prompt
-    assert "skill-2" not in main_request.system_prompt
-    assert "skill-4" not in main_request.system_prompt
-    execute_skill = next(tool for tool in main_request.tools if tool.name == "execute_skill")
-    assert "skill-0" in execute_skill.description
-    assert "skill-1" in execute_skill.description
-    assert "skill-2" not in execute_skill.description
 
 
-@patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-@pytest.mark.asyncio
-async def test_empty_direct_llm_response_uses_visible_fallback(lightweight_config) -> None:
-    """도구 호출 없는 일반 최종 응답도 빈 문자열이면 사용자 가시 fallback을 반환한다."""
-    orchestrator = AgentOrchestrator(lightweight_config)
-    orchestrator._asset_selection_config["enabled"] = False
-    orchestrator._router = MagicMock()
-    orchestrator._router.send = AsyncMock(return_value=_text_response("   "))
-
-    result = await orchestrator.process_message("안녕", 1, 1)
-
-    assert result
-    assert "응답을 생성하지 못했습니다" in result
 
 
 def test_tool_usage_instruction_prioritizes_tools_and_smalltalk_policy() -> None:

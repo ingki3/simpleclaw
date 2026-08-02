@@ -12,6 +12,7 @@ aiohttp 기반 단일 페이지 대시보드를 제공한다.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from aiohttp import web
 
@@ -50,11 +51,19 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         .timeline-step { padding: 8px 12px; margin: 4px 0; border-left: 3px solid #2563eb; background: #f8fafc; }
         .timeline-step.failure { border-left-color: #dc2626; }
         .timeline-step .meta { font-size: 0.85em; color: #666; margin-top: 4px; }
+        .warning { font-weight: 600; }
+        @media (prefers-color-scheme: dark) { body { background:#111827; color:#e5e7eb; } h1 { color:#f9fafb; } .card { background:#1f2937; } th { background:#374151; } th,td { border-color:#4b5563; } }
     </style>
 </head>
 <body>
     <h1>SimpleClaw Dashboard</h1>
     <div class="card" id="metrics">Loading...</div>
+    <div class="card">
+        <h2>LLM Usage &amp; Cost</h2>
+        <label>Period <select id="llm-usage-period"><option value="day">Day</option><option value="month">Month</option></select></label>
+        <label>Group <select id="llm-usage-group"><option value="backend">Backend</option><option value="model">Model</option><option value="route">Route</option><option value="task">Task</option></select></label>
+        <div id="llm-usage">Loading...</div>
+    </div>
     <div class="card">
         <h2>Memory Index (BIZ-29)</h2>
         <div id="memory">Loading...</div>
@@ -73,6 +82,20 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="executions">Loading...</div>
     </div>
     <script>
+        const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+        async function loadLlmUsage() {
+            const target = document.getElementById('llm-usage');
+            const period = document.getElementById('llm-usage-period').value;
+            const group = document.getElementById('llm-usage-group').value;
+            try {
+                const response = await fetch(`/api/llm-usage?period=${period}&group_by=${group}`);
+                const data = await response.json();
+                if (data.disabled) { target.textContent = 'Usage accounting disabled'; return; }
+                const rows = (data.groups || []).map(item => `<tr><td>${escapeHtml(item.backend_name || item.model || item.route_name || item.task_name || '')}</td><td>${escapeHtml(item.event_count)}</td><td>${escapeHtml(item.estimated_cost_usd)}</td></tr>`).join('');
+                target.innerHTML = `<p>Input ${escapeHtml(data.input_tokens)} · Output ${escapeHtml(data.output_tokens)} · Estimated $${escapeHtml(data.estimated_cost_usd)}</p><p class="warning">Unpriced: ${escapeHtml(data.unpriced_event_count)} events / ${escapeHtml(data.unpriced_tokens)} tokens</p><table><thead><tr><th>Group</th><th>Calls</th><th>Estimated USD</th></tr></thead><tbody>${rows}</tbody></table>`;
+            } catch (_) { target.textContent = 'LLM usage fetch failed'; }
+        }
+        document.addEventListener('change', event => { if (event.target.id.startsWith('llm-usage-')) loadLlmUsage(); });
         async function load() {
             const m = await (await fetch('/api/metrics')).json();
             // process_group_leaks > 0이면 빨간 카드로 시각적 경고.
@@ -174,7 +197,9 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
             }
         }
         load();
+        loadLlmUsage();
         setInterval(load, 10000);
+        setInterval(loadLlmUsage, 10000);
     </script>
 </body>
 </html>"""
@@ -195,6 +220,8 @@ class DashboardServer:
         *,
         conversation_store: ConversationStore | None = None,
         rag_log_window_days: int = 7,
+        usage_store: object | None = None,
+        usage_timezone: str = "Asia/Seoul",
     ) -> None:
         self._metrics = metrics
         self._logger = structured_logger
@@ -205,6 +232,8 @@ class DashboardServer:
         # 별도의 인스턴스를 주입할 필요는 없다.
         self._conversation_store = conversation_store
         self._rag_log_window_days = rag_log_window_days
+        self._usage_store = usage_store
+        self._usage_timezone = usage_timezone
         self._runner: web.AppRunner | None = None
         self._app: web.Application | None = None
         self._running = False
@@ -216,6 +245,20 @@ class DashboardServer:
         app.router.add_get("/api/logs", self._handle_logs)
         app.router.add_get("/api/trace", self._handle_trace)
         app.router.add_get("/api/memory_stats", self._handle_memory_stats)
+        app.router.add_get("/api/llm-usage", self._handle_llm_usage)
+
+    async def _handle_llm_usage(self, request: web.Request) -> web.Response:
+        if self._usage_store is None:
+            return web.json_response({"disabled": True})
+        period = request.query.get("period", "day")
+        group_by = request.query.get("group_by", "backend")
+        if period not in {"day", "month"} or group_by not in {"backend", "model", "route", "task"}:
+            return web.json_response({"error": "invalid period or group_by"}, status=400)
+        now = datetime.now(UTC)
+        method = self._usage_store.summarize_day if period == "day" else self._usage_store.summarize_month
+        payload = method(now, timezone=self._usage_timezone, group_by=group_by)
+        payload.update({"disabled": False, "period": period, "timezone": self._usage_timezone})
+        return web.json_response(payload)
 
     async def start(self) -> None:
         """대시보드 HTTP 서버를 시작한다."""
@@ -340,6 +383,8 @@ def register_dashboard_routes(
     structured_logger: StructuredLogger,
     conversation_store: ConversationStore | None = None,
     rag_log_window_days: int = 7,
+    usage_store: object | None = None,
+    usage_timezone: str = "Asia/Seoul",
 ) -> DashboardServer:
     """기존 대시보드 라우트를 외부 aiohttp 앱에 등록한다.
 
@@ -351,6 +396,8 @@ def register_dashboard_routes(
         structured_logger=structured_logger,
         conversation_store=conversation_store,
         rag_log_window_days=rag_log_window_days,
+        usage_store=usage_store,
+        usage_timezone=usage_timezone,
     )
     dashboard.register_routes(app)
     return dashboard

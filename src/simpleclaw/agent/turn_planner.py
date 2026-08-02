@@ -30,6 +30,9 @@ from simpleclaw.llm.router import LLMRouter
 
 logger = logging.getLogger(__name__)
 
+_PLANNER_EXAMPLES_PROMPT = "unified_turn_planner_examples"
+_PROMPT_SECTION_SEPARATOR = "\n\n---\n\n"
+
 _REPAIR_REQUIRED_FIELDS = (
     "context",
     "clarification",
@@ -117,7 +120,7 @@ def _requested_asset_scope(
 ) -> tuple[tuple[str, str] | None, tuple[tuple[str, str], ...], tuple[str, ...]]:
     """raw 응답에서 primary/allowed asset과 tool 이름을 추출한다."""
     if raw_data is None or not isinstance(raw_data.get("execution"), Mapping):
-        primary = plan.execution.primary_asset
+        primary = plan.capability.primary_asset
         primary_identity = (
             None
             if primary is None
@@ -125,16 +128,24 @@ def _requested_asset_scope(
         )
         allowed = tuple(
             (asset.asset_type, asset.name)
-            for asset in plan.execution.allowed_assets
+            for asset in plan.capability.supporting_assets
         )
         return primary_identity, allowed, plan.execution.allowed_tools
 
     execution = raw_data["execution"]
-    primary_identity = _raw_asset_identity(
-        execution.get("primary_asset"),
-        allow_none=True,
-    )
-    raw_allowed = execution.get("allowed_assets")
+    capability = raw_data.get("capability")
+    if isinstance(capability, Mapping):
+        primary_identity = _raw_asset_identity(
+            capability.get("primary_asset"),
+            allow_none=True,
+        )
+        raw_allowed = capability.get("supporting_assets")
+    else:
+        primary_identity = _raw_asset_identity(
+            execution.get("primary_asset"),
+            allow_none=True,
+        )
+        raw_allowed = execution.get("allowed_assets")
     if not isinstance(raw_allowed, list):
         raise PlanBoundaryViolation("invalid_allowed_assets")
     allowed: list[tuple[str, str]] = []
@@ -370,6 +381,7 @@ async def plan_turn_with_llm(
     router,
     max_tokens: int = 2048,
     reasoning: dict | None = None,
+    examples_prompt_name: str = _PLANNER_EXAMPLES_PROMPT,
 ) -> UnifiedTurnPlan:
     """한 structured 요청으로 plan을 만들고 repair→retry 후 fail-closed한다.
 
@@ -389,10 +401,21 @@ async def plan_turn_with_llm(
     """
     original = text or ""
     try:
+        base_prompt = load_system_prompt("unified_turn_planner")
+        examples_prompt = load_system_prompt(examples_prompt_name)
+        logger.info(
+            "Unified planner prompts loaded: base=%s@%d examples=%s@%d",
+            base_prompt.name,
+            base_prompt.version,
+            examples_prompt.name,
+            examples_prompt.version,
+        )
         request = LLMRequest(
-            system_prompt=load_system_prompt(
-                "unified_turn_planner"
-            ).system_prompt,
+            system_prompt=(
+                base_prompt.system_prompt
+                + _PROMPT_SECTION_SEPARATOR
+                + examples_prompt.field("template")
+            ),
             user_message=build_turn_planner_user_prompt(
                 text=original,
                 candidates=candidates,
@@ -403,6 +426,7 @@ async def plan_turn_with_llm(
             response_mime_type="application/json",
             response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
             require_structured_output=True,
+            usage_task="turn_planner",
         )
     except Exception as exc:  # noqa: BLE001 — raw 원문 없이 service 오류로 정규화.
         logger.warning(

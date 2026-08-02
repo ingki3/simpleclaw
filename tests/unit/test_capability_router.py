@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from simpleclaw.agent.capability_router import (
-    infer_domains,
-    infer_intents,
-    select_capability,
-)
+from simpleclaw.agent.capability_router import select_capability
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.models import SkillDefinition
@@ -81,6 +77,8 @@ def test_selects_read_only_standings_skill_for_normalized_question(fake_skill):
         "(직전 대화 맥락: 롯데, 야구) 그럼 현재 리그 순위표를 보여줘.",
         skills=[skill],
         recipes=[],
+        explicit_intents=("standings", "realtime_lookup"),
+        explicit_domains=("sports",),
     )
     assert decision is not None
     assert decision.asset_type == "skill"
@@ -164,6 +162,8 @@ def test_best_scoring_asset_wins(fake_skill, fake_recipe):
         "(직전 대화 맥락: 롯데, 야구) 그럼 현재 순위와 오늘 결과는?",
         skills=[generic, sports],
         recipes=[],
+        explicit_intents=("standings", "current_result", "realtime_lookup"),
+        explicit_domains=("sports",),
     )
     assert decision is not None
     assert decision.asset_name == "sports-lookup-skill"
@@ -242,8 +242,8 @@ def test_select_capability_explicit_weak_intent_alone_does_not_match(fake_skill)
     assert decision is None
 
 
-def test_select_capability_still_falls_back_when_explicit_metadata_absent(fake_skill):
-    """explicit metadata 가 없으면 기존 keyword 추론 fallback 이 유지된다."""
+def test_select_capability_fails_closed_when_explicit_metadata_absent(fake_skill):
+    """explicit metadata가 없으면 사용자 텍스트를 분류하지 않는다."""
     skill = fake_skill(
         "weather-skill",
         domains=("weather",),
@@ -252,14 +252,4 @@ def test_select_capability_still_falls_back_when_explicit_metadata_absent(fake_s
         side_effects=False,
     )
     decision = select_capability("오늘 서울 날씨", skills=[skill], recipes=[])
-    assert decision is not None
-    assert decision.asset_name == "weather-skill"
-
-
-def test_infer_intents_and_domains_are_generic():
-    assert "standings" in infer_intents("현재 리그 순위표 보여줘")
-    assert "quote" in infer_intents("오늘 삼성전자 주가 얼마야?")
-    assert "sports" in infer_domains("어제 야구 경기 결과")
-    assert "market" in infer_domains("코스피 지수 알려줘")
-    assert infer_intents("") == ()
-    assert infer_domains("") == ()
+    assert decision is None

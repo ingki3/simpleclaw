@@ -27,25 +27,21 @@ retry:
 
 # realtime-lookup-skill
 
-실시간성 질문(오늘/현재/최신 뉴스, 날씨, 주가/시장, 경기 결과 등)에 대해 최종 답변 전 근거 JSON을 생성합니다.
+UnifiedTurnPlanner가 구조화한 current-fact 요청에 대해 최종 답변 전 근거 JSON을 생성합니다.
 
 > **Internal evidence skill.** 이 스킬은 오케스트레이터가 LLM 루프 밖에서 직접 실행해
-> system evidence 로만 주입하는 내부 스킬입니다. 일반 `execute_skill` 대상의 LLM callable
+> typed evidence로만 전달하는 내부 스킬입니다. 일반 `execute_skill` 대상의 LLM callable
 > skill/tool 목록에는 노출되지 않으므로 모델이 직접 호출하지 않습니다.
-
-## When to use
-
-- 현재/최신/오늘/방금 같은 시간 cue가 있는 뉴스·날씨·시장·스포츠 질문
-- 과거 답변의 최신 사실 확인/정정 요청
-- 크론 보고서처럼 최신 기사/시장 상황을 근거로 써야 하는 작업
 
 ## Contract
 
 - 입력:
-  - 1순위: 오케스트레이터가 전달하는 URL-safe base64 JSON 단일 토큰
-  - fallback: base64 토큰이 아니면 위치 인자 전체를 평문 query 로 처리(한국어 raw query
-    직접 호출도 Unicode/base64 오류 없이 동작)
+  - 오케스트레이터가 전달하는 URL-safe base64 JSON 단일 토큰
+  - 필수 필드: `query`, `domain`, `intents`, typed `entities`,
+    `reference_date`, `required_claims`, `as_of_kst`
+  - query-only 또는 metadata 누락 요청은 `unsupported`로 fail closed
 - 출력: 아래 필드를 갖는 JSON
+  - `lookup_status`: `found` / `not_found` / `failed` / `unsupported` / `unusable`
   - `kind`: `news` / `weather` / `market` / `sports` / `general`
   - `query`
   - `freshness`: `as_of_kst`, `retrieved_at_utc`, `timeline_status`

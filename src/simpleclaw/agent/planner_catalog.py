@@ -125,6 +125,10 @@ class PlannerAsset:
     output_contract: str | None
     declared: bool
     runtime_visible: bool
+    coverage: str = "partial_coverage"
+    input_contract: str | None = None
+    fallback_modes: tuple[str, ...] = ()
+    retry_statuses: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """알 수 없거나 민감한 자산 문자열은 snapshot에 들어오지 못하게 한다."""
@@ -165,6 +169,13 @@ class PlannerAsset:
                 asset_type=self.asset_type,
                 asset_name=safe_name,
                 field="output_contract",
+            )
+        if self.input_contract is not None:
+            _validate_catalog_text(
+                self.input_contract,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="input_contract",
             )
 
 
@@ -259,6 +270,10 @@ def _asset_from_capability(
         direct_answer=capability.direct_answer,
         requires_confirmation=capability.requires_confirmation,
         output_contract=capability.output_contract,
+        coverage=capability.coverage,
+        input_contract=capability.input_contract,
+        fallback_modes=capability.fallback_modes,
+        retry_statuses=capability.retry_statuses,
         declared=capability.declared,
         runtime_visible=runtime_visible,
     )
@@ -293,6 +308,8 @@ def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
             spec.operator_gate_required or spec.risk is ToolRisk.HIGH
         ),
         output_contract=None,
+        coverage="partial_coverage",
+        input_contract=None,
         declared=True,
         runtime_visible=spec.scope is ToolScope.RUNTIME,
     )
@@ -315,6 +332,8 @@ def _execute_skill_adapter_asset() -> PlannerAsset:
         direct_answer=False,
         requires_confirmation=False,
         output_contract=None,
+        coverage="partial_coverage",
+        input_contract=None,
         declared=True,
         runtime_visible=True,
     )
@@ -334,6 +353,10 @@ def _snapshot_payload(asset: PlannerAsset) -> dict[str, Any]:
         "direct_answer": asset.direct_answer,
         "requires_confirmation": asset.requires_confirmation,
         "output_contract": asset.output_contract,
+        "coverage": asset.coverage,
+        "input_contract": asset.input_contract,
+        "fallback_modes": list(asset.fallback_modes),
+        "retry_statuses": list(asset.retry_statuses),
         "declared": asset.declared,
         "runtime_visible": asset.runtime_visible,
     }
@@ -358,6 +381,16 @@ def _prompt_payload(asset: PlannerAsset) -> dict[str, Any]:
         payload["freshness_sensitive"] = True
     if asset.direct_answer:
         payload["direct_answer"] = True
+    if asset.coverage != "partial_coverage":
+        payload["coverage"] = asset.coverage
+    if asset.input_contract:
+        payload["input_contract"] = asset.input_contract
+    if asset.output_contract:
+        payload["output_contract"] = asset.output_contract
+    if asset.fallback_modes:
+        payload["fallback_modes"] = list(asset.fallback_modes)
+    if asset.retry_statuses:
+        payload["retry_statuses"] = list(asset.retry_statuses)
     if asset.output_contract is not None:
         payload["output_contract"] = asset.output_contract
     return payload

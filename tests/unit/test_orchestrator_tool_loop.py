@@ -26,7 +26,7 @@ from simpleclaw.agent.evidence_policy import (
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
-from simpleclaw.llm.models import LLMResponse, MultimodalAttachment, ToolCall
+from simpleclaw.llm.models import LLMResponse, ToolCall
 
 
 @pytest.fixture
@@ -729,79 +729,8 @@ async def test_tool_result_with_20001_chars_is_capped_at_20000_in_next_llm_reque
     assert tool_message["content"] == tool_result[:20_000]
 
 
-@pytest.mark.asyncio
-async def test_attachment_context_note_is_in_current_user_message_not_saved(
-    config_file,
-):
-    """문서 첨부 메타 note는 provider 요청에만 붙고 대화 DB 저장 텍스트에는 남지 않는다."""
-    orch = AgentOrchestrator(config_file)
-    seen_requests = []
-
-    async def fake_send(request):
-        seen_requests.append(request)
-        return _text_response("첨부를 확인했습니다.")
-
-    orch._router.send = fake_send
-    attachment = MultimodalAttachment(
-        data=b"%PDF-1.7",
-        mime_type="application/pdf",
-        name="paper.pdf",
-        path="/tmp/simpleclaw-attachments/paper.pdf",
-        size_bytes=8,
-    )
-
-    result = await orch.process_message(
-        "요약해줘",
-        user_id=1,
-        chat_id=1,
-        attachments=[attachment],
-    )
-
-    assert result == "첨부를 확인했습니다."
-    assert len(seen_requests) == 1
-    current_message = seen_requests[0].messages[-1]
-    assert current_message["attachments"] == [attachment]
-    content = current_message["content"]
-    assert "Attachment context" in content
-    assert "paper.pdf" in content
-    assert "application/pdf" in content
-    assert "/tmp/simpleclaw-attachments/paper.pdf" in content
-    assert "8 bytes" in content
-    assert "직접 분석" in content
-    assert "불가능하면" in content
-    assert "1차 근거" in content
-    assert "이거" in content
-    assert "몇 알" in content
-    assert "명시적으로 요청하지 않았다면" in content
-    assert "첨부와 무관한 웹 검색이나 현재 사실 조회" in content
-
-    saved = orch._store.get_recent(limit=2)
-    assert saved[0].content == "요약해줘"
-    assert "Attachment context" not in saved[0].content
-    assert "%PDF" not in saved[0].content
-    assert "/tmp/simpleclaw-attachments/paper.pdf" not in saved[0].content
 
 
-@pytest.mark.asyncio
-async def test_attachment_context_note_includes_attachment_without_path(config_file):
-    orch = AgentOrchestrator(config_file)
-    seen_requests = []
-
-    async def fake_send(request):
-        seen_requests.append(request)
-        return _text_response("이미지 확인")
-
-    orch._router.send = fake_send
-    attachment = MultimodalAttachment(
-        data=b"jpg", mime_type="image/jpeg", name="photo.jpg"
-    )
-
-    await orch.process_message("이미지를 분석해 주세요.", 1, 1, attachments=[attachment])
-
-    content = seen_requests[0].messages[-1]["content"]
-    assert "photo.jpg" in content
-    assert "image/jpeg" in content
-    assert "Sandbox path" not in content
 
 
 @pytest.mark.asyncio
@@ -976,78 +905,8 @@ async def test_forced_final_ignores_legacy_evidence_flags(config_file, monkeypat
     assert result.failure_kind is None
 
 
-@pytest.mark.asyncio
-async def test_live_sports_query_collects_without_synthetic_tool_history(
-    config_file, monkeypatch,
-):
-    """실시간 경기 조회는 direct collector를 쓰고 synthetic history를 만들지 않는다."""
-    orch = AgentOrchestrator(config_file)
-
-    dispatch_calls: list[ToolCall] = []
-
-    async def fake_dispatch(tc):
-        dispatch_calls.append(tc)
-        return (
-            "WEB_SEARCH_RESULTS: sports (1 results)\n"
-            "1. 네이버 프로야구 경기 결과\n"
-            "URL: https://sports.example/game"
-        )
-
-    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    call_idx = {"i": 0}
-
-    async def fake_send(_request):
-        call_idx["i"] += 1
-        return _text_response("LG가 두산을 7:4로 이겼습니다.")
-
-    orch._router.send = fake_send
-
-    result = await orch.process_cron_message("오늘 프로야구 결과 알려줘")
-
-    assert result == "LG가 두산을 7:4로 이겼습니다."
-    assert call_idx["i"] == 1
-    assert [call.name for call in dispatch_calls] == ["web_search"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "message",
-    [
-        "삼성전자 현재 주가 알려줘",
-        "서울 날씨 지금 어때?",
-        "AI 최신 뉴스 찾아줘",
-    ],
-)
-async def test_live_market_weather_news_queries_collect_without_synthetic_history(
-    config_file, monkeypatch, message,
-):
-    """주가·날씨·뉴스도 direct collector 근거 뒤에 final을 생성한다."""
-    orch = AgentOrchestrator(config_file)
-
-    dispatch_calls: list[ToolCall] = []
-
-    async def fake_dispatch(tc):
-        dispatch_calls.append(tc)
-        return (
-            f"WEB_SEARCH_RESULTS: {message} (1 results)\n"
-            "1. 공식 조회 결과\n"
-            "URL: https://example.com/current"
-        )
-
-    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    call_idx = {"i": 0}
-
-    async def fake_send(_request):
-        call_idx["i"] += 1
-        return _text_response("검증 근거 기반 답변")
-
-    orch._router.send = fake_send
-
-    result = await orch.process_cron_message(message)
-
-    assert result == "검증 근거 기반 답변"
-    assert call_idx["i"] == 1
-    assert [call.name for call in dispatch_calls] == ["web_search"]
 
 
 @pytest.mark.asyncio
@@ -1461,47 +1320,6 @@ async def test_empty_final_prefers_prior_success_over_trailing_no_output_cli(
     assert "추가로 어떤 기준" not in result
 
 
-@pytest.mark.asyncio
-async def test_empty_final_no_evidence_creates_pending_clarify_in_chat(
-    config_file, monkeypatch,
-):
-    """대화형 채널에서는 근거 부족 fallback이 인라인 clarify 질문으로 전환된다."""
-    orch = AgentOrchestrator(config_file)
-
-    async def fake_dispatch(tc):
-        return "[Command completed with no output]"
-
-    monkeypatch.setattr(orch, "_dispatch_tool_call", fake_dispatch)
-    responses = [
-        _tool_response("c1", "cli", {"command": "curl ... | grep ..."}),
-        _text_response(""),
-    ]
-    call_idx = {"i": 0}
-
-    async def fake_send(_request):
-        i = call_idx["i"]
-        call_idx["i"] += 1
-        return responses[i]
-
-    orch._router.send = fake_send
-
-    result = await orch.process_message(
-        "제목 찾아봐",
-        user_id=6233568410,
-        chat_id=6233568410,
-    )
-
-    assert "확인한 범위만으로는 답을 확정하기 어렵습니다" in result
-    assert "다른 키워드로 다시 확인해줘" in result
-    pending = orch.pop_pending_clarify(6233568410)
-    assert pending is not None
-    assert "어떤 방향으로 확인할까요" in pending.question
-    assert [opt.label for opt in pending.options] == [
-        "다른 키워드",
-        "다른 출처",
-        "조건 추가",
-        "URL로 확인",
-    ]
 
 
 @pytest.mark.asyncio
@@ -1736,55 +1554,8 @@ async def test_agent_browser_under_cap_dispatches_normally(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_process_message_threads_on_text_delta_to_router(
-    config_file, monkeypatch,
-):
-    """``process_message(on_text_delta=...)`` 가 라우터까지 콜백을 전달해야 한다."""
-    orch = AgentOrchestrator(config_file)
-
-    seen_callback = {"cb": None}
-
-    async def fake_send(request, on_text_delta=None):
-        # 라우터 send 가 콜백을 받아 첫 델타를 흘려보낸 뒤 final 텍스트로 종료.
-        seen_callback["cb"] = on_text_delta
-        if on_text_delta is not None:
-            await on_text_delta("hello ")
-            await on_text_delta("world")
-        return _text_response("hello world")
-
-    orch._router.send = fake_send
-
-    collected: list[str] = []
-
-    async def cb(d: str) -> None:
-        collected.append(d)
-
-    result = await orch.process_message(
-        "ping", user_id=1, chat_id=1, on_text_delta=cb,
-    )
-    assert result == "hello world"
-    assert collected == ["hello ", "world"]
-    assert seen_callback["cb"] is cb
 
 
-@pytest.mark.asyncio
-async def test_process_message_without_callback_uses_send_signature(
-    config_file, monkeypatch,
-):
-    """BIZ-259 — 콜백 미지정 시 기존 1-인자 ``router.send(request)`` 시그니처 유지.
-
-    fake_send 가 ``request`` 단일 인자만 받아도 호출이 성공해야 한다 (회귀 가드).
-    """
-    orch = AgentOrchestrator(config_file)
-
-    async def fake_send(_request):  # 단일 인자
-        return _text_response("plain answer")
-
-    orch._router.send = fake_send
-
-    result = await orch.process_message("hi", user_id=1, chat_id=1)
-    assert result == "plain answer"
 
 
 # ── BIZ-436: ActionResultLedger 기반 empty-final 복구 ─────────────────

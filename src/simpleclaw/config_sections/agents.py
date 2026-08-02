@@ -150,10 +150,10 @@ _AGENT_DEFAULTS: dict = {
         },
         "fallback_mode": "conservative_original",
     },
-    # BIZ-493/BIZ-497: default off, shadow는 관측 전용, canary는 결정적
-    # read-only cohort, primary는 검증된 context/tool scope 전체를 연결한다.
+    # BIZ-523: ordinary turn은 typed planner primary 단일 경로다.
     "unified_turn_planner": {
-        "mode": "off",
+        "mode": "primary",
+        "architecture": "legacy_v2",
         "sample_rate": 0.0,
         "max_tokens": 2048,
         "structured_output": True,
@@ -167,6 +167,18 @@ _AGENT_DEFAULTS: dict = {
         "selected_context_max_turns": 3,
         "selected_context_max_chars": 2400,
         "repair_attempts": 1,
+        "examples_prompt": "unified_turn_planner_examples",
+        "planner_max_attempts": 2,
+        "evidence_max_attempts": 2,
+        "resolution_budget": {
+            "max_steps": None,
+            "max_tool_calls": None,
+            "max_seconds": None,
+            "max_tokens": None,
+        },
+        "resolution_budget_valid": False,
+        "complex_escalation": {"enabled": False},
+        "on_planner_failure": "fail_closed",
         "telemetry": {
             "enabled": True,
             "include_raw_text": False,
@@ -301,7 +313,7 @@ def _agent_with_defaults(agent: dict) -> dict:
     try:
         unified_mode = UnifiedTurnPlannerMode(raw_mode)
     except ValueError:
-        unified_mode = UnifiedTurnPlannerMode.OFF
+        unified_mode = UnifiedTurnPlannerMode.PRIMARY
     unified_reasoning = unified_turn_planner.get("reasoning", {})
     if not isinstance(unified_reasoning, dict):
         unified_reasoning = {}
@@ -318,6 +330,28 @@ def _agent_with_defaults(agent: dict) -> dict:
     if not isinstance(unified_telemetry, dict):
         unified_telemetry = {}
     unified_telemetry_defaults = unified_defaults["telemetry"]
+    architecture = str(
+        unified_turn_planner.get(
+            "architecture",
+            unified_defaults["architecture"],
+        )
+    ).strip().lower()
+    if architecture not in {"legacy_v2", "capability_first_v3"}:
+        architecture = unified_defaults["architecture"]
+    resolution_budget = unified_turn_planner.get("resolution_budget", {})
+    if not isinstance(resolution_budget, dict):
+        resolution_budget = {}
+    budget_defaults = unified_defaults["resolution_budget"]
+    normalized_budget = {
+        key: _coerce_optional_positive_int(
+            resolution_budget.get(key, budget_defaults[key])
+        )
+        for key in budget_defaults
+    }
+    budget_valid = any(value is not None for value in normalized_budget.values())
+    complex_escalation = unified_turn_planner.get("complex_escalation", {})
+    if not isinstance(complex_escalation, dict):
+        complex_escalation = {}
 
     try:
         sample_rate = float(
@@ -567,6 +601,7 @@ def _agent_with_defaults(agent: dict) -> dict:
         },
         "unified_turn_planner": {
             "mode": unified_mode.value,
+            "architecture": architecture,
             "sample_rate": sample_rate,
             "max_tokens": _coerce_int_config(
                 unified_turn_planner.get(
@@ -603,6 +638,20 @@ def _agent_with_defaults(agent: dict) -> dict:
             # deterministic repair + validated semantic retry 1회가 strict 계약이다.
             # config의 0/다른 값은 무시하고 고정값으로 정규화한다.
             "repair_attempts": unified_defaults["repair_attempts"],
+            "examples_prompt": str(
+                unified_turn_planner.get(
+                    "examples_prompt",
+                    unified_defaults["examples_prompt"],
+                )
+            ),
+            "planner_max_attempts": unified_defaults["planner_max_attempts"],
+            "evidence_max_attempts": unified_defaults["evidence_max_attempts"],
+            "resolution_budget": normalized_budget,
+            "resolution_budget_valid": budget_valid,
+            "complex_escalation": {
+                "enabled": bool(complex_escalation.get("enabled", False)),
+            },
+            "on_planner_failure": unified_defaults["on_planner_failure"],
             "telemetry": {
                 "enabled": bool(
                     unified_telemetry.get(
@@ -773,6 +822,17 @@ def _coerce_int_config(raw: object, default: int, *, minimum: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, value)
+
+
+def _coerce_optional_positive_int(raw: object) -> int | None:
+    """null 또는 양의 정수만 허용하는 resolution budget coercer."""
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _coerce_float_config(

@@ -208,6 +208,14 @@ async def _call_dreaming_llm_for_key(
         user_message=user_prompt,
         backend_name=self._dreaming_model,
         max_tokens=max_tokens,
+        usage_task={
+            "cluster": "dreaming_summary",
+            "memory": "dreaming_memory",
+            "user": "dreaming_profile",
+            "soul": "dreaming_profile",
+            "agent": "dreaming_profile",
+            "active_projects": "dreaming_summary",
+        }.get(prompt_name, "dreaming_summary"),
     )
     started = time.monotonic()
     try:

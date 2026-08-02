@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -42,9 +43,12 @@ from simpleclaw.agent.asset_selector import (
     filter_assets_by_selection,
     normalize_selector_response,
 )
+from simpleclaw.agent.capability_executor import (
+    CapabilityExecutor,
+    decode_asset_result,
+)
 from simpleclaw.agent.capability_router import (
     CapabilityDecision,
-    select_capability,
 )
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
@@ -56,6 +60,11 @@ from simpleclaw.agent.commands import (
     try_cron_command,
     try_recipe_command,
 )
+from simpleclaw.agent.complex_problem import (
+    ComplexProblemController,
+    ComplexProblemState,
+    ProblemNode,
+)
 from simpleclaw.agent.context_candidates import (
     ContextCandidateBuilder,
     ContextCandidateSet,
@@ -64,18 +73,23 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.evidence_investigation import (
+    EvidenceInvestigationController,
+)
 from simpleclaw.agent.evidence_policy import (
+    EvidenceFreshness,
     EvidenceRequirement,
+    EvidenceSourceType,
     EvidenceState,
-    assess_realtime_result,
+    EvidenceStatus,
     no_evidence_requirement,
-    requirement_from_turn_analysis,
     requirement_from_turn_plan,
 )
 from simpleclaw.agent.execution_router import (
     ExecutionCallbacks,
     ExecutionRouter,
 )
+from simpleclaw.agent.fact_check_controller import FactCheckController
 from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
@@ -84,9 +98,22 @@ from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
-from simpleclaw.agent.response_router import (
-    ResponseRoute,
-    classify_response_route,
+from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
+from simpleclaw.agent.resolution_types import (
+    AssetExecutionStatus,
+    AssetResult,
+    ComplexitySignal,
+    GoalStatus,
+    ProblemTransition,
+    ResolutionBudget,
+)
+from simpleclaw.agent.session_state import (
+    PendingInteraction,
+    SessionIdentity,
+    SessionState,
+    current_session_key_var,
+    current_turn_id_var,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.tool_gate import ToolExecutionScope
@@ -103,8 +130,6 @@ from simpleclaw.agent.tool_schemas import (
     filter_tool_definitions,
     validate_dispatch_tool_names,
 )
-from simpleclaw.agent.turn_analysis import analyze_turn_with_llm
-from simpleclaw.agent.turn_frame import build_turn_frame
 from simpleclaw.agent.turn_plan import AssetRef, ExecutionMode, UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.agent.turn_planner_telemetry import (
@@ -113,6 +138,7 @@ from simpleclaw.agent.turn_planner_telemetry import (
     build_turn_planner_shadow_failure_event,
     emit_turn_planner_shadow_event,
 )
+from simpleclaw.agent.turn_state import TurnExecutionState, TurnPhase
 from simpleclaw.config import (
     load_agent_config,
     load_asset_selection_config,
@@ -154,6 +180,7 @@ from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
+from simpleclaw.recipes.executor import execute_recipe
 from simpleclaw.recipes.learning import (
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,
     RecipeSuggestion,
@@ -164,7 +191,6 @@ from simpleclaw.recipes.learning import (
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.security import CommandGuard
-from simpleclaw.security.sanitize import sanitize_tool_output
 from simpleclaw.security.secrets import default_manager
 from simpleclaw.security.skill_env import load_skill_env_secret_refs
 from simpleclaw.skills.discovery import discover_skills
@@ -180,11 +206,13 @@ from simpleclaw.skills.learning import (
 )
 from simpleclaw.skills.mcp_client import MCPManager
 from simpleclaw.skills.models import SkillDefinition
-from simpleclaw.skills.realtime_lookup import (
-    decode_payload as decode_realtime_lookup_payload,
+from simpleclaw.skills.realtime_contracts import (
+    LookupStatus,
+    RealtimeLookupRequest,
+    RealtimeLookupResult,
 )
 from simpleclaw.skills.realtime_lookup import (
-    is_usable_realtime_evidence,
+    decode_payload as decode_realtime_lookup_payload,
 )
 from simpleclaw.skills.realtime_lookup import (
     lookup_async as run_realtime_lookup,
@@ -229,20 +257,17 @@ def _canary_read_only_eligible(
         return False
     if execution.mode is ExecutionMode.DIRECT_ANSWER:
         return (
-            execution.primary_asset is None
-            and not execution.allowed_assets
+            plan.capability.primary_asset is None
+            and not plan.capability.supporting_assets
             and not execution.allowed_tools
             and not plan.fact_check.required
         )
-    if execution.mode not in {
-        ExecutionMode.EXECUTE_ASSET,
-        ExecutionMode.RECIPE,
-    }:
+    if plan.capability.coverage.value != "full_coverage":
         return False
 
-    refs = set(execution.allowed_assets)
-    if execution.primary_asset is not None:
-        refs.add(execution.primary_asset)
+    refs = set(plan.capability.supporting_assets)
+    if plan.capability.primary_asset is not None:
+        refs.add(plan.capability.primary_asset)
     refs.update(
         AssetRef("native_tool", tool_name)
         for tool_name in execution.allowed_tools
@@ -391,118 +416,6 @@ _TOOL_RESULT_EMPTY_FINAL_ERROR_PREFIXES = (
 )
 
 _REALTIME_LOOKUP_SKILL_NAME = "realtime-lookup-skill"
-_REALTIME_LOOKUP_CONTEXT_HEADER = "## Realtime Lookup Evidence"
-_LIVE_FACT_TIME_CUES = (
-    "오늘",
-    "현재",
-    "지금",
-    "실시간",
-    "방금",
-    "최신",
-    "결과",
-    "스코어",
-    "예보",
-    "마감",
-    "장마감",
-    # BIZ-363: 경기 일정/중계 편성은 사전지식으로 답하면 쉽게 stale 해진다.
-    "일정",
-    "중계",
-    "방송",
-    "편성",
-    # 경기 결과를 묻는 구어체는 명시적인 "오늘/결과" 없이도 현재 상태 요청이다.
-    "어케 됐",
-    "어케 되었",
-    "어떻게 됐",
-    "어떻게 되었",
-    "누가 이겼",
-    "몇 대 몇",
-)
-_LIVE_FACT_CORRECTION_CUES = (
-    "틀렸",
-    "이상해",
-    "다시 확인",
-    "확인해",
-    "맞아?",
-)
-_LIVE_FACT_SPORTS_TERMS = (
-    "프로야구",
-    "kbo",
-    "야구",
-    "축구",
-    "농구",
-    "배구",
-    "월드컵",
-    "경기",
-    "경기 결과",
-    "스코어",
-)
-_LIVE_FACT_STOCK_TERMS = (
-    "주가",
-    "주식",
-    "코스피",
-    "코스닥",
-    "나스닥",
-    "다우",
-    "s&p",
-    "환율",
-    "증시",
-    "시장 마감",
-    "티커",
-    # BIZ-394: 기업·시장 이벤트(상장/IPO/공모 등)도 웹 근거가 필요한 현재성 사실로
-    # 본다. "OpenAI 상장 영향" 류가 시간 cue 없이도 evidence 조회를 타게 한다.
-    "상장",
-    "ipo",
-    "공모",
-    "기업가치",
-    "시총",
-)
-_LIVE_FACT_WEATHER_TERMS = (
-    "날씨",
-    "기온",
-    "강수",
-    "비 와",
-    "눈 와",
-    "미세먼지",
-    "예보",
-)
-_LIVE_FACT_NEWS_TERMS = (
-    "뉴스",
-    "속보",
-    "기사",
-    "최신 소식",
-)
-
-
-def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
-    """소문자화된 텍스트에서 키워드가 하나라도 보이는지 확인한다."""
-    lowered = text.lower()
-    return any(needle.lower() in lowered for needle in needles)
-
-
-def _looks_like_live_fact_request(text: str, prior_context: str = "") -> bool:
-    """경기·주가·날씨·뉴스처럼 웹 근거가 필요한 최신 사실 질문인지 판정한다.
-
-    모델 프롬프트 가드만으로는 작은 모델이 실시간 질문을 바로 답하는 회귀를
-    막지 못했다. 그래서 보수적인 키워드 게이트로 최종 답변 직전에도 한 번 더
-    차단한다. 단순 스포츠 규칙 설명 같은 비실시간 질문은 시간 cue 없이 통과시킨다.
-    """
-    if not text.strip():
-        return False
-    has_time_cue = _contains_any(text, _LIVE_FACT_TIME_CUES)
-    if _contains_any(text, _LIVE_FACT_WEATHER_TERMS):
-        return True
-    if _contains_any(text, _LIVE_FACT_NEWS_TERMS) and has_time_cue:
-        return True
-    if _contains_any(text, _LIVE_FACT_STOCK_TERMS):
-        return True
-    if has_time_cue and _contains_any(text, _LIVE_FACT_SPORTS_TERMS):
-        return True
-    if _contains_any(text, _LIVE_FACT_CORRECTION_CUES):
-        context = prior_context[-3000:]
-        return _looks_like_live_fact_request(context, prior_context="")
-    return False
-
-
 def _parse_undo_command(text: str) -> tuple[bool, int | None]:
     """/undo 명령 여부와 요청 turn 수를 파싱한다.
 
@@ -524,67 +437,6 @@ def _parse_undo_command(text: str) -> tuple[bool, int | None]:
     if turns < 1:
         return True, None
     return True, turns
-
-
-def _realtime_lookup_skill_payload(
-    text: str,
-    now_kst: object,
-    prior_context: str = "",
-) -> str | None:
-    """실시간성 질문을 evidence 스킬용 단일 토큰 payload로 직렬화한다.
-
-    BIZ-359: Gemini는 모델이 직접 반환하지 않은 synthetic assistant
-    functionCall을 다음 요청 history에 넣으면 ``thought_signature`` 누락으로 거부한다.
-    그래서 오케스트레이터는 더 이상 강제 ``web_fetch`` tool call을 합성하지 않고,
-    별도 ``realtime-lookup-skill``을 LLM history 밖에서 먼저 실행한 뒤 그 결과만
-    system evidence 블록으로 주입한다. 스킬 executor가 args를 공백 split하므로
-    JSON은 URL-safe base64 단일 토큰으로 전달한다.
-    """
-    if not _looks_like_live_fact_request(text, prior_context=prior_context):
-        return None
-
-    normalized_query = " ".join(text.split()) or "실시간 정보"
-    iso_formatter = getattr(now_kst, "isoformat", None)
-    payload = {
-        "query": normalized_query,
-        "as_of_kst": iso_formatter() if callable(iso_formatter) else str(now_kst),
-        "prior_context": prior_context[-1200:],
-    }
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii")
-
-
-def _format_realtime_lookup_context(evidence: str) -> str:
-    """실시간 조회 스킬 stdout을 최종 답변용 system evidence 블록으로 감싼다."""
-    return "\n".join(
-        [
-            _REALTIME_LOOKUP_CONTEXT_HEADER,
-            ("Use only the evidence below for live/current facts. "
-            "Do not invent numbers, dates, sources, winners, prices, or news not present here. "
-            "If the evidence says it is limited, say so explicitly."),
-            # BIZ-383: 일정/상태성 질문은 timeline_validation 으로 출처의 시점 반영
-            # 범위를 검증한다. status 를 그대로 신뢰해 stale 전망을 확정처럼 말하지 말 것.
-            ("If the evidence contains a `timeline_validation` object, respect its `status`: "
-            "`stale_or_pre_event` means the source only describes a future/scheduled event — "
-            "answer as a forecast, never as a confirmed result; "
-            "`current_pending` means some events finished while others remain — separate the "
-            "confirmed part from the pending part; "
-            "`partial` means results may be only partially reflected — flag the partiality; "
-            "`final` means a confirmed result — still state the as-of/source time; "
-            "`no_evidence`/`unknown` means the timeline could not be verified — say so explicitly."),
-            ("For sports, state teams, scores, status, winner, and event date only when all values "
-            "come from the same `type: sports_score` fact. Never merge values across snippets or "
-            "sources, and never infer a missing sports_score field. If no complete `sports_score` "
-            "fact exists, do not state an exact score, winner, or LIVE/final status."),
-            ("A `lookup_status=failed` or an empty `facts` list is a verification failure, never "
-            "evidence that no game exists. Only `lookup_status=not_found` supports an explicit "
-            "no-game statement."),
-            ("Do not mention system prompts, this evidence block or its header name, or raw "
-            "internal field names to the user. Translate verified facts and limitations into "
-            "natural user-facing language."),
-            evidence.strip() or "{}",
-        ]
-    )
 
 
 def _format_attachment_context_note(
@@ -800,6 +652,7 @@ class AgentOrchestrator:
         *,
         metrics: MetricsCollector | None = None,
         structured_logger: StructuredLogger | None = None,
+        llm_usage_sink: object | None = None,
     ) -> None:
         self._config_path = Path(config_path)
         # 메트릭 수집기 — 서브프로세스 종료 결과를 누적하여 누수 추세를 모니터링.
@@ -884,7 +737,7 @@ class AgentOrchestrator:
         self._reload_dynamic_files()
 
         # LLM router
-        self._router = create_router(config_path)
+        self._router = create_router(config_path, usage_sink=llm_usage_sink)
 
         # Conversation store
         # BIZ-313: db_path 가 ``~/.simpleclaw-agent/default/...`` 형태로 오므로 expanduser 로 풀어준다.
@@ -1223,6 +1076,7 @@ class AgentOrchestrator:
         user_id: int,
         chat_id: int,
         *,
+        thread_id: int | str | None = None,
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
@@ -1243,16 +1097,33 @@ class AgentOrchestrator:
                 chat_id,
             )
             return DRAIN_MAINTENANCE_MESSAGE
-        with self._drain_controller.operation("message_turn"):
-            return await self._process_message_impl(
-                text,
-                user_id,
-                chat_id,
-                attachments=attachments,
-                on_text_delta=on_text_delta,
-                on_progress=on_progress,
-                operator_tools=operator_tools,
-            )
+        session_key = SessionIdentity(
+            channel="telegram",
+            user_id=str(user_id),
+            chat_id=str(chat_id),
+            thread_id="" if thread_id is None else str(thread_id),
+        ).stable_key()
+        turn = TurnExecutionState.create(
+            session_key=session_key,
+            original_text=text,
+        )
+        session_token = current_session_key_var.set(session_key)
+        turn_token = current_turn_id_var.set(turn.turn_id)
+        try:
+            with self._drain_controller.operation("message_turn"):
+                return await self._process_message_impl(
+                    text,
+                    user_id,
+                    chat_id,
+                    attachments=attachments,
+                    on_text_delta=on_text_delta,
+                    on_progress=on_progress,
+                    operator_tools=operator_tools,
+                    turn=turn,
+                )
+        finally:
+            current_turn_id_var.reset(turn_token)
+            current_session_key_var.reset(session_token)
 
     async def _process_message_impl(
         self,
@@ -1264,6 +1135,7 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
+        turn: TurnExecutionState | None = None,
     ) -> str:
         """수신 메시지를 Native Function Calling 파이프라인으로 처리한다.
 
@@ -1276,18 +1148,31 @@ class AgentOrchestrator:
         델타를 콜백으로 흘려보낸다. ``/cron``, ``/recipe-*`` 명령어 분기는 즉답 분기
         이므로 콜백을 무시한다 — 부분 결과로 알림 트리거되는 사고 방지(``final_only``).
         """
+        if turn is None:
+            turn = TurnExecutionState.create(
+                session_key=SessionIdentity(
+                    channel="telegram",
+                    user_id=str(user_id),
+                    chat_id=str(chat_id),
+                ).stable_key(),
+                original_text=text,
+            )
         with trace_scope() as trace_id:
             logger.info(
                 "Message received: trace_id=%s user=%d chat=%d",
                 trace_id, user_id, chat_id,
             )
             self._reload_dynamic_files()
+            self._store.clear_pending_interaction(turn.session_key)
 
             undo_command, undo_turns = _parse_undo_command(text)
             if undo_command:
                 if undo_turns is None:
                     return _UNDO_USAGE_MESSAGE
-                hidden_turns = self._store.hide_recent_user_turns(undo_turns)
+                hidden_turns = self._store.hide_recent_user_turns(
+                    undo_turns,
+                    session_key=turn.session_key,
+                )
                 if hidden_turns == 0:
                     return _UNDO_NO_TURNS_MESSAGE
                 return _UNDO_SUCCESS_MESSAGE.format(turns=hidden_turns)
@@ -1396,267 +1281,20 @@ class AgentOrchestrator:
                     )
                 )
                 recent_rows = self._store.get_recent_with_ids(
-                    limit=max(self._history_limit, planner_candidate_limit)
+                    limit=max(self._history_limit, planner_candidate_limit),
+                    session_key=turn.session_key,
                 )
-                recent_for_analysis = [
-                    {"role": msg.role.value, "content": msg.content}
-                    for _row_id, msg in (
-                        recent_rows[-self._history_limit :]
-                        if self._history_limit > 0
-                        else ()
-                    )
-                ]
-                # BIZ-493 — 위 history snapshot을 sampled background task에
-                # 고정한다. task를 await하지 않으므로 planner latency/실패가 현재
-                # TurnAnalysis/route/tool 응답을 block하거나 변경하지 않는다.
-                self._schedule_unified_turn_planner_shadow(
+                tool_loop_result = await self._run_unified_turn_planner_primary(
                     text,
                     recent_rows=recent_rows,
+                    attachments=attachments,
+                    on_text_delta=on_text_delta,
+                    on_progress=on_progress,
+                    operator_tools=operator_tools,
+                    turn=turn,
                 )
-                rollout_mode = str(
-                    self._unified_turn_planner_config.get("mode", "off")
-                )
-                canary_selected = (
-                    rollout_mode == "canary"
-                    and _deterministic_rollout_sample(
-                        user_id=user_id,
-                        chat_id=chat_id,
-                        sample_rate=float(
-                            self._unified_turn_planner_config.get(
-                                "sample_rate",
-                                0.0,
-                            )
-                        ),
-                    )
-                )
-                if rollout_mode == "canary" and not canary_selected:
-                    self._record_unified_rollout_path(
-                        path="legacy",
-                        reason="canary_sampled_out",
-                    )
-                if rollout_mode == "primary" or canary_selected:
-                    tool_loop_result = await self._run_unified_turn_planner_primary(
-                        text,
-                        recent_rows=recent_rows,
-                        attachments=attachments,
-                        on_text_delta=on_text_delta,
-                        on_progress=on_progress,
-                        operator_tools=operator_tools,
-                        canary_read_only=canary_selected,
-                    )
-                    if tool_loop_result is not None:
-                        response_text = tool_loop_result.text
-                        pending = self._pending_clarify.get(chat_id)
-                        if pending is not None:
-                            response_text = pending.format_user_visible()
+                response_text = tool_loop_result.text
 
-                        msg_ids = self._save_turn(text, response_text)
-                        await self._capture_conversation_end_opportunity(
-                            text, response_text, list(msg_ids)
-                        )
-                        await self._capture_skill_learning_candidate(
-                            text, response_text, tool_loop_result, list(msg_ids)
-                        )
-                        await self._capture_recipe_learning_candidate(
-                            text, response_text, tool_loop_result, list(msg_ids)
-                        )
-                        return response_text
-
-                turn_analysis = None
-                turn_analysis_cfg = self._turn_analysis_config
-                if bool(turn_analysis_cfg.get("enabled", True)):
-                    turn_analysis = await analyze_turn_with_llm(
-                        text,
-                        recent_messages=recent_for_analysis,
-                        router=self._router,
-                        max_tokens=int(turn_analysis_cfg.get("max_tokens", 2048)),
-                        max_recent_messages=int(
-                            turn_analysis_cfg.get("max_recent_messages", 12)
-                        ),
-                        structured_output=bool(
-                            turn_analysis_cfg.get("structured_output", True)
-                        ),
-                        reasoning=turn_analysis_cfg.get("reasoning"),
-                    )
-                    logger.info(
-                        "TurnAnalysis built: source=%s backend=%s route=%s "
-                        "confidence=%.2f evidence_required=%s "
-                        "original_len=%d normalized_len=%d "
-                        "ambiguity=%d intents=%s domains=%s",
-                        turn_analysis.source,
-                        "turn_analysis",
-                        turn_analysis.route.value,
-                        turn_analysis.confidence,
-                        turn_analysis.evidence_required,
-                        len(turn_analysis.original_text),
-                        len(turn_analysis.normalized_question),
-                        len(turn_analysis.ambiguity_options),
-                        list(turn_analysis.intents),
-                        list(turn_analysis.domains),
-                    )
-                    if turn_analysis.source != "llm":
-                        # 분석 실패(fallback) — LLM 판단을 신뢰하지 않고 아래
-                        # 결정적 호환 경로로 내려간다(운영 연속성 우선).
-                        turn_analysis = None
-
-                if turn_analysis is not None:
-                    needs_clarification = turn_analysis.needs_clarification
-                    ambiguity_options = list(turn_analysis.ambiguity_options)
-                    route_input = turn_analysis.normalized_question
-                else:
-                    # BIZ-425 호환 fallback — deterministic keyword 정규화.
-                    turn_frame = build_turn_frame(
-                        text, recent_messages=recent_for_analysis
-                    )
-                    logger.info(
-                        "TurnFrame built: confidence=%.2f original_len=%d "
-                        "normalized_len=%d ambiguity=%d context=%s",
-                        turn_frame.confidence,
-                        len(turn_frame.original_text),
-                        len(turn_frame.normalized_question),
-                        len(turn_frame.ambiguity_options),
-                        turn_frame.context_summary[:60] or "-",
-                    )
-                    needs_clarification = turn_frame.needs_clarification
-                    ambiguity_options = list(turn_frame.ambiguity_options)
-                    route_input = turn_frame.normalized_question
-
-                # ClarifyGate: 복원이 애매하면 임의 실행 대신 기존 clarify
-                # 인프라(BIZ-260)로 사용자에게 되묻는다 — LLM/결정적 경로 공통.
-                if (
-                    needs_clarification
-                    and len(ambiguity_options) >= 2
-                    and not attachments
-                ):
-                    clarify_request = ClarifyRequest(
-                        question="어느 맥락 기준으로 이어서 확인할까요?",
-                        options=normalize_options(ambiguity_options),
-                    )
-                    self._pending_clarify[chat_id] = clarify_request
-                    response_text = clarify_request.format_user_visible()
-                    self._save_turn(text, response_text)
-                    return response_text
-
-                # BIZ-425/BIZ-426 — read-only capability 후보를 route 결정보다
-                # 먼저 판단한다. LLM 이 제공한 intents/domains 가 1순위이고,
-                # 없으면 keyword cue 추론이 fallback 으로 동작한다.
-                capability_decision = select_capability(
-                    route_input,
-                    skills=self._exposable_skills(),
-                    recipes=getattr(self, "_recipes", []),
-                    explicit_intents=(
-                        turn_analysis.intents if turn_analysis is not None else None
-                    ),
-                    explicit_domains=(
-                        turn_analysis.domains if turn_analysis is not None else None
-                    ),
-                )
-                if capability_decision is not None:
-                    logger.info(
-                        "Capability decision: selected=%s:%s auto_execute=%s "
-                        "reasons=%s",
-                        capability_decision.asset_type,
-                        capability_decision.asset_name,
-                        capability_decision.safe_to_auto_execute,
-                        list(capability_decision.reasons),
-                    )
-
-                if turn_analysis is not None:
-                    # BIZ-426 — primary route 는 LLM 판단을 그대로 쓴다.
-                    # keyword 기반 classify_response_route 는 아래 fallback 전용.
-                    route_decision = turn_analysis.to_route_decision()
-                else:
-                    # BIZ-394: 답변 근거로 주입될 study context 가 stale/저신뢰면,
-                    # 그 신선도 신호를 라우터에 넘겨 현재 사실 재조회(at-least
-                    # guarded)를 강제한다. 회수는 내부에서 실패를 삼킨다.
-                    study_context_for_routing = (
-                        self._context_retrieval.study_context_for_routing(route_input)
-                    )
-                    route_decision = classify_response_route(
-                        route_input,
-                        route_threshold=int(
-                            self._complex_fact_config.get("route_threshold", 3)
-                        ),
-                        study_context=study_context_for_routing,
-                    )
-                evidence_requirement = (
-                    requirement_from_turn_analysis(turn_analysis)
-                    if turn_analysis is not None
-                    else EvidenceRequirement(
-                        required=route_decision.needs_current_facts,
-                        query=route_input,
-                        domain="general",
-                        allowed_collectors=(
-                            frozenset({"web_search", "web_fetch"})
-                            if route_decision.needs_current_facts
-                            else frozenset()
-                        ),
-                        freshness_required=route_decision.needs_current_facts,
-                        origin="legacy_route_fallback",
-                    )
-                )
-                # BIZ-425 — read-only capability 로 직접 해결 가능한 조회성
-                # 질문은 complex 과승격 대신 tool loop(강한 자산 힌트)로 보낸다.
-                # 단, 남은 변수(경우의 수/시나리오)가 필요한 질문은 단일 조회로
-                # 답할 수 없으므로 complex workflow 를 유지한다.
-                capability_preempts_complex = (
-                    capability_decision is not None
-                    and capability_decision.safe_to_auto_execute
-                    and not route_decision.needs_remaining_variables
-                )
-                logger.info(
-                    "Route decision: route=%s score=%d reasons=%s "
-                    "capability_preempt=%s",
-                    route_decision.route.value,
-                    route_decision.complexity_score,
-                    route_decision.reasons,
-                    capability_preempts_complex,
-                )
-                if (
-                    self._complex_fact_config.get("enabled", False)
-                    and route_decision.route == ResponseRoute.COMPLEX_FACT_WORKFLOW
-                    and not capability_preempts_complex
-                ):
-                    response_text = await self._run_complex_fact_workflow(
-                        route_input,
-                        route_decision,
-                        on_progress=on_progress,
-                    )
-                    tool_loop_result = ToolLoopResult(response_text)
-                elif self._skill_learning_config.get(
-                    "enabled", False
-                ) or self._recipe_learning_config.get("enabled", False):
-                    # skill/recipe 학습 후보 capture는 tool trace가 필요하다.
-                    tool_loop_result = await self._run_tool_loop_result(
-                        route_input,
-                        attachments=attachments,
-                        on_text_delta=on_text_delta,
-                        on_progress=on_progress,
-                        capability_hint=capability_decision,
-                        evidence_requirement=evidence_requirement,
-                    )
-                    response_text = tool_loop_result.text
-                else:
-                    response_text = await self._tool_loop(
-                        route_input,
-                        attachments=attachments,
-                        on_text_delta=on_text_delta,
-                        on_progress=on_progress,
-                        capability_hint=capability_decision,
-                        evidence_requirement=evidence_requirement,
-                    )
-                    tool_loop_result = ToolLoopResult(response_text)
-
-                # BIZ-260 — clarify 가 호출됐다면 ``_tool_loop`` 가 빈 텍스트로
-                # 종결했을 수 있다. 대화 이력 저장은 항상 "질문 + 번호 옵션"
-                # 텍스트로 — 다음 turn 의 LLM 컨텍스트에 옵션이 보존되어 사용자가
-                # 텍스트로 "1" / 본문으로 답해도 매칭 가능 (DoD backward compat).
-                pending = self._pending_clarify.get(chat_id)
-                if pending is not None:
-                    response_text = pending.format_user_visible()
-
-                # 일반 사용자 발화는 채널을 명시하지 않는다(=organic). 이후 BIZ-76
-                # 후속에서 telegram/webhook/console 같은 origin 메타로 확장될 수 있음.
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
@@ -1668,6 +1306,7 @@ class AgentOrchestrator:
                     text, response_text, tool_loop_result, list(msg_ids)
                 )
                 return response_text
+
             finally:
                 clarify_chat_id_var.reset(clarify_token)
 
@@ -1681,7 +1320,8 @@ class AgentOrchestrator:
         on_progress: ProgressCallback | None,
         operator_tools: bool,
         canary_read_only: bool = False,
-    ) -> ToolLoopResult | None:
+        turn: TurnExecutionState | None = None,
+    ) -> ToolLoopResult:
         """Planner→PlanGate→ExecutionRouter를 ordinary primary turn에 한 번 적용한다.
 
         Planner와 context 선택은 controller loop 밖에서 고정한다. gate가 실행을
@@ -1689,6 +1329,11 @@ class AgentOrchestrator:
         fail-closed 응답을 반환한다.
         """
         config = self._unified_turn_planner_config
+        if turn is None:
+            turn = TurnExecutionState.create(
+                session_key=current_session_key_var.get(),
+                original_text=text,
+            )
         candidate_limit = int(config.get("context_candidate_limit", 8))
         candidates = ContextCandidateBuilder(
             max_turns=candidate_limit,
@@ -1712,6 +1357,12 @@ class AgentOrchestrator:
                 router=self._router,
                 max_tokens=int(config.get("max_tokens", 2048)),
                 reasoning=config.get("reasoning"),
+                examples_prompt_name=str(
+                    config.get(
+                        "examples_prompt",
+                        "unified_turn_planner_examples",
+                    )
+                ),
             )
         except Exception as exc:
             logger.warning(
@@ -1722,11 +1373,19 @@ class AgentOrchestrator:
                 path="fail_closed",
                 reason="planner_unavailable",
             )
+            turn.transition(TurnPhase.FAILED)
             return ToolLoopResult(
                 _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
                 success=False,
             )
 
+        if plan.original_text != text:
+            logger.warning(
+                "Unified planner returned a mismatched original_text; "
+                "restoring the controller-owned request text"
+            )
+            plan = replace(plan, original_text=text)
+        turn.attach_plan(plan)
         gate_result = PlanGate(
             selected_context_max_turns=int(
                 config.get("selected_context_max_turns", 3)
@@ -1735,6 +1394,7 @@ class AgentOrchestrator:
                 config.get("selected_context_max_chars", 2400)
             ),
         ).evaluate(plan, candidates=candidates, catalog=catalog)
+        turn.attach_gate_result(gate_result)
         logger.info(
             "Unified TurnPlanner primary gated: status=%s mode=%s "
             "selected_turns=%d tools=%d assets=%d",
@@ -1756,6 +1416,7 @@ class AgentOrchestrator:
                 execution_mode=plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
+            turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
         if gate_result.status is GateStatus.CONFIRMATION_REQUIRED:
             self._record_unified_rollout_path(
@@ -1764,22 +1425,28 @@ class AgentOrchestrator:
                 execution_mode=plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
+            self._store.save_session_state(
+                SessionState(
+                    key=turn.session_key,
+                    pending=PendingInteraction(
+                        kind="confirmation",
+                        payload={
+                            "question": _UNIFIED_PLAN_CONFIRMATION_MESSAGE,
+                            "execution_mode": plan.execution.mode.value,
+                        },
+                    ),
+                )
+            )
+            turn.transition(TurnPhase.WAITING_FOR_USER)
             return ToolLoopResult(_UNIFIED_PLAN_CONFIRMATION_MESSAGE, success=False)
         if gate_result.status is GateStatus.CLARIFY:
-            if canary_read_only:
-                self._record_unified_rollout_path(
-                    path="legacy",
-                    reason="canary_ineligible_clarify",
-                    execution_mode=plan.execution.mode.value,
-                    gate_status=gate_result.status.value,
-                )
-                return None
             self._record_unified_rollout_path(
                 path="primary",
                 reason="clarify",
                 execution_mode=plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
+            turn.transition(TurnPhase.WAITING_FOR_USER)
             return ToolLoopResult(self._render_unified_clarification(plan))
 
         effective_plan = gate_result.effective_plan
@@ -1790,18 +1457,20 @@ class AgentOrchestrator:
                 execution_mode=plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
+            turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
         if canary_read_only and not _canary_read_only_eligible(
             effective_plan,
             catalog,
         ):
             self._record_unified_rollout_path(
-                path="legacy",
+                path="fail_closed",
                 reason="canary_ineligible_plan",
                 execution_mode=effective_plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
-            return None
+            turn.transition(TurnPhase.REJECTED)
+            return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
 
         self._record_unified_rollout_path(
             path="primary",
@@ -1810,14 +1479,15 @@ class AgentOrchestrator:
             gate_status=gate_result.status.value,
         )
 
-        routed_result: ToolLoopResult | None = None
-
         async def run_planned_tool_loop(
-            callback_plan: UnifiedTurnPlan,
-        ) -> str:
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
             """검증된 immutable plan을 같은 ToolLoopState에 고정한다."""
-            nonlocal routed_result
-            routed_result = await self._run_tool_loop_result(
+            callback_plan = state.plan
+            if callback_plan is None:
+                raise ValueError("planned tool loop requires an attached plan")
+            state.transition(TurnPhase.EXECUTING)
+            result = await self._run_tool_loop_result(
                 callback_plan.context.standalone_question,
                 attachments=attachments,
                 on_text_delta=on_text_delta,
@@ -1829,63 +1499,472 @@ class AgentOrchestrator:
                     callback_plan,
                     catalog=catalog,
                 ),
+                turn=state,
             )
-            return routed_result.text
+            state.transition(TurnPhase.FINALIZING)
+            state.set_final_text(result.text)
+            state.transition(TurnPhase.COMPLETED)
+            return state
 
-        async def clarify(_callback_plan: UnifiedTurnPlan) -> str:
+        async def clarify(state: TurnExecutionState) -> TurnExecutionState:
             """PASS plan의 명시적 clarify mode도 같은 사용자 UX로 수렴시킨다."""
-            return self._render_unified_clarification(_callback_plan)
+            if state.plan is None:
+                raise ValueError("clarify requires an attached plan")
+            state.transition(TurnPhase.WAITING_FOR_USER)
+            state.final_text = self._render_unified_clarification(state.plan)
+            return state
 
         async def run_planned_fact_check(
-            callback_plan: UnifiedTurnPlan,
-        ) -> str:
-            """계획된 ToolLoop 범위 안에서 제한된 사실 검색을 실행한다."""
-            return await run_planned_tool_loop(callback_plan)
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            """Typed source request를 먼저 실행하고 검증된 근거만 조합한다."""
+
+            async def lookup(
+                request: RealtimeLookupRequest,
+            ) -> RealtimeLookupResult:
+                raw = json.dumps(
+                    request.to_payload(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                token = base64.urlsafe_b64encode(raw).decode("ascii")
+                output = await self._execute_skill(
+                    _REALTIME_LOOKUP_SKILL_NAME,
+                    token,
+                )
+                try:
+                    payload = json.loads(output or "")
+                except (TypeError, json.JSONDecodeError):
+                    payload = {
+                        "lookup_status": "unusable",
+                        "confidence": "low",
+                        "evidence": [],
+                        "facts": [],
+                        "limitations": ["structured lookup returned invalid JSON"],
+                    }
+                try:
+                    status = LookupStatus(
+                        str(payload.get("lookup_status") or "unusable")
+                    )
+                except ValueError:
+                    status = LookupStatus.UNUSABLE
+                return RealtimeLookupResult(
+                    request=request,
+                    status=status,
+                    evidence=tuple(payload.get("evidence") or ()),
+                    facts=tuple(payload.get("facts") or ()),
+                    limitations=tuple(payload.get("limitations") or ()),
+                    payload=payload,
+                )
+
+            async def compose(
+                verified_state: TurnExecutionState,
+            ) -> str:
+                if verified_state.plan is None:
+                    raise ValueError("fact composition requires plan")
+                result = await self._run_tool_loop_result(
+                    verified_state.plan.context.standalone_question,
+                    attachments=attachments,
+                    on_text_delta=None,
+                    on_progress=on_progress,
+                    operator_tools=operator_tools,
+                    plan=verified_state.plan,
+                    candidates=candidates,
+                    evidence_requirement=requirement_from_turn_plan(
+                        verified_state.plan,
+                        catalog=catalog,
+                    ),
+                    turn=verified_state,
+                )
+                return result.text
+
+            evidence_max_attempts = int(
+                config.get("evidence_max_attempts", 2)
+            )
+            return await FactCheckController(
+                lookup=tuple(lookup for _ in range(evidence_max_attempts)),
+                compose=compose,
+                max_attempts=evidence_max_attempts,
+            ).run(state)
 
         async def run_planned_complex_fact(
-            callback_plan: UnifiedTurnPlan,
-        ) -> str:
-            """Planner와 맥락 선택을 반복하지 않고 근거 슬롯 소유권을 위임한다."""
-            nonlocal routed_result
-            if not self._complex_fact_config.get(
-                "source_claim_hardening_ready",
-                False,
-            ):
-                routed_result = ToolLoopResult(
-                    "출처·주장 검증 선행 작업이 준비되지 않아 복합 사실 답변을 "
-                    "안전하게 확정할 수 없습니다. 현재는 제한된 답변만 제공합니다.",
-                    success=False,
-                )
-                return routed_result.text
-            fact_result = await self._run_planned_complex_fact_workflow(
-                callback_plan,
-                on_progress=on_progress,
-            )
-            routed_result = ToolLoopResult(
-                fact_result.text,
-                success=fact_result.success,
-            )
-            return routed_result.text
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            """복합 사실도 동일한 typed retrieval/finalization gate를 사용한다."""
+            return await run_planned_fact_check(state)
 
         async def run_planned_recipe(
-            callback_plan: UnifiedTurnPlan,
-        ) -> str:
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
             """선택된 recipe만 노출하고 해당 asset이 근거 수명주기를 소유하게 한다."""
-            return await run_planned_tool_loop(callback_plan)
+            return await run_planned_tool_loop(state)
+        factual_handler = (
+            run_planned_fact_check
+            if turn.plan is not None and turn.plan.fact_check.required
+            else run_planned_tool_loop
+        )
+        architecture = str(config.get("architecture", "legacy_v2"))
+        if architecture == "capability_first_v3":
+            if not bool(config.get("resolution_budget_valid", False)):
+                self._record_unified_rollout_path(
+                    path="fail_closed",
+                    reason="capability_first_budget_unbounded",
+                    execution_mode=effective_plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                turn.transition(TurnPhase.REJECTED)
+                return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
 
+            budget_config = config.get("resolution_budget", {})
+            if not isinstance(budget_config, dict):
+                budget_config = {}
+            budget = ResolutionBudget.from_seconds(
+                max_seconds=budget_config.get("max_seconds"),
+                max_steps=budget_config.get("max_steps"),
+                max_tool_calls=budget_config.get("max_tool_calls"),
+                token_budget=budget_config.get("max_tokens"),
+            )
+
+            async def execute_exact_skill(name: str, question: str) -> object:
+                return await self._execute_skill(name, shlex.quote(question))
+
+            async def execute_exact_recipe(
+                name: str,
+                variables: dict[str, str],
+            ) -> object:
+                recipe = next(
+                    (
+                        item
+                        for item in getattr(self, "_recipes", ())
+                        if item.name == name
+                    ),
+                    None,
+                )
+                if recipe is None or not recipe.steps:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "unsupported",
+                        "limitations": ["typed_recipe_executor_unavailable"],
+                    }
+                result = await execute_recipe(
+                    recipe,
+                    variables,
+                    timeout=recipe.settings.timeout,
+                    command_guard=self._command_guard,
+                    metrics=self._metrics,
+                )
+                if not result.success:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "failed_terminal",
+                        "limitations": [result.error or "recipe_failed"],
+                    }
+                envelopes: list[dict[str, object]] = []
+                for step in result.step_results:
+                    try:
+                        decoded = json.loads(step.output)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if (
+                        isinstance(decoded, dict)
+                        and decoded.get("schema") == "asset_result.v1"
+                    ):
+                        envelopes.append(decoded)
+                if len(envelopes) != 1:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "failed_terminal",
+                        "limitations": ["recipe_requires_one_typed_envelope"],
+                    }
+                return envelopes[0]
+
+            async def direct_mode(
+                callback_plan: UnifiedTurnPlan,
+                _transition: object,
+                _ledger: object,
+                _budget: ResolutionBudget,
+            ) -> str:
+                result = await self._run_tool_loop_result(
+                    callback_plan.context.standalone_question,
+                    attachments=attachments,
+                    on_text_delta=on_text_delta,
+                    on_progress=on_progress,
+                    operator_tools=operator_tools,
+                    plan=callback_plan,
+                    candidates=candidates,
+                    evidence_requirement=requirement_from_turn_plan(
+                        callback_plan,
+                        catalog=catalog,
+                    ),
+                )
+                return result.text
+
+            async def execute_supporting_asset(
+                selected: AssetRef,
+                question: str,
+                _ledger: ResolutionLedger,
+            ) -> AssetResult:
+                if selected.asset_type == "skill":
+                    raw = await execute_exact_skill(selected.name, question)
+                elif selected.asset_type == "recipe":
+                    raw = await execute_exact_recipe(
+                        selected.name,
+                        {"query": question},
+                    )
+                else:
+                    return AssetResult(
+                        asset_type=selected.asset_type,
+                        asset_name=selected.name,
+                        status=AssetExecutionStatus.UNSUPPORTED,
+                        limitations=("typed_supporting_executor_unavailable",),
+                    )
+                catalog_asset = next(
+                    (
+                        item
+                        for item in catalog.assets
+                        if item.asset_type == selected.asset_type
+                        and item.name == selected.name
+                    ),
+                    None,
+                )
+                return decode_asset_result(
+                    raw,
+                    asset_type=selected.asset_type,
+                    asset_name=selected.name,
+                    side_effect=bool(
+                        catalog_asset is not None and catalog_asset.side_effects
+                    ),
+                )
+
+            def investigation_transition(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+            ) -> ProblemTransition:
+                if transition is not None:
+                    return transition
+                required = callback_plan.fact_check.required_claims or (
+                    "unresolved_goal",
+                )
+                return ProblemTransition(
+                    original_goal=callback_plan.context.standalone_question,
+                    previous_question=callback_plan.context.standalone_question,
+                    triggering_observation="partial_capability",
+                    goal_status=GoalStatus.UNRESOLVED,
+                    unresolved_gap=required[0],
+                    next_question=callback_plan.context.standalone_question,
+                    required_claims=required,
+                    recommended_mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+                    transition_reason="partial_capability",
+                )
+
+            async def evidence_mode(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+                ledger: ResolutionLedger,
+                callback_budget: ResolutionBudget,
+            ) -> AssetResult:
+                outcome = await EvidenceInvestigationController(
+                    execute_supporting_asset=execute_supporting_asset,
+                ).run(
+                    investigation_transition(callback_plan, transition),
+                    supporting_assets=callback_plan.capability.supporting_assets,
+                    budget=callback_budget,
+                    ledger=ledger,
+                )
+                return outcome.last_result or AssetResult(
+                    asset_type="controller",
+                    asset_name="evidence_investigation",
+                    status=AssetExecutionStatus.UNSUPPORTED,
+                    unresolved_claims=outcome.goal.unresolved_claims,
+                    limitations=(outcome.stop_reason,),
+                )
+
+            async def complex_mode(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+                ledger: ResolutionLedger,
+                callback_budget: ResolutionBudget,
+            ) -> AssetResult:
+                prior_signals = (
+                    ledger.asset_results[-1].complexity_signals
+                    if ledger.asset_results
+                    else ()
+                )
+                signals = tuple(
+                    dict.fromkeys(
+                        (*callback_plan.execution.complexity_signals, *prior_signals)
+                    )
+                )
+                if not signals:
+                    return AssetResult(
+                        asset_type="controller",
+                        asset_name="complex_problem",
+                        status=AssetExecutionStatus.DENIED,
+                        limitations=("complexity_signal_missing",),
+                    )
+                claims = callback_plan.fact_check.required_claims
+                if not claims and transition is not None:
+                    claims = transition.required_claims
+                claims = claims or ("unresolved_goal",)
+                ordered = bool(
+                    set(signals)
+                    & {
+                        ComplexitySignal.DEPENDENCY_GRAPH,
+                        ComplexitySignal.ORDERED_CAPABILITY_COMPOSITION,
+                    }
+                )
+                nodes = [
+                    ProblemNode(
+                        node_id=f"claim-{index}",
+                        claim=claim,
+                        question=(
+                            transition.next_question
+                            if transition is not None and index == 0
+                            else f"다음 미해결 항목을 확인한다: {claim}"
+                        ),
+                        dependencies=(f"claim-{index - 1}",)
+                        if ordered and index > 0
+                        else (),
+                        allowed_assets=(
+                            (
+                                callback_plan.capability.supporting_assets[
+                                    index
+                                    % len(callback_plan.capability.supporting_assets)
+                                ],
+                            )
+                            if callback_plan.capability.supporting_assets
+                            else ()
+                        ),
+                    )
+                    for index, claim in enumerate(claims)
+                ]
+
+                async def execute_node(
+                    node: ProblemNode,
+                    asset: AssetRef,
+                    node_ledger: ResolutionLedger,
+                ) -> AssetResult:
+                    return await execute_supporting_asset(
+                        asset,
+                        node.question,
+                        node_ledger,
+                    )
+
+                state = ComplexProblemState(
+                    original_goal=callback_plan.context.standalone_question,
+                    nodes=nodes,
+                    ledger=ledger,
+                )
+                outcome = await ComplexProblemController(
+                    execute_node=execute_node,
+                ).run(state, budget=callback_budget)
+                resolved = tuple(
+                    node.claim
+                    for node in nodes
+                    if node.node_id in outcome.state.resolved_node_ids
+                )
+                unresolved = tuple(claim for claim in claims if claim not in resolved)
+                last = ledger.asset_results[-1] if ledger.asset_results else None
+                return AssetResult(
+                    asset_type="controller",
+                    asset_name="complex_problem",
+                    status=(
+                        AssetExecutionStatus.COMPLETED
+                        if outcome.success
+                        else AssetExecutionStatus.PARTIAL_SUCCESS
+                    ),
+                    data=dict(last.data) if last is not None else {},
+                    resolved_claims=resolved,
+                    unresolved_claims=unresolved,
+                    limitations=outcome.limitations,
+                )
+
+            turn.transition(TurnPhase.EXECUTING)
+            outcome = await ResolutionController(
+                capability_executor=CapabilityExecutor(
+                    catalog=catalog,
+                    execute_skill=execute_exact_skill,
+                    execute_recipe=execute_exact_recipe,
+                ),
+                direct_answer=direct_mode,
+                answer_with_evidence=evidence_mode,
+                resolve_complex_problem=complex_mode,
+                complex_escalation_enabled=bool(
+                    config.get("complex_escalation", {}).get("enabled", False)
+                ),
+            ).resolve(effective_plan, budget=budget)
+            logger.info(
+                "Capability resolution: coverage=%s fast_path=%s asset_status=%s "
+                "goal_status=%s mode=%s stop_reason=%s attempts=%d "
+                "validator_allow_final=%s",
+                effective_plan.capability.coverage.value,
+                bool(effective_plan.capability.primary_asset),
+                (
+                    outcome.asset_result.status.value
+                    if outcome.asset_result is not None
+                    else "none"
+                ),
+                outcome.goal.status.value,
+                outcome.mode.value,
+                outcome.stop_reason,
+                len(outcome.ledger.attempted_signatures),
+                outcome.validation.allow_final,
+            )
+            if outcome.mode is ExecutionMode.CLARIFY:
+                turn.transition(TurnPhase.LIMITED_FINAL)
+                turn.set_final_text(outcome.text, limited=True)
+                turn.transition(TurnPhase.COMPLETED)
+            elif effective_plan.fact_check.required and outcome.validation.allow_final:
+                turn.record_evidence(
+                    EvidenceState(
+                        required=True,
+                        attempted=True,
+                        status=EvidenceStatus.FOUND,
+                        source_type=EvidenceSourceType.APPROVED_TOOL,
+                        freshness=EvidenceFreshness.CURRENT_TURN,
+                        evidence_text="\n".join(
+                            item.source_url or item.provenance
+                            for item in outcome.ledger.evidence
+                            if item.usable
+                        ),
+                        query=effective_plan.context.standalone_question,
+                    )
+                )
+                turn.verify_evidence()
+                turn.transition(TurnPhase.FINALIZING)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            elif effective_plan.fact_check.required:
+                turn.transition(TurnPhase.LIMITED_FINAL)
+                turn.set_final_text(outcome.text, limited=True)
+                turn.transition(TurnPhase.COMPLETED)
+            else:
+                turn.transition(TurnPhase.FINALIZING)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            self._record_unified_rollout_path(
+                path="capability_first_v3",
+                reason=outcome.stop_reason,
+                execution_mode=outcome.mode.value,
+                gate_status=gate_result.status.value,
+            )
+            return ToolLoopResult(
+                outcome.text,
+                success=turn.phase is TurnPhase.COMPLETED,
+            )
         router = self._build_execution_router(
             ExecutionCallbacks(
-                direct_answer=run_planned_tool_loop,
-                execute_asset=run_planned_tool_loop,
-                tool_loop=run_planned_tool_loop,
-                fact_check=run_planned_fact_check,
-                complex_fact=run_planned_complex_fact,
-                recipe=run_planned_recipe,
+                direct_answer=factual_handler,
+                answer_with_evidence=run_planned_fact_check,
+                resolve_complex_problem=run_planned_complex_fact,
                 clarify=clarify,
             )
         )
-        response_text = await router.dispatch(effective_plan)
-        return routed_result or ToolLoopResult(response_text)
+        completed = await router.dispatch(turn)
+        return ToolLoopResult(
+            completed.final_text or _UNIFIED_PLAN_REJECTED_MESSAGE,
+            success=completed.phase is TurnPhase.COMPLETED,
+        )
 
     def _record_unified_rollout_path(
         self,
@@ -1942,7 +2021,84 @@ class AgentOrchestrator:
             ).format_user_visible()
         request = ClarifyRequest(question=question, options=options)
         self._pending_clarify[chat_id] = request
+        self._save_pending_clarify(current_session_key_var.get(), request)
         return request.format_user_visible()
+
+    def _save_pending_clarify(
+        self,
+        session_key: str,
+        request: ClarifyRequest,
+    ) -> None:
+        self._store.save_session_state(
+            SessionState(
+                key=session_key,
+                pending=PendingInteraction(
+                    kind="clarify",
+                    payload={
+                        "question": request.question,
+                        "options": [
+                            {"label": option.label, "body": option.body}
+                            for option in request.options
+                        ],
+                    },
+                ),
+            )
+        )
+
+    def get_pending_clarify(
+        self,
+        user_id: int,
+        chat_id: int,
+        thread_id: int | str | None = None,
+    ) -> ClarifyRequest | None:
+        """Load a durable clarification without consuming it."""
+        session_key = SessionIdentity(
+            channel="telegram",
+            user_id=str(user_id),
+            chat_id=str(chat_id),
+            thread_id="" if thread_id is None else str(thread_id),
+        ).stable_key()
+        state = self._store.load_session_state(session_key)
+        if state is None or state.pending is None:
+            return None
+        if state.pending.kind != "clarify":
+            return None
+        payload = state.pending.payload
+        question = str(payload.get("question") or "").strip()
+        raw_options = payload.get("options")
+        if not question or not isinstance(raw_options, list):
+            return None
+        try:
+            options = normalize_options(raw_options)
+        except ValueError:
+            return None
+        return ClarifyRequest(question=question, options=options)
+
+    def consume_pending_clarify(
+        self,
+        user_id: int,
+        chat_id: int,
+        thread_id: int | str | None = None,
+    ) -> ClarifyRequest | None:
+        """Atomically consume a durable clarification."""
+        session_key = SessionIdentity(
+            channel="telegram",
+            user_id=str(user_id),
+            chat_id=str(chat_id),
+            thread_id="" if thread_id is None else str(thread_id),
+        ).stable_key()
+        previous = self._store.clear_pending_interaction(session_key)
+        if previous is None or previous.pending is None:
+            return None
+        payload = previous.pending.payload
+        try:
+            options = normalize_options(payload.get("options"))
+        except (TypeError, ValueError):
+            return None
+        return ClarifyRequest(
+            question=str(payload.get("question") or ""),
+            options=options,
+        )
 
     def _schedule_unified_turn_planner_shadow(
         self,
@@ -2183,12 +2339,24 @@ class AgentOrchestrator:
         동일 채널을 부착한다. cron-admin / recipe:<name> 같은 자동·명령 트리거 출처를
         이후 dreaming 코퍼스 로더가 분리하거나 가중치 다운하기 위한 메타이다.
         """
-        user_id = self._store.add_message(ConversationMessage(
-            role=MessageRole.USER, content=user_text, channel=channel,
-        ))
-        asst_id = self._store.add_message(ConversationMessage(
-            role=MessageRole.ASSISTANT, content=assistant_text, channel=channel,
-        ))
+        session_key = current_session_key_var.get()
+        turn_id = current_turn_id_var.get() or hashlib.sha256(
+            f"{session_key}:{time.time_ns()}".encode()
+        ).hexdigest()
+        user_id, asst_id = self._store.save_turn(
+            ConversationMessage(
+                role=MessageRole.USER,
+                content=user_text,
+                channel=channel,
+            ),
+            ConversationMessage(
+                role=MessageRole.ASSISTANT,
+                content=assistant_text,
+                channel=channel,
+            ),
+            session_key=session_key,
+            turn_id=turn_id,
+        )
         self._schedule_embedding(user_id, user_text)
         self._schedule_embedding(asst_id, assistant_text)
         return user_id, asst_id
@@ -2299,7 +2467,7 @@ class AgentOrchestrator:
         )
         response = None
         try:
-            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            request = LLMRequest(user_message=prompt, max_tokens=2048, usage_task="skill_suggestion")
             if structured_output:
                 request.response_mime_type = "application/json"
                 request.response_schema = SKILL_SUGGESTION_RESPONSE_SCHEMA
@@ -2395,7 +2563,7 @@ class AgentOrchestrator:
         )
         response = None
         try:
-            request = LLMRequest(user_message=prompt, max_tokens=2048)
+            request = LLMRequest(user_message=prompt, max_tokens=2048, usage_task="recipe_suggestion")
             if structured_output:
                 request.response_mime_type = "application/json"
                 request.response_schema = RECIPE_SUGGESTION_RESPONSE_SCHEMA
@@ -2526,6 +2694,7 @@ class AgentOrchestrator:
         plan: UnifiedTurnPlan | None = None,
         candidates: ContextCandidateSet | None = None,
         evidence_requirement: EvidenceRequirement | None = None,
+        turn: TurnExecutionState | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -2549,7 +2718,11 @@ class AgentOrchestrator:
                 if plan is not None
                 else no_evidence_requirement()
             )
-        evidence_state: EvidenceState = evidence_requirement.initial_state()
+        evidence_state: EvidenceState = (
+            turn.evidence
+            if turn is not None and turn.evidence.attempted
+            else evidence_requirement.initial_state()
+        )
         attempted_collectors: set[str] = set()
 
         # 현재 시각을 KST로 주입
@@ -2589,7 +2762,6 @@ class AgentOrchestrator:
                 {"role": candidate.role, "content": candidate.content}
                 for candidate in selected
             ]
-            prior_context = "\n".join(candidate.content for candidate in selected)
             messages.append(current_user_message)
             # Planner가 선택하지 않은 과거 발화를 semantic retrieval이 다시
             # 주입하면 context allowlist가 무력화되므로 primary에서는 자동 RAG를
@@ -2597,10 +2769,12 @@ class AgentOrchestrator:
             rag_context = ""
         elif isolated:
             messages: list[dict] = [current_user_message]
-            prior_context = ""
             rag_context = ""
         else:
-            recent = self._store.get_recent(limit=self._history_limit)
+            recent = self._store.get_recent(
+                limit=self._history_limit,
+                session_key=current_session_key_var.get(),
+            )
             # BIZ-164 — 과거 턴의 ``role=tool`` 메시지와 assistant 메시지의
             # ``tool_calls`` 필드는 다음 턴의 LLM 입력에서 잘라낸다. 5/10 의
             # ``link-git-summarizer`` 같은 실패 도구 호출이 history 에 남아
@@ -2612,17 +2786,14 @@ class AgentOrchestrator:
             # 현재 턴 내부(in-flight)의 tool exchange 는 아래 루프에서 그대로
             # 누적되므로 정보 손실 없음.
             messages = []
-            prior_context_parts: list[str] = []
             for msg in recent:
                 role_value = msg.role.value
                 if role_value not in ("user", "assistant", "system"):
                     continue
-                prior_context_parts.append(msg.content)
                 messages.append({
                     "role": role_value,
                     "content": msg.content,
                 })
-            prior_context = "\n".join(prior_context_parts[-6:])
             messages.append(current_user_message)
             # 시맨틱 회상: 최근 윈도우에 포함되지 않은 과거 메시지를 추가 컨텍스트로 회수
             recent_contents = {msg.content for msg in recent}
@@ -2639,10 +2810,18 @@ class AgentOrchestrator:
 
         planned_allowed_assets: frozenset[tuple[str, str]] | None = None
         if plan is not None:
-            planned_allowed_assets = frozenset(
+            planned_asset_refs = {
                 (asset.asset_type, asset.name)
-                for asset in plan.execution.allowed_assets
-            )
+                for asset in plan.capability.supporting_assets
+            }
+            if plan.capability.primary_asset is not None:
+                planned_asset_refs.add(
+                    (
+                        plan.capability.primary_asset.asset_type,
+                        plan.capability.primary_asset.name,
+                    )
+                )
+            planned_allowed_assets = frozenset(planned_asset_refs)
             active_skills = [
                 skill
                 for skill in active_skills
@@ -2653,10 +2832,9 @@ class AgentOrchestrator:
                 for recipe in active_recipes
                 if ("recipe", recipe.name) in planned_allowed_assets
             ]
-            primary = plan.execution.primary_asset
+            primary = plan.capability.primary_asset
             if (
-                plan.execution.mode
-                in {ExecutionMode.EXECUTE_ASSET, ExecutionMode.RECIPE}
+                plan.capability.coverage.value == "full_coverage"
                 and primary is not None
             ):
                 if primary.asset_type == "skill":
@@ -2743,86 +2921,6 @@ class AgentOrchestrator:
                 active_skills_prompt = self._format_skills_for_prompt(active_skills)
                 active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
-        realtime_lookup_context = ""
-        realtime_lookup_usable = False
-        detected_realtime_payload = _realtime_lookup_skill_payload(
-            execution_text,
-            now_kst,
-            prior_context=prior_context,
-        )
-        if (
-            plan is None
-            and detected_realtime_payload is not None
-            and not evidence_requirement.required
-        ):
-            # Legacy deterministic fallback already identified a live-fact turn.
-            # Promote that existing signal to the common outcome contract; do
-            # not introduce a new user-text classifier here.
-            evidence_requirement = EvidenceRequirement(
-                required=True,
-                query=execution_text,
-                domain="general",
-                allowed_collectors=frozenset({"web_search", "web_fetch"}),
-                freshness_required=True,
-                origin="legacy_realtime_detector",
-            )
-            evidence_state = evidence_requirement.initial_state()
-        realtime_lookup_payload = (
-            detected_realtime_payload
-            if evidence_requirement.required
-            else None
-        )
-        if (
-            realtime_lookup_payload is not None
-            and self._resolve_skill_name(_REALTIME_LOOKUP_SKILL_NAME) is not None
-        ):
-            try:
-                payload = decode_realtime_lookup_payload(realtime_lookup_payload)
-                realtime_lookup_result = await self._execute_skill(
-                    _REALTIME_LOOKUP_SKILL_NAME,
-                    realtime_lookup_payload,
-                )
-                realtime_lookup_usable = is_usable_realtime_evidence(
-                    realtime_lookup_result,
-                    payload,
-                )
-                evidence_state = assess_realtime_result(
-                    evidence_requirement,
-                    realtime_lookup_result,
-                    usable=realtime_lookup_usable,
-                    as_of=payload.get("as_of_kst", ""),
-                )
-                attempted_collectors.add("structured_realtime")
-                realtime_lookup_context = _format_realtime_lookup_context(
-                    sanitize_tool_output(realtime_lookup_result or ""),
-                )
-                logger.info(
-                    "BIZ-480: realtime lookup evidence injected (%d chars, usable=%s)",
-                    len(realtime_lookup_context),
-                    realtime_lookup_usable,
-                )
-            except Exception as exc:
-                failed_result = {
-                    "kind": "realtime_lookup",
-                    "lookup_status": "failed",
-                    "confidence": "low",
-                    "facts": [],
-                    "limitations": [
-                        f"realtime lookup failed: {type(exc).__name__}"
-                    ],
-                }
-                evidence_state = assess_realtime_result(
-                    evidence_requirement,
-                    failed_result,
-                    usable=False,
-                    failure_reason=f"structured provider failed: {type(exc).__name__}",
-                )
-                attempted_collectors.add("structured_realtime")
-                logger.warning("BIZ-480: realtime lookup failed: %s", exc)
-        # Structured provider output is untrusted observation data. The common
-        # evidence gate passes its validated payload through a user-role data
-        # envelope; never append raw provider text to trusted RAG/system blocks.
-
         # 시스템 프롬프트는 페르소나/스킬과 RAG 회상 블록을 합친 결과.
         # BIZ-252 — Claude 의 prompt caching 을 위해 세그먼트 단위로도 함께 보낸다.
         # cache 경계: 페르소나 끝 / 스킬 목록 끝. ReAct 지시문과 RAG 블록은 마커 뒤에 둔다.
@@ -2862,11 +2960,16 @@ class AgentOrchestrator:
                 operator_tools=operator_tools,
                 allow_cron_mutation=allow_cron_mutation,
             )
+            if turn is not None:
+                turn.execution_scope = execution_scope
         effective_on_text_delta = on_text_delta
         if plan is not None and (
             plan.fact_check.required
             or plan.execution.mode
-            in {ExecutionMode.FACT_CHECK, ExecutionMode.COMPLEX_FACT}
+            in {
+                ExecutionMode.ANSWER_WITH_EVIDENCE,
+                ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+            }
         ):
             effective_on_text_delta = None
 
@@ -2888,6 +2991,7 @@ class AgentOrchestrator:
             evidence_requirement=evidence_requirement,
             evidence_state=evidence_state,
             attempted_collectors=attempted_collectors,
+            turn=turn,
         )
 
     async def _run_tool_loop_result(
@@ -2904,6 +3008,7 @@ class AgentOrchestrator:
         plan: UnifiedTurnPlan | None = None,
         candidates: ContextCandidateSet | None = None,
         evidence_requirement: EvidenceRequirement | None = None,
+        turn: TurnExecutionState | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
@@ -2933,6 +3038,7 @@ class AgentOrchestrator:
             plan=plan,
             candidates=candidates,
             evidence_requirement=evidence_requirement,
+            turn=turn,
         )
         result = await ToolLoopRunner(self).run(state)
         return result
@@ -3008,6 +3114,7 @@ class AgentOrchestrator:
                     backend_name=str(cfg["backend"]),
                     tools=[build_selector_tool_definition()],
                     max_tokens=int(cfg["max_tokens"]),
+                    usage_task="asset_selector",
                 )
             )
             result = normalize_selector_response(

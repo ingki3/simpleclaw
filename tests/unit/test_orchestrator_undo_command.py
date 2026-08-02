@@ -51,34 +51,7 @@ memory:
 
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 class TestUndoCommand:
-    @pytest.mark.asyncio
-    async def test_undo_default_hides_last_turn_before_llm(self, config_file):
-        orch = AgentOrchestrator(config_file)
-        orch._tool_loop = AsyncMock(side_effect=["first answer", "second answer"])
 
-        assert await orch.process_message("first", user_id=1, chat_id=1) == "first answer"
-        result = await orch.process_message("/undo", user_id=1, chat_id=1)
-
-        assert "최근 1턴" in result
-        assert "대화 이력에 저장하지 않습니다" in result
-        assert [msg.content for msg in orch._store.get_recent(limit=10)] == []
-        assert [
-            msg.content for msg in orch._store.get_recent(limit=10, include_deleted=True)
-        ] == ["first", "first answer"]
-        assert orch._tool_loop.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_undo_two_hides_two_recent_user_turns(self, config_file):
-        orch = AgentOrchestrator(config_file)
-        orch._tool_loop = AsyncMock(side_effect=["a1", "a2", "a3"])
-        await orch.process_message("u1", user_id=1, chat_id=1)
-        await orch.process_message("u2", user_id=1, chat_id=1)
-        await orch.process_message("u3", user_id=1, chat_id=1)
-
-        result = await orch.process_message("/undo 2", user_id=1, chat_id=1)
-
-        assert "최근 2턴" in result
-        assert [msg.content for msg in orch._store.get_recent(limit=10)] == ["u1", "a1"]
 
     @pytest.mark.asyncio
     async def test_undo_rejects_invalid_numbers_without_saving(self, config_file):

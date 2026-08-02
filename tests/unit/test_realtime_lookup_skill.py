@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -23,9 +27,56 @@ from simpleclaw.skills.realtime_sources import (
     SportsGameFact,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC_ROOT = _REPO_ROOT / "src"
+
 # ----------------------------------------------------------------------
 # raw query fallback parser
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "import simpleclaw.skills.realtime_lookup",
+        "from simpleclaw.agent import AgentOrchestrator",
+    ),
+)
+def test_clean_process_import_contract(statement):
+    """공개 realtime/agent import는 clean process의 import 순서와 무관하다."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(_SRC_ROOT)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", statement],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_installed_wrapper_imports_in_clean_process(tmp_path):
+    """설치 스크립트가 만든 runtime wrapper도 clean process에서 import된다."""
+    from scripts.install_realtime_lookup_skill import install
+
+    skill_dir = install(tmp_path)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(_SRC_ROOT), str(skill_dir)))
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import realtime_lookup_skill"],
+        cwd=_REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_parse_args_decodes_base64_payload():
@@ -73,61 +124,6 @@ def test_main_with_raw_korean_args_does_not_error(monkeypatch, capsys):
     # lookup 실패 envelope가 아니라 정상 evidence 계약을 따른다.
     assert "timeline_validation" in output
     assert not any("base64" in lim.lower() for lim in output["limitations"])
-
-
-# ----------------------------------------------------------------------
-# domain classification (BIZ-394 구조적 market cue)
-# ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "query",
-    [
-        "OpenAI 상장 일정이 어떻게 돼?",
-        "엔비디아 IPO 공모가 전망",
-        "이번 인수로 기업가치가 얼마나 오를까",
-        "증시 영향 분석해줘",
-        "테슬라 시총 변화",
-    ],
-)
-def test_classify_query_market_domain_events(query):
-    """기업·시장 이벤트(상장/IPO/공모/기업가치/시총/증시)는 market 도메인으로 분류된다."""
-    assert realtime_lookup.classify_query(query) == "market"
-
-
-@pytest.mark.parametrize(
-    ("query", "expected"),
-    [
-        ("오늘 서울 날씨 어때?", "weather"),
-        ("코스피 지금 얼마야?", "market"),
-        ("어제 KBO 경기 스코어", "sports"),
-        ("최신 속보 알려줘", "news"),
-        ("파이썬 리스트가 뭐야?", "general"),
-    ],
-)
-def test_classify_query_domain_mapping(query, expected):
-    """주요 도메인 분류가 회귀하지 않는다."""
-    assert realtime_lookup.classify_query(query) == expected
-
-
-# ----------------------------------------------------------------------
-# timeline-sensitive query detector
-# ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "query",
-    ["오늘 경기 결과 알려줘", "다음 경기 일정", "코스피 마감 순위", "release schedule"],
-)
-def test_timeline_sensitive_queries_detected(query):
-    """일정/상태/결과 질문은 timeline-sensitive로 분류된다."""
-    assert realtime_lookup.is_timeline_sensitive_query(query) is True
-
-
-@pytest.mark.parametrize("query", ["파이썬 리스트가 뭐야?", "맛집 추천해줘"])
-def test_non_timeline_queries_not_detected(query):
-    """일정/상태 cue가 없는 일반 질문은 timeline-sensitive가 아니다."""
-    assert realtime_lookup.is_timeline_sensitive_query(query) is False
 
 
 # ----------------------------------------------------------------------
@@ -210,16 +206,44 @@ def _document_source(text: str) -> SourceDocument:
     )
 
 
+def _request_payload(
+    query: str,
+    *,
+    domain: str = "news",
+    intents: tuple[str, ...] = ("current_result",),
+    as_of_kst: str = "2026-06-26T20:00:00+09:00",
+    freshness_required: bool = True,
+) -> dict:
+    entities = (
+        [
+            {"kind": "league", "value": "KBO"},
+            {"kind": "team", "value": "롯데 자이언츠"},
+        ]
+        if domain == "sports"
+        else []
+    )
+    return {
+        "query": query,
+        "domain": domain,
+        "intents": list(intents),
+        "entities": entities,
+        "reference_date": as_of_kst[:10],
+        "required_claims": [],
+        "as_of_kst": as_of_kst,
+        "freshness_required": freshness_required,
+    }
+
+
 def test_lookup_includes_timeline_validation_and_freshness(monkeypatch):
     """lookup()은 timeline_validation, freshness, limitations를 포함한다."""
     async def fake_collect_sources(**_kwargs):
         return [_document_source("결승전은 내일 오후 8시 개최 예정입니다." * 5)], []
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
-
-    result = realtime_lookup.lookup(
-        {"query": "오늘 결승전 결과", "as_of_kst": "2026-06-26T20:00:00+09:00"}
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
     )
+
+    result = realtime_lookup.lookup(_request_payload("오늘 결승전 결과"))
 
     assert "timeline_validation" in result
     assert result["timeline_validation"]["status"] == "stale_or_pre_event"
@@ -240,9 +264,11 @@ def test_lookup_marks_pending_source_with_limitation(monkeypatch):
             )
         ], []
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
 
-    result = realtime_lookup.lookup({"query": "시리즈 경기 결과"})
+    result = realtime_lookup.lookup(_request_payload("시리즈 경기 결과"))
 
     assert result["timeline_validation"]["status"] == "current_pending"
     assert result["evidence"][0]["timeline_status"] == "current_pending"
@@ -254,9 +280,18 @@ def test_lookup_non_timeline_query_keeps_evidence(monkeypatch):
     async def fake_collect_sources(**_kwargs):
         return [_document_source("서울의 오늘 날씨는 맑고 기온은 25도입니다." * 5)], []
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
 
-    result = realtime_lookup.lookup({"query": "서울 날씨 어때?"})
+    result = realtime_lookup.lookup(
+        _request_payload(
+            "서울 날씨 어때?",
+            domain="weather",
+            intents=("current_weather",),
+            freshness_required=False,
+        )
+    )
 
     assert result["timeline_validation"]["is_timeline_sensitive"] is False
     assert result["evidence"]
@@ -282,9 +317,17 @@ def test_lookup_multi_source_yields_high_confidence(monkeypatch):
         )
         return [first, second], []
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
 
-    result = realtime_lookup.lookup({"query": "이정후 시즌 타율"})
+    result = realtime_lookup.lookup(
+        _request_payload(
+            "이정후 시즌 타율",
+            intents=("season_stat",),
+            freshness_required=False,
+        )
+    )
 
     assert len(result["evidence"]) == 2
     assert result["confidence"] == "high"
@@ -322,15 +365,147 @@ def test_lookup_sports_score_fact_keeps_all_values_together(monkeypatch):
             )
         ], []
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
     result = realtime_lookup.lookup(
-        {"query": "롯데 야구 어케 되었나?", "as_of_kst": "2026-07-24T22:18:43+09:00"}
+        _request_payload(
+            "롯데 야구 어케 되었나?",
+            domain="sports",
+            as_of_kst="2026-07-24T22:18:43+09:00",
+        )
     )
 
     assert result["facts"] == [{"type": "sports_score", **fact.__dict__}]
     assert result["timeline_validation"]["status"] == "final"
     assert result["confidence"] == "high"
     assert result["lookup_status"] == "found"
+
+
+def _usable_sports_payload(*, status: str = "final") -> dict:
+    winner = "롯데 자이언츠" if status == "final" else None
+    return {
+        "kind": "sports",
+        "lookup_status": "found",
+        "confidence": "high" if status == "final" else "medium",
+        "facts": [
+            {
+                "type": "sports_score",
+                "league": "KBO",
+                "event_date": "2026-07-28",
+                "status": status,
+                "away_team": "롯데 자이언츠",
+                "away_score": 8,
+                "home_team": "한화 이글스",
+                "home_score": 3,
+                "winner": winner,
+                "source": "Naver Sports Schedule API",
+                "source_url": "https://api-gw.sports.naver.com/schedule/games",
+            }
+        ],
+        "timeline_validation": {
+            "status": "final" if status == "final" else "partial"
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "required_claims"),
+    [("final", ["점수", "승패"]), ("live", ["현재 점수"])],
+)
+def test_typed_current_sports_fact_is_usable(status, required_claims):
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request["reference_date"] = "2026-07-28"
+    request["required_claims"] = required_claims
+
+    assert realtime_lookup.is_usable_realtime_evidence(
+        _usable_sports_payload(status=status),
+        request,
+    )
+
+
+@pytest.mark.parametrize(
+    ("required_claims", "fact_update"),
+    [
+        (["승자"], {"winner": None}),
+        (["관중 수"], {}),
+        (["점수", "관중 수"], {}),
+    ],
+)
+def test_missing_or_unsupported_sports_claim_is_unusable(
+    required_claims,
+    fact_update,
+):
+    payload = _usable_sports_payload()
+    payload["facts"][0].update(fact_update)
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(
+        reference_date="2026-07-28",
+        required_claims=required_claims,
+    )
+
+    assert not realtime_lookup.is_usable_realtime_evidence(payload, request)
+
+
+def test_final_draw_satisfies_outcome_claim() -> None:
+    payload = _usable_sports_payload()
+    payload["facts"][0].update(
+        away_score=3,
+        home_score=3,
+        winner=None,
+    )
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(reference_date="2026-07-28", required_claims=["승패"])
+
+    assert realtime_lookup.is_usable_realtime_evidence(payload, request)
+
+
+@pytest.mark.parametrize(
+    ("payload_update", "fact_update", "request_update"),
+    [
+        ({"confidence": "low"}, {}, {}),
+        ({"timeline_validation": {"status": "stale_or_pre_event"}}, {}, {}),
+        ({}, {"event_date": "2026-07-27"}, {}),
+        (
+            {"timeline_validation": {"status": "partial"}},
+            {"status": "scheduled", "winner": None},
+            {},
+        ),
+        ({}, {}, {"required_claims": []}),
+    ],
+)
+def test_stale_partial_or_incomplete_sports_fact_is_unusable(
+    payload_update,
+    fact_update,
+    request_update,
+):
+    payload = _usable_sports_payload()
+    payload.update(payload_update)
+    payload["facts"][0].update(fact_update)
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(
+        reference_date="2026-07-28",
+        required_claims=["점수", "승패"],
+    )
+    request.update(request_update)
+
+    assert not realtime_lookup.is_usable_realtime_evidence(payload, request)
 
 
 @pytest.mark.parametrize(
@@ -368,9 +543,15 @@ def test_sports_timeline_uses_structured_fact_status(
     async def fake_collect_sources(**_kwargs):
         return CollectionOutcome("found", [document], [])
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
     result = realtime_lookup.lookup(
-        {"query": "롯데 야구 결과", "as_of_kst": "2026-07-28T20:18:43+09:00"}
+        _request_payload(
+            "롯데 야구 결과",
+            domain="sports",
+            as_of_kst="2026-07-28T20:18:43+09:00",
+        )
     )
 
     assert result["timeline_validation"]["status"] == expected_timeline
@@ -383,9 +564,15 @@ def test_lookup_propagates_typed_empty_sports_outcome(monkeypatch, collection_st
     async def fake_collect_sources(**_kwargs):
         return CollectionOutcome(collection_status, [], ["bounded fixture"])
 
-    monkeypatch.setattr(realtime_lookup, "collect_sources", fake_collect_sources)
+    monkeypatch.setattr(
+        realtime_lookup, "collect_sources_for_request", fake_collect_sources
+    )
     result = realtime_lookup.lookup(
-        {"query": "롯데 야구 결과", "as_of_kst": "2026-07-28T20:18:43+09:00"}
+        _request_payload(
+            "롯데 야구 결과",
+            domain="sports",
+            as_of_kst="2026-07-28T20:18:43+09:00",
+        )
     )
 
     assert result["lookup_status"] == collection_status

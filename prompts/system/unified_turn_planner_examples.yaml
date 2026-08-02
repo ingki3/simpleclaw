@@ -1,0 +1,48 @@
+name: unified_turn_planner_examples
+version: 2
+description: >-
+  Versioned semantic examples for Unified TurnPlanner. These examples guide
+  the structured LLM decision and are never interpreted as runtime keyword
+  rules.
+template: |-
+  ## Example: current sports result
+  User: 어제 유해란 LPGA 1라운드 성적 확인해줘
+  Decision summary:
+  - domains=[sports], intents=[current_result], fact_check.required=true
+  - fact_check.domain=sports, fact_check.intents=[current_result]
+  - entities include athlete=유해란, league=LPGA, sport=golf, round=1
+  - reference_date resolves the user's relative date before source selection
+  - if catalog declares naver-sports-skill as full_coverage/query.v1/asset_result.v1,
+    capability.primary_asset is that exact skill and it executes before mode
+  - execution.mode=answer_with_evidence is only the unresolved fallback path
+  - failed, unsupported, or unusable retrieval never means absence
+
+  ## Example: official team score
+  User: 오늘 롯데 경기 최종 점수를 공식 결과로 확인해줘
+  Decision summary:
+  - domains=[sports], intents=[current_result], fact_check.required=true
+  - fact_check.domain=sports, fact_check.intents=[current_result]
+  - entities include team=롯데 and league=KBO
+  - reference_date resolves 오늘
+  - exact full coverage executes first; empty may transition to
+    execution.mode=answer_with_evidence for schedule/status explanation
+
+  ## Example: static explanation
+  User: 파이썬 dataclass가 뭐야?
+  Decision summary:
+  - fact_check.required=false
+  - capability.coverage=no_match
+  - execution.mode=direct_answer
+
+  ## Example: unresolved follow-up
+  User: 그거 다시 확인해줘
+  Decision summary:
+  - if more than one bounded context candidate is plausible,
+    execution.mode=clarify
+
+  ## Example: explicit complexity
+  User: 두 공식 자료가 충돌하는 이유를 비교하고 계산 규칙까지 적용해줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem
+  - execution.complexity_signals includes evidence_conflict and calculation_or_rule
+  - a simple empty/failed/denied lookup must not select this mode

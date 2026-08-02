@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from simpleclaw.agent.action_result import (
     ActionResultLedger,
@@ -45,6 +45,9 @@ from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.llm.models import LLMRequest, SystemBlock, ToolCall
 from simpleclaw.llm.providers.base import TextDeltaCallback
 from simpleclaw.security.sanitize import sanitize_tool_output
+
+if TYPE_CHECKING:
+    from simpleclaw.agent.turn_state import TurnExecutionState
 
 logger = logging.getLogger("simpleclaw.agent.orchestrator")
 
@@ -183,6 +186,7 @@ class ToolLoopState:
     )
     evidence_state: EvidenceState | None = None
     attempted_collectors: set[str] = field(default_factory=set)
+    turn: TurnExecutionState | None = None
 
 
 @dataclass
@@ -463,6 +467,15 @@ class ToolLoopRunner:
         return await self._run(state)
 
     @staticmethod
+    def _record_evidence(
+        state: ToolLoopState,
+        evidence: EvidenceState,
+    ) -> None:
+        state.evidence_state = evidence
+        if state.turn is not None:
+            state.turn.record_evidence(evidence)
+
+    @staticmethod
     def _inject_evidence_context(state: ToolLoopState) -> None:
         evidence = state.evidence_state
         if evidence is None or not evidence.usable:
@@ -579,10 +592,13 @@ class ToolLoopRunner:
             result = f"Error: {collector} failed — {type(exc).__name__}"
 
         sanitized = sanitize_tool_output(result)
-        state.evidence_state = assess_tool_result(
-            requirement,
-            tool_name=collector,
-            output=sanitized,
+        self._record_evidence(
+            state,
+            assess_tool_result(
+                requirement,
+                tool_name=collector,
+                output=sanitized,
+            ),
         )
         trace.append(
             ToolTraceStep(
@@ -620,7 +636,11 @@ class ToolLoopRunner:
         )
         invoked_tool_sequence: list[str] = []
         tool_results_for_empty_final: list[tuple[str, str]] = []
-        action_ledger = ActionResultLedger()
+        action_ledger = (
+            state.turn.action_ledger
+            if state.turn is not None
+            else ActionResultLedger()
+        )
         trace: list[ToolTraceStep] = []
         agent_browser_call_count = 0
         prev_snapshot = state.previous_mutation_snapshot
@@ -641,6 +661,7 @@ class ToolLoopRunner:
                     messages=state.messages,
                     tools=state.tools,
                     system_blocks=state.system_blocks,
+                    usage_task="tool_loop",
                 )
                 text_delta_callback = (
                     state.on_text_delta
@@ -700,10 +721,13 @@ class ToolLoopRunner:
                         if asset_collectors:
                             collector = asset_collectors[0]
                             state.attempted_collectors.add(collector)
-                            state.evidence_state = assess_tool_result(
-                                state.evidence_requirement,
-                                tool_name=collector,
-                                output=final_text,
+                            self._record_evidence(
+                                state,
+                                assess_tool_result(
+                                    state.evidence_requirement,
+                                    tool_name=collector,
+                                    output=final_text,
+                                ),
                             )
                     if (
                         state.evidence_requirement.required
@@ -878,10 +902,13 @@ class ToolLoopRunner:
                     and tc.name in state.evidence_requirement.allowed_collectors
                 ):
                     state.attempted_collectors.add(tc.name)
-                    state.evidence_state = assess_tool_result(
-                        state.evidence_requirement,
-                        tool_name=tc.name,
-                        output=sanitized,
+                    self._record_evidence(
+                        state,
+                        assess_tool_result(
+                            state.evidence_requirement,
+                            tool_name=tc.name,
+                            output=sanitized,
+                        ),
                     )
                     if state.evidence_state.usable:
                         self._inject_evidence_context(state)
@@ -981,6 +1008,7 @@ class ToolLoopRunner:
                 user_message=state.user_content,
                 messages=state.messages,
                 system_blocks=state.system_blocks,
+                usage_task="tool_loop",
             )
             if state.on_text_delta is not None:
                 final_send = self._orchestrator._router.send(

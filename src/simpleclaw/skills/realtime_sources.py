@@ -16,9 +16,12 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlencode, urlparse
 from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from simpleclaw.skills.realtime_contracts import RealtimeLookupRequest
 
 GOOGLE_NEWS_RSS_ENDPOINT = "https://news.google.com/rss/search"
 _NAVER_SEARCH_ENDPOINT = "https://search.naver.com/search.naver"
@@ -78,7 +81,9 @@ class SourceDocument:
 class CollectionOutcome:
     """명시적 no-match를 fetch/schema/state 실패와 분리한 수집 결과."""
 
-    lookup_status: Literal["found", "not_found", "failed"]
+    lookup_status: Literal[
+        "found", "not_found", "failed", "unsupported", "unusable"
+    ]
     sources: list[SourceDocument]
     limitations: list[str]
 
@@ -513,11 +518,11 @@ async def _collect_news_sources(
 
 async def _collect_sports_source(
     *,
-    query: str,
+    expected_team: str,
     as_of_kst: object,
     fetch_page: FetchPage,
 ) -> CollectionOutcome:
-    expected_team = canonical_kbo_team(query)
+    expected_team = canonical_kbo_team(expected_team)
     if expected_team is None:
         return _failed_sports_outcome("질문에서 확인할 KBO 팀을 특정하지 못했습니다.")
     date = _as_of_date(as_of_kst)
@@ -567,7 +572,7 @@ async def collect_sources(
     """도메인별 source policy에 따라 검증된 원문 source만 반환한다."""
     if kind == "sports":
         return await _collect_sports_source(
-            query=query,
+            expected_team=query,
             as_of_kst=as_of_kst,
             fetch_page=fetch_page,
         )
@@ -591,6 +596,81 @@ async def collect_sources(
     )
 
 
+async def collect_sources_for_request(
+    request: RealtimeLookupRequest,
+    *,
+    fetch_page: FetchPage,
+    resolve_news_url: ResolveNewsUrl | None = None,
+) -> CollectionOutcome:
+    """Select a source adapter from typed plan metadata only."""
+    domain = request.domain.casefold()
+    as_of = request.reference_date or request.as_of_kst
+    if domain == "sports":
+        league = request.entity("league").casefold()
+        if league != "kbo":
+            return CollectionOutcome(
+                "unsupported",
+                [],
+                [
+                    (
+                        "No registered structured realtime adapter for "
+                        f"sports league {request.entity('league') or 'unknown'}."
+                    )
+                ],
+            )
+        team = request.entity("team")
+        if not team:
+            return CollectionOutcome(
+                "failed",
+                [],
+                ["The KBO adapter requires a typed team entity."],
+            )
+        return await _collect_sports_source(
+            expected_team=team,
+            as_of_kst=as_of,
+            fetch_page=fetch_page,
+        )
+
+    news_backed_domains = frozenset(
+        {
+            "news",
+            "general",
+            "market",
+            "entertainment",
+            "technology",
+            "finance",
+        }
+    )
+    if domain in news_backed_domains:
+        sources, limitations = await _collect_news_sources(
+            query=request.query,
+            as_of_kst=as_of,
+            fetch_page=fetch_page,
+            resolve_news_url=resolve_news_url,
+        )
+        return CollectionOutcome(
+            "found" if sources else "failed",
+            sources,
+            limitations,
+        )
+    if domain == "weather":
+        sources, limitations = await _collect_direct_search_source(
+            query=request.query,
+            kind=domain,
+            fetch_page=fetch_page,
+        )
+        return CollectionOutcome(
+            "found" if sources else "failed",
+            sources,
+            limitations,
+        )
+    return CollectionOutcome(
+        "unsupported",
+        [],
+        [f"No registered realtime adapter for domain {request.domain}."],
+    )
+
+
 __all__ = [
     "CollectionOutcome",
     "FetchPage",
@@ -604,6 +684,7 @@ __all__ = [
     "build_sports_page_url",
     "canonical_kbo_team",
     "collect_sources",
+    "collect_sources_for_request",
     "filter_recent_candidates",
     "html_to_visible_text",
     "parse_google_news_rss",

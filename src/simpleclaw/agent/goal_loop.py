@@ -290,7 +290,7 @@ class GoalLoopRunner:
                 max_answer_chars=self._config.max_answer_chars_for_judge,
             )
             judge_response = await self._judge_send(
-                LLMRequest(user_message=judge_prompt, max_tokens=self._config.judge_max_tokens)
+                LLMRequest(user_message=judge_prompt, max_tokens=self._config.judge_max_tokens, usage_task="goal_judge")
             )
             decision = parse_judge_decision(getattr(judge_response, "text", ""))
             goal_round = GoalRound(

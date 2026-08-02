@@ -42,21 +42,29 @@ def _payload(**overrides: object) -> dict[str, object]:
             "required": False,
             "owner": "none",
             "domain": "none",
+            "intents": [],
             "entities": [],
+            "reference_date": "",
             "search_query": "",
             "required_claims": [],
             "freshness_required": False,
             "reason": "",
         },
-        "execution": {
-            "mode": "direct_answer",
+        "capability": {
+            "coverage": "no_match",
             "primary_asset": {
                 "asset_type": "none",
                 "asset_name": "__none__",
             },
-            "allowed_assets": [],
+            "supporting_assets": [],
+            "fallback_modes": [],
+            "reason": "정적 설명",
+        },
+        "execution": {
+            "mode": "direct_answer",
             "allowed_tools": [],
             "requires_confirmation": False,
+            "complexity_signals": [],
             "reason": "정적 설명",
         },
         "confidence": 0.95,
@@ -95,11 +103,8 @@ def test_enum_values_are_stable() -> None:
     assert [item.value for item in ExecutionMode] == [
         "clarify",
         "direct_answer",
-        "execute_asset",
-        "tool_loop",
-        "fact_check",
-        "complex_fact",
-        "recipe",
+        "answer_with_evidence",
+        "resolve_complex_problem",
     ]
     assert [item.value for item in EvidenceOwner] == ["none", "planner", "asset"]
 
@@ -110,7 +115,7 @@ def test_schema_is_gemini_compatible_and_strict() -> None:
     encoded = json.dumps(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA)
     assert '"null"' not in encoded
     assert "route" not in UNIFIED_TURN_PLAN_RESPONSE_SCHEMA["properties"]
-    primary = UNIFIED_TURN_PLAN_RESPONSE_SCHEMA["properties"]["execution"][
+    primary = UNIFIED_TURN_PLAN_RESPONSE_SCHEMA["properties"]["capability"][
         "properties"
     ]["primary_asset"]
     assert primary["properties"]["asset_type"]["enum"][0] == "none"
@@ -181,9 +186,9 @@ def test_parser_preserves_selected_context_and_fact_plan() -> None:
     assert plan.context.selected_turn_ids == ("m101",)
     assert plan.fact_check.owner is EvidenceOwner.PLANNER
     assert plan.fact_check.required_claims == ("오늘 발표 내용", "양사 역할")
-    assert plan.execution.mode is ExecutionMode.FACT_CHECK
-    assert plan.execution.primary_asset is not None
-    assert plan.execution.primary_asset.name == "realtime-lookup-skill"
+    assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "realtime-lookup-skill"
 
 
 def test_topic_shift_discards_selected_history() -> None:
@@ -259,9 +264,8 @@ def test_unclear_reference_forces_clarify_mode() -> None:
     ("mode", "expected_route"),
     [
         ("direct_answer", ResponseRoute.STANDARD_TOOL_LOOP),
-        ("tool_loop", ResponseRoute.STANDARD_TOOL_LOOP),
-        ("fact_check", ResponseRoute.CURRENT_FACT_GUARDED_LOOP),
-        ("complex_fact", ResponseRoute.COMPLEX_FACT_WORKFLOW),
+        ("answer_with_evidence", ResponseRoute.CURRENT_FACT_GUARDED_LOOP),
+        ("resolve_complex_problem", ResponseRoute.COMPLEX_FACT_WORKFLOW),
     ],
 )
 def test_route_decision_adapter_uses_execution_mode_as_source_of_truth(
@@ -326,3 +330,54 @@ def test_assistant_false_claim_is_not_selected_as_evidence_context() -> None:
 
     assert plan.context.selected_turn_ids == ("m101",)
     assert "m102" not in plan.context.selected_turn_ids
+
+
+def test_lpga_plan_preserves_typed_fact_metadata() -> None:
+    payload = _payload(
+        domains=["sports"],
+        intents=["current_result"],
+        fact_check={
+            "required": True,
+            "owner": "planner",
+            "domain": "sports",
+            "intents": ["current_result"],
+            "entities": [
+                {"kind": "athlete", "value": "유해란"},
+                {"kind": "league", "value": "LPGA"},
+                {"kind": "sport", "value": "golf"},
+                {"kind": "round", "value": "1"},
+            ],
+            "reference_date": "2026-07-30",
+            "search_query": "유해란 LPGA 1라운드 2026-07-30 결과",
+            "required_claims": ["1라운드 스코어", "순위"],
+            "freshness_required": True,
+            "reason": "current sports result",
+        },
+        execution={
+            "mode": "fact_check",
+            "primary_asset": {
+                "asset_type": "none",
+                "asset_name": "__none__",
+            },
+            "allowed_assets": [],
+            "allowed_tools": ["web_search"],
+            "requires_confirmation": False,
+            "reason": "verify current result",
+        },
+    )
+    plan = parse_turn_plan_data(
+        payload,
+        original_text="어제 유해란 LPGA 1라운드 성적 확인해줘",
+    )
+
+    assert plan.fact_check.domain == "sports"
+    assert plan.fact_check.intents == ("current_result",)
+    assert plan.fact_check.reference_date == "2026-07-30"
+    assert {
+        (entity.kind, entity.value) for entity in plan.fact_check.entities
+    } == {
+        ("athlete", "유해란"),
+        ("league", "LPGA"),
+        ("sport", "golf"),
+        ("round", "1"),
+    }

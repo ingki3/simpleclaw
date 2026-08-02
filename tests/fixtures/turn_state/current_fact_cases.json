@@ -1,0 +1,95 @@
+[
+  {
+    "id": "lpga-current-result-domain-loss",
+    "critical": true,
+    "user": "어제 유해란 LPGA 1라운드 성적 확인해줘",
+    "expected_domain": "sports",
+    "expected_intents": [
+      "current_result"
+    ],
+    "fact_check_required": true,
+    "must_preserve_entities": [
+      "유해란",
+      "LPGA",
+      "1라운드"
+    ],
+    "forbidden_without_verified_evidence": [
+      "일정이 없다",
+      "불참했다",
+      "검색 결과가 없다"
+    ]
+  },
+  {
+    "id": "planner-unavailable-fail-closed",
+    "user": "오늘 경기 결과 알려줘",
+    "planner_error": true,
+    "expected_terminal_state": "failed",
+    "keyword_fallback_forbidden": true
+  },
+  {
+    "id": "session-topic-isolation",
+    "sessions": [
+      "telegram:A",
+      "telegram:B"
+    ],
+    "expected_cross_session_context": false
+  },
+  {
+    "id": "kbo-current-score",
+    "critical": true,
+    "user": "오늘 롯데 경기 최종 점수를 공식 결과로 확인해줘",
+    "expected_domain": "sports",
+    "expected_intents": ["current_result"],
+    "fact_check_required": true
+  },
+  {
+    "id": "ambiguous-follow-up",
+    "user": "그거 다시 확인해줘",
+    "expected_mode": "clarify"
+  },
+  {
+    "id": "static-explanation",
+    "user": "파이썬 dataclass가 무엇인지 설명해줘",
+    "fact_check_required": false
+  },
+  {
+    "id": "side-effect-confirmation",
+    "user": "내일 오전 9시에 알림을 등록해줘",
+    "confirmation_required": true
+  },
+  {
+    "id": "weather-forecast",
+    "user": "내일 서울 날씨와 비 올 확률을 확인해줘",
+    "expected_domain": "weather",
+    "expected_intents": ["forecast"],
+    "fact_check_required": true
+  },
+  {
+    "id": "market-current-quote",
+    "user": "현재 삼성전자 주가를 확인해줘",
+    "expected_domain": "market",
+    "expected_intents": ["quote"],
+    "fact_check_required": true
+  },
+  {
+    "id": "news-current-status",
+    "user": "오늘 OpenAI 공식 발표가 있었는지 확인해줘",
+    "expected_domain": "news",
+    "expected_intents": ["current_status"],
+    "fact_check_required": true
+  },
+  {
+    "id": "topic-shift",
+    "user": "이전 얘기와 별개로 SQLite WAL 모드를 설명해줘",
+    "expected_relation": "topic_shift",
+    "fact_check_required": false
+  },
+  {
+    "id": "unsupported-sports-league",
+    "user": "오늘 LPGA 전체 실시간 리더보드를 확인해줘",
+    "expected_domain": "sports",
+    "expected_intents": ["current_result"],
+    "fact_check_required": true,
+    "unsupported_must_not_mean_not_found": true
+  }
+]

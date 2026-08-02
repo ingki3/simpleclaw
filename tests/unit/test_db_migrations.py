@@ -21,7 +21,17 @@ from simpleclaw.db.migrations import (
     MigrationRunner,
     run_conversations_migrations,
     run_daemon_migrations,
+    run_usage_migrations,
 )
+
+
+def test_usage_migration_is_idempotent(tmp_path):
+    db = tmp_path / "usage.db"
+    assert run_usage_migrations(db) == [1]
+    assert run_usage_migrations(db) == []
+    with sqlite3.connect(db) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"llm_usage_events", "llm_usage_alert_claims"}.issubset(tables)
 
 
 def _write_migration(dir_path: Path, version: int, name: str, sql: str) -> Path:
@@ -395,7 +405,7 @@ class TestPackagedHelpers:
         # 0004(BIZ-366 /undo soft-delete deleted_at 컬럼),
         # 0005(BIZ-388 study_topics/study_items)는
         # 실제로 additive migration 으로 실행된다.
-        assert applied == [2, 3, 4, 5]
+        assert applied == [2, 3, 4, 5, 6]
 
         with sqlite3.connect(db) as conn:
             row = conn.execute(
@@ -411,6 +421,8 @@ class TestPackagedHelpers:
             }
             assert "channel" in cols
             assert "deleted_at" in cols
+            assert "session_key" in cols
+            assert "turn_id" in cols
             tables = {
                 r[0] for r in conn.execute(
                     "SELECT name FROM sqlite_master WHERE type='table'"
@@ -418,7 +430,8 @@ class TestPackagedHelpers:
             }
             assert "memory_items" in tables
             assert {"study_topics", "study_items"}.issubset(tables)
+            assert "conversation_sessions" in tables
             ver = conn.execute(
                 "SELECT MAX(version) FROM schema_version"
             ).fetchone()[0]
-            assert ver == 5
+            assert ver == 6

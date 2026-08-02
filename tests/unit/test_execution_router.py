@@ -20,15 +20,13 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.turn_state import TurnExecutionState
 
 _MODE_CALLBACKS = (
     (ExecutionMode.CLARIFY, "clarify"),
     (ExecutionMode.DIRECT_ANSWER, "direct_answer"),
-    (ExecutionMode.EXECUTE_ASSET, "execute_asset"),
-    (ExecutionMode.TOOL_LOOP, "tool_loop"),
-    (ExecutionMode.FACT_CHECK, "fact_check"),
-    (ExecutionMode.COMPLEX_FACT, "complex_fact"),
-    (ExecutionMode.RECIPE, "recipe"),
+    (ExecutionMode.ANSWER_WITH_EVIDENCE, "answer_with_evidence"),
+    (ExecutionMode.RESOLVE_COMPLEX_PROBLEM, "resolve_complex_problem"),
 )
 
 
@@ -64,15 +62,24 @@ def _plan(mode: ExecutionMode) -> UnifiedTurnPlan:
     )
 
 
-def _callbacks(selected_name: str, result: str) -> tuple[ExecutionCallbacks, dict]:
+def _state(mode: ExecutionMode) -> TurnExecutionState:
+    plan = _plan(mode)
+    state = TurnExecutionState.create(
+        session_key="telegram:A",
+        original_text=plan.original_text,
+    )
+    state.attach_plan(plan)
+    return state
+
+
+def _callbacks(selected_name: str) -> tuple[ExecutionCallbacks, dict]:
     callbacks = {
         name: AsyncMock(
-            return_value=result,
             side_effect=(
-                None
+                (lambda state: state)
                 if name == selected_name
                 else AssertionError(f"unexpected callback: {name}")
-            ),
+            )
         )
         for _mode, name in _MODE_CALLBACKS
     }
@@ -85,13 +92,13 @@ async def test_dispatches_each_mode_to_exact_callback(
     mode: ExecutionMode,
     callback_name: str,
 ) -> None:
-    plan = _plan(mode)
-    callbacks, spies = _callbacks(callback_name, "selected")
+    state = _state(mode)
+    callbacks, spies = _callbacks(callback_name)
 
-    result = await ExecutionRouter(callbacks).dispatch(plan)
+    result = await ExecutionRouter(callbacks).dispatch(state)
 
-    assert result == "selected"
-    spies[callback_name].assert_awaited_once_with(plan)
+    assert result is state
+    spies[callback_name].assert_awaited_once_with(state)
     for name, spy in spies.items():
         if name != callback_name:
             spy.assert_not_awaited()
@@ -99,17 +106,15 @@ async def test_dispatches_each_mode_to_exact_callback(
 
 @pytest.mark.asyncio
 async def test_callback_result_is_returned_without_transformation() -> None:
-    class RoutedText(str):
-        pass
+    state = _state(ExecutionMode.ANSWER_WITH_EVIDENCE)
+    routed = _state(ExecutionMode.ANSWER_WITH_EVIDENCE)
+    callbacks, _spies = _callbacks("answer_with_evidence")
+    callbacks.answer_with_evidence.return_value = routed
+    callbacks.answer_with_evidence.side_effect = None
 
-    result = RoutedText("callback result")
-    callbacks, _spies = _callbacks("tool_loop", result)
+    dispatched = await ExecutionRouter(callbacks).dispatch(state)
 
-    dispatched = await ExecutionRouter(callbacks).dispatch(
-        _plan(ExecutionMode.TOOL_LOOP)
-    )
-
-    assert dispatched is result
+    assert dispatched is routed
 
 
 @pytest.mark.asyncio
@@ -119,11 +124,11 @@ async def test_dispatch_does_not_invoke_planner_or_llm(monkeypatch) -> None:
         "simpleclaw.agent.turn_planner.plan_turn_with_llm",
         planner,
     )
-    callbacks, spies = _callbacks("direct_answer", "direct")
-    plan = _plan(ExecutionMode.DIRECT_ANSWER)
+    callbacks, spies = _callbacks("direct_answer")
+    state = _state(ExecutionMode.DIRECT_ANSWER)
 
-    result = await ExecutionRouter(callbacks).dispatch(plan)
+    result = await ExecutionRouter(callbacks).dispatch(state)
 
-    assert result == "direct"
-    spies["direct_answer"].assert_awaited_once_with(plan)
+    assert result is state
+    spies["direct_answer"].assert_awaited_once_with(state)
     planner.assert_not_awaited()

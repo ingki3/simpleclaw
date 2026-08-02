@@ -36,7 +36,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 import numpy as np
 
@@ -51,6 +51,9 @@ from simpleclaw.memory.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from simpleclaw.agent.session_state import SessionState
 
 # 임베딩 BLOB 직렬화 dtype. e5-small 등 대부분의 문장 임베딩 모델은 float32로 충분하다.
 # 차원은 호출자가 일관되게 관리하며 저장소는 강제하지 않는다.
@@ -161,16 +164,28 @@ class ConversationStore:
         soft-delete 메타(deleted_at)는 컨텍스트 노출 여부만 제어하므로 도메인 메시지
         객체에는 싣지 않는다. 감사 조회는 row id를 함께 반환하는 API가 담당한다.
         """
-        role, content, ts, tokens, channel = row
+        role, content, ts, tokens, channel, *scope = row
         return ConversationMessage(
             role=MessageRole(role),
             content=content,
             timestamp=datetime.fromisoformat(ts),
             token_count=tokens,
             channel=channel,
+            session_key=str(scope[0]) if scope else "legacy-default",
+            turn_id=(
+                str(scope[1])
+                if len(scope) > 1 and scope[1] is not None
+                else None
+            ),
         )
 
-    def add_message(self, message: ConversationMessage) -> int:
+    def add_message(
+        self,
+        message: ConversationMessage,
+        *,
+        session_key: str | None = None,
+        turn_id: str | None = None,
+    ) -> int:
         """새 대화 메시지를 DB에 저장하고 INSERT된 행 id를 반환한다.
 
         반환 id는 이후 ``add_embedding()`` 호출 시 message_id로 사용한다.
@@ -188,20 +203,69 @@ class ConversationStore:
         """
         with self._connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO messages (role, content, timestamp, token_count, channel) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO messages "
+                "(role, content, timestamp, token_count, channel, session_key, turn_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     message.role.value,
                     message.content,
                     message.timestamp.isoformat(),
                     message.token_count,
                     message.channel,
+                    session_key or message.session_key or "legacy-default",
+                    turn_id if turn_id is not None else message.turn_id,
                 ),
             )
             return int(cursor.lastrowid)
 
+    def save_turn(
+        self,
+        user_message: ConversationMessage,
+        assistant_message: ConversationMessage,
+        *,
+        session_key: str,
+        turn_id: str,
+    ) -> tuple[int, int]:
+        """Persist one user/assistant pair and session checkpoint atomically."""
+        now = datetime.now().astimezone().isoformat()
+        with self._connect() as conn:
+            ids: list[int] = []
+            for message in (user_message, assistant_message):
+                cursor = conn.execute(
+                    "INSERT INTO messages "
+                    "(role, content, timestamp, token_count, channel, "
+                    "session_key, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        message.role.value,
+                        message.content,
+                        message.timestamp.isoformat(),
+                        message.token_count,
+                        message.channel,
+                        session_key,
+                        turn_id,
+                    ),
+                )
+                ids.append(int(cursor.lastrowid))
+            conn.execute(
+                """
+                INSERT INTO conversation_sessions (
+                    session_key, pending_kind, pending_payload,
+                    last_completed_turn_id, updated_at
+                ) VALUES (?, NULL, NULL, ?, ?)
+                ON CONFLICT(session_key) DO UPDATE SET
+                    last_completed_turn_id = excluded.last_completed_turn_id,
+                    updated_at = excluded.updated_at
+                """,
+                (session_key, turn_id, now),
+            )
+        return ids[0], ids[1]
+
     def get_recent(
-        self, limit: int = 20, *, include_deleted: bool = False
+        self,
+        limit: int = 20,
+        *,
+        include_deleted: bool = False,
+        session_key: str | None = None,
     ) -> list[ConversationMessage]:
         """최근 메시지를 시간순으로 반환한다.
 
@@ -212,12 +276,22 @@ class ConversationStore:
         Returns:
             시간순(오래된 것 먼저)으로 정렬된 ConversationMessage 리스트.
         """
-        visibility_clause = "" if include_deleted else "WHERE deleted_at IS NULL "
+        conditions: list[str] = []
+        params: list[object] = []
+        if not include_deleted:
+            conditions.append("deleted_at IS NULL")
+        if session_key is not None:
+            conditions.append("session_key = ?")
+            params.append(session_key)
+        visibility_clause = (
+            f"WHERE {' AND '.join(conditions)} " if conditions else ""
+        )
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content, timestamp, token_count, channel FROM messages "
+                "SELECT role, content, timestamp, token_count, channel, "
+                "session_key, turn_id FROM messages "
                 f"{visibility_clause}ORDER BY id DESC LIMIT ?",
-                (limit,),
+                (*params, limit),
             ).fetchall()
 
         messages = []
@@ -227,7 +301,11 @@ class ConversationStore:
         return messages
 
     def get_since(
-        self, since: datetime, *, include_deleted: bool = False
+        self,
+        since: datetime,
+        *,
+        include_deleted: bool = False,
+        session_key: str | None = None,
     ) -> list[ConversationMessage]:
         """지정된 시점 이후의 메시지를 시간순으로 반환한다.
 
@@ -237,12 +315,19 @@ class ConversationStore:
         Returns:
             시간순으로 정렬된 ConversationMessage 리스트.
         """
-        deleted_clause = "" if include_deleted else "AND deleted_at IS NULL "
+        conditions = ["timestamp >= ?"]
+        params: list[object] = [since.isoformat()]
+        if not include_deleted:
+            conditions.append("deleted_at IS NULL")
+        if session_key is not None:
+            conditions.append("session_key = ?")
+            params.append(session_key)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT role, content, timestamp, token_count, channel FROM messages "
-                f"WHERE timestamp >= ? {deleted_clause}ORDER BY id",
-                (since.isoformat(),),
+                "SELECT role, content, timestamp, token_count, channel, "
+                "session_key, turn_id FROM messages "
+                f"WHERE {' AND '.join(conditions)} ORDER BY id",
+                tuple(params),
             ).fetchall()
 
         return [self._message_from_row(row) for row in rows]
@@ -252,7 +337,11 @@ class ConversationStore:
     # ------------------------------------------------------------------
 
     def get_recent_with_ids(
-        self, limit: int = 20, *, include_deleted: bool = False
+        self,
+        limit: int = 20,
+        *,
+        include_deleted: bool = False,
+        session_key: str | None = None,
     ) -> list[tuple[int, ConversationMessage]]:
         """최근 메시지를 ``(id, message)`` 쌍으로 시간순 반환.
 
@@ -261,39 +350,198 @@ class ConversationStore:
         기본 조회는 soft-delete 된 메시지를 제외한다. 반환된 rowid 는
         planner context ID ``msg:<rowid>`` 의 안정적인 원본으로 사용할 수 있다.
         """
-        visibility_clause = "" if include_deleted else "WHERE deleted_at IS NULL "
+        conditions: list[str] = []
+        params: list[object] = []
+        if not include_deleted:
+            conditions.append("deleted_at IS NULL")
+        if session_key is not None:
+            conditions.append("session_key = ?")
+            params.append(session_key)
+        visibility_clause = (
+            f"WHERE {' AND '.join(conditions)} " if conditions else ""
+        )
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, role, content, timestamp, token_count, channel "
+                "SELECT id, role, content, timestamp, token_count, channel, "
+                "session_key, turn_id "
                 f"FROM messages {visibility_clause}ORDER BY id DESC LIMIT ?",
-                (limit,),
+                (*params, limit),
             ).fetchall()
 
         results: list[tuple[int, ConversationMessage]] = []
         # DB에서 역순(최신 먼저)으로 가져온 뒤 다시 뒤집어 시간순으로 만든다.
-        for mid, role, content, ts, tokens, channel in reversed(rows):
-            msg = self._message_from_row((role, content, ts, tokens, channel))
+        for (
+            mid,
+            role,
+            content,
+            ts,
+            tokens,
+            channel,
+            row_session_key,
+            turn_id,
+        ) in reversed(rows):
+            msg = self._message_from_row(
+                (
+                    role,
+                    content,
+                    ts,
+                    tokens,
+                    channel,
+                    row_session_key,
+                    turn_id,
+                )
+            )
             results.append((int(mid), msg))
         return results
 
+    def save_session_state(self, state: SessionState) -> None:
+        """Upsert one versioned pending-interaction/session checkpoint."""
+        record = state.to_record()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_sessions (
+                    session_key, pending_kind, pending_payload,
+                    last_completed_turn_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(session_key) DO UPDATE SET
+                    pending_kind = excluded.pending_kind,
+                    pending_payload = excluded.pending_payload,
+                    last_completed_turn_id = excluded.last_completed_turn_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    record["session_key"],
+                    record["pending_kind"],
+                    record["pending_payload"],
+                    record["last_completed_turn_id"],
+                    record["updated_at"],
+                ),
+            )
+
+    def load_session_state(self, session_key: str) -> SessionState | None:
+        """Load one durable session checkpoint, ignoring unknown payload versions."""
+        from simpleclaw.agent.session_state import SessionState
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT session_key, pending_kind, pending_payload,
+                       last_completed_turn_id, updated_at
+                FROM conversation_sessions
+                WHERE session_key = ?
+                """,
+                (session_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = {
+            "session_key": row[0],
+            "pending_kind": row[1],
+            "pending_payload": row[2],
+            "last_completed_turn_id": row[3],
+            "updated_at": row[4],
+        }
+        state = SessionState.from_record(record)
+        if (
+            state.pending is not None
+            and row[1] is not None
+            and state.pending.kind != row[1]
+        ):
+            logger.warning(
+                "Ignoring pending interaction with mismatched outer kind"
+            )
+            return SessionState(
+                key=state.key,
+                last_completed_turn_id=state.last_completed_turn_id,
+                updated_at=state.updated_at,
+            )
+        return state
+
+    def clear_pending_interaction(self, session_key: str) -> SessionState | None:
+        """Atomically clear and return a session's pending interaction."""
+        from simpleclaw.agent.session_state import SessionState
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT session_key, pending_kind, pending_payload,
+                       last_completed_turn_id, updated_at
+                FROM conversation_sessions
+                WHERE session_key = ?
+                """,
+                (session_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE conversation_sessions
+                SET pending_kind = NULL, pending_payload = NULL,
+                    updated_at = ?
+                WHERE session_key = ?
+                """,
+                (datetime.now().astimezone().isoformat(), session_key),
+            )
+        return SessionState.from_record(
+            {
+                "session_key": row[0],
+                "pending_kind": row[1],
+                "pending_payload": row[2],
+                "last_completed_turn_id": row[3],
+                "updated_at": row[4],
+            }
+        )
+
     def get_since_with_ids(
-        self, since: datetime, *, include_deleted: bool = False
+        self,
+        since: datetime,
+        *,
+        include_deleted: bool = False,
+        session_key: str | None = None,
     ) -> list[tuple[int, ConversationMessage]]:
         """지정 시점 이후 메시지를 ``(id, message)`` 쌍으로 시간순 반환."""
-        deleted_clause = "" if include_deleted else "AND deleted_at IS NULL "
+        conditions = ["timestamp >= ?"]
+        params: list[object] = [since.isoformat()]
+        if not include_deleted:
+            conditions.append("deleted_at IS NULL")
+        if session_key is not None:
+            conditions.append("session_key = ?")
+            params.append(session_key)
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, role, content, timestamp, token_count, channel "
-                f"FROM messages WHERE timestamp >= ? {deleted_clause}ORDER BY id",
-                (since.isoformat(),),
+                "SELECT id, role, content, timestamp, token_count, channel, "
+                "session_key, turn_id FROM messages "
+                f"WHERE {' AND '.join(conditions)} ORDER BY id",
+                tuple(params),
             ).fetchall()
 
         return [
             (
                 int(mid),
-                self._message_from_row((role, content, ts, tokens, channel)),
+                self._message_from_row(
+                    (
+                        role,
+                        content,
+                        ts,
+                        tokens,
+                        channel,
+                        row_session_key,
+                        turn_id,
+                    )
+                ),
             )
-            for mid, role, content, ts, tokens, channel in rows
+            for (
+                mid,
+                role,
+                content,
+                ts,
+                tokens,
+                channel,
+                row_session_key,
+                turn_id,
+            ) in rows
         ]
 
     def get_messages_by_ids(
@@ -333,7 +581,12 @@ class ConversationStore:
             for mid, role, content, ts, tokens, channel in rows
         ]
 
-    def hide_recent_user_turns(self, turns: int) -> int:
+    def hide_recent_user_turns(
+        self,
+        turns: int,
+        *,
+        session_key: str | None = None,
+    ) -> int:
         """최근 user turn N개와 그 이후 assistant 메시지를 soft-delete한다.
 
         물리 삭제 없이 ``deleted_at``만 채워 이후 ``get_recent``/``get_since`` 기본
@@ -350,8 +603,15 @@ class ConversationStore:
             raise ValueError("turns must be >= 1")
 
         with self._connect() as conn:
+            session_clause = ""
+            params: list[object] = []
+            if session_key is not None:
+                session_clause = "AND session_key = ? "
+                params.append(session_key)
             rows = conn.execute(
-                "SELECT id, role FROM messages WHERE deleted_at IS NULL ORDER BY id DESC"
+                "SELECT id, role FROM messages WHERE deleted_at IS NULL "
+                f"{session_clause}ORDER BY id DESC",
+                params,
             ).fetchall()
             ids_to_hide: list[int] = []
             user_turns = 0

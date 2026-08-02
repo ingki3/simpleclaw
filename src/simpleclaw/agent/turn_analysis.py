@@ -566,6 +566,7 @@ async def analyze_turn_with_llm(
             user_message=user_message,
             route_name="turn_analysis",
             max_tokens=max_tokens,
+            usage_task="turn_analysis",
         )
         if structured_output:
             # BIZ-427 — schema-constrained JSON 출력을 provider 에 요구한다.

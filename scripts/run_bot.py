@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -31,6 +32,7 @@ from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
+    load_llm_usage_config,
     load_persona_config,
     load_recipes_config,
     load_security_config,
@@ -40,6 +42,8 @@ from simpleclaw.config import (
 from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigger
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
+from simpleclaw.llm.usage import BackendPricing
+from simpleclaw.logging.llm_usage import LLMUsageService, LLMUsageStore
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.redaction import install_telegram_token_redaction
 from simpleclaw.logging.structured_logger import StructuredLogger
@@ -95,8 +99,10 @@ def _kill_existing_bots():
 
 def _create_telegram_notifier(bot_token: str, chat_id: int):
     """Create an async notifier that sends cron results to Telegram."""
+
     async def notifier(job_name: str, text: str) -> None:
         from telegram import Bot
+
         tg_bot = Bot(token=bot_token)
         async with tg_bot:
             for chunk in split_for_telegram(text):
@@ -172,10 +178,12 @@ def _create_webhook_alert_notifier(
     Telegram API 실패는 구조화 로그로 남기되 예외를 흡수한다. WebhookServer는 이
     콜백을 background task로 실행하므로, 실패가 HTTP 응답 경로를 막지 않는다.
     """
+
     async def notifier(alert_type: str, details: dict) -> None:
         text = _format_webhook_alert(alert_type, details)
         try:
             from telegram import Bot
+
             tg_bot = Bot(token=bot_token)
             async with tg_bot:
                 await tg_bot.send_message(chat_id=chat_id, text=text[:4096])
@@ -216,6 +224,48 @@ async def main():
     # `zombies_reaped`)가 운영 환경에서 자동 누적되도록 한다.
     metrics = MetricsCollector()
     structured_logger = StructuredLogger()
+    usage_config = load_llm_usage_config(CONFIG_PATH)
+    usage_store = None
+    usage_service = None
+    if usage_config["enabled"]:
+        usage_store = LLMUsageStore(Path(usage_config["db_path"]).expanduser())
+        cutoff = datetime.now(UTC) - timedelta(days=usage_config["retention_days"])
+        pruned = usage_store.prune_before(cutoff.isoformat())
+        logger.info("LLM usage retention prune completed rows=%d", pruned)
+        pricing = {
+            name: BackendPricing(
+                version=entry["version"],
+                source_url=entry.get("source_url"),
+                effective_from=entry.get("effective_from"),
+                input_per_million_usd=entry.get("input_per_million_usd"),
+                output_per_million_usd=entry.get("output_per_million_usd"),
+                cache_read_per_million_usd=entry.get("cache_read_per_million_usd"),
+                cache_write_per_million_usd=entry.get("cache_write_per_million_usd"),
+            )
+            for name, entry in usage_config["pricing"].items()
+        }
+        operator_chat_id = _select_webhook_alert_chat_id(tg_config["whitelist"])
+
+        async def _send_usage_alert(text: str) -> None:
+            if operator_chat_id is None:
+                raise RuntimeError("operator Telegram chat is not configured")
+            from telegram import Bot
+
+            tg_bot = Bot(token=tg_config["bot_token"])
+            async with tg_bot:
+                await tg_bot.send_message(chat_id=operator_chat_id, text=text[:4096])
+
+        usage_service = LLMUsageService(
+            usage_store,
+            pricing=pricing,
+            metrics=metrics,
+            structured_logger=structured_logger,
+            timezone=usage_config["timezone"],
+            daily_usd=usage_config["thresholds"]["daily_usd"],
+            monthly_usd=usage_config["thresholds"]["monthly_usd"],
+            alert_callback=_send_usage_alert,
+            alert_cooldown_seconds=usage_config["thresholds"]["cooldown_seconds"],
+        )
 
     # Core modules
     # structured_logger를 함께 주입하여 RAG 회상(action_type="rag_retrieve") 이벤트를
@@ -224,6 +274,7 @@ async def main():
         CONFIG_PATH,
         metrics=metrics,
         structured_logger=structured_logger,
+        llm_usage_sink=usage_service,
     )
     agent_config = load_agent_config(CONFIG_PATH)
     attachment_dir = (
@@ -245,7 +296,8 @@ async def main():
         message_handler=orchestrator.process_message,
         # BIZ-260: clarify 도구 호출 시 인라인 키보드 렌더용 — 오케스트레이터의
         # ``_pending_clarify`` 레지스트리를 채널이 회수한다.
-        clarify_provider=orchestrator.pop_pending_clarify,
+        clarify_provider=orchestrator.get_pending_clarify,
+        clarify_consumer=orchestrator.consume_pending_clarify,
         streaming_config=streaming_config,
         attachment_dir=attachment_dir,
         # BIZ-442 — drain 중 새 메시지에 짧은 점검 안내로 즉답.
@@ -264,9 +316,7 @@ async def main():
     notify_chat_id = whitelist["user_ids"][0] if whitelist["user_ids"] else None
     notifier = None
     if notify_chat_id:
-        notifier = _create_telegram_notifier(
-            tg_config["bot_token"], notify_chat_id
-        )
+        notifier = _create_telegram_notifier(tg_config["bot_token"], notify_chat_id)
         logger.info("Cron → Telegram notification enabled (chat_id=%d)", notify_chat_id)
 
     # BIZ-34 — WebhookServer의 이상 트래픽 alert_callback을 Telegram 운영자
@@ -299,9 +349,7 @@ async def main():
             max_body_size=webhook_config["max_body_size"],
             rate_limit=webhook_config["rate_limit"],
             rate_limit_window=webhook_config["rate_limit_window"],
-            max_concurrent_connections=webhook_config[
-                "max_concurrent_connections"
-            ],
+            max_concurrent_connections=webhook_config["max_concurrent_connections"],
             queue_size=webhook_config["queue_size"],
             alert_callback=webhook_alert_callback,
             alert_cooldown=webhook_config["alert_cooldown"],
@@ -315,9 +363,7 @@ async def main():
             print(f"ERROR: Webhook 서버 바인딩 실패 — {exc}")
             structured_logger.log(
                 action_type="webhook_start_failed",
-                input_summary=(
-                    f"{webhook_config['host']}:{webhook_config['port']}"
-                ),
+                input_summary=(f"{webhook_config['host']}:{webhook_config['port']}"),
                 output_summary=str(exc),
                 status="failed",
                 level="ERROR",
@@ -333,7 +379,8 @@ async def main():
     recipes_dir.mkdir(parents=True, exist_ok=True)
 
     cron = CronScheduler(
-        daemon_store, apscheduler,
+        daemon_store,
+        apscheduler,
         agent_orchestrator=orchestrator,
         notifier=notifier,
         recipes_dir=recipes_dir,
@@ -353,9 +400,7 @@ async def main():
     enable_clusters = dreaming_config.get("enable_clusters", False)
     cluster_threshold = dreaming_config.get("cluster_threshold", 0.75)
     clusterer = (
-        IncrementalClusterer(threshold=cluster_threshold)
-        if enable_clusters
-        else None
+        IncrementalClusterer(threshold=cluster_threshold) if enable_clusters else None
     )
 
     # BIZ-74 / BIZ-133 — Active Projects: 기본 활성. 운영자가 끄려면 config 에서
@@ -366,9 +411,7 @@ async def main():
     active_projects_file = (
         active_projects_cfg.get("sidecar_path") if active_projects_enabled else None
     )
-    active_projects_window_days = int(
-        active_projects_cfg.get("window_days", 7)
-    )
+    active_projects_window_days = int(active_projects_cfg.get("window_days", 7))
 
     # BIZ-80: 1차 언어 정책. config.dreaming.language 가 없거나 primary=null 이면
     # enforcement 가 꺼져 있어 LLM 출력이 그대로 통과한다(레거시 호환). 기본값은
@@ -417,15 +460,21 @@ async def main():
         if bool(context_cron_cfg.get("enabled", False)):
             conv_context = ConversationContextCollector(
                 conv_store,
-                lookback_hours=int(context_cron_cfg.get("conversation_lookback_hours", 24)),
+                lookback_hours=int(
+                    context_cron_cfg.get("conversation_lookback_hours", 24)
+                ),
             )
             # BIZ-357 — live skill/config resolver로 Calendar/Gmail provider를 주입한다.
             # 경로/인증 장애는 provider/collector 단계에서 context_unavailable warning으로
             # 축약되어 Dreaming run 전체를 실패시키지 않는다.
-            calendar_provider, mail_provider = resolve_context_providers(context_cron_cfg)
+            calendar_provider, mail_provider = resolve_context_providers(
+                context_cron_cfg
+            )
             calendar_context = CalendarContextCollector(
                 calendar_provider,
-                lookahead_hours=int(context_cron_cfg.get("calendar_lookahead_hours", 24)),
+                lookahead_hours=int(
+                    context_cron_cfg.get("calendar_lookahead_hours", 24)
+                ),
             )
             mail_context = MailContextCollector(
                 mail_provider,
@@ -447,7 +496,9 @@ async def main():
             context_planner = ContextCronPlanner(
                 allow_one_shot=bool(context_cron_cfg.get("allow_one_shot", True)),
                 allow_recurring=bool(context_cron_cfg.get("allow_recurring", True)),
-                max_opportunities=int(context_cron_cfg.get("max_context_opportunities_per_run", 3)),
+                max_opportunities=int(
+                    context_cron_cfg.get("max_context_opportunities_per_run", 3)
+                ),
             )
         proactive_extractor = DreamingOpportunityExtractor(
             min_confidence=float(proactive_cfg.get("min_confidence", 0.75)),
@@ -500,6 +551,7 @@ async def main():
     # 도중 working tree에서 사라지는 race window 에서 데이터 손실을 막는다.
     # 보존 정책: 최근 7개 사이클 + 가장 최근 1개는 항상 보존.
     from pathlib import Path as _Path
+
     safety_backup_files: list[_Path] = [
         persona_local_dir / "AGENT.md",
         persona_local_dir / "USER.md",
@@ -552,17 +604,15 @@ async def main():
         decay_archive_after_days=dreaming_config.get("decay", {}).get(
             "archive_after_days", 30
         ),
-        reject_default_ttl_days=dreaming_config.get(
-            "reject_blocklist", {}
-        ).get("default_ttl_days"),
+        reject_default_ttl_days=dreaming_config.get("reject_blocklist", {}).get(
+            "default_ttl_days"
+        ),
         # BIZ-79: dry-run + admin review 모드. 운영 환경에서는 항상 켜져 있어
         # 추출된 인사이트가 USER.md 에 즉시 쓰이지 않고 review 큐로 들어간다.
         # auto_promote 임계치를 동시에 충족한 항목만 큐 우회.
         suggestions_file=_expand(dreaming_config["suggestions_file"]),
         blocklist_file=_expand(dreaming_config["blocklist_file"]),
-        auto_promote_confidence=dreaming_config.get(
-            "auto_promote_confidence", 0.7
-        ),
+        auto_promote_confidence=dreaming_config.get("auto_promote_confidence", 0.7),
         auto_promote_evidence_count=dreaming_config.get(
             "auto_promote_evidence_count", 3
         ),
@@ -621,11 +671,9 @@ async def main():
         # 다음 시각 추정: 오늘 이미 실행했으면 내일 overnight_hour, 아니면 오늘 overnight_hour
         # (이미 그 시간이 지났다면 다음 날). 실제 트리거는 idle 조건도 봐야 하지만, "언제부터
         # 실행 가능 시점인지" 만 알려도 운영자에게 충분한 정보가 된다.
-        target = now.replace(
-            hour=overnight_hour_cfg, minute=0, second=0, microsecond=0
-        )
+        target = now.replace(hour=overnight_hour_cfg, minute=0, second=0, microsecond=0)
         if last_dt and last_dt.date() == now.date():
-            next_dt = (target + timedelta(days=1))
+            next_dt = target + timedelta(days=1)
         elif now < target:
             next_dt = target
         else:
@@ -637,9 +685,7 @@ async def main():
         if last_dt and last_dt.date() == now.date():
             blockers.append(f"오늘({now:%Y-%m-%d}) 이미 1회 실행됨")
         if now.hour < overnight_hour_cfg:
-            blockers.append(
-                f"야간 시간({overnight_hour_cfg:02d}:00) 미도래"
-            )
+            blockers.append(f"야간 시간({overnight_hour_cfg:02d}:00) 미도래")
         # 메시지가 한 건도 없으면 트리거 자체가 안 돈다 — 운영자가 즉시 인지하도록.
         try:
             recent = conv_store.get_recent(limit=1)
@@ -679,9 +725,13 @@ async def main():
             logger.exception("Dreaming check failed")
 
     apscheduler.add_job(
-        _dreaming_check, "interval", minutes=5, id="dreaming-check",
+        _dreaming_check,
+        "interval",
+        minutes=5,
+        id="dreaming-check",
     )
     if proactive_presenter is not None:
+
         async def _proactive_presenter_tick():
             """APScheduler interval job: pending proactive 제안을 Telegram으로 노출."""
             try:
@@ -729,8 +779,7 @@ async def main():
                         and getattr(webhook_server, "is_running", False)
                     ),
                     "dashboard_running": bool(
-                        admin_api is not None
-                        and admin_api.dashboard_routes_registered
+                        admin_api is not None and admin_api.dashboard_routes_registered
                     ),
                     "cron_jobs_active": len(cron.list_jobs()),
                     "scheduler_running": apscheduler.running,
@@ -764,6 +813,8 @@ async def main():
             dashboard_metrics=metrics,
             dashboard_structured_logger=structured_logger,
             dashboard_conversation_store=conv_store,
+            dashboard_usage_store=usage_store,
+            dashboard_usage_timezone=usage_config["timezone"],
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.
@@ -789,7 +840,13 @@ async def main():
     logger.info("Cron scheduler started with %d jobs.", len(jobs))
     for j in jobs:
         status = "ON" if j.enabled else "OFF"
-        logger.info("  [%s] %s: %s → %s", status, j.name, j.cron_expression, j.action_reference[:60])
+        logger.info(
+            "  [%s] %s: %s → %s",
+            status,
+            j.name,
+            j.cron_expression,
+            j.action_reference[:60],
+        )
 
     # Start bot
     print("Starting Telegram bot...")

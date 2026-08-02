@@ -5,12 +5,13 @@ from __future__ import annotations
 from simpleclaw.config import load_agent_config
 
 
-def test_unified_turn_planner_defaults_to_off(tmp_path):
+def test_unified_turn_planner_defaults_to_primary(tmp_path):
     config = tmp_path / "config.yaml"
     config.write_text("agent:\n  history_limit: 5\n", encoding="utf-8")
 
     assert load_agent_config(config)["unified_turn_planner"] == {
-        "mode": "off",
+        "mode": "primary",
+        "architecture": "legacy_v2",
         "sample_rate": 0.0,
         "max_tokens": 2048,
         "structured_output": True,
@@ -24,6 +25,18 @@ def test_unified_turn_planner_defaults_to_off(tmp_path):
         "selected_context_max_turns": 3,
         "selected_context_max_chars": 2400,
         "repair_attempts": 1,
+        "examples_prompt": "unified_turn_planner_examples",
+        "planner_max_attempts": 2,
+        "evidence_max_attempts": 2,
+        "resolution_budget": {
+            "max_steps": None,
+            "max_tool_calls": None,
+            "max_seconds": None,
+            "max_tokens": None,
+        },
+        "resolution_budget_valid": False,
+        "complex_escalation": {"enabled": False},
+        "on_planner_failure": "fail_closed",
         "telemetry": {
             "enabled": True,
             "include_raw_text": False,
@@ -63,6 +76,7 @@ agent:
 
     assert result == {
         "mode": "shadow",
+        "architecture": "legacy_v2",
         "sample_rate": 0.25,
         "max_tokens": 1024,
         "structured_output": True,
@@ -76,11 +90,54 @@ agent:
         "selected_context_max_turns": 2,
         "selected_context_max_chars": 1200,
         "repair_attempts": 1,
+        "examples_prompt": "unified_turn_planner_examples",
+        "planner_max_attempts": 2,
+        "evidence_max_attempts": 2,
+        "resolution_budget": {
+            "max_steps": None,
+            "max_tool_calls": None,
+            "max_seconds": None,
+            "max_tokens": None,
+        },
+        "resolution_budget_valid": False,
+        "complex_escalation": {"enabled": False},
+        "on_planner_failure": "fail_closed",
         "telemetry": {
             "enabled": False,
             "include_raw_text": False,
         },
     }
+
+
+def test_capability_first_budget_is_nullable_but_primary_requires_finite_axis(
+    tmp_path,
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """\
+agent:
+  unified_turn_planner:
+    architecture: capability_first_v3
+    resolution_budget:
+      max_steps: 4
+      max_tool_calls: null
+      max_seconds: 20
+      max_tokens: null
+    complex_escalation:
+      enabled: true
+""",
+        encoding="utf-8",
+    )
+    result = load_agent_config(config)["unified_turn_planner"]
+    assert result["architecture"] == "capability_first_v3"
+    assert result["resolution_budget_valid"] is True
+    assert result["resolution_budget"] == {
+        "max_steps": 4,
+        "max_tool_calls": None,
+        "max_seconds": 20,
+        "max_tokens": None,
+    }
+    assert result["complex_escalation"]["enabled"] is True
 
 
 def test_unified_turn_planner_invalid_values_fail_closed(tmp_path):
@@ -103,7 +160,7 @@ agent:
 
     result = load_agent_config(config)["unified_turn_planner"]
 
-    assert result["mode"] == "off"
+    assert result["mode"] == "primary"
     assert result["sample_rate"] == 0.0
     assert result["selected_context_max_turns"] == 2
     assert result["selected_context_max_chars"] == 100

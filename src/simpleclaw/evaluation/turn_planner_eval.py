@@ -23,13 +23,22 @@ _EXECUTION_MODES = frozenset(
     {
         "clarify",
         "direct_answer",
-        "execute_asset",
-        "tool_loop",
-        "fact_check",
-        "complex_fact",
-        "recipe",
+        "answer_with_evidence",
+        "resolve_complex_problem",
     }
 )
+_LEGACY_EXECUTION_MODES = {
+    "execute_asset": "direct_answer",
+    "recipe": "direct_answer",
+    "tool_loop": "answer_with_evidence",
+    "fact_check": "answer_with_evidence",
+    "complex_fact": "resolve_complex_problem",
+}
+
+
+def _normalized_execution_mode(value: object) -> str:
+    raw = str(value or "")
+    return _LEGACY_EXECUTION_MODES.get(raw, raw)
 _MESSAGE_ROLES = frozenset({"user", "assistant"})
 
 
@@ -93,6 +102,11 @@ class CaseEvaluation:
     output_tokens: int
     context_reduction_rate: float | None
     error_codes: tuple[str, ...] = ()
+    keyword_fallback_count: int = 0
+    fact_required_without_action: int = 0
+    unverified_final_count: int = 0
+    planner_call_count: int = 1
+    cross_session_selected_count: int = 0
 
     @property
     def macro_score(self) -> float:
@@ -128,6 +142,11 @@ class CaseEvaluation:
             },
             "context_reduction_rate": self.context_reduction_rate,
             "error_codes": list(self.error_codes),
+            "keyword_fallback_count": self.keyword_fallback_count,
+            "fact_required_without_action": self.fact_required_without_action,
+            "unverified_final_count": self.unverified_final_count,
+            "planner_call_count": self.planner_call_count,
+            "cross_session_selected_count": self.cross_session_selected_count,
         }
 
 
@@ -308,6 +327,7 @@ def parse_fixture(
         source=source,
         line_number=line_number,
     )
+    mode = _normalized_execution_mode(mode)
     if mode not in _EXECUTION_MODES:
         raise FixtureFormatError(
             f"{source} line {line_number}: unsupported execution mode {mode}"
@@ -511,7 +531,7 @@ def _prediction_shape_errors(
         errors.append("invalid:fact_check.entities")
     if not isinstance(fact_check.get("search_query"), str):
         errors.append("invalid:fact_check.search_query")
-    if execution.get("mode") not in _EXECUTION_MODES:
+    if _normalized_execution_mode(execution.get("mode")) not in _EXECUTION_MODES:
         errors.append("invalid:execution.mode")
     if (
         "primary_asset" not in execution
@@ -627,7 +647,10 @@ def score_prediction(
             clarification.get("required")
             is fixture.gold.clarification_required
         ),
-        "execution_mode": execution.get("mode") == fixture.gold.execution_mode,
+        "execution_mode": (
+            _normalized_execution_mode(execution.get("mode"))
+            == fixture.gold.execution_mode
+        ),
         "fact_required": (
             fact_check.get("required") is fixture.gold.fact_required
         ),
@@ -806,6 +829,21 @@ def aggregate_results(
             ),
         },
         "context_reduction_rate": _mean(context_reductions),
+        "keyword_fallback_count": sum(
+            result.keyword_fallback_count for result in ordered_results
+        ),
+        "fact_required_without_action": sum(
+            result.fact_required_without_action for result in ordered_results
+        ),
+        "unverified_final_count": sum(
+            result.unverified_final_count for result in ordered_results
+        ),
+        "planner_call_count": sum(
+            result.planner_call_count for result in ordered_results
+        ),
+        "session_context_contamination": sum(
+            result.cross_session_selected_count for result in ordered_results
+        ),
     }
     if catalog_metrics is not None:
         expected_keys = {"asset_count", "character_count", "estimated_tokens"}

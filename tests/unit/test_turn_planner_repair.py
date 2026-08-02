@@ -129,7 +129,7 @@ def test_repair_recovers_payload_cut_inside_decision_summary() -> None:
     )
 
     assert plan is not None
-    assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     assert plan.fact_check.search_query == "내일 서울 날씨"
     assert plan.decision_summary == ""
 
@@ -163,7 +163,7 @@ async def test_planner_repairs_truncated_tail_without_retry() -> None:
         router=router,
     )
 
-    assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     router.send.assert_awaited_once()
 
 
@@ -194,7 +194,7 @@ async def test_planner_retries_route_once_after_parse_and_repair_fail() -> None:
         router=router,
     )
 
-    assert plan.execution.mode is ExecutionMode.FACT_CHECK
+    assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     primary.send.assert_awaited_once()
     retry.send.assert_awaited_once()
 
