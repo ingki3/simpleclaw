@@ -62,6 +62,8 @@ def build_admin_api_server(
     dashboard_structured_logger: object | None = None,
     dashboard_conversation_store: ConversationStore | None = None,
     dashboard_rag_log_window_days: int = 7,
+    dashboard_usage_store: object | None = None,
+    dashboard_usage_timezone: str = "Asia/Seoul",
 ) -> AdminAPIServer | None:
     """``config.yaml``에서 admin_api 설정을 읽어 ``AdminAPIServer``를 만든다.
 
@@ -150,6 +152,8 @@ def build_admin_api_server(
         dashboard_structured_logger=dashboard_structured_logger,
         dashboard_conversation_store=dashboard_conversation_store,
         dashboard_rag_log_window_days=dashboard_rag_log_window_days,
+        dashboard_usage_store=dashboard_usage_store,
+        dashboard_usage_timezone=dashboard_usage_timezone,
     )
 
 

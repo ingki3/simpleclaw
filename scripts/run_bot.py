@@ -17,6 +17,7 @@ import logging
 import os
 import signal
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -31,6 +32,7 @@ from simpleclaw.channels.webhook_server import WebhookServer
 from simpleclaw.config import (
     load_agent_config,
     load_daemon_config,
+    load_llm_usage_config,
     load_persona_config,
     load_recipes_config,
     load_security_config,
@@ -41,8 +43,10 @@ from simpleclaw.daemon.dreaming_trigger import LAST_DREAMING_KEY, DreamingTrigge
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.logging.metrics import MetricsCollector
+from simpleclaw.logging.llm_usage import LLMUsageService, LLMUsageStore
 from simpleclaw.logging.redaction import install_telegram_token_redaction
 from simpleclaw.logging.structured_logger import StructuredLogger
+from simpleclaw.llm.usage import BackendPricing
 from simpleclaw.memory.clustering import IncrementalClusterer
 from simpleclaw.memory.conversation_store import ConversationStore
 from simpleclaw.memory.dreaming import DreamingPipeline
@@ -216,6 +220,46 @@ async def main():
     # `zombies_reaped`)가 운영 환경에서 자동 누적되도록 한다.
     metrics = MetricsCollector()
     structured_logger = StructuredLogger()
+    usage_config = load_llm_usage_config(CONFIG_PATH)
+    usage_store = None
+    usage_service = None
+    if usage_config["enabled"]:
+        usage_store = LLMUsageStore(Path(usage_config["db_path"]).expanduser())
+        cutoff = datetime.now(UTC) - timedelta(days=usage_config["retention_days"])
+        pruned = usage_store.prune_before(cutoff.isoformat())
+        logger.info("LLM usage retention prune completed rows=%d", pruned)
+        pricing = {
+            name: BackendPricing(
+                version=entry["version"],
+                source_url=entry.get("source_url"),
+                effective_from=entry.get("effective_from"),
+                input_per_million_usd=entry.get("input_per_million_usd"),
+                output_per_million_usd=entry.get("output_per_million_usd"),
+                cache_read_per_million_usd=entry.get("cache_read_per_million_usd"),
+                cache_write_per_million_usd=entry.get("cache_write_per_million_usd"),
+            )
+            for name, entry in usage_config["pricing"].items()
+        }
+        operator_chat_id = _select_webhook_alert_chat_id(tg_config["whitelist"])
+
+        async def _send_usage_alert(text: str) -> None:
+            if operator_chat_id is None:
+                raise RuntimeError("operator Telegram chat is not configured")
+            from telegram import Bot
+            tg_bot = Bot(token=tg_config["bot_token"])
+            async with tg_bot:
+                await tg_bot.send_message(chat_id=operator_chat_id, text=text[:4096])
+
+        usage_service = LLMUsageService(
+            usage_store,
+            pricing=pricing,
+            metrics=metrics,
+            structured_logger=structured_logger,
+            timezone=usage_config["timezone"],
+            daily_usd=usage_config["thresholds"]["daily_usd"],
+            monthly_usd=usage_config["thresholds"]["monthly_usd"],
+            alert_callback=_send_usage_alert,
+        )
 
     # Core modules
     # structured_logger를 함께 주입하여 RAG 회상(action_type="rag_retrieve") 이벤트를
@@ -224,6 +268,7 @@ async def main():
         CONFIG_PATH,
         metrics=metrics,
         structured_logger=structured_logger,
+        llm_usage_sink=usage_service,
     )
     agent_config = load_agent_config(CONFIG_PATH)
     attachment_dir = (
@@ -765,6 +810,8 @@ async def main():
             dashboard_metrics=metrics,
             dashboard_structured_logger=structured_logger,
             dashboard_conversation_store=conv_store,
+            dashboard_usage_store=usage_store,
+            dashboard_usage_timezone=usage_config["timezone"],
         )
     except AdminAPIBootError as exc:
         # 명시적 부팅 실패 — 토큰 미설정/검증 실패 등을 사유와 함께 stderr에 남기고 종료.

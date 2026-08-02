@@ -1,11 +1,15 @@
 """Tests for the web dashboard."""
 
+from datetime import UTC, datetime
+
 import pytest
 from aiohttp import web
 
 from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
 from simpleclaw.logging.metrics import MetricsCollector
 from simpleclaw.logging.structured_logger import StructuredLogger
+from simpleclaw.logging.llm_usage import LLMUsageStore
+from simpleclaw.llm.usage import LLMUsageEvent, NormalizedUsage
 
 
 class TestDashboardServer:
@@ -29,6 +33,8 @@ class TestDashboardServer:
         assert resp.status == 200
         text = await resp.text()
         assert "SimpleClaw Dashboard" in text
+        assert "LLM Usage &amp; Cost" in text
+        assert "llm-usage-period" in text
 
     @pytest.mark.asyncio
     async def test_metrics_api(self, dashboard, aiohttp_client):
@@ -83,6 +89,24 @@ class TestDashboardServer:
         memory = await client.get("/api/memory_stats")
         assert memory.status == 200
         assert await memory.json() == {"disabled": True}
+        usage = await client.get("/api/llm-usage")
+        assert usage.status == 200
+        assert await usage.json() == {"disabled": True}
+
+    @pytest.mark.asyncio
+    async def test_usage_api_summary_and_validation(self, tmp_path, aiohttp_client):
+        store = LLMUsageStore(tmp_path / "usage.db")
+        store.record(LLMUsageEvent("one", datetime.now(UTC).isoformat(), "", "primary", "profile", "model", "default", "chat", "primary", None, "success", 1, NormalizedUsage(10, 2), 14, "v1"))
+        dashboard = DashboardServer(MetricsCollector(), StructuredLogger(tmp_path / "logs"), usage_store=store)
+        app = web.Application()
+        dashboard.register_routes(app)
+        client = await aiohttp_client(app)
+        response = await client.get("/api/llm-usage?period=day&group_by=backend")
+        payload = await response.json()
+        assert payload["disabled"] is False
+        assert payload["estimated_cost_usd"] == "0.000014"
+        assert payload["groups"][0]["backend_name"] == "primary"
+        assert (await client.get("/api/llm-usage?group_by=sql")).status == 400
 
 
 class TestDashboardTraceTimeline:

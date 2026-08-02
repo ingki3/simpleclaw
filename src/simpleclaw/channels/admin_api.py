@@ -269,6 +269,8 @@ class AdminAPIServer:
         dashboard_structured_logger: object | None = None,
         dashboard_conversation_store: ConversationStore | None = None,
         dashboard_rag_log_window_days: int = 7,
+        dashboard_usage_store: object | None = None,
+        dashboard_usage_timezone: str = "Asia/Seoul",
     ) -> None:
         self._host = host
         self._port = port
@@ -345,6 +347,8 @@ class AdminAPIServer:
         self._dashboard_structured_logger = dashboard_structured_logger
         self._dashboard_conversation_store = dashboard_conversation_store
         self._dashboard_rag_log_window_days = dashboard_rag_log_window_days
+        self._dashboard_usage_store = dashboard_usage_store
+        self._dashboard_usage_timezone = dashboard_usage_timezone
         self._dashboard_routes_registered = False
 
         self._app: web.Application | None = None
@@ -410,6 +414,8 @@ class AdminAPIServer:
                     structured_logger=self._dashboard_structured_logger,
                     conversation_store=self._dashboard_conversation_store,
                     rag_log_window_days=self._dashboard_rag_log_window_days,
+                    usage_store=self._dashboard_usage_store,
+                    usage_timezone=self._dashboard_usage_timezone,
                 )
 
         if registrar is None:
