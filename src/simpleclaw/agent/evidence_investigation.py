@@ -88,10 +88,13 @@ class EvidenceInvestigationController:
             )
 
         last_result: AssetResult | None = None
-        steps = 0
-        calls = 0
-        while budget.snapshot(steps_used=steps, tool_calls_used=calls).can_continue:
-            asset = supporting_assets[steps % len(supporting_assets)]
+        asset_index = 0
+        while budget.snapshot(
+            steps_used=ledger.steps_used,
+            tool_calls_used=ledger.tool_calls_used,
+            tokens_used=ledger.tokens_used,
+        ).can_continue:
+            asset = supporting_assets[asset_index % len(supporting_assets)]
             signature = attempt_signature(
                 question=current_question,
                 asset_type=asset.asset_type,
@@ -106,11 +109,26 @@ class EvidenceInvestigationController:
                     stop_reason="repeated_attempt_signature",
                     last_result=last_result,
                 )
-            last_result = await self._execute(asset, current_question, ledger)
+            try:
+                last_result = await budget.wait_for(
+                    self._execute(asset, current_question, ledger)
+                )
+            except TimeoutError:
+                last_result = AssetResult(
+                    asset_type=asset.asset_type,
+                    asset_name=asset.name,
+                    status=AssetExecutionStatus.FAILED_TERMINAL,
+                    unresolved_claims=(selected_gap,),
+                    limitations=("deadline_exhausted",),
+                )
+            ledger.record_usage(
+                steps=1,
+                tool_calls=1,
+                tokens=last_result.tokens_used,
+            )
             if not ledger.asset_results or ledger.asset_results[-1] is not last_result:
                 ledger.append_asset_result(last_result)
-            steps += 1
-            calls += 1
+            asset_index += 1
             goal = self._goal_resolver.evaluate(
                 original_goal=transition.original_goal,
                 required_claims=transition.required_claims,
@@ -154,4 +172,3 @@ class EvidenceInvestigationController:
             "budget_exhausted",
             last_result,
         )
-

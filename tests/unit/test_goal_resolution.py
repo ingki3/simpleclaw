@@ -37,4 +37,3 @@ def test_unknown_side_effect_blocks_goal() -> None:
         ledger=ResolutionLedger(),
     )
     assert goal.status is GoalStatus.BLOCKED
-

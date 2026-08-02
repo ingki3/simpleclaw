@@ -57,9 +57,11 @@ class ComplexProblemController:
         *,
         budget: ResolutionBudget,
     ) -> ComplexProblemOutcome:
-        steps = 0
-        calls = 0
-        while budget.snapshot(steps_used=steps, tool_calls_used=calls).can_continue:
+        while budget.snapshot(
+            steps_used=state.ledger.steps_used,
+            tool_calls_used=state.ledger.tool_calls_used,
+            tokens_used=state.ledger.tokens_used,
+        ).can_continue:
             pending = [
                 node
                 for node in state.nodes
@@ -67,7 +69,13 @@ class ComplexProblemController:
                 and node.node_id not in state.blocked_node_ids
             ]
             if not pending:
-                return ComplexProblemOutcome(state, True, "resolved")
+                success = len(state.resolved_node_ids) == len(state.nodes)
+                return ComplexProblemOutcome(
+                    state,
+                    success,
+                    "resolved" if success else "blocked",
+                    () if success else ("unresolved_blocked_nodes",),
+                )
             ready = next(
                 (
                     node
@@ -100,11 +108,25 @@ class ComplexProblemController:
                     "repeated_attempt_signature",
                     (f"repeated_node:{ready.node_id}",),
                 )
-            result = await self._execute_node(ready, asset, state.ledger)
+            try:
+                result = await budget.wait_for(
+                    self._execute_node(ready, asset, state.ledger)
+                )
+            except TimeoutError:
+                result = AssetResult(
+                    asset_type=asset.asset_type,
+                    asset_name=asset.name,
+                    status=AssetExecutionStatus.FAILED_TERMINAL,
+                    unresolved_claims=(ready.claim,),
+                    limitations=("deadline_exhausted",),
+                )
+            state.ledger.record_usage(
+                steps=1,
+                tool_calls=1,
+                tokens=result.tokens_used,
+            )
             if not state.ledger.asset_results or state.ledger.asset_results[-1] is not result:
                 state.ledger.append_asset_result(result)
-            steps += 1
-            calls += 1
             if ready.claim in result.resolved_claims:
                 state.resolved_node_ids.add(ready.node_id)
                 continue
@@ -132,4 +154,3 @@ class ComplexProblemController:
             "budget_exhausted",
             ("resolution_budget_exhausted",),
         )
-

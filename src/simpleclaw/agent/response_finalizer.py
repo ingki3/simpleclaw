@@ -42,4 +42,3 @@ class ResponseFinalizer:
         if blocked:
             return f"근거가 충분하지 않아 확정 답변을 제한합니다. 추가 확인 필요: {blocked}"
         return "현재 확인된 근거만으로는 요청을 확정적으로 완료할 수 없습니다."
-

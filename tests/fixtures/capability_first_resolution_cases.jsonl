@@ -8,4 +8,3 @@
 {"id":"terminal_failure","asset_name":"lookup","coverage":"full_coverage","mode":"answer_with_evidence","goal_status":"blocked"}
 {"id":"ambiguous_entity","asset_name":"","coverage":"needs_input","mode":"clarify","goal_status":"needs_user_input"}
 {"id":"static_definition","asset_name":"","coverage":"no_match","mode":"direct_answer","goal_status":"resolved"}
-

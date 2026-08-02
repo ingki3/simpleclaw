@@ -28,6 +28,7 @@ class ProblemTransitionBuilder:
         budget: ResolutionBudget,
         steps_used: int = 0,
         tool_calls_used: int = 0,
+        tokens_used: int = 0,
     ) -> ProblemTransition | None:
         if goal.status is GoalStatus.RESOLVED:
             return None
@@ -57,6 +58,7 @@ class ProblemTransitionBuilder:
                 budget=budget,
                 steps_used=steps_used,
                 tool_calls_used=tool_calls_used,
+                tokens_used=tokens_used,
             )
             if escalation.escalate:
                 mode = ExecutionMode.RESOLVE_COMPLEX_PROBLEM
@@ -80,4 +82,3 @@ class ProblemTransitionBuilder:
             recommended_mode=mode,
             transition_reason=reason,
         )
-

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 
@@ -11,7 +12,7 @@ from simpleclaw.agent.orchestrator import (
     _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
     AgentOrchestrator,
 )
-from simpleclaw.agent.resolution_types import CapabilityCoverage
+from simpleclaw.agent.resolution_types import CapabilityCoverage, ComplexitySignal
 from simpleclaw.agent.session_state import SessionIdentity
 from simpleclaw.agent.turn_plan import (
     AssetRef,
@@ -246,6 +247,269 @@ async def test_capability_first_exact_lpga_skips_generic_realtime_lookup(
     result = await orchestrator.process_message("LPGA 유해란 스코어", 10, 20)
     assert result == "유해란 70타"
     assert called == ["naver-sports-skill"]
+
+
+def _supporting_skill(name: str) -> SkillDefinition:
+    return SkillDefinition(
+        name=name,
+        description=f"typed supporting asset {name}",
+        capability=CapabilityMetadata(
+            domains=("sports",),
+            intents=("current_result",),
+            read_only=True,
+            side_effects=False,
+            freshness_sensitive=True,
+            direct_answer=False,
+            output_contract="asset_result.v1",
+            coverage="partial_coverage",
+            input_contract="query.v1",
+            declared=True,
+        ),
+    )
+
+
+def _enable_capability_v3(config_file, *, complex_enabled: bool = False) -> None:
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "agent:\n",
+            "agent:\n"
+            "  unified_turn_planner:\n"
+            "    architecture: capability_first_v3\n"
+            "    resolution_budget:\n"
+            "      max_steps: 4\n"
+            "      max_tool_calls: 4\n"
+            "      max_seconds: 1\n"
+            "      max_tokens: 20\n"
+            "    complex_escalation:\n"
+            f"      enabled: {str(complex_enabled).lower()}\n",
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_capability_first_partial_path_runs_gap_controller_with_shared_budget(
+    config_file,
+    monkeypatch,
+) -> None:
+    _enable_capability_v3(config_file)
+    orchestrator = AgentOrchestrator(config_file)
+    skills = [_supporting_skill("score-lookup"), _supporting_skill("rank-lookup")]
+    orchestrator._skills = skills
+    orchestrator._skills_by_name = {skill.name: skill for skill in skills}
+    orchestrator._reload_dynamic_files = lambda: None
+
+    async def planner(text, *, catalog, **_kwargs):
+        base = _plan(
+            text,
+            catalog.fingerprint,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact=True,
+        )
+        return replace(
+            base,
+            fact_check=replace(
+                base.fact_check,
+                owner=EvidenceOwner.PLANNER,
+                search_query=text,
+                required_claims=("score", "rank"),
+            ),
+            capability=CapabilityPlan(
+                coverage=CapabilityCoverage.PARTIAL,
+                supporting_assets=(
+                    AssetRef("skill", "score-lookup"),
+                    AssetRef("skill", "rank-lookup"),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("simpleclaw.agent.orchestrator.plan_turn_with_llm", planner)
+    called: list[str] = []
+
+    async def execute_skill(name: str, _args: str) -> str:
+        called.append(name)
+        if name == "score-lookup":
+            return json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "partial_success",
+                    "resolved_claims": ["score"],
+                    "unresolved_claims": ["rank"],
+                    "next_questions": ["현재 순위를 확인한다"],
+                    "usage": {"total_tokens": 4},
+                    "evidence": [
+                        {
+                            "claim_id": "score",
+                            "value": "70",
+                            "source_url": "https://example.test/score",
+                            "fresh": True,
+                        }
+                    ],
+                }
+            )
+        return json.dumps(
+            {
+                "schema": "asset_result.v1",
+                "status": "completed",
+                "resolved_claims": ["rank"],
+                "usage": {"total_tokens": 3},
+                "evidence": [
+                    {
+                        "claim_id": "rank",
+                        "value": "2",
+                        "source_url": "https://example.test/rank",
+                        "fresh": True,
+                    }
+                ],
+                "data": {"text": "70타, 현재 2위"},
+            }
+        )
+
+    orchestrator._execute_skill = execute_skill
+    result = await orchestrator.process_message("현재 점수와 순위", 10, 20)
+
+    assert result == "70타, 현재 2위"
+    assert called == ["score-lookup", "rank-lookup"]
+
+
+@pytest.mark.asyncio
+async def test_capability_first_complex_path_runs_ordered_controller(
+    config_file,
+    monkeypatch,
+) -> None:
+    _enable_capability_v3(config_file, complex_enabled=True)
+    orchestrator = AgentOrchestrator(config_file)
+    skills = [_supporting_skill("input-lookup"), _supporting_skill("rule-lookup")]
+    orchestrator._skills = skills
+    orchestrator._skills_by_name = {skill.name: skill for skill in skills}
+    orchestrator._reload_dynamic_files = lambda: None
+
+    async def planner(text, *, catalog, **_kwargs):
+        base = _plan(
+            text,
+            catalog.fingerprint,
+            mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+            fact=True,
+        )
+        return replace(
+            base,
+            fact_check=replace(
+                base.fact_check,
+                owner=EvidenceOwner.PLANNER,
+                search_query=text,
+                required_claims=("input", "rule"),
+            ),
+            execution=replace(
+                base.execution,
+                mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+                complexity_signals=(
+                    ComplexitySignal.ORDERED_CAPABILITY_COMPOSITION,
+                ),
+            ),
+            capability=CapabilityPlan(
+                coverage=CapabilityCoverage.PARTIAL,
+                supporting_assets=(
+                    AssetRef("skill", "input-lookup"),
+                    AssetRef("skill", "rule-lookup"),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr("simpleclaw.agent.orchestrator.plan_turn_with_llm", planner)
+    called: list[str] = []
+
+    async def execute_skill(name: str, _args: str) -> str:
+        called.append(name)
+        claim = "input" if name == "input-lookup" else "rule"
+        return json.dumps(
+            {
+                "schema": "asset_result.v1",
+                "status": "completed",
+                "resolved_claims": [claim],
+                "usage": {"total_tokens": 2},
+                "evidence": [
+                    {
+                        "claim_id": claim,
+                        "value": name,
+                        "source_url": f"https://example.test/{claim}",
+                        "fresh": True,
+                    }
+                ],
+                "data": {"text": "순서대로 계산 완료"},
+            }
+        )
+
+    orchestrator._execute_skill = execute_skill
+    result = await orchestrator.process_message("입력과 규칙을 순서대로 계산", 10, 20)
+
+    assert result == "순서대로 계산 완료"
+    assert called == ["input-lookup", "rule-lookup"]
+
+
+@pytest.mark.asyncio
+async def test_capability_first_exact_path_enforces_in_flight_deadline(
+    config_file,
+    monkeypatch,
+) -> None:
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "agent:\n",
+            "agent:\n"
+            "  unified_turn_planner:\n"
+            "    architecture: capability_first_v3\n"
+            "    resolution_budget:\n"
+            "      max_steps: 2\n"
+            "      max_seconds: 0.01\n",
+        ),
+        encoding="utf-8",
+    )
+    orchestrator = AgentOrchestrator(config_file)
+    skill = _supporting_skill("slow-lookup")
+    skill = replace(
+        skill,
+        capability=replace(skill.capability, coverage="full_coverage"),
+    )
+    orchestrator._skills = [skill]
+    orchestrator._skills_by_name = {skill.name: skill}
+    orchestrator._reload_dynamic_files = lambda: None
+
+    async def planner(text, *, catalog, **_kwargs):
+        base = _plan(
+            text,
+            catalog.fingerprint,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact=True,
+        )
+        return replace(
+            base,
+            fact_check=replace(
+                base.fact_check,
+                owner=EvidenceOwner.ASSET,
+                search_query="",
+                required_claims=("score",),
+            ),
+            capability=CapabilityPlan(
+                coverage=CapabilityCoverage.FULL,
+                primary_asset=AssetRef("skill", "slow-lookup"),
+            ),
+        )
+
+    monkeypatch.setattr("simpleclaw.agent.orchestrator.plan_turn_with_llm", planner)
+
+    async def slow_skill(*_args: object) -> str:
+        await asyncio.sleep(0.05)
+        return json.dumps(
+            {
+                "schema": "asset_result.v1",
+                "status": "completed",
+                "resolved_claims": ["score"],
+            }
+        )
+
+    orchestrator._execute_skill = slow_skill
+    result = await orchestrator.process_message("현재 점수", 10, 20)
+
+    assert "확정 답변을 제한합니다" in result
 
 
 @pytest.mark.asyncio

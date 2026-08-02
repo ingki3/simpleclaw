@@ -55,4 +55,3 @@ def test_attempt_signature_is_canonical_and_hides_raw_question() -> None:
 
 def test_capability_coverage_wire_values_are_stable() -> None:
     assert CapabilityCoverage.FULL.value == "full_coverage"
-

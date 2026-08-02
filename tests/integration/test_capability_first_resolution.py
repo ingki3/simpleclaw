@@ -80,4 +80,3 @@ async def test_lpga_exact_asset_never_calls_generic_collector() -> None:
     ).resolve(plan, budget=ResolutionBudget(max_steps=3))
     assert outcome.goal.status is GoalStatus.RESOLVED
     generic_kbo.assert_not_awaited()
-

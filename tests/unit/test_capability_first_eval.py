@@ -24,4 +24,3 @@ def test_capability_first_metrics_reject_false_complex_and_repeat() -> None:
     )
     assert checks["false_complex_escalation"] is False
     assert checks["repeated_signature"] is False
-

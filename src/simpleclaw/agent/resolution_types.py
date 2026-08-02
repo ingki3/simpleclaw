@@ -7,7 +7,9 @@ budget만 정의한다.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -86,6 +88,7 @@ class AssetResult:
     effect_id: str = ""
     retryable: bool = False
     limitations: tuple[str, ...] = ()
+    tokens_used: int = 0
 
     def __post_init__(self) -> None:
         """Side-effect 불명 상태가 자동 재시도 가능해지지 않게 fail-closed한다."""
@@ -94,6 +97,12 @@ class AssetResult:
             AssetExecutionStatus.UNKNOWN_EFFECT,
         }:
             object.__setattr__(self, "retryable", False)
+        if (
+            not isinstance(self.tokens_used, int)
+            or isinstance(self.tokens_used, bool)
+            or self.tokens_used < 0
+        ):
+            object.__setattr__(self, "tokens_used", 0)
 
 
 @dataclass(frozen=True)
@@ -185,6 +194,24 @@ class ResolutionBudget:
             stop_reasons=tuple(reasons),
         )
 
+    def remaining_seconds(self, *, now_monotonic: float | None = None) -> float | None:
+        """In-flight await에 적용할 남은 deadline 초를 반환한다."""
+        if self.deadline_monotonic is None:
+            return None
+        now = time.monotonic() if now_monotonic is None else now_monotonic
+        return max(0.0, self.deadline_monotonic - now)
+
+    async def wait_for(self, awaitable: Awaitable[Any]) -> Any:
+        """Deadline이 있으면 실행 중인 await도 동일 budget으로 중단한다."""
+        remaining = self.remaining_seconds()
+        if remaining is None:
+            return await awaitable
+        if remaining <= 0:
+            if hasattr(awaitable, "close"):
+                awaitable.close()
+            raise TimeoutError("resolution deadline exhausted")
+        return await asyncio.wait_for(awaitable, timeout=remaining)
+
 
 @dataclass(frozen=True)
 class BudgetSnapshot:
@@ -213,6 +240,7 @@ def decide_complex_escalation(
     budget: ResolutionBudget,
     steps_used: int = 0,
     tool_calls_used: int = 0,
+    tokens_used: int = 0,
 ) -> EscalationDecision:
     """신호·policy·budget을 모두 만족할 때만 complex 승격한다."""
     if result.side_effect and result.status in {
@@ -235,8 +263,8 @@ def decide_complex_escalation(
     snapshot = budget.snapshot(
         steps_used=steps_used,
         tool_calls_used=tool_calls_used,
+        tokens_used=tokens_used,
     )
     if not snapshot.can_escalate:
         return EscalationDecision(False, "budget_exhausted")
     return EscalationDecision(True, result.complexity_signals[0].value)
-

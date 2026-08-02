@@ -67,6 +67,9 @@ class ResolutionLedger:
     evidence: list[EvidenceRecord] = field(default_factory=list)
     actions: list[ActionRecord] = field(default_factory=list)
     attempted_signatures: set[str] = field(default_factory=set)
+    steps_used: int = 0
+    tool_calls_used: int = 0
+    tokens_used: int = 0
 
     def has_attempted(self, signature: str) -> bool:
         return signature in self.attempted_signatures
@@ -105,3 +108,14 @@ class ResolutionLedger:
                 )
             )
 
+    def record_usage(
+        self,
+        *,
+        steps: int = 0,
+        tool_calls: int = 0,
+        tokens: int = 0,
+    ) -> None:
+        """Controller 경계를 넘어 승계할 누적 실행 사용량을 기록한다."""
+        self.steps_used += max(0, steps)
+        self.tool_calls_used += max(0, tool_calls)
+        self.tokens_used += max(0, tokens)

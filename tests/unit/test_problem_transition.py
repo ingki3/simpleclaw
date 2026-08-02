@@ -31,4 +31,3 @@ def test_empty_result_transitions_to_explanation_without_complex_escalation() ->
     assert transition is not None
     assert transition.recommended_mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     assert transition.original_goal.startswith("오늘 롯데")
-

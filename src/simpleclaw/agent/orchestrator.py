@@ -68,6 +68,14 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalConfig,
     ContextRetrievalService,
 )
+from simpleclaw.agent.complex_problem import (
+    ComplexProblemController,
+    ComplexProblemState,
+    ProblemNode,
+)
+from simpleclaw.agent.evidence_investigation import (
+    EvidenceInvestigationController,
+)
 from simpleclaw.agent.evidence_policy import (
     EvidenceFreshness,
     EvidenceRequirement,
@@ -90,10 +98,14 @@ from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_controller import ResolutionController
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
     AssetResult,
+    ComplexitySignal,
+    GoalStatus,
+    ProblemTransition,
     ResolutionBudget,
 )
 from simpleclaw.agent.session_state import (
@@ -1686,35 +1698,25 @@ class AgentOrchestrator:
                 )
                 return result.text
 
-            async def supporting_mode(
-                callback_plan: UnifiedTurnPlan,
-                transition: object,
-                _ledger: object,
-                _budget: ResolutionBudget,
+            async def execute_supporting_asset(
+                selected: AssetRef,
+                question: str,
+                _ledger: ResolutionLedger,
             ) -> AssetResult:
-                supporting = callback_plan.capability.supporting_assets
-                if not supporting:
-                    return AssetResult(
-                        asset_type="controller",
-                        asset_name="supporting_asset",
-                        status=AssetExecutionStatus.UNSUPPORTED,
-                        unresolved_claims=callback_plan.fact_check.required_claims,
-                        limitations=("supporting_asset_missing",),
+                if selected.asset_type == "skill":
+                    raw = await execute_exact_skill(selected.name, question)
+                elif selected.asset_type == "recipe":
+                    raw = await execute_exact_recipe(
+                        selected.name,
+                        {"query": question},
                     )
-                selected = supporting[0]
-                question = getattr(
-                    transition,
-                    "next_question",
-                    callback_plan.context.standalone_question,
-                )
-                if selected.asset_type != "skill":
+                else:
                     return AssetResult(
                         asset_type=selected.asset_type,
                         asset_name=selected.name,
                         status=AssetExecutionStatus.UNSUPPORTED,
                         limitations=("typed_supporting_executor_unavailable",),
                     )
-                raw = await execute_exact_skill(selected.name, str(question))
                 catalog_asset = next(
                     (
                         item
@@ -1733,6 +1735,149 @@ class AgentOrchestrator:
                     ),
                 )
 
+            def investigation_transition(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+            ) -> ProblemTransition:
+                if transition is not None:
+                    return transition
+                required = callback_plan.fact_check.required_claims or (
+                    "unresolved_goal",
+                )
+                return ProblemTransition(
+                    original_goal=callback_plan.context.standalone_question,
+                    previous_question=callback_plan.context.standalone_question,
+                    triggering_observation="partial_capability",
+                    goal_status=GoalStatus.UNRESOLVED,
+                    unresolved_gap=required[0],
+                    next_question=callback_plan.context.standalone_question,
+                    required_claims=required,
+                    recommended_mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+                    transition_reason="partial_capability",
+                )
+
+            async def evidence_mode(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+                ledger: ResolutionLedger,
+                callback_budget: ResolutionBudget,
+            ) -> AssetResult:
+                outcome = await EvidenceInvestigationController(
+                    execute_supporting_asset=execute_supporting_asset,
+                ).run(
+                    investigation_transition(callback_plan, transition),
+                    supporting_assets=callback_plan.capability.supporting_assets,
+                    budget=callback_budget,
+                    ledger=ledger,
+                )
+                return outcome.last_result or AssetResult(
+                    asset_type="controller",
+                    asset_name="evidence_investigation",
+                    status=AssetExecutionStatus.UNSUPPORTED,
+                    unresolved_claims=outcome.goal.unresolved_claims,
+                    limitations=(outcome.stop_reason,),
+                )
+
+            async def complex_mode(
+                callback_plan: UnifiedTurnPlan,
+                transition: ProblemTransition | None,
+                ledger: ResolutionLedger,
+                callback_budget: ResolutionBudget,
+            ) -> AssetResult:
+                prior_signals = (
+                    ledger.asset_results[-1].complexity_signals
+                    if ledger.asset_results
+                    else ()
+                )
+                signals = tuple(
+                    dict.fromkeys(
+                        (*callback_plan.execution.complexity_signals, *prior_signals)
+                    )
+                )
+                if not signals:
+                    return AssetResult(
+                        asset_type="controller",
+                        asset_name="complex_problem",
+                        status=AssetExecutionStatus.DENIED,
+                        limitations=("complexity_signal_missing",),
+                    )
+                claims = callback_plan.fact_check.required_claims
+                if not claims and transition is not None:
+                    claims = transition.required_claims
+                claims = claims or ("unresolved_goal",)
+                ordered = bool(
+                    set(signals)
+                    & {
+                        ComplexitySignal.DEPENDENCY_GRAPH,
+                        ComplexitySignal.ORDERED_CAPABILITY_COMPOSITION,
+                    }
+                )
+                nodes = [
+                    ProblemNode(
+                        node_id=f"claim-{index}",
+                        claim=claim,
+                        question=(
+                            transition.next_question
+                            if transition is not None and index == 0
+                            else f"다음 미해결 항목을 확인한다: {claim}"
+                        ),
+                        dependencies=(f"claim-{index - 1}",)
+                        if ordered and index > 0
+                        else (),
+                        allowed_assets=(
+                            (
+                                callback_plan.capability.supporting_assets[
+                                    index
+                                    % len(callback_plan.capability.supporting_assets)
+                                ],
+                            )
+                            if callback_plan.capability.supporting_assets
+                            else ()
+                        ),
+                    )
+                    for index, claim in enumerate(claims)
+                ]
+
+                async def execute_node(
+                    node: ProblemNode,
+                    asset: AssetRef,
+                    node_ledger: ResolutionLedger,
+                ) -> AssetResult:
+                    return await execute_supporting_asset(
+                        asset,
+                        node.question,
+                        node_ledger,
+                    )
+
+                state = ComplexProblemState(
+                    original_goal=callback_plan.context.standalone_question,
+                    nodes=nodes,
+                    ledger=ledger,
+                )
+                outcome = await ComplexProblemController(
+                    execute_node=execute_node,
+                ).run(state, budget=callback_budget)
+                resolved = tuple(
+                    node.claim
+                    for node in nodes
+                    if node.node_id in outcome.state.resolved_node_ids
+                )
+                unresolved = tuple(claim for claim in claims if claim not in resolved)
+                last = ledger.asset_results[-1] if ledger.asset_results else None
+                return AssetResult(
+                    asset_type="controller",
+                    asset_name="complex_problem",
+                    status=(
+                        AssetExecutionStatus.COMPLETED
+                        if outcome.success
+                        else AssetExecutionStatus.PARTIAL_SUCCESS
+                    ),
+                    data=dict(last.data) if last is not None else {},
+                    resolved_claims=resolved,
+                    unresolved_claims=unresolved,
+                    limitations=outcome.limitations,
+                )
+
             turn.transition(TurnPhase.EXECUTING)
             outcome = await ResolutionController(
                 capability_executor=CapabilityExecutor(
@@ -1741,8 +1886,8 @@ class AgentOrchestrator:
                     execute_recipe=execute_exact_recipe,
                 ),
                 direct_answer=direct_mode,
-                answer_with_evidence=supporting_mode,
-                resolve_complex_problem=supporting_mode,
+                answer_with_evidence=evidence_mode,
+                resolve_complex_problem=complex_mode,
                 complex_escalation_enabled=bool(
                     config.get("complex_escalation", {}).get("enabled", False)
                 ),
@@ -1766,7 +1911,7 @@ class AgentOrchestrator:
             )
             if outcome.mode is ExecutionMode.CLARIFY:
                 turn.transition(TurnPhase.LIMITED_FINAL)
-                turn.set_final_text(outcome.text)
+                turn.set_final_text(outcome.text, limited=True)
                 turn.transition(TurnPhase.COMPLETED)
             elif effective_plan.fact_check.required and outcome.validation.allow_final:
                 turn.record_evidence(
@@ -1790,7 +1935,7 @@ class AgentOrchestrator:
                 turn.transition(TurnPhase.COMPLETED)
             elif effective_plan.fact_check.required:
                 turn.transition(TurnPhase.LIMITED_FINAL)
-                turn.set_final_text(outcome.text)
+                turn.set_final_text(outcome.text, limited=True)
                 turn.transition(TurnPhase.COMPLETED)
             else:
                 turn.transition(TurnPhase.FINALIZING)

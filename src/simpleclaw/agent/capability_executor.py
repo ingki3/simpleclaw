@@ -73,6 +73,15 @@ def decode_asset_result(
         if signal not in signals:
             signals.append(signal)
     result_data = data.get("data")
+    usage = data.get("usage")
+    token_value = data.get("tokens_used", 0)
+    if isinstance(usage, Mapping):
+        token_value = usage.get("total_tokens", usage.get("tokens", token_value))
+    tokens_used = (
+        token_value
+        if isinstance(token_value, int) and not isinstance(token_value, bool)
+        else 0
+    )
     return AssetResult(
         asset_type=asset_type,
         asset_name=asset_name,
@@ -87,6 +96,7 @@ def decode_asset_result(
         effect_id=str(data.get("effect_id") or "")[:256],
         retryable=bool(data.get("retryable", False)),
         limitations=_string_tuple(data.get("limitations"))[:32],
+        tokens_used=max(0, tokens_used),
     )
 
 
@@ -135,7 +145,11 @@ class CapabilityExecutor:
                 status=AssetExecutionStatus.UNSUPPORTED,
                 limitations=("asset_not_fast_path_eligible",),
             )
-        snapshot = budget.snapshot(steps_used=len(ledger.asset_results))
+        snapshot = budget.snapshot(
+            steps_used=ledger.steps_used,
+            tool_calls_used=ledger.tool_calls_used,
+            tokens_used=ledger.tokens_used,
+        )
         if not snapshot.can_continue:
             return AssetResult(
                 asset_type=asset_ref.asset_type,
@@ -159,9 +173,13 @@ class CapabilityExecutor:
             )
         try:
             if asset_ref.asset_type == "skill" and self._execute_skill is not None:
-                raw = await self._execute_skill(asset_ref.name, question)
+                raw = await budget.wait_for(
+                    self._execute_skill(asset_ref.name, question)
+                )
             elif asset_ref.asset_type == "recipe" and self._execute_recipe is not None:
-                raw = await self._execute_recipe(asset_ref.name, {"query": question})
+                raw = await budget.wait_for(
+                    self._execute_recipe(asset_ref.name, {"query": question})
+                )
             else:
                 raise ValueError("exact executor unavailable")
             result = decode_asset_result(
@@ -169,6 +187,18 @@ class CapabilityExecutor:
                 asset_type=asset_ref.asset_type,
                 asset_name=asset_ref.name,
                 side_effect=asset.side_effects,
+            )
+        except TimeoutError:
+            result = AssetResult(
+                asset_type=asset_ref.asset_type,
+                asset_name=asset_ref.name,
+                status=(
+                    AssetExecutionStatus.UNKNOWN_EFFECT
+                    if asset.side_effects
+                    else AssetExecutionStatus.FAILED_TERMINAL
+                ),
+                side_effect=asset.side_effects,
+                limitations=("deadline_exhausted",),
             )
         except Exception as exc:  # noqa: BLE001 - typed fail-closed boundary
             result = AssetResult(
@@ -182,6 +212,7 @@ class CapabilityExecutor:
                 side_effect=asset.side_effects,
                 limitations=(f"typed_asset_result_error:{type(exc).__name__}",),
             )
+        ledger.record_usage(steps=1, tool_calls=1, tokens=result.tokens_used)
         ledger.append_asset_result(result)
         return result
 

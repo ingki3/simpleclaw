@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
@@ -164,3 +165,29 @@ async def test_exact_recipe_identity_executes_once() -> None:
         "daily",
         {"query": "LPGA 유해란 현재 스코어와 순위를 알려줘"},
     )
+
+
+@pytest.mark.asyncio
+async def test_exact_executor_deadline_cancels_in_flight_await() -> None:
+    async def slow_result(*_args: object) -> object:
+        await asyncio.sleep(0.05)
+        return {
+            "schema": "asset_result.v1",
+            "status": "completed",
+            "resolved_claims": ["score"],
+        }
+
+    ledger = ResolutionLedger()
+    result = await CapabilityExecutor(
+        catalog=_catalog(),
+        execute_skill=slow_result,
+    ).execute(
+        _plan(),
+        budget=ResolutionBudget.from_seconds(max_seconds=0.01, max_steps=2),
+        ledger=ledger,
+    )
+
+    assert result.status is AssetExecutionStatus.FAILED_TERMINAL
+    assert result.limitations == ("deadline_exhausted",)
+    assert ledger.steps_used == 1
+    assert ledger.tool_calls_used == 1

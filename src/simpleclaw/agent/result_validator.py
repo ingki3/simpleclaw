@@ -32,10 +32,12 @@ class CommonResultValidator:
         goal: GoalResolutionState,
         ledger: ResolutionLedger,
         required_claims: tuple[str, ...] = (),
+        freshness_optional_claims: tuple[str, ...] = (),
     ) -> ValidationDecision:
         limitations: list[str] = []
         supported = set(goal.resolved_claims) if not required_claims else set()
         values_by_claim: dict[str, set[str]] = {}
+        freshness_optional = frozenset(freshness_optional_claims)
         for evidence in ledger.evidence:
             if not evidence.usable:
                 limitations.append(
@@ -47,6 +49,9 @@ class CommonResultValidator:
                 continue
             if evidence.fresh is False:
                 limitations.append(f"stale_evidence:{evidence.claim_id}")
+                continue
+            if evidence.fresh is None and evidence.claim_id not in freshness_optional:
+                limitations.append(f"unknown_freshness:{evidence.claim_id}")
                 continue
             if evidence.claim_id:
                 supported.add(evidence.claim_id)

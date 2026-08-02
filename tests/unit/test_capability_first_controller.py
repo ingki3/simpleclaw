@@ -80,4 +80,3 @@ async def test_exact_asset_resolves_before_mode_callback() -> None:
     assert outcome.goal.status is GoalStatus.RESOLVED
     assert outcome.text == "70타"
     evidence_handler.assert_not_awaited()
-

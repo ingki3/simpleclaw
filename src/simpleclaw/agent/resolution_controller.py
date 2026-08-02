@@ -116,8 +116,9 @@ class ResolutionController:
                     in plan.capability.fallback_modes
                 ),
                 budget=budget,
-                steps_used=1,
-                tool_calls_used=1,
+                steps_used=ledger.steps_used,
+                tool_calls_used=ledger.tool_calls_used,
+                tokens_used=ledger.tokens_used,
             )
             if goal.status is GoalStatus.RESOLVED:
                 return self._final_outcome(
@@ -173,7 +174,15 @@ class ResolutionController:
         handler = self._handlers.get(mode)
         if (
             mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM
-            and not self._complex_escalation_enabled
+            and (
+                not self._complex_escalation_enabled
+                or (transition is None and not plan.execution.complexity_signals)
+                or not budget.snapshot(
+                    steps_used=ledger.steps_used,
+                    tool_calls_used=ledger.tool_calls_used,
+                    tokens_used=ledger.tokens_used,
+                ).can_escalate
+            )
         ):
             handler = None
         draft = ""
@@ -248,6 +257,11 @@ class ResolutionController:
             goal=goal,
             ledger=ledger,
             required_claims=plan.fact_check.required_claims,
+            freshness_optional_claims=(
+                plan.fact_check.required_claims
+                if not plan.fact_check.freshness_required
+                else ()
+            ),
         )
         return ResolutionOutcome(
             text=self._finalizer.finalize(validation, draft=draft),
