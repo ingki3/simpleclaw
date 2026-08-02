@@ -13,6 +13,7 @@ from enum import Enum
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
+from simpleclaw.agent.freshness_policy import freshness_is_required
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
     CapabilityCoverage,
@@ -466,6 +467,17 @@ class PlanGate:
             for identity in referenced
             if identity in runtime_assets
         ]
+        if (
+            freshness_is_required(plan, assets=known_referenced_assets)
+            and not plan.fact_check.freshness_required
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.freshness_required",
+                    "fact_check.freshness_required",
+                    "Current or freshness-sensitive facts require freshness validation.",
+                )
+            )
         confirmation_assets = [
             asset
             for asset in known_referenced_assets

@@ -35,6 +35,7 @@ def _asset(
     read_only: bool = True,
     side_effects: bool = False,
     requires_confirmation: bool = False,
+    freshness_sensitive: bool = False,
 ) -> PlannerAsset:
     return PlannerAsset(
         asset_type=asset_type,
@@ -44,7 +45,7 @@ def _asset(
         intents=(),
         read_only=read_only,
         side_effects=side_effects,
-        freshness_sensitive=False,
+        freshness_sensitive=freshness_sensitive,
         direct_answer=True,
         requires_confirmation=requires_confirmation,
         declared=declared,
@@ -94,7 +95,12 @@ def _plan(
     fact_required: bool = False,
     owner: EvidenceOwner = EvidenceOwner.NONE,
     search_query: str = "",
+    intents: tuple[str, ...] | None = None,
+    freshness_required: bool | None = None,
 ) -> UnifiedTurnPlan:
+    resolved_intents = intents if intents is not None else (
+        ("current_weather",) if fact_required else ()
+    )
     return UnifiedTurnPlan(
         original_text="질문",
         context=ContextSelection(
@@ -109,15 +115,20 @@ def _plan(
             question="무엇을 뜻하시나요?" if clarification_required else "",
         ),
         domains=("weather",) if fact_required else (),
-        intents=("current_weather",) if fact_required else (),
+        intents=resolved_intents,
         fact_check=FactCheckPlan(
             required=fact_required,
             owner=owner,
             domain="weather" if fact_required else "none",
             entities=(),
             search_query=search_query,
-            intents=("current_weather",) if fact_required else (),
+            intents=resolved_intents,
             required_claims=("current conditions",) if fact_required else (),
+            freshness_required=(
+                fact_required
+                if freshness_required is None
+                else freshness_required
+            ),
         ),
         execution=ExecutionPlan(
             mode=mode,
@@ -284,6 +295,72 @@ def test_current_fact_invariants_fail_closed(
 
     assert result.status is GateStatus.REPAIR
     assert code in {item.code for item in result.violations}
+
+
+def test_current_result_cannot_disable_freshness_at_plan_gate() -> None:
+    asset = _asset("scores")
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "scores"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("current_result",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.freshness_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_freshness_sensitive_asset_cannot_disable_freshness_at_plan_gate() -> None:
+    asset = _asset("live-catalog", freshness_sensitive=True)
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "live-catalog"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("definition",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.freshness_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_definition_is_not_forced_into_freshness_policy() -> None:
+    asset = _asset("dictionary")
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=AssetRef("skill", "dictionary"),
+        fact_required=True,
+        owner=EvidenceOwner.ASSET,
+        intents=("definition",),
+        freshness_required=False,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(asset),
+    )
+
+    assert result.status is GateStatus.PASS
 
 
 @pytest.mark.parametrize(

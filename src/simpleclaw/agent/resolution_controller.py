@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from simpleclaw.agent.capability_executor import CapabilityExecutor
+from simpleclaw.agent.freshness_policy import freshness_optional_claims
 from simpleclaw.agent.goal_resolution import GoalResolver
 from simpleclaw.agent.problem_transition import ProblemTransitionBuilder
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
@@ -257,11 +258,7 @@ class ResolutionController:
             goal=goal,
             ledger=ledger,
             required_claims=plan.fact_check.required_claims,
-            freshness_optional_claims=(
-                plan.fact_check.required_claims
-                if not plan.fact_check.freshness_required
-                else ()
-            ),
+            freshness_optional_claims=freshness_optional_claims(plan),
         )
         return ResolutionOutcome(
             text=self._finalizer.finalize(validation, draft=draft),
