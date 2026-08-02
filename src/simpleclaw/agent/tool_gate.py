@@ -24,6 +24,9 @@ class ToolExecutionScope:
     allowed_assets: frozenset[tuple[str, str]]
     operator_tools: bool
     allow_cron_mutation: bool
+    # None은 기존 planned loop와 동일한 무제한(상위 iteration budget 적용).
+    # exact nested recipe는 1로 고정해 delegate 중복 실행을 dispatch 전에 막는다.
+    max_tool_calls: int | None = None
 
 
 class ToolCallRejected(RuntimeError):

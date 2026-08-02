@@ -1,0 +1,89 @@
+name: sports-live
+description: "Naver structured sports API로 라이브 점수·현재 결과·팀/선수 순위를 KST 신선도와 출처 URL이 있는 typed evidence로 검증"
+trigger: "스포츠 라이브, 실시간 경기, 현재 결과, 어제 경기, 야구, 축구, 농구, 배구, 골프, LPGA, 리더보드, LoL, LCK, 순위, standings, ranking"
+
+skills:
+  - naver-sports-skill
+
+capability:
+  domains: [sports]
+  intents: [current_result, live_score, standings, ranking, leaderboard]
+  read_only: true
+  side_effects: false
+  freshness_sensitive: true
+  direct_answer: true
+  requires_confirmation: false
+  coverage: full_coverage
+  input_contract: query.v1
+  output_contract: asset_result.v1
+  fallback_modes: [answer_with_evidence]
+  retry_statuses: [failed_retryable]
+
+parameters:
+  - name: query
+    description: "Capability-first exact 실행의 standalone 자연어 질문"
+    required: false
+    default: ""
+  - name: category
+    description: "수동 실행 종목/리그"
+    required: false
+    default: "kbo"
+  - name: mode
+    description: "수동 실행 모드: auto, live, standings"
+    required: false
+    default: "auto"
+  - name: date
+    description: "수동 live 조회 날짜: today 또는 YYYY-MM-DD (KST)"
+    required: false
+    default: "today"
+  - name: season
+    description: "수동 standings 시즌; auto면 helper가 활성 시즌을 선택"
+    required: false
+    default: "auto"
+  - name: limit
+    description: "최대 결과 수 1..20"
+    required: false
+    default: "10"
+
+instructions: |
+  ## Naver structured sports evidence
+
+  - 실행 시각: {{ now }} KST
+  - query.v1: {{ query }}
+  - 수동 입력: category={{ category }}, mode={{ mode }}, date={{ date }}, season={{ season }}, limit={{ limit }}
+
+  `query.v1`이 비어 있지 않으면 category/mode/date/season/player를 자연어 질문에서
+  해석한다. 이 경우 수동 입력의 기본값 `kbo/auto/today/auto/10`은 사용자가 직접
+  말한 값으로 간주하지 않는다. 질문에 없는 값만 안전한 helper 기본값으로 둔다.
+  `query.v1`이 비어 있으면 기존 수동 parameter 경로를 그대로 사용한다.
+
+  허용된 `naver-sports-skill`을 정확히 한 번 실행한다. 처음 사용해도 별도
+  `skill_docs`, web/search/browser, generic realtime/KBO collector, command를
+  호출하지 않는다. 등록된 `execute_skill`만 사용한다.
+
+  helper args는 질문 또는 수동 입력을 recipe 내부에서 다음 형태로 정규화한다.
+
+  `--mode <live|standings> --category <category> --date <today|YYYY-MM-DD> [--season <season>] --limit <1..20> --json`
+
+  category는 kbo/mlb/npb, kleague/epl 및 명시 리그 ID, basketball/kbl/nba/wkbl,
+  volleyball/kovo/wkovo, general/atp/wta/ufc, golf/pga/lpga/kpga/klpga,
+  esports/lol/lck 별칭을 해석한다. 어제/오늘은 실행 시각 KST 기준 날짜로 만든다.
+  미지원 명시 값은 KBO로 대체하지 않는다. mode가 auto이면 순위·랭킹·standings·
+  leaderboard 의도는 standings, 그 외 현재 결과·성적·스코어는 live로 정규화한다.
+
+  helper stdout JSON의 `ok`, `items`, `error.retryable`을 엄격히 구분한다.
+
+  - ok=true + items 존재: completed
+  - ok=true + items=[]: live는 empty, 명시 대상/순위 부재는 not_found
+  - ok=false + retryable=true: failed_retryable
+  - ok=false + retryable=false 또는 schema/JSON 오류: failed_terminal
+
+  exact 실행의 최종 출력은 `asset_result.v1` JSON object 하나뿐이다. Markdown fence나
+  자연어 머리말을 붙이지 않는다. `data`에는 helper 결과를 bounded object로 보존한다.
+  `evidence` 각 항목은 claim_id/value/source_url/provenance/fetched_at/fresh를 가진다.
+  source URL, provenance, freshness가 모두 확인된 현재 사실만 resolved_claims에 넣고,
+  나머지는 unresolved_claims와 limitations에 둔다. Naver 지연 가능성도 limitation으로
+  남긴다. 정상 empty/not_found를 실패나 사실 단정으로 바꾸지 않는다.
+
+  수동 실행(`query.v1` 비어 있음)은 기존 결론 우선 한국어 브리핑을 유지하되 helper
+  JSON 밖의 점수·순위·시즌 값을 만들지 않고 source.urls와 fetched_at KST를 밝힌다.

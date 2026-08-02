@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from simpleclaw.recipes.executor import execute_recipe
+from simpleclaw.recipes.executor import (
+    execute_recipe,
+    render_exact_recipe_instructions,
+)
 from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import (
     OnErrorPolicy,
@@ -19,6 +22,26 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "recipes"
 
 
 class TestRecipeExecutor:
+    def test_exact_recipe_renderer_injects_query_and_strict_contract(self):
+        recipe = load_recipe(FIXTURES / "sports-live" / "recipe.yaml")
+
+        rendered = render_exact_recipe_instructions(
+            recipe,
+            query="어제 유해란 LPGA 1라운드 성적과 순위",
+        )
+
+        assert "query.v1" in rendered
+        assert "어제 유해란 LPGA 1라운드 성적과 순위" in rendered
+        assert "Allowed delegate skills: naver-sports-skill" in rendered
+        assert "Return exactly one JSON object" in rendered
+        assert "Telegram" not in rendered
+
+    def test_exact_recipe_renderer_requires_delegate_allowlist(self):
+        recipe = RecipeDefinition(name="unsafe", instructions="run {{ query }}")
+
+        with pytest.raises(RecipeExecutionError, match="skills allowlist"):
+            render_exact_recipe_instructions(recipe, query="current score")
+
     @pytest.mark.asyncio
     async def test_full_recipe_execution(self):
         recipe = load_recipe(FIXTURES / "daily-report" / "recipe.yaml")

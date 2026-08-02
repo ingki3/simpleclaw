@@ -95,6 +95,10 @@ class RecipeDefinition:
     """
     name: str                                                       # 레시피 이름
     description: str = ""                                           # 레시피 설명
+    # instructions recipe가 내부에서 호출할 수 있는 skill allowlist. recipe.yaml의
+    # 기존 문서화 필드 ``skills:``를 보존하며, exact recipe nested loop에서는
+    # 이 목록 밖의 skill/tool을 노출하지 않는다.
+    skills: tuple[str, ...] = ()
     parameters: list[RecipeParameter] = field(default_factory=list) # 입력 파라미터 목록
     steps: list[RecipeStep] = field(default_factory=list)           # 실행 스텝 목록
     instructions: str = ""                                          # v2 지시문 텍스트

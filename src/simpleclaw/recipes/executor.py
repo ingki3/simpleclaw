@@ -362,6 +362,58 @@ def render_instructions(
     return result
 
 
+def render_exact_recipe_instructions(
+    recipe: RecipeDefinition,
+    *,
+    query: str,
+) -> str:
+    """Instructions recipe를 strict ``query.v1`` 실행 프롬프트로 렌더한다.
+
+    domain parsing과 source 선택은 recipe/delegate가 소유한다. Core는 원문 질문,
+    delegate allowlist, 출력 envelope 규칙만 고정해 nested LLM이 자연어 답변이나
+    다른 tool로 빠지는 것을 fail-closed 경계 안에 둔다.
+    """
+    normalized_query = str(query).strip()
+    if not recipe.instructions.strip():
+        raise RecipeExecutionError(
+            f"Exact recipe '{recipe.name}' requires non-empty instructions"
+        )
+    if not normalized_query:
+        raise RecipeExecutionError(
+            f"Exact recipe '{recipe.name}' requires a non-empty query.v1 input"
+        )
+    if not recipe.skills:
+        raise RecipeExecutionError(
+            f"Exact recipe '{recipe.name}' requires a non-empty skills allowlist"
+        )
+
+    variables = {
+        parameter.name: parameter.default
+        for parameter in recipe.parameters
+        if parameter.default
+    }
+    variables["query"] = normalized_query
+    rendered = render_instructions(recipe.instructions, variables=variables).rstrip()
+    delegates = ", ".join(recipe.skills)
+    return (
+        f"{rendered}\n\n"
+        "## Exact capability execution contract (mandatory)\n"
+        f"- Input schema: query.v1\n- Standalone query: {normalized_query}\n"
+        f"- Allowed delegate skills: {delegates}\n"
+        "- Use only an allowed delegate skill and call it at most once.\n"
+        "- Do not call web/search/browser/command/recipe/notification tools.\n"
+        "- Return exactly one JSON object and no prose or Markdown fences.\n"
+        "- The object schema must be asset_result.v1. Preserve distinct statuses "
+        "completed, empty, not_found, failed_retryable, failed_terminal, or "
+        "unsupported.\n"
+        "- Current factual claims may be resolved only when evidence includes "
+        "source URL/provenance and freshness. Otherwise list them under "
+        "unresolved_claims and do not invent a factual final.\n"
+        "- Include schema, status, data, evidence, resolved_claims, "
+        "unresolved_claims, limitations, retryable, and tokens_used."
+    )
+
+
 def _substitute_variables(content: str, variables: dict[str, str]) -> str:
     """${variable_name} 패턴을 실제 값으로 치환한다.
 
