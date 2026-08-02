@@ -42,7 +42,9 @@ def _payload(**overrides: object) -> dict[str, object]:
             "required": False,
             "owner": "none",
             "domain": "none",
+            "intents": [],
             "entities": [],
+            "reference_date": "",
             "search_query": "",
             "required_claims": [],
             "freshness_required": False,
@@ -326,3 +328,54 @@ def test_assistant_false_claim_is_not_selected_as_evidence_context() -> None:
 
     assert plan.context.selected_turn_ids == ("m101",)
     assert "m102" not in plan.context.selected_turn_ids
+
+
+def test_lpga_plan_preserves_typed_fact_metadata() -> None:
+    payload = _payload(
+        domains=["sports"],
+        intents=["current_result"],
+        fact_check={
+            "required": True,
+            "owner": "planner",
+            "domain": "sports",
+            "intents": ["current_result"],
+            "entities": [
+                {"kind": "athlete", "value": "유해란"},
+                {"kind": "league", "value": "LPGA"},
+                {"kind": "sport", "value": "golf"},
+                {"kind": "round", "value": "1"},
+            ],
+            "reference_date": "2026-07-30",
+            "search_query": "유해란 LPGA 1라운드 2026-07-30 결과",
+            "required_claims": ["1라운드 스코어", "순위"],
+            "freshness_required": True,
+            "reason": "current sports result",
+        },
+        execution={
+            "mode": "fact_check",
+            "primary_asset": {
+                "asset_type": "none",
+                "asset_name": "__none__",
+            },
+            "allowed_assets": [],
+            "allowed_tools": ["web_search"],
+            "requires_confirmation": False,
+            "reason": "verify current result",
+        },
+    )
+    plan = parse_turn_plan_data(
+        payload,
+        original_text="어제 유해란 LPGA 1라운드 성적 확인해줘",
+    )
+
+    assert plan.fact_check.domain == "sports"
+    assert plan.fact_check.intents == ("current_result",)
+    assert plan.fact_check.reference_date == "2026-07-30"
+    assert {
+        (entity.kind, entity.value) for entity in plan.fact_check.entities
+    } == {
+        ("athlete", "유해란"),
+        ("league", "LPGA"),
+        ("sport", "golf"),
+        ("round", "1"),
+    }

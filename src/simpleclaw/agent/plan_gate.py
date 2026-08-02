@@ -281,6 +281,47 @@ class PlanGate:
                     "Current-fact execution requires a fact-check plan.",
                 )
             )
+        if fact_check.required and (
+            not plan.domains or fact_check.domain not in plan.domains
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.domain_mismatch",
+                    "fact_check.domain",
+                    "Fact domain must be present in the top-level plan domains.",
+                )
+            )
+        if fact_check.required and (
+            not fact_check.intents
+            or not set(fact_check.intents).issubset(plan.intents)
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.intent_mismatch",
+                    "fact_check.intents",
+                    "Fact intents must be a non-empty subset of plan intents.",
+                )
+            )
+        if (
+            fact_check.required
+            and "current_result" in fact_check.intents
+            and not fact_check.reference_date
+        ):
+            violations.append(
+                _violation(
+                    "fact_check.reference_date_required",
+                    "fact_check.reference_date",
+                    "Current-result verification requires a resolved reference date.",
+                )
+            )
+        if current_fact_mode and not fact_check.required_claims:
+            violations.append(
+                _violation(
+                    "fact_check.required_claims",
+                    "fact_check.required_claims",
+                    "Current-fact execution requires explicit claims to verify.",
+                )
+            )
         if (
             fact_check.required
             and fact_check.owner is EvidenceOwner.NONE

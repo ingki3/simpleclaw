@@ -21,17 +21,23 @@ import base64
 import json
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 from urllib.request import Request, urlopen
 
+from simpleclaw.skills.realtime_contracts import (
+    LookupStatus,
+    RealtimeLookupRequest,
+    RealtimeLookupResult,
+)
 from simpleclaw.skills.realtime_sources import (
     CollectionOutcome,
     FetchPage,
     ResolveNewsUrl,
     SourceDocument,
-    collect_sources,
+    collect_sources_for_request,
     html_to_visible_text,
 )
 
@@ -90,44 +96,6 @@ def parse_args(args: list[str]) -> dict[str, Any]:
     return {"query": raw_query} if raw_query else {}
 
 
-# 도메인 분류 cue. BIZ-394: market 분류를 단순 주가/지수 키워드에서 "기업·시장
-# 이벤트(상장/IPO/공모/기업가치 등)"까지 넓혀, 영향·전망 질문이 general 로 새지
-# 않고 시장 도메인 검색 URL/본문 회수 경로를 타도록 구조적 cue 를 추가한다.
-_WEATHER_TERMS = ("날씨", "기온", "강수", "미세먼지", "예보")
-_MARKET_TERMS = (
-    "주가",
-    "주식",
-    "코스피",
-    "코스닥",
-    "나스닥",
-    "s&p",
-    "환율",
-    "증시",
-    "시장",
-    "상장",
-    "ipo",
-    "공모",
-    "기업가치",
-    "시총",
-)
-_SPORTS_TERMS = ("kbo", "프로야구", "야구", "축구", "스코어")
-_NEWS_TERMS = ("뉴스", "속보", "기사", "최신 소식")
-
-
-def classify_query(query: str) -> str:
-    """질문 문자열을 조회 도메인으로 보수 분류한다."""
-    lowered = query.lower()
-    if any(term in lowered for term in _WEATHER_TERMS):
-        return "weather"
-    if any(term in lowered for term in _MARKET_TERMS):
-        return "market"
-    if any(term in lowered for term in _SPORTS_TERMS):
-        return "sports"
-    if any(term in lowered for term in _NEWS_TERMS):
-        return "news"
-    return "general"
-
-
 def _html_to_text(body: str, limit: int = _MAX_SOURCE_CHARS) -> str:
     """HTML에서 스크립트/페이지 chrome/태그를 제거해 본문 위주 텍스트로 축약한다.
 
@@ -165,40 +133,6 @@ async def _default_fetch_page(url: str) -> str:
     body, _limitations = await asyncio.to_thread(_fetch_raw, url)
     return body
 
-
-# 질문 자체가 "일정/상태/결과의 시점"에 민감한지 판정하는 cue.
-# 단순 사실/정의 질문과 달리, 출처가 어느 이벤트까지 반영했는지 검증이 필요하다.
-_TIMELINE_QUERY_CUES = (
-    "일정",
-    "언제",
-    "몇 시",
-    "몇시",
-    "스케줄",
-    "개막",
-    "폐막",
-    "결과",
-    "스코어",
-    "순위",
-    "날짜",
-    "일자",
-    "마감",
-    "발표",
-    "출시",
-    "예정",
-    "다음 경기",
-    "다음경기",
-    "오늘 경기",
-    "경기 결과",
-    "최종",
-    "확정",
-    "schedule",
-    "when",
-    "result",
-    "score",
-    "standings",
-    "fixture",
-    "deadline",
-)
 
 # 출처 본문이 "아직 일어나지 않은" 이벤트만 가리키는 미래/예정 cue.
 _FUTURE_EVENT_CUES = (
@@ -287,12 +221,6 @@ _DATE_PATTERNS = (
     re.compile(r"\d{4}[./-]\d{1,2}[./-]\d{1,2}"),
     re.compile(r"\b\d{1,2}[./]\d{1,2}\b"),
 )
-
-
-def is_timeline_sensitive_query(query: str) -> bool:
-    """질문이 일정/상태/결과의 시점에 민감한지 보수적으로 판정한다."""
-    lowered = query.lower()
-    return any(cue.lower() in lowered for cue in _TIMELINE_QUERY_CUES)
 
 
 def _matched_cues(text: str, cues: tuple[str, ...]) -> list[str]:
@@ -438,10 +366,28 @@ def _parsed_result(value: object) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _request_value(
+    request: RealtimeLookupRequest | Mapping[str, object] | None,
+    name: str,
+) -> object | None:
+    if isinstance(request, RealtimeLookupRequest):
+        return getattr(request, name, None)
+    if isinstance(request, Mapping):
+        return request.get(name)
+    return None
+
+
 def _expected_event_date(
-    result: dict[str, Any], payload: dict[str, Any] | None
+    result: dict[str, Any],
+    request: RealtimeLookupRequest | Mapping[str, object] | None,
 ) -> str | None:
-    raw = payload.get("as_of_kst") if payload is not None else None
+    raw = _request_value(request, "reference_date")
+    if raw:
+        try:
+            return datetime.fromisoformat(str(raw)).date().isoformat()
+        except ValueError:
+            return None
+    raw = _request_value(request, "as_of_kst")
     freshness = result.get("freshness")
     if raw is None and isinstance(freshness, dict):
         raw = freshness.get("as_of_kst")
@@ -453,15 +399,89 @@ def _expected_event_date(
         return None
 
 
+_SPORTS_CLAIM_CAPABILITIES = {
+    "점수": ("score",),
+    "스코어": ("score",),
+    "현재점수": ("score",),
+    "현재스코어": ("score",),
+    "최종점수": ("final_score",),
+    "최종스코어": ("final_score",),
+    "score": ("score",),
+    "currentscore": ("score",),
+    "finalscore": ("final_score",),
+    "승패": ("outcome",),
+    "승자": ("outcome",),
+    "경기결과": ("outcome",),
+    "최종결과": ("outcome",),
+    "winner": ("outcome",),
+    "outcome": ("outcome",),
+    "result": ("outcome",),
+    "finalresult": ("outcome",),
+    "경기상태": ("status",),
+    "진행상태": ("status",),
+    "status": ("status",),
+    "gamestatus": ("status",),
+    "팀": ("teams",),
+    "대진": ("teams",),
+    "경기팀": ("teams",),
+    "teams": ("teams",),
+    "matchup": ("teams",),
+    "경기일": ("event_date",),
+    "경기날짜": ("event_date",),
+    "날짜": ("event_date",),
+    "eventdate": ("event_date",),
+    "gamedate": ("event_date",),
+    "리그": ("league",),
+    "대회": ("league",),
+    "league": ("league",),
+}
+
+
+def _normalized_claim(claim: object) -> str:
+    """Planner claim을 명시적 capability key와 대조할 안정된 형태로 만든다."""
+    return "".join(character for character in str(claim).casefold() if character.isalnum())
+
+
+def _sports_claims_are_satisfied(
+    required_claims: list[object] | tuple[object, ...],
+    fact: Mapping[str, object],
+) -> bool:
+    """모든 sports claim이 실제 typed fact capability로 충족되는지 판정한다."""
+    status = fact["status"]
+    away_team = fact["away_team"]
+    home_team = fact["home_team"]
+    winner = fact["winner"]
+    is_draw = (
+        status == "final"
+        and winner is None
+        and fact["away_score"] == fact["home_score"]
+    )
+    capabilities = {
+        "score": True,
+        "final_score": status == "final",
+        "outcome": status == "final"
+        and (winner in {away_team, home_team} or is_draw),
+        "status": status in {"final", "live"},
+        "teams": bool(away_team and home_team),
+        "event_date": bool(fact["event_date"]),
+        "league": bool(fact["league"]),
+    }
+    for claim in required_claims:
+        required = _SPORTS_CLAIM_CAPABILITIES.get(_normalized_claim(claim))
+        if required is None or not all(capabilities[item] for item in required):
+            return False
+    return True
+
+
 def is_usable_realtime_evidence(
     result: object,
-    payload: dict[str, Any] | None = None,
+    request: RealtimeLookupRequest | Mapping[str, object] | None = None,
 ) -> bool:
     """live-fact final을 허용할 수 있는 구조화 realtime result인지 판정한다."""
     parsed = _parsed_result(result)
     if parsed is None or parsed.get("confidence") not in {"medium", "high"}:
         return False
-    if parsed.get("lookup_status") in {"not_found", "failed"}:
+    if parsed.get("lookup_status") != LookupStatus.FOUND.value:
         return False
     facts = parsed.get("facts")
     if not isinstance(facts, list) or not facts or not all(
@@ -469,10 +489,48 @@ def is_usable_realtime_evidence(
     ):
         return False
 
-    # source 일부 실패나 live/partial 설명 같은 limitation은 허용한다. confidence가
-    # low인 실패 envelope는 위에서 이미 차단하므로 raw context bool로 판정하지 않는다.
-    if parsed.get("kind") != "sports":
-        return True
+    domain = str(_request_value(request, "domain") or parsed.get("kind") or "")
+    if not domain or parsed.get("kind") != domain:
+        return False
+    required_claims = _request_value(request, "required_claims")
+    if required_claims is not None and (
+        not isinstance(required_claims, list | tuple)
+        or not required_claims
+        or any(not str(claim).strip() for claim in required_claims)
+    ):
+        return False
+    freshness_required = bool(
+        _request_value(request, "freshness_required")
+    )
+    timeline = parsed.get("timeline_validation")
+    if timeline is not None and not isinstance(timeline, dict):
+        return False
+    if (
+        (freshness_required or domain == "sports")
+        and isinstance(timeline, dict)
+        and timeline.get("status") in {
+            "stale_or_pre_event",
+            "current_pending",
+            "no_evidence",
+            "unknown",
+        }
+    ):
+        return False
+    if freshness_required and domain != "sports" and (
+        not isinstance(timeline, dict) or timeline.get("status") != "final"
+    ):
+        return False
+    if domain == "sports" and not isinstance(timeline, dict):
+        return False
+
+    # source 일부 실패 limitation은 허용한다. confidence가 low인 실패 envelope는
+    # 위에서 이미 차단하므로 raw context bool로 판정하지 않는다.
+    if domain != "sports":
+        return all(
+            str(fact.get("claim") or "").strip()
+            and str(fact.get("source_url") or fact.get("url") or "").strip()
+            for fact in facts
+        )
 
     sports_facts = [fact for fact in facts if fact.get("type") == "sports_score"]
     if len(sports_facts) != 1 or len(facts) != 1:
@@ -500,14 +558,43 @@ def is_usable_realtime_evidence(
         return False
     if fact["status"] == "live" and fact["winner"] is not None:
         return False
-    if fact["status"] == "final" and fact["winner"] not in {
-        fact["away_team"],
-        fact["home_team"],
-        None,
-    }:
+    if fact["status"] == "final":
+        winner_is_team = fact["winner"] in {
+            fact["away_team"],
+            fact["home_team"],
+        }
+        is_draw = (
+            fact["winner"] is None
+            and fact["away_score"] == fact["home_score"]
+        )
+        if not winner_is_team and not is_draw:
+            return False
+    if required_claims is not None and not _sports_claims_are_satisfied(
+        required_claims,
+        fact,
+    ):
         return False
-    expected_date = _expected_event_date(parsed, payload)
-    return expected_date is not None and fact["event_date"] == expected_date
+    entities = _request_value(request, "entities")
+    if isinstance(entities, (list, tuple)):
+        for entity in entities:
+            if isinstance(entity, Mapping):
+                kind = str(entity.get("kind") or "")
+                value = str(entity.get("value") or "")
+            else:
+                kind = str(getattr(entity, "kind", "") or "")
+                value = str(getattr(entity, "value", "") or "")
+            if kind == "league" and value.casefold() != str(fact["league"]).casefold():
+                return False
+            if kind in {"team", "athlete"} and value.casefold() not in {
+                str(fact["away_team"]).casefold(),
+                str(fact["home_team"]).casefold(),
+            }:
+                return False
+    expected_date = _expected_event_date(parsed, request)
+    if expected_date is None or fact["event_date"] != expected_date:
+        return False
+    expected_timeline = "final" if fact["status"] == "final" else "partial"
+    return isinstance(timeline, dict) and timeline.get("status") == expected_timeline
 
 
 # 이전 내부 import를 깨지 않되 production은 명시적인 이름을 사용한다.
@@ -515,10 +602,10 @@ has_usable_realtime_evidence = is_usable_realtime_evidence
 
 
 async def lookup_async(
-    payload: dict[str, Any],
+    payload: dict[str, Any] | RealtimeLookupRequest,
     fetch_page: FetchPage,
     resolve_news_url: ResolveNewsUrl | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | RealtimeLookupResult:
     """실시간 조회를 실행하고 구조화된 evidence JSON dict를 반환한다.
 
     뉴스/일반은 Google News RSS로 후보를 찾은 뒤 원문을 읽고, 스포츠는 기준일로
@@ -526,13 +613,58 @@ async def lookup_async(
     production에서는 오케스트레이터가 SSRF/redirect 정책을 적용한
     ``fetch_page``를 주입한다.
     """
-    query = str(payload.get("query") or "").strip() or "실시간 정보"
-    kind = classify_query(query)
-    as_of_kst = payload.get("as_of_kst")
-    collected = await collect_sources(
-        query=query,
-        kind=kind,
-        as_of_kst=as_of_kst,
+    typed_input = isinstance(payload, RealtimeLookupRequest)
+    try:
+        request = (
+            payload
+            if typed_input
+            else RealtimeLookupRequest.from_payload(payload)
+        )
+    except (TypeError, ValueError) as exc:
+        raw = payload if isinstance(payload, dict) else {}
+        fallback_request = RealtimeLookupRequest(
+            query=str(raw.get("query") or ""),
+            domain=str(raw.get("domain") or "unsupported"),
+            intents=(),
+            entities=(),
+            reference_date="",
+            required_claims=(),
+            as_of_kst=str(raw.get("as_of_kst") or ""),
+        )
+        output = {
+            "kind": fallback_request.domain,
+            "query": fallback_request.query,
+            "lookup_status": LookupStatus.UNSUPPORTED.value,
+            "freshness": {"as_of_kst": fallback_request.as_of_kst},
+            "confidence": "low",
+            "evidence": [],
+            "facts": [],
+            "timeline_validation": {
+                "is_timeline_sensitive": False,
+                "status": "no_evidence",
+                "as_of_kst": fallback_request.as_of_kst,
+                "signals": {},
+                "notes": [],
+            },
+            "limitations": [
+                f"invalid structured realtime request: {type(exc).__name__}"
+            ],
+        }
+        result = RealtimeLookupResult(
+            request=fallback_request,
+            status=LookupStatus.UNSUPPORTED,
+            evidence=(),
+            facts=(),
+            limitations=tuple(output["limitations"]),
+            payload=output,
+        )
+        return result if typed_input else output
+
+    query = request.query
+    kind = request.domain
+    as_of_kst = request.as_of_kst
+    collected = await collect_sources_for_request(
+        request=request,
         fetch_page=fetch_page,
         resolve_news_url=resolve_news_url,
     )
@@ -550,7 +682,17 @@ async def lookup_async(
     combined_text = "\n".join(source.text for source in sources)
 
     # BIZ-383: 일정/상태성 질문이면 출처 본문이 어느 이벤트까지 반영했는지 검증한다.
-    is_sensitive = kind == "sports" or is_timeline_sensitive_query(query)
+    is_sensitive = bool(
+        request.freshness_required
+        or kind == "sports"
+        or {
+            "current_result",
+            "current_status",
+            "schedule",
+            "forecast",
+        }
+        & set(request.intents)
+    )
     sports_facts = [
         _fact_from_source(source)
         for source in sources
@@ -636,10 +778,11 @@ async def lookup_async(
                 confidence = "low"
             limitations.append(timeline_validation["notes"][0])
 
-    return {
+    output = {
         "kind": kind,
         "query": query,
         "lookup_status": lookup_status,
+        "authoritative_empty": lookup_status == "not_found",
         "freshness": {
             "as_of_kst": as_of_kst,
             "retrieved_at_utc": now_utc,
@@ -651,13 +794,26 @@ async def lookup_async(
         "timeline_validation": timeline_validation,
         "limitations": limitations,
     }
+    try:
+        typed_status = LookupStatus(lookup_status)
+    except ValueError:
+        typed_status = LookupStatus.FAILED
+    result = RealtimeLookupResult(
+        request=request,
+        status=typed_status,
+        evidence=tuple(evidence),
+        facts=tuple(facts),
+        limitations=tuple(limitations),
+        payload=output,
+    )
+    return result if typed_input else output
 
 
 def lookup(
-    payload: dict[str, Any],
+    payload: dict[str, Any] | RealtimeLookupRequest,
     *,
     fetch_page: FetchPage = _default_fetch_page,
-) -> dict[str, Any]:
+) -> dict[str, Any] | RealtimeLookupResult:
     """동기 CLI/테스트 호환 wrapper. async runtime은 ``lookup_async``를 사용한다."""
     return asyncio.run(lookup_async(payload, fetch_page=fetch_page))
 
@@ -683,6 +839,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = parse_args(args)
         result = lookup(payload)
+        if isinstance(result, RealtimeLookupResult):
+            result = result.to_payload()
     except Exception as exc:  # noqa: BLE001 — stdout JSON contract 유지
         result = {
             "kind": "unknown",

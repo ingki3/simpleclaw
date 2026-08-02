@@ -419,6 +419,7 @@ def _mock_query(
     query.message = MagicMock()
     query.message.chat_id = chat_id
     query.message.message_id = message_id
+    query.message.message_thread_id = None
     query.message.reply_text = AsyncMock()
     query.data = data
     query.answer = AsyncMock()
@@ -569,6 +570,31 @@ class TestCallbackQueryWhitelist:
         query.answer.assert_awaited()
         kwargs = query.answer.await_args.kwargs
         assert "만료" in kwargs.get("text", "")
+
+    @pytest.mark.asyncio
+    async def test_restart_cache_miss_recovers_durable_pending(self):
+        handler = AsyncMock(return_value="ok")
+        consumer = MagicMock()
+        request = _build_clarify_request("Durable A", "Durable B")
+        bot = TelegramBot(
+            "token",
+            whitelist_user_ids=[123],
+            message_handler=handler,
+            clarify_provider=lambda user_id, chat_id, thread_id: request,
+            clarify_consumer=consumer,
+        )
+        query = _mock_query(
+            user_id=123,
+            chat_id=999,
+            message_id=42,
+            data=encode_callback_data(1),
+        )
+        update = MagicMock(callback_query=query)
+
+        await bot._on_callback_query(update, MagicMock())
+
+        handler.assert_awaited_once_with("Durable B", 123, 999)
+        consumer.assert_called_once_with(123, 999, None)
 
     @pytest.mark.asyncio
     async def test_invalid_callback_data_dropped(self):

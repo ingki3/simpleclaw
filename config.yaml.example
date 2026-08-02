@@ -112,10 +112,8 @@ agent:
     max_rounds: 3
     judge_max_tokens: 768
     max_answer_chars_for_judge: 6000
-  # BIZ-426 — 일반 turn 앞단의 LLM turn analysis. follow-up 맥락 복원(정규화 질문),
-  # clarify 필요성, domains/intents, 실행 route(standard/current/complex)를 keyword
-  # heuristic 대신 LLM structured JSON 판단으로 결정한다. 분석 실패/비활성 시에는
-  # 기존 결정적 TurnFrame + response_router 가 fallback 으로 동작한다.
+  # Deprecated: ordinary turn 의미 판단에는 사용하지 않습니다. 설정이 남아 있어도
+  # UnifiedTurnPlanner 실패 시 keyword/TurnFrame fallback으로 내려가지 않습니다.
   turn_analysis:
     enabled: true
     # Backend 선택은 llm.routes.turn_analysis에서 합니다. 아래 legacy
@@ -141,14 +139,10 @@ agent:
     retry_model: null
     retry_backend: null
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
-  # BIZ-493/BIZ-497 — Unified TurnPlanner rollout. `shadow`는 현재 응답 경로와
-  # 독립된 sampled 관측만 수행한다. `canary`는 결정적 user/chat cohort에서
-  # direct answer와 선언된 read-only/no-side-effect 자산만 primary로 실행한다.
-  # `primary`는 모든 검증된 plan을 응답 경로에 적용하므로 canary/primary의
-  # live 활성화와 비율 확대에는 운영자 승인 및 runtime restart가 필요하다.
+  # BIZ-523 — ordinary turn의 유일한 semantic controller.
   unified_turn_planner:
-    mode: off                 # off | shadow | canary | primary
-    sample_rate: 0.0          # shadow/canary 0.0~1.0; off default는 외부 호출 없음
+    mode: primary
+    sample_rate: 0.0          # deprecated rollout 값; ordinary 실행에는 사용하지 않음
     max_tokens: 2048
     # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
     structured_output: true
@@ -162,6 +156,10 @@ agent:
     selected_context_max_chars: 2400
     # deterministic repair + validated semantic retry 1회 고정값. 다른 값은 무시한다.
     repair_attempts: 1
+    examples_prompt: unified_turn_planner_examples
+    planner_max_attempts: 2
+    evidence_max_attempts: 2
+    on_planner_failure: fail_closed
     telemetry:
       enabled: true
       include_raw_text: false  # true로 설정해도 loader가 false로 fail-closed

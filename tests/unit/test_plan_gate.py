@@ -106,14 +106,16 @@ def _plan(
             required=clarification_required,
             question="무엇을 뜻하시나요?" if clarification_required else "",
         ),
-        domains=(),
-        intents=(),
+        domains=("weather",) if fact_required else (),
+        intents=("current_weather",) if fact_required else (),
         fact_check=FactCheckPlan(
             required=fact_required,
             owner=owner,
             domain="weather" if fact_required else "none",
             entities=(),
             search_query=search_query,
+            intents=("current_weather",) if fact_required else (),
+            required_claims=("current conditions",) if fact_required else (),
         ),
         execution=ExecutionPlan(
             mode=mode,

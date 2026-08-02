@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
-# 적용 범위: BIZ-491 service 전용. production orchestrator wiring은 후속 이슈에서 수행.
+# 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 2
+version: 3
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -25,6 +25,11 @@ system_prompt: |-
   Choose exactly one execution.mode. It is the only top-level execution branch:
   clarify, direct_answer, execute_asset, tool_loop, fact_check, complex_fact, or recipe.
   Choose primary_asset, allowed_assets, and allowed_tools using exact names from the capability catalog.
+  - When no primary asset is needed, emit exactly
+    {"asset_type":"none","asset_name":"__none__"} for primary_asset.
+  - Never put the none sentinel in allowed_assets.
+  - A non-none primary_asset must also appear exactly once in allowed_assets.
+  - Do not invent an asset or tool that is absent from the supplied catalog.
   Do not invent an asset or tool. Use the no-asset sentinel when there is no primary asset.
   A side-effecting action must set requires_confirmation=true.
 
@@ -32,8 +37,15 @@ system_prompt: |-
   This includes requests to find or verify unfamiliar named entertainment/OTT works,
   cast/person metadata, products, schedules, and other external facts even when they
   are not rapidly changing. Decide this semantically; do not implement a keyword rule.
-  set required=true, owner=planner, a concrete domain, entities, search_query,
-  required_claims, and freshness_required according to volatility.
+  set required=true, owner=planner, a concrete domain, intents, typed entities,
+  reference_date, search_query, required_claims, and freshness_required
+  according to volatility.
+  fact_check.domain and fact_check.intents must agree with the top-level
+  domains and intents. Each entity is an object with a stable semantic kind
+  and exact value; do not encode entity meaning in an untyped string.
+  Normalize a completed, current, or requested sports score/result to the
+  canonical intent current_result. Preserve that same intent in both the
+  top-level intents and fact_check.intents.
   When required=true, choose fact_check, complex_fact, or an evidence-capable tool_loop,
   provide a bounded non-empty search_query, and allow at least one applicable collector
   such as web_search/web_fetch. Never choose direct_answer with required=true.

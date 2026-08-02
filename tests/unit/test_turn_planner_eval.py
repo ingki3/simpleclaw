@@ -16,6 +16,7 @@ from simpleclaw.evaluation.turn_planner_eval import (
     aggregate_results,
     evaluate_fixture_replays,
     load_fixtures,
+    parse_fixture,
     percentile,
     score_prediction,
 )
@@ -90,6 +91,33 @@ def _fixture_row() -> dict[str, object]:
             "output_tokens": 280,
         },
     }
+
+
+def test_aggregate_reports_state_safety_metrics() -> None:
+    fixture = parse_fixture(
+        _fixture_row(),
+        source="inline",
+        line_number=1,
+    )
+    result = score_prediction(
+        fixture,
+        fixture.prediction,
+        latency_ms=1,
+        input_tokens=1,
+        output_tokens=1,
+        repeat_index=1,
+    )
+    report = aggregate_results(
+        [result],
+        variant="medium",
+        repeat=1,
+        baseline="unified",
+    )
+    assert report["summary"]["keyword_fallback_count"] == 0
+    assert report["summary"]["fact_required_without_action"] == 0
+    assert report["summary"]["unverified_final_count"] == 0
+    assert report["summary"]["planner_call_count"] == 1
+    assert report["summary"]["session_context_contamination"] == 0
 
 
 def test_load_fixtures_accepts_valid_jsonl(tmp_path: Path) -> None:

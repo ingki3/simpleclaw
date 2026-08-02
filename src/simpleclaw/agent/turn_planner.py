@@ -30,6 +30,9 @@ from simpleclaw.llm.router import LLMRouter
 
 logger = logging.getLogger(__name__)
 
+_PLANNER_EXAMPLES_PROMPT = "unified_turn_planner_examples"
+_PROMPT_SECTION_SEPARATOR = "\n\n---\n\n"
+
 _REPAIR_REQUIRED_FIELDS = (
     "context",
     "clarification",
@@ -370,6 +373,7 @@ async def plan_turn_with_llm(
     router,
     max_tokens: int = 2048,
     reasoning: dict | None = None,
+    examples_prompt_name: str = _PLANNER_EXAMPLES_PROMPT,
 ) -> UnifiedTurnPlan:
     """한 structured 요청으로 plan을 만들고 repair→retry 후 fail-closed한다.
 
@@ -389,10 +393,21 @@ async def plan_turn_with_llm(
     """
     original = text or ""
     try:
+        base_prompt = load_system_prompt("unified_turn_planner")
+        examples_prompt = load_system_prompt(examples_prompt_name)
+        logger.info(
+            "Unified planner prompts loaded: base=%s@%d examples=%s@%d",
+            base_prompt.name,
+            base_prompt.version,
+            examples_prompt.name,
+            examples_prompt.version,
+        )
         request = LLMRequest(
-            system_prompt=load_system_prompt(
-                "unified_turn_planner"
-            ).system_prompt,
+            system_prompt=(
+                base_prompt.system_prompt
+                + _PROMPT_SECTION_SEPARATOR
+                + examples_prompt.field("template")
+            ),
             user_message=build_turn_planner_user_prompt(
                 text=original,
                 candidates=candidates,

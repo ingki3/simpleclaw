@@ -9,9 +9,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from simpleclaw.agent.turn_plan import ExecutionMode, UnifiedTurnPlan
+from simpleclaw.agent.turn_plan import ExecutionMode
+from simpleclaw.agent.turn_state import TurnExecutionState
 
-ExecutionCallback = Callable[[UnifiedTurnPlan], Awaitable[str]]
+ExecutionCallback = Callable[
+    [TurnExecutionState],
+    Awaitable[TurnExecutionState],
+]
 
 
 @dataclass(frozen=True)
@@ -33,8 +37,13 @@ class ExecutionRouter:
     def __init__(self, callbacks: ExecutionCallbacks) -> None:
         self._callbacks = callbacks
 
-    async def dispatch(self, plan: UnifiedTurnPlan) -> str:
-        """``plan.execution.mode``의 callback 결과를 그대로 반환한다."""
+    async def dispatch(
+        self,
+        state: TurnExecutionState,
+    ) -> TurnExecutionState:
+        """Dispatch the same turn object selected by its immutable plan."""
+        if state.plan is None:
+            raise ValueError("execution router requires an attached plan")
         handlers = {
             ExecutionMode.CLARIFY: self._callbacks.clarify,
             ExecutionMode.DIRECT_ANSWER: self._callbacks.direct_answer,
@@ -44,4 +53,4 @@ class ExecutionRouter:
             ExecutionMode.COMPLEX_FACT: self._callbacks.complex_fact,
             ExecutionMode.RECIPE: self._callbacks.recipe,
         }
-        return await handlers[plan.execution.mode](plan)
+        return await handlers[state.plan.execution.mode](state)

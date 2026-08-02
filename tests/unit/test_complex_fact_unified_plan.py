@@ -9,7 +9,6 @@ import pytest
 from simpleclaw.agent.evidence_retrieval import EvidenceRetriever
 from simpleclaw.agent.fact_plan import fact_plan_from_turn_plan
 from simpleclaw.agent.fact_types import (
-    ComplexFactResult,
     EvidenceCoverage,
     EvidenceItem,
 )
@@ -17,7 +16,6 @@ from simpleclaw.agent.fact_workflow import (
     ComplexFactWorkflow,
     ComplexFactWorkflowConfig,
 )
-from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.turn_plan import (
     ClarificationPlan,
     ContextRelation,
@@ -210,75 +208,3 @@ async def test_retrieval_policy_uses_plan_query_and_allowed_collector(monkeypatc
     blocked = EvidenceRetriever.from_turn_plan(_plan(allowed_tools=()))
     assert await blocked.search_for_slot("claim_1", "must not run") == []
     assert search.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_primary_complex_plan_is_blocked_until_source_hardening(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    orchestrator = AgentOrchestrator(_config(tmp_path))
-    planner_calls = 0
-
-    async def fake_planner(_text, *, catalog, **_kwargs):
-        nonlocal planner_calls
-        planner_calls += 1
-        return _plan(fingerprint=catalog.fingerprint)
-
-    monkeypatch.setattr(
-        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
-        fake_planner,
-    )
-    planned_workflow = AsyncMock(side_effect=AssertionError("hardening gate bypassed"))
-    monkeypatch.setattr(
-        orchestrator,
-        "_run_planned_complex_fact_workflow",
-        planned_workflow,
-    )
-
-    result = await orchestrator.process_message("공식 근거로 확인해줘", 1, 1)
-
-    assert planner_calls == 1
-    assert "선행 작업이 준비되지 않아" in result
-    planned_workflow.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ready_primary_complex_uses_existing_plan_once(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    orchestrator = AgentOrchestrator(_config(tmp_path, hardening_ready=True))
-    planner_calls = 0
-
-    async def fake_planner(_text, *, catalog, **_kwargs):
-        nonlocal planner_calls
-        planner_calls += 1
-        return _plan(fingerprint=catalog.fingerprint)
-
-    monkeypatch.setattr(
-        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
-        fake_planner,
-    )
-    fact_plan = fact_plan_from_turn_plan(_plan(), max_iterations=4)
-    planned_workflow = AsyncMock(
-        return_value=ComplexFactResult(
-            text="검증 완료",
-            plan=fact_plan,
-            success=True,
-        )
-    )
-    monkeypatch.setattr(
-        orchestrator,
-        "_run_planned_complex_fact_workflow",
-        planned_workflow,
-    )
-
-    result = await orchestrator.process_message("공식 근거로 확인해줘", 1, 1)
-
-    assert result == "검증 완료"
-    assert planner_calls == 1
-    planned_workflow.assert_awaited_once()
-    assert planned_workflow.await_args.args[0].context.standalone_question == (
-        "SK와 NVIDIA의 협력 발표를 공식 근거로 확인해줘"
-    )

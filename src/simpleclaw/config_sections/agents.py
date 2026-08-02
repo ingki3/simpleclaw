@@ -150,10 +150,9 @@ _AGENT_DEFAULTS: dict = {
         },
         "fallback_mode": "conservative_original",
     },
-    # BIZ-493/BIZ-497: default off, shadow는 관측 전용, canary는 결정적
-    # read-only cohort, primary는 검증된 context/tool scope 전체를 연결한다.
+    # BIZ-523: ordinary turn은 typed planner primary 단일 경로다.
     "unified_turn_planner": {
-        "mode": "off",
+        "mode": "primary",
         "sample_rate": 0.0,
         "max_tokens": 2048,
         "structured_output": True,
@@ -167,6 +166,10 @@ _AGENT_DEFAULTS: dict = {
         "selected_context_max_turns": 3,
         "selected_context_max_chars": 2400,
         "repair_attempts": 1,
+        "examples_prompt": "unified_turn_planner_examples",
+        "planner_max_attempts": 2,
+        "evidence_max_attempts": 2,
+        "on_planner_failure": "fail_closed",
         "telemetry": {
             "enabled": True,
             "include_raw_text": False,
@@ -301,7 +304,7 @@ def _agent_with_defaults(agent: dict) -> dict:
     try:
         unified_mode = UnifiedTurnPlannerMode(raw_mode)
     except ValueError:
-        unified_mode = UnifiedTurnPlannerMode.OFF
+        unified_mode = UnifiedTurnPlannerMode.PRIMARY
     unified_reasoning = unified_turn_planner.get("reasoning", {})
     if not isinstance(unified_reasoning, dict):
         unified_reasoning = {}
@@ -603,6 +606,15 @@ def _agent_with_defaults(agent: dict) -> dict:
             # deterministic repair + validated semantic retry 1회가 strict 계약이다.
             # config의 0/다른 값은 무시하고 고정값으로 정규화한다.
             "repair_attempts": unified_defaults["repair_attempts"],
+            "examples_prompt": str(
+                unified_turn_planner.get(
+                    "examples_prompt",
+                    unified_defaults["examples_prompt"],
+                )
+            ),
+            "planner_max_attempts": unified_defaults["planner_max_attempts"],
+            "evidence_max_attempts": unified_defaults["evidence_max_attempts"],
+            "on_planner_failure": unified_defaults["on_planner_failure"],
             "telemetry": {
                 "enabled": bool(
                     unified_telemetry.get(
