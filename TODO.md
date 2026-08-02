@@ -139,6 +139,8 @@
 
 ### 2026-08-02
 
+- [x] **[BIZ-527](mention://issue/cc0bf8e4-7883-4053-852c-f39637e37d04) / [BIZ-528](mention://issue/4c14d104-1ced-498d-991f-5d1603ca92af): Turn/Session/Evidence gate 코드·오프라인 검증 완료** — PR #537을 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)해 typed realtime request, verified-evidence finalization, required-claim capability 검증을 반영했다. `main` 승격·live config·restart·smoke는 계속 BIZ-523의 release/live gate가 소유한다. (2026-08-02)
+
 - [x] **[BIZ-524](mention://issue/529b497b-ae11-4e82-818c-74fa36200f0d): 모든 Gemini 호출을 OpenRouter로 전환** — [PR #541](https://github.com/ingki3/simpleclaw/pull/541)을 `dev`에 squash merge(SHA `ef0dffb9d6f2677848d317eaf59ada5059f57af3`)하고 [release PR #542](https://github.com/ingki3/simpleclaw/pull/542)를 `main`에 merge commit(SHA `e3757f88d185c0d4f6aa7ff60967cf81058b8d53`)으로 반영해 `v2026.08.01.1`을 발행했다. live config backup 후 TurnAnalysis·Asset Selector·default retry·multimodal core route를 OpenRouter `google/gemini-3.6-flash`로 전환하고 LaunchAgent를 재시작했다. text/default·required structured·forced tool·image·PDF no-send, Admin UI·Webhook HTTP 200, Telegram polling·scheduler 정상, Telegram send/edit 0건, ERROR 0건, SimpleClaw core native Google Gemini 호출 0건을 확인했다. (완료: 2026-08-02)
 
 ### 2026-07-30
