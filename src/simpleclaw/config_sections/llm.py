@@ -8,7 +8,9 @@ from __future__ import annotations
 import copy
 import logging
 import os
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from dotenv import dotenv_values
@@ -30,6 +32,82 @@ _LLM_DEFAULTS: dict = {
     "routes": {},
     "providers": {},
 }
+
+_LLM_USAGE_DEFAULTS: dict = {
+    "enabled": False,
+    "db_path": "~/.simpleclaw-agent/default/llm_usage.db",
+    "timezone": "Asia/Seoul",
+    "retention_days": 400,
+    "alert_mode": "alert_only",
+    "thresholds": {"daily_usd": None, "monthly_usd": None, "cooldown_seconds": 3600},
+    "pricing": {},
+}
+
+
+def _optional_decimal(value: object, *, name: str, positive: bool = False) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise LLMConfigError(f"{name} must be a decimal")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise LLMConfigError(f"{name} must be a decimal") from exc
+    if not result.is_finite() or result < 0 or (positive and result == 0):
+        raise LLMConfigError(f"{name} must be {'positive' if positive else 'non-negative'}")
+    return result
+
+
+def load_llm_usage_config(config_path: str | Path) -> dict:
+    """Load disabled-by-default, validated usage accounting configuration."""
+    result = copy.deepcopy(_LLM_USAGE_DEFAULTS)
+    path = Path(config_path)
+    if not path.is_file():
+        return result
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        return result
+    llm = data.get("llm", {}) if isinstance(data, dict) else {}
+    raw = llm.get("usage", {}) if isinstance(llm, dict) else {}
+    if not isinstance(raw, dict):
+        raise LLMConfigError("llm.usage must be a mapping")
+    result["enabled"] = bool(raw.get("enabled", False))
+    result["db_path"] = str(raw.get("db_path", result["db_path"]))
+    result["timezone"] = str(raw.get("timezone", result["timezone"]))
+    try:
+        ZoneInfo(result["timezone"])
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise LLMConfigError("llm.usage timezone is invalid") from exc
+    retention = raw.get("retention_days", result["retention_days"])
+    if isinstance(retention, bool) or not isinstance(retention, int) or retention <= 0:
+        raise LLMConfigError("llm.usage retention_days must be positive")
+    result["retention_days"] = retention
+    mode = raw.get("alert_mode", "alert_only")
+    if mode != "alert_only":
+        raise LLMConfigError("llm.usage alert_mode must be alert_only")
+    thresholds = raw.get("thresholds", {})
+    if not isinstance(thresholds, dict):
+        raise LLMConfigError("llm.usage thresholds must be a mapping")
+    result["thresholds"] = {
+        "daily_usd": _optional_decimal(thresholds.get("daily_usd"), name="daily_usd", positive=True),
+        "monthly_usd": _optional_decimal(thresholds.get("monthly_usd"), name="monthly_usd", positive=True),
+        "cooldown_seconds": int(thresholds.get("cooldown_seconds", 3600)),
+    }
+    pricing: dict[str, dict] = {}
+    raw_pricing = raw.get("pricing", {})
+    if not isinstance(raw_pricing, dict):
+        raise LLMConfigError("llm.usage pricing must be a mapping")
+    for backend, entry in raw_pricing.items():
+        if not isinstance(backend, str) or not isinstance(entry, dict):
+            continue
+        normalized = dict(entry)
+        normalized["version"] = str(entry.get("version", "unversioned"))
+        for key in ("input_per_million_usd", "output_per_million_usd", "cache_read_per_million_usd", "cache_write_per_million_usd"):
+            normalized[key] = _optional_decimal(entry.get(key), name=f"pricing.{backend}.{key}")
+        pricing[backend] = normalized
+    result["pricing"] = pricing
+    return result
 
 
 def _clean_optional_str(value: object) -> str | None:
