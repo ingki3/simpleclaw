@@ -607,6 +607,21 @@ daemon:
 
         assert result["dreaming"]["model"] == ""
 
+    def test_live_dreaming_backend_alias_is_loaded_verbatim(self, tmp_path: Path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+daemon:
+  dreaming:
+    model: openrouter_gemini_3_6_flash
+""",
+        )
+
+        result = load_daemon_config(cfg)
+
+        assert result["dreaming"]["model"] == "openrouter_gemini_3_6_flash"
+
     # -- BIZ-297: dreaming.max_tokens --
 
     def test_dreaming_max_tokens_defaults(self, tmp_path: Path):

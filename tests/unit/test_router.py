@@ -274,18 +274,31 @@ class TestLLMRouter:
         with pytest.raises(LLMConfigError, match="Unknown backend"):
             await router.send(request)
 
-    def test_validate_backend_name_accepts_registered_alias(self, router):
+    def test_validate_backend_name_accepts_current_live_alias(self):
+        live_aliases = (
+            "openrouter_glm_5_2",
+            "openrouter_deepseek_v4_pro",
+            "openrouter_gemini_3_6_flash",
+        )
+        providers = {alias: MockProvider(alias) for alias in live_aliases}
+        router = LLMRouter(
+            backends={},
+            providers=providers,
+            default_backend="openrouter_deepseek_v4_pro",
+        )
+
         router.validate_backend_name(
-            "provider_b", field_path="daemon.dreaming.model"
+            "openrouter_gemini_3_6_flash",
+            field_path="daemon.dreaming.model",
         )
 
     def test_validate_backend_name_rejects_unknown_alias_with_field_path(self, router):
         with pytest.raises(
             LLMConfigError,
-            match=r"daemon\.dreaming\.model: unknown backend alias 'nonexistent'",
+            match=r"daemon\.dreaming\.model: unknown backend alias 'utility_fast'",
         ):
             router.validate_backend_name(
-                "nonexistent", field_path="daemon.dreaming.model"
+                "utility_fast", field_path="daemon.dreaming.model"
             )
 
     def test_validate_backend_name_allows_empty_default_route(self, router):

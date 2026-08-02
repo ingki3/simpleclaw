@@ -89,6 +89,48 @@ def _make_http(responses: list[tuple[int | None, dict | None]]):
 
 
 class TestHappyPath:
+    def test_current_live_dreaming_alias_passes_preflight(
+        self, script_module, tmp_path
+    ):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            f"""
+llm:
+  default: openrouter_deepseek_v4_pro
+  providers:
+    openrouter_glm_5_2:
+      type: cli
+      command: echo
+    openrouter_deepseek_v4_pro:
+      type: cli
+      command: echo
+    openrouter_gemini_3_6_flash:
+      type: cli
+      command: echo
+daemon:
+  dreaming:
+    model: openrouter_gemini_3_6_flash
+  drain:
+    state_file: "{tmp_path}/drain_state.json"
+"""
+        )
+        launchctl_calls: list[list[str]] = []
+        args = script_module.build_parser().parse_args(["--config", str(config)])
+
+        exit_code = script_module.run_drain_restart(
+            args,
+            runner=_make_runner(launchctl_calls),
+            http_get_json=_make_http(
+                [(200, {"status": "ok", "drain": {"active_operations": 0}})]
+            ),
+            getuid=lambda: 501,
+        )
+
+        assert exit_code == 0
+        assert launchctl_calls == [
+            ["launchctl", "kickstart", "-k", "gui/501/com.simpleclaw.bot"]
+        ]
+
     def test_full_sequence(self, script_module, config_file, tmp_path):
         drain_file = tmp_path / "drain_state.json"
         clock = FakeTime()
@@ -246,14 +288,14 @@ class TestFailurePaths:
         config.write_text(
             f"""
 llm:
-  default: utility_fast
+  default: openrouter_gemini_3_6_flash
   providers:
-    utility_fast:
+    openrouter_gemini_3_6_flash:
       type: cli
       command: echo
 daemon:
   dreaming:
-    model: missing_backend
+    model: utility_fast
   drain:
     state_file: "{tmp_path}/drain_state.json"
 """
@@ -269,7 +311,7 @@ daemon:
         assert exit_code == 2
         assert launchctl_calls == []
         assert not (tmp_path / "drain_state.json").exists()
-        assert "daemon.dreaming.model: unknown backend alias 'missing_backend'" in (
+        assert "daemon.dreaming.model: unknown backend alias 'utility_fast'" in (
             capsys.readouterr().out
         )
 

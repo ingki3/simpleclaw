@@ -157,7 +157,7 @@ class TestDreamingPipeline:
     async def test_llm_model_routing(self, setup):
         """Dreaming backend alias is passed to the LLM request."""
         store, pipeline, _, _ = setup
-        pipeline._dreaming_model = "utility_fast"
+        pipeline._dreaming_model = "openrouter_gemini_3_6_flash"
 
         mock_response = MagicMock()
         mock_response.text = '{"memory": "## test", "user_insights": ""}'
@@ -173,7 +173,7 @@ class TestDreamingPipeline:
 
         # Verify the request used the dreaming model
         call_args = mock_router.send.call_args[0][0]
-        assert call_args.backend_name == "utility_fast"
+        assert call_args.backend_name == "openrouter_gemini_3_6_flash"
 
     @pytest.mark.asyncio
     async def test_empty_llm_model_uses_default_route(self, setup):

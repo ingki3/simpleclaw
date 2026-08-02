@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-538](mention://issue/2e969590-74fa-4f97-9971-488bb9d58d4c): Dreaming backend alias를 live router와 정합화** — `daemon.dreaming.model`을 현재 등록된 backend alias와 restart 전 교차 검증하고, 빈 값의 default-route 계약은 보존한다. unknown alias는 field-path 오류로 fail-closed하며 자동 fallback하지 않는다. 예시·Admin restart 정책·drain/restart preflight·회귀 테스트를 정합화한 뒤 Graphify/PR/CI와 live 한 필드 rollout·두 주기 no-send 관측을 완료한다. (진행: 2026-08-02)
+- [>] **[BIZ-538](mention://issue/2e969590-74fa-4f97-9971-488bb9d58d4c): Dreaming backend alias를 live router와 정합화** — `daemon.dreaming.model`을 현재 등록된 backend alias와 restart 전 교차 검증하고, 빈 값의 default-route 계약은 보존한다. unknown alias는 field-path 오류로 fail-closed하며 자동 fallback하지 않는다. [BIZ-539](mention://issue/19b1404f-ed4e-4965-897c-5c17e03491ea)에서 예시·회귀를 live registry로 검증한 `openrouter_gemini_3_6_flash`에 맞췄으며, Graphify/PR/CI와 live 한 필드 rollout·두 주기 no-send 관측 완료 전까지 진행 상태를 유지한다. (진행: 2026-08-02)
 
 - [>] **BIZ-17: LLM 토큰 사용량·비용 추적 및 임계 경보** — 실제 provider attempt 단위의 content-free usage event, versioned backend pricing 기반 micro-USD 예상 비용, 별도 SQLite 일/월 집계와 durable alert claim, dashboard API/panel, alert-only Telegram 배선을 구현한다. production 가격·threshold·enable/restart는 운영자 승인 전 적용하지 않는다. (진행: 2026-08-02)
 
