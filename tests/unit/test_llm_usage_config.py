@@ -16,8 +16,13 @@ def test_usage_config_defaults_disabled(tmp_path):
 
 def test_usage_config_normalizes_decimal_rates(tmp_path):
     path = tmp_path / "config.yaml"
-    path.write_text("llm:\n  usage:\n    pricing:\n      primary:\n        version: v1\n        input_per_million_usd: '3.25'\n", encoding="utf-8")
-    assert load_llm_usage_config(path)["pricing"]["primary"]["input_per_million_usd"] == Decimal("3.25")
+    path.write_text(
+        "llm:\n  usage:\n    pricing:\n      primary:\n        version: v1\n        input_per_million_usd: '3.25'\n",
+        encoding="utf-8",
+    )
+    assert load_llm_usage_config(path)["pricing"]["primary"][
+        "input_per_million_usd"
+    ] == Decimal("3.25")
 
 
 def test_usage_config_rejects_invalid_timezone(tmp_path):
@@ -30,6 +35,20 @@ def test_usage_config_rejects_invalid_timezone(tmp_path):
 @pytest.mark.parametrize("value", ["NaN", "Infinity", -1, True])
 def test_usage_config_rejects_invalid_rates(tmp_path, value):
     path = tmp_path / "config.yaml"
-    path.write_text(f"llm:\n  usage:\n    pricing:\n      primary:\n        input_per_million_usd: {value}\n", encoding="utf-8")
+    path.write_text(
+        f"llm:\n  usage:\n    pricing:\n      primary:\n        input_per_million_usd: {value}\n",
+        encoding="utf-8",
+    )
     with pytest.raises(LLMConfigError):
+        load_llm_usage_config(path)
+
+
+@pytest.mark.parametrize("value", ["-1", "86401", "true", "'60'"])
+def test_usage_config_rejects_unbounded_alert_cooldown(tmp_path, value):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        f"llm:\n  usage:\n    thresholds:\n      cooldown_seconds: {value}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(LLMConfigError, match="cooldown_seconds"):
         load_llm_usage_config(path)

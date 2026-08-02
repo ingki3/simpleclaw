@@ -110,13 +110,22 @@ integer micro-USD and provider-reported cost remains a separate field.
 
 Daily/monthly thresholds use the configured timezone and a durable database
 claim, so a restart cannot emit duplicate alerts for the same period and
-threshold. The MVP is alert-only: accounting, database, logging, or Telegram
-delivery failures never block an otherwise valid LLM response. Enablement,
-production rates, thresholds, database path, restart, and a real-provider smoke
-all require operator approval.
+threshold. Failed claims become retryable after `cooldown_seconds`; pending
+claims use a five-minute lease and can be reclaimed after a process restart.
+Delivery is limited to three attempts per period/threshold, and a subsequent
+usage event drives a due retry. The MVP is alert-only: accounting, database,
+logging, or Telegram delivery failures never block an otherwise valid LLM
+response. Enablement, production rates, thresholds, database path, restart, and
+a real-provider smoke all require operator approval.
 
 Usage rows, logs, dashboard payloads, and alerts must not contain prompts,
 responses, tool arguments/results, chat/user/thread identifiers, or credentials.
+Every free-string event field is limited to a 128-character identifier alphabet;
+path separators, whitespace, control-like values, and credential-shaped markers
+are deterministically replaced with a field-scoped `redacted-*` value before the
+router sink and again before SQLite storage. Unknown attempt/status enums fail
+closed to bounded values. OpenAI-compatible endpoints that report `usage.cost`
+preserve it separately as provider-reported micro-USD.
 
 ## 에러 처리
 

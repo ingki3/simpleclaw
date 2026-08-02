@@ -55,10 +55,13 @@ class TestVertexGeminiInit:
 
     def test_client_init_failure_maps_to_auth_error(self):
         """ADC 미구성 등 초기화 실패는 LLMAuthError — 라우터가 skip 할 수 있어야 한다."""
-        with patch(
-            "simpleclaw.llm.providers.vertex_gemini.genai.Client",
-            side_effect=DefaultCredentialsError("no ADC"),
-        ), pytest.raises(LLMAuthError):
+        with (
+            patch(
+                "simpleclaw.llm.providers.vertex_gemini.genai.Client",
+                side_effect=DefaultCredentialsError("no ADC"),
+            ),
+            pytest.raises(LLMAuthError),
+        ):
             VertexGeminiProvider(model="gemini-3.5-flash", project="test-proj")
 
 
@@ -117,11 +120,14 @@ class TestVertexGeminiServiceAccount:
         """SA JSON 파싱 실패도 LLMAuthError 로 매핑되어야 한다."""
         sa_file = tmp_path / "sa.json"
         sa_file.write_text("not-json")
-        with patch(
-            "simpleclaw.llm.providers.vertex_gemini."
-            "service_account.Credentials.from_service_account_file",
-            side_effect=ValueError("bad key file"),
-        ), pytest.raises(LLMAuthError):
+        with (
+            patch(
+                "simpleclaw.llm.providers.vertex_gemini."
+                "service_account.Credentials.from_service_account_file",
+                side_effect=ValueError("bad key file"),
+            ),
+            pytest.raises(LLMAuthError),
+        ):
             VertexGeminiProvider(
                 model="gemini-3.5-flash", credentials_path=str(sa_file)
             )
@@ -142,7 +148,10 @@ class TestVertexGeminiSend:
         response = MagicMock()
         response.candidates = [candidate]
         response.usage_metadata = MagicMock(
-            prompt_token_count=7, candidates_token_count=3
+            prompt_token_count=7,
+            candidates_token_count=3,
+            cached_content_token_count=2,
+            thoughts_token_count=1,
         )
         return response
 
@@ -155,6 +164,12 @@ class TestVertexGeminiSend:
         result = await provider.send("system", "hello")
         assert result.text == "Hello from Vertex"
         assert result.backend_name == "vertex_gemini"
+        assert result.usage == {
+            "input_tokens": 7,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 2,
+            "reasoning_tokens": 1,
+        }
 
     @pytest.mark.asyncio
     async def test_token_refresh_failure_maps_to_auth_error(self):
@@ -221,9 +236,7 @@ class TestVertexGeminiRouterRegistration:
             '      location: "us-central1"\n',
             encoding="utf-8",
         )
-        with patch(
-            "simpleclaw.llm.providers.vertex_gemini.genai.Client"
-        ) as client_cls:
+        with patch("simpleclaw.llm.providers.vertex_gemini.genai.Client") as client_cls:
             router = create_router(config_file)
 
         assert "vertex_gemini" in router.list_backends()
@@ -250,6 +263,7 @@ class TestVertexGeminiRouterRegistration:
             '      model: "gemini-3.5-flash"\n',
             encoding="utf-8",
         )
+
         # genai.Client 는 gemini/vertex_gemini 가 공유하는 모듈 속성이므로
         # vertexai=True 호출만 실패시킨다 — gemini 프로바이더는 살아야 한다.
         def fake_client(**kwargs):

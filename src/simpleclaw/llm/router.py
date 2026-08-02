@@ -31,7 +31,12 @@ from simpleclaw.llm.models import (
 from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
 from simpleclaw.llm.transports import get_transport_class
-from simpleclaw.llm.usage import LLMUsageEvent, LLMUsageSink, normalize_usage
+from simpleclaw.llm.usage import (
+    LLMUsageEvent,
+    LLMUsageSink,
+    normalize_usage,
+    sanitize_usage_dimension,
+)
 from simpleclaw.logging.trace_context import get_trace_id
 
 logger = logging.getLogger(__name__)
@@ -107,7 +112,9 @@ class LLMRouter:
         self._default = default_backend
         # 가용 provider 가 없는 정책 이름은 조용히 비활성화 — 부분 가용성 보장.
         self._fallback = fallback_backend if fallback_backend in providers else None
-        self._multimodal = multimodal_backend if multimodal_backend in providers else None
+        self._multimodal = (
+            multimodal_backend if multimodal_backend in providers else None
+        )
         if routes is None:
             routes = {
                 "default": LLMRoute(
@@ -129,8 +136,13 @@ class LLMRouter:
         *,
         attempt_role: str = "primary",
         retry_reason: str | None = None,
+        record_response: bool = True,
     ) -> LLMResponse:
-        """선택된 백엔드 provider 로 요청을 실제 전송한다."""
+        """선택된 backend에 전송하고 확정 가능한 attempt 결과를 기록한다.
+
+        semantic validator를 사용하는 호출은 ``record_response=False``로 응답 기록을
+        미룬다. provider 예외는 validator와 무관하게 이 경계에서 항상 기록한다.
+        """
         provider = self._providers[backend_name]
 
         # BIZ-453 — reasoning hint 는 설정된 요청에만 kwargs 로 전달한다.
@@ -143,66 +155,113 @@ class LLMRouter:
         started = time.monotonic()
         try:
             if on_text_delta is not None:
-                logger.info("Routing streaming request to backend '%s'", backend_name)
+                logger.info(
+                    "Routing streaming request to backend '%s'",
+                    sanitize_usage_dimension(backend_name, field="backend_name"),
+                )
                 response = await provider.stream(
-                request.system_prompt,
-                request.user_message,
-                request.messages,
-                request.tools,
-                system_blocks=request.system_blocks,
-                on_text_delta=on_text_delta,
-                max_tokens=request.max_tokens,
-                response_mime_type=request.response_mime_type,
-                response_schema=request.response_schema,
-                require_structured_output=request.require_structured_output,
+                    request.system_prompt,
+                    request.user_message,
+                    request.messages,
+                    request.tools,
+                    system_blocks=request.system_blocks,
+                    on_text_delta=on_text_delta,
+                    max_tokens=request.max_tokens,
+                    response_mime_type=request.response_mime_type,
+                    response_schema=request.response_schema,
+                    require_structured_output=request.require_structured_output,
                     **extra_kwargs,
                 )
             else:
-                logger.info("Routing request to backend '%s'", backend_name)
+                logger.info(
+                    "Routing request to backend '%s'",
+                    sanitize_usage_dimension(backend_name, field="backend_name"),
+                )
                 response = await provider.send(
-            request.system_prompt,
-            request.user_message,
-            request.messages,
-            request.tools,
-            system_blocks=request.system_blocks,
-            max_tokens=request.max_tokens,
-            response_mime_type=request.response_mime_type,
-            response_schema=request.response_schema,
-            require_structured_output=request.require_structured_output,
+                    request.system_prompt,
+                    request.user_message,
+                    request.messages,
+                    request.tools,
+                    system_blocks=request.system_blocks,
+                    max_tokens=request.max_tokens,
+                    response_mime_type=request.response_mime_type,
+                    response_schema=request.response_schema,
+                    require_structured_output=request.require_structured_output,
                     **extra_kwargs,
                 )
         except Exception as exc:
-            self._record_usage_event(backend_name, request, attempt_role, retry_reason, "error", time.monotonic() - started, None, type(exc).__name__)
+            self._record_usage_event(
+                backend_name,
+                request,
+                attempt_role,
+                retry_reason,
+                "error",
+                time.monotonic() - started,
+                None,
+                type(exc).__name__,
+            )
             raise
-        status = "empty" if _response_is_empty_final(response) else "success"
-        self._record_usage_event(backend_name, request, attempt_role, retry_reason, status, time.monotonic() - started, response, None)
+        if record_response:
+            status = "empty" if _response_is_empty_final(response) else "success"
+            self._record_usage_event(
+                backend_name,
+                request,
+                attempt_role,
+                retry_reason,
+                status,
+                time.monotonic() - started,
+                response,
+                None,
+            )
         return response
 
-    def _record_usage_event(self, backend_name: str, request: LLMRequest, attempt_role: str, retry_reason: str | None, status: str, elapsed: float, response: LLMResponse | None, error_type: str | None) -> None:
+    def _record_usage_event(
+        self,
+        backend_name: str,
+        request: LLMRequest,
+        attempt_role: str,
+        retry_reason: str | None,
+        status: str,
+        elapsed: float,
+        response: LLMResponse | None,
+        error_type: str | None,
+    ) -> None:
         if self._usage_sink is None:
             return
         backend = self._backends[backend_name]
         profile = self._profiles.get(backend_name)
         event = LLMUsageEvent(
-            event_id=str(uuid.uuid4()), occurred_at_utc=datetime.now(UTC).isoformat(),
-            trace_id=get_trace_id(), backend_name=backend_name,
-            provider_profile=profile.name if profile else (backend.profile or "generic"),
+            event_id=str(uuid.uuid4()),
+            occurred_at_utc=datetime.now(UTC).isoformat(),
+            trace_id=get_trace_id(),
+            backend_name=backend_name,
+            provider_profile=profile.name
+            if profile
+            else (backend.profile or "generic"),
             model=(response.model if response else backend.model) or backend.model,
-            route_name="direct" if request.backend_name else (request.route_name or "default"),
+            route_name="direct"
+            if request.backend_name
+            else (request.route_name or "default"),
             task_name=request.usage_task or request.route_name or "chat",
-            attempt_role=attempt_role, retry_reason=retry_reason, status=status,
-            duration_ms=elapsed * 1000, usage=normalize_usage(response.usage if response else None),
+            attempt_role=attempt_role,
+            retry_reason=retry_reason,
+            status=status,
+            duration_ms=elapsed * 1000,
+            usage=normalize_usage(response.usage if response else None),
             error_type=error_type,
         )
+        safe_event = event.sanitized()
         try:
-            self._usage_sink.record(event)
+            self._usage_sink.record(safe_event)
         except Exception as exc:  # fail-open telemetry boundary
-            logger.warning("llm_usage_record_failed backend=%s task=%s error_type=%s", backend_name, event.task_name, type(exc).__name__)
+            logger.warning("llm_usage_record_failed error_type=%s", type(exc).__name__)
 
     def _resolve_request(self, request: LLMRequest) -> tuple[str, str | None]:
         """Resolve the mutually-exclusive backend/route selectors."""
         if request.backend_name and request.route_name:
-            raise LLMConfigError("LLM request cannot set both backend_name and route_name")
+            raise LLMConfigError(
+                "LLM request cannot set both backend_name and route_name"
+            )
         if request.backend_name:
             return request.backend_name, None
 
@@ -273,8 +332,8 @@ class LLMRouter:
         ):
             logger.warning(
                 "Skipping incompatible or unavailable retry backend '%s' for '%s'",
-                retry_name,
-                backend_name,
+                sanitize_usage_dimension(retry_name, field="backend_name"),
+                sanitize_usage_dimension(backend_name, field="backend_name"),
             )
             return None
         return retry_name
@@ -302,7 +361,7 @@ class LLMRouter:
 
         try:
             response = await self._send_to_backend(backend_name, request, on_text_delta)
-        except Exception:
+        except Exception as exc:
             retry_name = (
                 self._usable_retry(backend_name, fallback_name, required)
                 if on_text_delta is None
@@ -310,24 +369,40 @@ class LLMRouter:
             )
             if retry_name:
                 logger.warning(
-                    "Backend '%s' failed; retrying fallback '%s'",
-                    backend_name,
-                    retry_name,
-                    exc_info=True,
+                    "Backend '%s' failed; retrying fallback '%s' error_type=%s",
+                    sanitize_usage_dimension(backend_name, field="backend_name"),
+                    sanitize_usage_dimension(retry_name, field="backend_name"),
+                    type(exc).__name__,
                 )
-                return await self._send_to_backend(retry_name, request, None, attempt_role="retry", retry_reason="provider_error")
+                return await self._send_to_backend(
+                    retry_name,
+                    request,
+                    None,
+                    attempt_role="retry",
+                    retry_reason="provider_error",
+                )
             raise
 
-        if fallback_name and on_text_delta is None and _response_is_empty_final(response):
+        if (
+            fallback_name
+            and on_text_delta is None
+            and _response_is_empty_final(response)
+        ):
             retry_name = self._usable_retry(backend_name, fallback_name, required)
             if not retry_name:
                 return response
             logger.warning(
                 "Backend '%s' returned empty final; retrying fallback '%s'",
-                backend_name,
-                retry_name,
+                sanitize_usage_dimension(backend_name, field="backend_name"),
+                sanitize_usage_dimension(retry_name, field="backend_name"),
             )
-            return await self._send_to_backend(retry_name, request, None, attempt_role="retry", retry_reason="empty_final")
+            return await self._send_to_backend(
+                retry_name,
+                request,
+                None,
+                attempt_role="retry",
+                retry_reason="empty_final",
+            )
         return response
 
     async def send_validated(
@@ -346,22 +421,125 @@ class LLMRouter:
         required = self._required_capabilities(request, None)
         self._preflight_backend(backend_name, required)
 
+        primary_started = time.monotonic()
         try:
-            return validate_response(await self._send_to_backend(backend_name, request))
+            primary_response = await self._send_to_backend(
+                backend_name, request, record_response=False
+            )
         except Exception as exc:
             retry_name = self._usable_retry(backend_name, fallback_name, required)
             if not retry_name:
                 raise
-            route_name = request.route_name or "default"
-            logger.warning(
-                "Validated response failed; backend=%s route=%s error_type=%s "
-                "retry_backend=%s retry=true",
-                backend_name,
-                route_name,
-                type(exc).__name__,
+            retry_reason = "provider_error"
+            error_type = type(exc).__name__
+        else:
+            if _response_is_empty_final(primary_response):
+                self._record_usage_event(
+                    backend_name,
+                    request,
+                    "primary",
+                    None,
+                    "empty",
+                    time.monotonic() - primary_started,
+                    primary_response,
+                    None,
+                )
+                retry_name = self._usable_retry(backend_name, fallback_name, required)
+                if not retry_name:
+                    return validate_response(primary_response)
+                retry_reason = "empty_final"
+                error_type = None
+            else:
+                try:
+                    validated = validate_response(primary_response)
+                except Exception as exc:
+                    self._record_usage_event(
+                        backend_name,
+                        request,
+                        "primary",
+                        "validation_error",
+                        "error",
+                        time.monotonic() - primary_started,
+                        primary_response,
+                        type(exc).__name__,
+                    )
+                    retry_name = self._usable_retry(
+                        backend_name, fallback_name, required
+                    )
+                    if not retry_name:
+                        raise
+                    retry_reason = "validation_error"
+                    error_type = type(exc).__name__
+                else:
+                    self._record_usage_event(
+                        backend_name,
+                        request,
+                        "primary",
+                        None,
+                        "success",
+                        time.monotonic() - primary_started,
+                        primary_response,
+                        None,
+                    )
+                    return validated
+
+        route_name = request.route_name or "default"
+        logger.warning(
+            "Validated response failed; backend=%s route=%s error_type=%s "
+            "retry_backend=%s retry=true",
+            sanitize_usage_dimension(backend_name, field="backend_name"),
+            sanitize_usage_dimension(route_name, field="route_name"),
+            error_type,
+            sanitize_usage_dimension(retry_name, field="backend_name"),
+        )
+        retry_started = time.monotonic()
+        retry_response = await self._send_to_backend(
+            retry_name,
+            request,
+            attempt_role="retry",
+            retry_reason=retry_reason,
+            record_response=False,
+        )
+        retry_status = (
+            "empty" if _response_is_empty_final(retry_response) else "success"
+        )
+        if retry_status == "empty":
+            self._record_usage_event(
                 retry_name,
+                request,
+                "retry",
+                retry_reason,
+                "empty",
+                time.monotonic() - retry_started,
+                retry_response,
+                None,
             )
-            return validate_response(await self._send_to_backend(retry_name, request, attempt_role="retry", retry_reason="validation_error"))
+            return validate_response(retry_response)
+        try:
+            validated = validate_response(retry_response)
+        except Exception as exc:
+            self._record_usage_event(
+                retry_name,
+                request,
+                "retry",
+                "validation_error",
+                "error",
+                time.monotonic() - retry_started,
+                retry_response,
+                type(exc).__name__,
+            )
+            raise
+        self._record_usage_event(
+            retry_name,
+            request,
+            "retry",
+            retry_reason,
+            "success",
+            time.monotonic() - retry_started,
+            retry_response,
+            None,
+        )
+        return validated
 
     def list_backends(self) -> list[str]:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""
@@ -388,7 +566,9 @@ class LLMRouter:
         return self._routes.get(route_name)
 
 
-def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = None) -> LLMRouter:
+def create_router(
+    config_path: str | Path, *, usage_sink: LLMUsageSink | None = None
+) -> LLMRouter:
     """config.yaml 설정으로부터 LLMRouter를 생성한다.
 
     Args:
@@ -444,11 +624,11 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
                 provider_cls = get_transport_class(backend.transport or "cli")
             except LLMConfigError as exc:
                 logger.warning(
-                    "Skipping provider '%s' (transport=%s profile=%s): %s",
-                    name,
-                    backend.transport,
-                    backend.profile,
-                    exc,
+                    "Skipping provider '%s' (transport=%s profile=%s) error_type=%s",
+                    sanitize_usage_dimension(name, field="backend_name"),
+                    sanitize_usage_dimension(backend.transport, field="transport"),
+                    sanitize_usage_dimension(backend.profile, field="provider_profile"),
+                    type(exc).__name__,
                 )
                 continue
             provider = provider_cls(
@@ -468,11 +648,11 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
                 if backend.transport == "openai_responses":
                     raise
                 logger.warning(
-                    "Skipping provider '%s' (transport=%s profile=%s): %s",
-                    name,
-                    backend.transport,
-                    backend.profile,
-                    exc,
+                    "Skipping provider '%s' (transport=%s profile=%s) error_type=%s",
+                    sanitize_usage_dimension(name, field="backend_name"),
+                    sanitize_usage_dimension(backend.transport, field="transport"),
+                    sanitize_usage_dimension(backend.profile, field="provider_profile"),
+                    type(exc).__name__,
                 )
                 continue
             api_key = pconf.get("api_key", "")
@@ -498,17 +678,17 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
                 providers[name] = provider
             except Exception as exc:
                 logger.warning(
-                    "Skipping provider '%s' (transport=%s profile=%s): %s",
-                    name,
-                    backend.transport,
-                    backend.profile,
-                    exc,
+                    "Skipping provider '%s' (transport=%s profile=%s) error_type=%s",
+                    sanitize_usage_dimension(name, field="backend_name"),
+                    sanitize_usage_dimension(backend.transport, field="transport"),
+                    sanitize_usage_dimension(backend.profile, field="provider_profile"),
+                    type(exc).__name__,
                 )
 
     if default_name and default_name not in providers:
         logger.warning(
             "Default backend '%s' not available. Using first available.",
-            default_name,
+            sanitize_usage_dimension(default_name, field="backend_name"),
         )
         # 기본 백엔드가 사용 불가하면 첫 번째 가용 프로바이더로 대체
         default_name = next(iter(providers)) if providers else ""
@@ -519,13 +699,14 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
     # BIZ-448 — 미가용 정책 백엔드는 경고 후 비활성화 (부분 가용성 우선).
     if fallback_name and fallback_name not in providers:
         logger.warning(
-            "Fallback backend '%s' not available; disabling fallback.", fallback_name
+            "Fallback backend '%s' not available; disabling fallback.",
+            sanitize_usage_dimension(fallback_name, field="backend_name"),
         )
         fallback_name = None
     if multimodal_name and multimodal_name not in providers:
         logger.warning(
             "Multimodal backend '%s' not available; using default routing.",
-            multimodal_name,
+            sanitize_usage_dimension(multimodal_name, field="backend_name"),
         )
         multimodal_name = None
 
@@ -543,9 +724,9 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
             logger.warning(
                 "Legacy LLM route '%s' primary backend '%s' is unavailable; "
                 "using active default '%s'.",
-                route_name,
-                primary,
-                default_name,
+                sanitize_usage_dimension(route_name, field="route_name"),
+                sanitize_usage_dimension(primary, field="backend_name"),
+                sanitize_usage_dimension(default_name, field="backend_name"),
             )
             primary = default_name
 
@@ -556,8 +737,8 @@ def create_router(config_path: str | Path, *, usage_sink: LLMUsageSink | None = 
                 )
             logger.warning(
                 "Legacy LLM route '%s' retry backend '%s' is unavailable; disabling retry.",
-                route_name,
-                retry,
+                sanitize_usage_dimension(route_name, field="route_name"),
+                sanitize_usage_dimension(retry, field="backend_name"),
             )
             retry = None
         normalized_routes[route_name] = LLMRoute(

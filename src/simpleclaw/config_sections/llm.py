@@ -44,7 +44,9 @@ _LLM_USAGE_DEFAULTS: dict = {
 }
 
 
-def _optional_decimal(value: object, *, name: str, positive: bool = False) -> Decimal | None:
+def _optional_decimal(
+    value: object, *, name: str, positive: bool = False
+) -> Decimal | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -54,7 +56,9 @@ def _optional_decimal(value: object, *, name: str, positive: bool = False) -> De
     except (InvalidOperation, ValueError) as exc:
         raise LLMConfigError(f"{name} must be a decimal") from exc
     if not result.is_finite() or result < 0 or (positive and result == 0):
-        raise LLMConfigError(f"{name} must be {'positive' if positive else 'non-negative'}")
+        raise LLMConfigError(
+            f"{name} must be {'positive' if positive else 'non-negative'}"
+        )
     return result
 
 
@@ -89,10 +93,24 @@ def load_llm_usage_config(config_path: str | Path) -> dict:
     thresholds = raw.get("thresholds", {})
     if not isinstance(thresholds, dict):
         raise LLMConfigError("llm.usage thresholds must be a mapping")
+    cooldown = thresholds.get("cooldown_seconds", 3600)
+    if (
+        isinstance(cooldown, bool)
+        or not isinstance(cooldown, int)
+        or cooldown < 0
+        or cooldown > 86_400
+    ):
+        raise LLMConfigError(
+            "llm.usage thresholds.cooldown_seconds must be between 0 and 86400"
+        )
     result["thresholds"] = {
-        "daily_usd": _optional_decimal(thresholds.get("daily_usd"), name="daily_usd", positive=True),
-        "monthly_usd": _optional_decimal(thresholds.get("monthly_usd"), name="monthly_usd", positive=True),
-        "cooldown_seconds": int(thresholds.get("cooldown_seconds", 3600)),
+        "daily_usd": _optional_decimal(
+            thresholds.get("daily_usd"), name="daily_usd", positive=True
+        ),
+        "monthly_usd": _optional_decimal(
+            thresholds.get("monthly_usd"), name="monthly_usd", positive=True
+        ),
+        "cooldown_seconds": cooldown,
     }
     pricing: dict[str, dict] = {}
     raw_pricing = raw.get("pricing", {})
@@ -103,8 +121,15 @@ def load_llm_usage_config(config_path: str | Path) -> dict:
             continue
         normalized = dict(entry)
         normalized["version"] = str(entry.get("version", "unversioned"))
-        for key in ("input_per_million_usd", "output_per_million_usd", "cache_read_per_million_usd", "cache_write_per_million_usd"):
-            normalized[key] = _optional_decimal(entry.get(key), name=f"pricing.{backend}.{key}")
+        for key in (
+            "input_per_million_usd",
+            "output_per_million_usd",
+            "cache_read_per_million_usd",
+            "cache_write_per_million_usd",
+        ):
+            normalized[key] = _optional_decimal(
+                entry.get(key), name=f"pricing.{backend}.{key}"
+            )
         pricing[backend] = normalized
     result["pricing"] = pricing
     return result
@@ -267,9 +292,10 @@ def load_llm_config(config_path: str | Path) -> dict:
                 routes[normalized_name] = normalized
                 route_sources[normalized_name] = "explicit"
 
-    legacy_default = _clean_optional_str(
-        llm.get("default", _LLM_DEFAULTS["default"])
-    ) or _LLM_DEFAULTS["default"]
+    legacy_default = (
+        _clean_optional_str(llm.get("default", _LLM_DEFAULTS["default"]))
+        or _LLM_DEFAULTS["default"]
+    )
     legacy_fallback = _clean_optional_str(llm.get("fallback"))
     legacy_multimodal = _clean_optional_str(llm.get("multimodal"))
     if "default" not in routes:
@@ -299,6 +325,7 @@ def load_llm_config(config_path: str | Path) -> dict:
     )
     explicit_turn_analysis_route = "turn_analysis" in routes
     if not explicit_turn_analysis_route:
+
         def _legacy_target(prefix: str) -> str | None:
             provider_key = f"{prefix}provider"
             model_key = f"{prefix}model"

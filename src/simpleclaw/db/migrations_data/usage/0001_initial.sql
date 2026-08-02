@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS llm_usage_alert_claims (
     claimed_at_utc TEXT NOT NULL,
     observed_cost_microusd INTEGER NOT NULL,
     dispatch_status TEXT NOT NULL DEFAULT 'pending' CHECK (dispatch_status IN ('pending', 'sent', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+    lease_expires_at_utc TEXT,
+    next_attempt_at_utc TEXT,
     error_type TEXT,
     PRIMARY KEY (period_kind, period_key, threshold_microusd)
 );

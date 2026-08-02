@@ -18,6 +18,7 @@ llm:
     thresholds:
       daily_usd: null
       monthly_usd: null
+      # Failed Telegram claim retry delay (0..86400s); at most 3 attempts.
       cooldown_seconds: 3600
     pricing:
       chat_primary:

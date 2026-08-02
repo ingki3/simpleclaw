@@ -1,5 +1,6 @@
 """Tests for the LLM router."""
 
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,11 +56,31 @@ class RecordingUsageSink:
 
 def _usage_router(sink, *, primary_text="ok"):
     primary = MockProvider("primary")
-    primary._mock_send.return_value = LLMResponse(text=primary_text, backend_name="primary", model="m1", usage={"input_tokens": 10, "output_tokens": 2})
+    primary._mock_send.return_value = LLMResponse(
+        text=primary_text,
+        backend_name="primary",
+        model="m1",
+        usage={"input_tokens": 10, "output_tokens": 2},
+    )
     fallback = MockProvider("fallback")
-    fallback._mock_send.return_value = LLMResponse(text="fallback", backend_name="fallback", model="m2", usage={"input_tokens": 4, "output_tokens": 1})
-    backends = {name: LLMBackend(name, BackendType.API, model) for name, model in (("primary", "m1"), ("fallback", "m2"))}
-    return LLMRouter(backends, {"primary": primary, "fallback": fallback}, "primary", profiles={}, routes={"default": LLMRoute("default", "primary", "fallback")}, usage_sink=sink)
+    fallback._mock_send.return_value = LLMResponse(
+        text="fallback",
+        backend_name="fallback",
+        model="m2",
+        usage={"input_tokens": 4, "output_tokens": 1},
+    )
+    backends = {
+        name: LLMBackend(name, BackendType.API, model)
+        for name, model in (("primary", "m1"), ("fallback", "m2"))
+    }
+    return LLMRouter(
+        backends,
+        {"primary": primary, "fallback": fallback},
+        "primary",
+        profiles={},
+        routes={"default": LLMRoute("default", "primary", "fallback")},
+        usage_sink=sink,
+    )
 
 
 @pytest.mark.asyncio
@@ -68,14 +89,93 @@ async def test_usage_records_actual_primary_once():
     await _usage_router(sink).send(LLMRequest(user_message="secret", usage_task="chat"))
     assert len(sink.events) == 1
     event = sink.events[0]
-    assert (event.backend_name, event.model, event.task_name, event.attempt_role) == ("primary", "m1", "chat", "primary")
+    assert (event.backend_name, event.model, event.task_name, event.attempt_role) == (
+        "primary",
+        "m1",
+        "chat",
+        "primary",
+    )
 
 
 @pytest.mark.asyncio
 async def test_usage_records_empty_primary_and_actual_fallback():
     sink = RecordingUsageSink()
-    await _usage_router(sink, primary_text="").send(LLMRequest(user_message="secret", usage_task="chat"))
-    assert [(e.backend_name, e.status, e.attempt_role, e.retry_reason) for e in sink.events] == [("primary", "empty", "primary", None), ("fallback", "success", "retry", "empty_final")]
+    await _usage_router(sink, primary_text="").send(
+        LLMRequest(user_message="secret", usage_task="chat")
+    )
+    assert [
+        (e.backend_name, e.status, e.attempt_role, e.retry_reason) for e in sink.events
+    ] == [
+        ("primary", "empty", "primary", None),
+        ("fallback", "success", "retry", "empty_final"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validated_usage_records_provider_error_and_retry_success():
+    sink = RecordingUsageSink()
+    router = _usage_router(sink)
+    router._providers["primary"]._mock_send.side_effect = RuntimeError("private body")
+
+    response = await router.send_validated(
+        LLMRequest(user_message="secret", usage_task="chat"), lambda value: value
+    )
+
+    assert response.backend_name == "fallback"
+    assert [
+        (event.backend_name, event.status, event.attempt_role, event.retry_reason)
+        for event in sink.events
+    ] == [
+        ("primary", "error", "primary", None),
+        ("fallback", "success", "retry", "provider_error"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validated_usage_records_empty_and_retry_success():
+    sink = RecordingUsageSink()
+
+    response = await _usage_router(sink, primary_text="").send_validated(
+        LLMRequest(user_message="secret", usage_task="chat"), lambda value: value
+    )
+
+    assert response.backend_name == "fallback"
+    assert [
+        (event.backend_name, event.status, event.attempt_role, event.retry_reason)
+        for event in sink.events
+    ] == [
+        ("primary", "empty", "primary", None),
+        ("fallback", "success", "retry", "empty_final"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validated_usage_attributes_semantic_failure_to_primary_attempt():
+    sink = RecordingUsageSink()
+
+    def validate(response):
+        if response.backend_name == "primary":
+            raise ValueError("synthetic invalid response")
+        return response
+
+    response = await _usage_router(sink).send_validated(
+        LLMRequest(user_message="secret", usage_task="chat"), validate
+    )
+
+    assert response.backend_name == "fallback"
+    assert [
+        (
+            event.backend_name,
+            event.status,
+            event.attempt_role,
+            event.retry_reason,
+            event.error_type,
+        )
+        for event in sink.events
+    ] == [
+        ("primary", "error", "primary", "validation_error", "ValueError"),
+        ("fallback", "success", "retry", "validation_error", None),
+    ]
 
 
 @pytest.mark.asyncio
@@ -83,8 +183,50 @@ async def test_usage_sink_failure_does_not_fail_response():
     class FailingSink:
         def record(self, event):
             raise RuntimeError("db unavailable")
-    response = await _usage_router(FailingSink()).send(LLMRequest(user_message="secret"))
+
+    response = await _usage_router(FailingSink()).send(
+        LLMRequest(user_message="secret")
+    )
     assert response.text == "ok"
+
+
+@pytest.mark.asyncio
+async def test_router_redacts_unsafe_dimensions_before_sink_and_usage_log(caplog):
+    marker = "sk-review-credential-marker"
+    route_marker = "../../private/route"
+    provider = MockProvider(marker)
+    provider._mock_send.side_effect = RuntimeError(
+        "private provider response credential body"
+    )
+    fallback = MockProvider("fallback")
+    fallback._mock_send.return_value = LLMResponse(
+        text="ok", backend_name="fallback", model="/private/model/path"
+    )
+    sink = RecordingUsageSink()
+    router = LLMRouter(
+        {
+            marker: LLMBackend(marker, BackendType.API, "/private/config/model"),
+            "fallback": LLMBackend("fallback", BackendType.API, "fallback-model"),
+        },
+        {marker: provider, "fallback": fallback},
+        marker,
+        profiles={},
+        routes={route_marker: LLMRoute(route_marker, marker, "fallback")},
+        usage_sink=sink,
+    )
+
+    with caplog.at_level(logging.INFO, logger="simpleclaw.llm.router"):
+        await router.send(
+            LLMRequest(route_name=route_marker, usage_task="raw user task")
+        )
+
+    serialized = repr(sink.events)
+    assert marker not in serialized
+    assert route_marker not in serialized
+    assert "/private/model/path" not in serialized
+    assert "raw user task" not in serialized
+    assert marker not in caplog.text
+    assert "private provider response credential body" not in caplog.text
 
 
 class TestLLMRouter:
@@ -230,6 +372,7 @@ class TestLLMRouter:
                 async def gen():
                     for c in self._items:
                         yield c
+
                 return gen()
 
         provider._client.aio.models.generate_content_stream = AsyncMock(
@@ -300,11 +443,10 @@ class TestLLMRouter:
                 async def gen():
                     for c in self._items:
                         yield c
+
                 return gen()
 
-        provider._client.chat.completions.create = AsyncMock(
-            return_value=_Iter(chunks)
-        )
+        provider._client.chat.completions.create = AsyncMock(return_value=_Iter(chunks))
 
         router = LLMRouter(
             backends={},

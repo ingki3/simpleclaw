@@ -96,8 +96,28 @@ class TestDashboardServer:
     @pytest.mark.asyncio
     async def test_usage_api_summary_and_validation(self, tmp_path, aiohttp_client):
         store = LLMUsageStore(tmp_path / "usage.db")
-        store.record(LLMUsageEvent("one", datetime.now(UTC).isoformat(), "", "primary", "profile", "model", "default", "chat", "primary", None, "success", 1, NormalizedUsage(10, 2), 14, "v1"))
-        dashboard = DashboardServer(MetricsCollector(), StructuredLogger(tmp_path / "logs"), usage_store=store)
+        store.record(
+            LLMUsageEvent(
+                "one",
+                datetime.now(UTC).isoformat(),
+                "",
+                "primary",
+                "profile",
+                "model",
+                "default",
+                "chat",
+                "primary",
+                None,
+                "success",
+                1,
+                NormalizedUsage(10, 2),
+                14,
+                "v1",
+            )
+        )
+        dashboard = DashboardServer(
+            MetricsCollector(), StructuredLogger(tmp_path / "logs"), usage_store=store
+        )
         app = web.Application()
         dashboard.register_routes(app)
         client = await aiohttp_client(app)
@@ -107,6 +127,51 @@ class TestDashboardServer:
         assert payload["estimated_cost_usd"] == "0.000014"
         assert payload["groups"][0]["backend_name"] == "primary"
         assert (await client.get("/api/llm-usage?group_by=sql")).status == 400
+
+    @pytest.mark.asyncio
+    async def test_usage_api_never_returns_unsafe_dimension_markers(
+        self, tmp_path, aiohttp_client
+    ):
+        marker = "sk-review-credential-marker"
+        store = LLMUsageStore(tmp_path / "usage.db")
+        store.record(
+            LLMUsageEvent(
+                "event",
+                datetime.now(UTC).isoformat(),
+                "trace",
+                marker,
+                marker,
+                "/private/model/path",
+                "raw route text",
+                "raw task text",
+                "primary",
+                None,
+                "success",
+                1,
+                NormalizedUsage(1, 1),
+                1,
+                marker,
+            )
+        )
+        dashboard = DashboardServer(
+            MetricsCollector(),
+            StructuredLogger(tmp_path / "logs"),
+            usage_store=store,
+        )
+        app = web.Application()
+        dashboard.register_routes(app)
+        client = await aiohttp_client(app)
+
+        for group_by in ("backend", "model", "route", "task"):
+            response = await client.get(
+                f"/api/llm-usage?period=day&group_by={group_by}"
+            )
+            body = await response.text()
+            assert response.status == 200
+            assert marker not in body
+            assert "/private/model/path" not in body
+            assert "raw route text" not in body
+            assert "raw task text" not in body
 
 
 class TestDashboardTraceTimeline:
