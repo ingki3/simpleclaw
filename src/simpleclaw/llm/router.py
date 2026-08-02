@@ -32,10 +32,10 @@ from simpleclaw.llm.profiles import ProviderProfile, get_provider_profile
 from simpleclaw.llm.providers.base import LLMProvider, TextDeltaCallback
 from simpleclaw.llm.transports import get_transport_class
 from simpleclaw.llm.usage import (
-    LLMUsageEvent,
-    LLMUsageSink,
     USAGE_ROUTE_NAMES,
     USAGE_TASK_NAMES,
+    LLMUsageEvent,
+    LLMUsageSink,
     UsageDimensionRegistry,
     normalize_usage,
     sanitize_usage_dimension,
