@@ -66,24 +66,29 @@ def test_threshold_claim_is_durable_and_deduplicated(tmp_path):
 
 def test_store_redacts_every_unsafe_string_before_sqlite_boundary(tmp_path):
     path = tmp_path / "usage.db"
-    marker = "sk-review-credential-marker"
+    markers = (
+        "private-user-message-marker-7f3a",
+        "AKIAFAKESYNTHETIC1234",
+        "ghp_FAKE_SYNTHETIC_MARKER_1234567890",
+        "xoxbFAKESYNTHETIC1234567890",
+    )
     event = LLMUsageEvent(
-        marker,
+        markers[0],
         datetime.now(UTC).isoformat(),
-        "/private/user/path",
-        marker,
-        "credential-secret",
-        "user supplied model",
-        "../../route",
-        "raw user task",
-        "primary",
-        "private reason",
-        "success",
+        markers[1],
+        markers[2],
+        markers[3],
+        markers[0],
+        markers[1],
+        markers[2],
+        markers[3],
+        markers[0],
+        markers[1],
         1.0,
         NormalizedUsage(10, 2),
         100,
-        "api_key=v1",
-        "secret-error",
+        markers[2],
+        markers[3],
     )
 
     store = LLMUsageStore(path)
@@ -92,10 +97,9 @@ def test_store_redacts_every_unsafe_string_before_sqlite_boundary(tmp_path):
         row = conn.execute("SELECT * FROM llm_usage_events").fetchone()
     serialized = json.dumps(row)
 
-    assert marker not in serialized
-    assert "/private/user/path" not in serialized
-    assert "raw user task" not in serialized
-    assert "api_key=v1" not in serialized
+    assert all(marker not in serialized for marker in markers)
+    assert '"primary"' in serialized
+    assert '"error"' in serialized
 
 
 def test_expired_pending_claim_is_reclaimed_once_after_restart(tmp_path):

@@ -8,6 +8,7 @@ from simpleclaw.llm.usage import (
     estimate_cost_microusd,
     normalize_usage,
     provider_cost_usd_to_microusd,
+    sanitize_usage_dimension,
 )
 
 
@@ -87,15 +88,40 @@ def test_usage_event_redacts_all_unsafe_free_string_fields_deterministically():
     assert first.attempt_role == "primary"
     assert first.retry_reason is None
     assert first.status == "error"
-    for value in (
-        first.event_id,
-        first.trace_id,
-        first.backend_name,
-        first.provider_profile,
-        first.model,
-        first.route_name,
-        first.task_name,
-        first.pricing_version,
-        first.error_type,
+    for field, value in (
+        ("event-id", first.event_id),
+        ("trace", first.trace_id),
+        ("backend", first.backend_name),
+        ("provider-profile", first.provider_profile),
+        ("model", first.model),
+        ("route", first.route_name),
+        ("task", first.task_name),
+        ("pricing-version", first.pricing_version),
+        ("error-type", first.error_type),
     ):
-        assert value is not None and value.startswith("redacted-")
+        assert value is not None and value.startswith(f"{field}-")
+
+
+def test_benign_and_credential_shaped_values_are_not_trusted_by_character_shape():
+    markers = (
+        "private-user-message-marker-7f3a",
+        "AKIAFAKESYNTHETIC1234",
+        "ghp_FAKE_SYNTHETIC_MARKER_1234567890",
+        "xoxbFAKESYNTHETIC1234567890",
+    )
+
+    for field in (
+        "event_id",
+        "trace_id",
+        "backend_name",
+        "provider_profile",
+        "model",
+        "route_name",
+        "task_name",
+        "pricing_version",
+        "error_type",
+    ):
+        for marker in markers:
+            sanitized = sanitize_usage_dimension(marker, field=field)
+            assert sanitized != marker
+            assert marker not in sanitized

@@ -5,7 +5,11 @@ from datetime import UTC, datetime
 import pytest
 from aiohttp import web
 
-from simpleclaw.llm.usage import LLMUsageEvent, NormalizedUsage
+from simpleclaw.llm.usage import (
+    LLMUsageEvent,
+    NormalizedUsage,
+    sanitize_usage_dimension,
+)
 from simpleclaw.logging.dashboard import DashboardServer, register_dashboard_routes
 from simpleclaw.logging.llm_usage import LLMUsageStore
 from simpleclaw.logging.metrics import MetricsCollector
@@ -125,32 +129,40 @@ class TestDashboardServer:
         payload = await response.json()
         assert payload["disabled"] is False
         assert payload["estimated_cost_usd"] == "0.000014"
-        assert payload["groups"][0]["backend_name"] == "primary"
+        assert payload["groups"][0]["backend_name"] == sanitize_usage_dimension(
+            "primary", field="backend_name"
+        )
         assert (await client.get("/api/llm-usage?group_by=sql")).status == 400
 
     @pytest.mark.asyncio
     async def test_usage_api_never_returns_unsafe_dimension_markers(
         self, tmp_path, aiohttp_client
     ):
-        marker = "sk-review-credential-marker"
+        markers = (
+            "private-user-message-marker-7f3a",
+            "AKIAFAKESYNTHETIC1234",
+            "ghp_FAKE_SYNTHETIC_MARKER_1234567890",
+            "xoxbFAKESYNTHETIC1234567890",
+        )
         store = LLMUsageStore(tmp_path / "usage.db")
         store.record(
             LLMUsageEvent(
-                "event",
+                markers[0],
                 datetime.now(UTC).isoformat(),
-                "trace",
-                marker,
-                marker,
-                "/private/model/path",
-                "raw route text",
-                "raw task text",
-                "primary",
-                None,
-                "success",
+                markers[1],
+                markers[2],
+                markers[3],
+                markers[0],
+                markers[1],
+                markers[2],
+                markers[3],
+                markers[0],
+                markers[1],
                 1,
                 NormalizedUsage(1, 1),
                 1,
-                marker,
+                markers[2],
+                markers[3],
             )
         )
         dashboard = DashboardServer(
@@ -168,10 +180,7 @@ class TestDashboardServer:
             )
             body = await response.text()
             assert response.status == 200
-            assert marker not in body
-            assert "/private/model/path" not in body
-            assert "raw route text" not in body
-            assert "raw task text" not in body
+            assert all(marker not in body for marker in markers)
 
 
 class TestDashboardTraceTimeline:

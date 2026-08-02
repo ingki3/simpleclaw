@@ -11,6 +11,7 @@ from simpleclaw.config_sections.llm import load_llm_config
 from simpleclaw.llm.models import LLMConfigError, LLMRequest, LLMResponse, LLMRoute
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter, create_router
+from simpleclaw.llm.usage import sanitize_usage_dimension
 
 
 class _Provider(LLMProvider):
@@ -19,7 +20,9 @@ class _Provider(LLMProvider):
 
     def __init__(self, name: str, *, error: Exception | None = None):
         result = LLMResponse(text="ok", backend_name=name, model="m")
-        self.send = AsyncMock(side_effect=error) if error else AsyncMock(return_value=result)
+        self.send = (
+            AsyncMock(side_effect=error) if error else AsyncMock(return_value=result)
+        )
         self.stream = AsyncMock(return_value=result)
 
 
@@ -69,10 +72,22 @@ async def test_validated_retry_does_not_log_provider_exception_body(caplog):
     router._providers["retry"].send.assert_awaited_once()
     assert private_body not in caplog.text
     assert user_text not in caplog.text
-    assert "backend=analysis" in caplog.text
-    assert "route=turn_analysis" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
-    assert "retry_backend=retry" in caplog.text
+    assert (
+        f"backend={sanitize_usage_dimension('analysis', field='backend_name')}"
+        in caplog.text
+    )
+    assert (
+        f"route={sanitize_usage_dimension('turn_analysis', field='route_name')}"
+        in caplog.text
+    )
+    assert (
+        f"error_type={sanitize_usage_dimension('RuntimeError', field='error_type')}"
+        in caplog.text
+    )
+    assert (
+        f"retry_backend={sanitize_usage_dimension('retry', field='backend_name')}"
+        in caplog.text
+    )
     assert "retry=true" in caplog.text
 
 
@@ -98,7 +113,10 @@ async def test_validated_retry_does_not_log_malformed_response(caplog):
     router._providers["analysis"].send.assert_awaited_once()
     router._providers["retry"].send.assert_awaited_once()
     assert malformed_marker not in caplog.text
-    assert "error_type=ValueError" in caplog.text
+    assert (
+        f"error_type={sanitize_usage_dimension('ValueError', field='error_type')}"
+        in caplog.text
+    )
 
 
 @pytest.mark.asyncio
@@ -203,7 +221,12 @@ agent:
     assert router.get_default_backend() == "available"
     assert router.get_route("default").primary == "available"
     assert router.get_route("turn_analysis").primary == "available"
-    assert "Legacy LLM route 'turn_analysis' primary backend 'unavailable_legacy'" in caplog.text
+    safe_route = sanitize_usage_dimension("turn_analysis", field="route_name")
+    safe_backend = sanitize_usage_dimension("unavailable_legacy", field="backend_name")
+    assert (
+        f"Legacy LLM route '{safe_route}' primary backend '{safe_backend}'"
+        in caplog.text
+    )
 
 
 def test_explicit_route_with_unavailable_backend_fails_during_startup(

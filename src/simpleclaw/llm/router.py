@@ -34,6 +34,9 @@ from simpleclaw.llm.transports import get_transport_class
 from simpleclaw.llm.usage import (
     LLMUsageEvent,
     LLMUsageSink,
+    USAGE_ROUTE_NAMES,
+    USAGE_TASK_NAMES,
+    UsageDimensionRegistry,
     normalize_usage,
     sanitize_usage_dimension,
 )
@@ -127,6 +130,18 @@ class LLMRouter:
                 )
         self._routes = routes
         self._usage_sink = usage_sink
+        self._usage_dimensions = UsageDimensionRegistry(
+            provider_profiles=frozenset(
+                profile.name for profile in self._profiles.values()
+            )
+            | frozenset({"generic"}),
+            route_names=(frozenset(routes) | frozenset({"direct"})) & USAGE_ROUTE_NAMES,
+            task_names=USAGE_TASK_NAMES,
+        )
+        if usage_sink is not None and hasattr(
+            usage_sink, "configure_dimension_registry"
+        ):
+            usage_sink.configure_dimension_registry(self._usage_dimensions)
 
     async def _send_to_backend(
         self,
@@ -157,7 +172,10 @@ class LLMRouter:
             if on_text_delta is not None:
                 logger.info(
                     "Routing streaming request to backend '%s'",
-                    sanitize_usage_dimension(backend_name, field="backend_name"),
+                    sanitize_usage_dimension(
+                        backend_name,
+                        field="backend_name",
+                    ),
                 )
                 response = await provider.stream(
                     request.system_prompt,
@@ -175,7 +193,10 @@ class LLMRouter:
             else:
                 logger.info(
                     "Routing request to backend '%s'",
-                    sanitize_usage_dimension(backend_name, field="backend_name"),
+                    sanitize_usage_dimension(
+                        backend_name,
+                        field="backend_name",
+                    ),
                 )
                 response = await provider.send(
                     request.system_prompt,
@@ -250,11 +271,16 @@ class LLMRouter:
             usage=normalize_usage(response.usage if response else None),
             error_type=error_type,
         )
-        safe_event = event.sanitized()
         try:
-            self._usage_sink.record(safe_event)
+            if hasattr(self._usage_sink, "record_from_router"):
+                self._usage_sink.record_from_router(event, self._usage_dimensions)
+            else:
+                self._usage_sink.record(event.sanitized(self._usage_dimensions))
         except Exception as exc:  # fail-open telemetry boundary
-            logger.warning("llm_usage_record_failed error_type=%s", type(exc).__name__)
+            logger.warning(
+                "llm_usage_record_failed error_type=%s",
+                sanitize_usage_dimension(type(exc).__name__, field="error_type"),
+            )
 
     def _resolve_request(self, request: LLMRequest) -> tuple[str, str | None]:
         """Resolve the mutually-exclusive backend/route selectors."""
@@ -372,7 +398,7 @@ class LLMRouter:
                     "Backend '%s' failed; retrying fallback '%s' error_type=%s",
                     sanitize_usage_dimension(backend_name, field="backend_name"),
                     sanitize_usage_dimension(retry_name, field="backend_name"),
-                    type(exc).__name__,
+                    sanitize_usage_dimension(type(exc).__name__, field="error_type"),
                 )
                 return await self._send_to_backend(
                     retry_name,
@@ -489,7 +515,7 @@ class LLMRouter:
             "retry_backend=%s retry=true",
             sanitize_usage_dimension(backend_name, field="backend_name"),
             sanitize_usage_dimension(route_name, field="route_name"),
-            error_type,
+            sanitize_usage_dimension(error_type, field="error_type"),
             sanitize_usage_dimension(retry_name, field="backend_name"),
         )
         retry_started = time.monotonic()
@@ -628,7 +654,7 @@ def create_router(
                     sanitize_usage_dimension(name, field="backend_name"),
                     sanitize_usage_dimension(backend.transport, field="transport"),
                     sanitize_usage_dimension(backend.profile, field="provider_profile"),
-                    type(exc).__name__,
+                    sanitize_usage_dimension(type(exc).__name__, field="error_type"),
                 )
                 continue
             provider = provider_cls(
@@ -652,7 +678,7 @@ def create_router(
                     sanitize_usage_dimension(name, field="backend_name"),
                     sanitize_usage_dimension(backend.transport, field="transport"),
                     sanitize_usage_dimension(backend.profile, field="provider_profile"),
-                    type(exc).__name__,
+                    sanitize_usage_dimension(type(exc).__name__, field="error_type"),
                 )
                 continue
             api_key = pconf.get("api_key", "")
@@ -682,7 +708,7 @@ def create_router(
                     sanitize_usage_dimension(name, field="backend_name"),
                     sanitize_usage_dimension(backend.transport, field="transport"),
                     sanitize_usage_dimension(backend.profile, field="provider_profile"),
-                    type(exc).__name__,
+                    sanitize_usage_dimension(type(exc).__name__, field="error_type"),
                 )
 
     if default_name and default_name not in providers:

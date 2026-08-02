@@ -8,19 +8,48 @@ provider별 원시 usage를 공통 토큰 구조로 정규화하고, 저장 가�
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Protocol
 
-_SAFE_DIMENSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$")
-_SECRET_MARKER = re.compile(
-    r"(?i)(?:api[_-]?key|bearer|credential|password|secret|token|sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{8,})"
-)
 _ATTEMPT_ROLES = {"primary", "retry"}
 _RETRY_REASONS = {"provider_error", "empty_final", "validation_error"}
 _STATUSES = {"success", "empty", "error"}
+USAGE_TASK_NAMES = frozenset(
+    {
+        "asset_selector",
+        "chat",
+        "dreaming_memory",
+        "dreaming_profile",
+        "dreaming_summary",
+        "fact_answer",
+        "goal_judge",
+        "recipe_suggestion",
+        "skill_suggestion",
+        "tool_loop",
+        "turn_analysis",
+        "turn_planner",
+    }
+)
+USAGE_ROUTE_NAMES = frozenset({"default", "direct", "multimodal", "turn_analysis"})
+
+
+@dataclass(frozen=True)
+class UsageDimensionRegistry:
+    """원문 노출이 허용된 실제 구성·코드 dimension의 bounded registry다."""
+
+    provider_profiles: frozenset[str] = frozenset()
+    route_names: frozenset[str] = frozenset()
+    task_names: frozenset[str] = USAGE_TASK_NAMES
+
+    def values_for(self, field: str) -> frozenset[str]:
+        """필드에 대응하는 닫힌 원문 허용 집합을 반환한다."""
+        return {
+            "provider_profile": self.provider_profiles,
+            "route_name": self.route_names,
+            "task_name": self.task_names,
+        }.get(field, frozenset())
 
 
 def _token(value: object) -> int | None:
@@ -31,23 +60,28 @@ def _token(value: object) -> int | None:
 
 
 def sanitize_usage_dimension(
-    value: object, *, field: str, optional: bool = False
+    value: object,
+    *,
+    field: str,
+    optional: bool = False,
+    allowed_values: frozenset[str] | set[str] | None = None,
 ) -> str | None:
-    """자유 문자열을 bounded identifier 또는 비식별화된 값으로 바꾼다.
+    """registry가 증명한 값만 원문으로 두고 나머지는 결정적으로 치환한다.
 
-    공백·경로 구분자·제어문자·credential 형태를 허용하지 않는다. 유효하지 않은
-    값은 원문을 남기지 않고 field별 SHA-256 접두사로 치환해 결정적 집계는 유지한다.
+    문자 모양이나 credential denylist는 신뢰 근거로 사용하지 않는다. 명시적
+    registry가 없는 자유 값은 예외 없이 field별 SHA-256 surrogate가 된다.
     """
     if optional and value is None:
         return None
     if (
         isinstance(value, str)
-        and _SAFE_DIMENSION.fullmatch(value)
-        and not _SECRET_MARKER.search(value)
+        and allowed_values is not None
+        and value in allowed_values
     ):
         return value
     digest = hashlib.sha256(f"{field}\0{value!s}".encode()).hexdigest()[:16]
-    return f"redacted-{digest}"
+    prefix = field.removesuffix("_name").replace("_", "-")[:24]
+    return f"{prefix}-{digest}"
 
 
 def provider_cost_usd_to_microusd(value: object) -> int | None:
@@ -125,8 +159,11 @@ class LLMUsageEvent:
         """원본 이벤트를 유지하면서 계산 비용과 가격 버전을 연결한다."""
         return replace(self, estimated_cost_microusd=cost, pricing_version=version)
 
-    def sanitized(self) -> LLMUsageEvent:
+    def sanitized(
+        self, registry: UsageDimensionRegistry | None = None
+    ) -> LLMUsageEvent:
         """모든 문자열 필드를 저장 가능한 bounded 값으로 fail-closed 정규화한다."""
+        registry = registry or UsageDimensionRegistry()
         try:
             occurred = datetime.fromisoformat(self.occurred_at_utc)
             if occurred.tzinfo is None:
@@ -144,23 +181,34 @@ class LLMUsageEvent:
         return replace(
             self,
             event_id=sanitize_usage_dimension(self.event_id, field="event_id")
-            or "redacted",
+            or "event-redacted",
             occurred_at_utc=occurred_at_utc,
             trace_id=sanitize_usage_dimension(self.trace_id, field="trace_id")
             or "redacted",
             backend_name=sanitize_usage_dimension(
                 self.backend_name, field="backend_name"
             )
-            or "redacted",
+            or "backend-redacted",
             provider_profile=sanitize_usage_dimension(
-                self.provider_profile, field="provider_profile"
+                self.provider_profile,
+                field="provider_profile",
+                allowed_values=registry.values_for("provider_profile"),
             )
-            or "redacted",
-            model=sanitize_usage_dimension(self.model, field="model") or "redacted",
-            route_name=sanitize_usage_dimension(self.route_name, field="route_name")
-            or "redacted",
-            task_name=sanitize_usage_dimension(self.task_name, field="task_name")
-            or "redacted",
+            or "provider-profile-redacted",
+            model=sanitize_usage_dimension(self.model, field="model")
+            or "model-redacted",
+            route_name=sanitize_usage_dimension(
+                self.route_name,
+                field="route_name",
+                allowed_values=registry.values_for("route_name"),
+            )
+            or "route-redacted",
+            task_name=sanitize_usage_dimension(
+                self.task_name,
+                field="task_name",
+                allowed_values=registry.values_for("task_name"),
+            )
+            or "task-redacted",
             attempt_role=attempt_role,
             retry_reason=retry_reason,
             status=status,

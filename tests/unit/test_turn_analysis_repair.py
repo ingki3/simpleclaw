@@ -25,6 +25,7 @@ from simpleclaw.agent.turn_analysis import (
     repair_turn_analysis_payload,
 )
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.usage import sanitize_usage_dimension
 
 # live 재현 shape — 핵심 필드는 완결됐고 tail `reasons` 문자열 중간에서 잘렸다.
 _TRUNCATED_LIVE_LIKE = (
@@ -205,7 +206,9 @@ async def test_analyze_falls_back_when_repair_fails(caplog):
     from simpleclaw.llm.router import LLMRouter
 
     primary = AsyncMock()
-    primary.send = AsyncMock(return_value=LLMResponse(text="깨진 응답 1", finish_reason="length"))
+    primary.send = AsyncMock(
+        return_value=LLMResponse(text="깨진 응답 1", finish_reason="length")
+    )
     retry = AsyncMock()
     retry.send = AsyncMock(side_effect=RuntimeError("fallback backend down"))
     router = LLMRouter(
@@ -265,9 +268,18 @@ async def test_actual_router_retry_failure_logs_are_sanitized(caplog):
     assert primary_marker not in caplog.text
     assert retry_marker not in caplog.text
     assert user_marker not in caplog.text
-    assert "backend=primary" in caplog.text
-    assert "route=turn_analysis" in caplog.text
-    assert "error_type=RuntimeError" in caplog.text
+    assert (
+        f"backend={sanitize_usage_dimension('primary', field='backend_name')}"
+        in caplog.text
+    )
+    assert (
+        f"route={sanitize_usage_dimension('turn_analysis', field='route_name')}"
+        in caplog.text
+    )
+    assert (
+        f"error_type={sanitize_usage_dimension('RuntimeError', field='error_type')}"
+        in caplog.text
+    )
 
 
 @pytest.mark.asyncio
@@ -291,9 +303,7 @@ async def test_analyze_skips_retry_when_no_retry_backend_configured():
     router = AsyncMock()
     router.send = AsyncMock(return_value=LLMResponse(text="not json"))
 
-    analysis = await analyze_turn_with_llm(
-        "질문", recent_messages=[], router=router
-    )
+    analysis = await analyze_turn_with_llm("질문", recent_messages=[], router=router)
 
     assert analysis.source == "fallback"
     router.send.assert_awaited_once()

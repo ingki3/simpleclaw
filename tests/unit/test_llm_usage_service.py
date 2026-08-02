@@ -1,5 +1,10 @@
+import asyncio
+import json
+import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 
 from simpleclaw.llm.usage import BackendPricing, LLMUsageEvent, NormalizedUsage
 from simpleclaw.logging.llm_usage import LLMUsageService, LLMUsageStore
@@ -75,36 +80,64 @@ def test_store_failure_is_fail_open(tmp_path):
     assert metrics.get_snapshot().llm_usage_record_failures == 1
 
 
-def test_service_redacts_unsafe_dimensions_before_log_and_db(tmp_path):
-    marker = "sk-review-credential-marker"
+@pytest.mark.asyncio
+async def test_service_redacts_benign_markers_from_db_log_and_alert(tmp_path):
+    markers = (
+        "private-user-message-marker-7f3a",
+        "AKIAFAKESYNTHETIC1234",
+        "ghp_FAKE_SYNTHETIC_MARKER_1234567890",
+        "xoxbFAKESYNTHETIC1234567890",
+    )
     store = LLMUsageStore(tmp_path / "usage.db")
     structured = StructuredLogger(tmp_path / "logs")
+    alerts = []
+
+    async def alert_callback(text):
+        alerts.append(text)
+
     event = LLMUsageEvent(
-        "event",
+        markers[0],
         datetime.now(UTC).isoformat(),
-        "/private/trace/path",
-        marker,
-        marker,
-        "raw user model",
-        "raw route text",
-        "raw task text",
-        "primary",
-        None,
-        "success",
+        markers[1],
+        markers[2],
+        markers[3],
+        markers[0],
+        markers[1],
+        markers[2],
+        markers[3],
+        markers[0],
+        markers[1],
         1,
-        NormalizedUsage(1, 1),
-        pricing_version=marker,
+        NormalizedUsage(20_000, 1),
+        pricing_version=markers[2],
+        error_type=markers[3],
     )
 
-    LLMUsageService(store, structured_logger=structured).record(event)
+    LLMUsageService(
+        store,
+        pricing={
+            markers[2]: BackendPricing(
+                version=markers[2],
+                input_per_million_usd=Decimal(1),
+                output_per_million_usd=Decimal(1),
+            )
+        },
+        structured_logger=structured,
+        daily_usd=Decimal("0.01"),
+        alert_callback=alert_callback,
+    ).record(event)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
 
     log_json = structured.get_entries()[-1].to_json()
-    summary_text = str(
+    api_payload = str(
         store.summarize_day(
             datetime.now(UTC), timezone="Asia/Seoul", group_by="backend"
         )
     )
-    assert marker not in log_json
-    assert marker not in summary_text
-    assert "/private/trace/path" not in log_json
-    assert "raw task text" not in log_json
+    with sqlite3.connect(store.db_path) as conn:
+        raw_db = json.dumps(conn.execute("SELECT * FROM llm_usage_events").fetchone())
+    serialized_outputs = (raw_db, log_json, api_payload, "\n".join(alerts))
+    assert alerts
+    for marker in markers:
+        assert all(marker not in output for output in serialized_outputs)

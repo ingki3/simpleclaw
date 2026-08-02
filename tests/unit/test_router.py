@@ -16,6 +16,7 @@ from simpleclaw.llm.models import (
 )
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
+from simpleclaw.llm.usage import sanitize_usage_dimension
 
 
 class MockProvider(LLMProvider):
@@ -54,6 +55,10 @@ class RecordingUsageSink:
         self.events.append(event)
 
 
+def _usage_backend(name):
+    return sanitize_usage_dimension(name, field="backend_name")
+
+
 def _usage_router(sink, *, primary_text="ok"):
     primary = MockProvider("primary")
     primary._mock_send.return_value = LLMResponse(
@@ -89,12 +94,9 @@ async def test_usage_records_actual_primary_once():
     await _usage_router(sink).send(LLMRequest(user_message="secret", usage_task="chat"))
     assert len(sink.events) == 1
     event = sink.events[0]
-    assert (event.backend_name, event.model, event.task_name, event.attempt_role) == (
-        "primary",
-        "m1",
-        "chat",
-        "primary",
-    )
+    assert event.backend_name.startswith("backend-")
+    assert event.model.startswith("model-")
+    assert (event.task_name, event.attempt_role) == ("chat", "primary")
 
 
 @pytest.mark.asyncio
@@ -106,8 +108,8 @@ async def test_usage_records_empty_primary_and_actual_fallback():
     assert [
         (e.backend_name, e.status, e.attempt_role, e.retry_reason) for e in sink.events
     ] == [
-        ("primary", "empty", "primary", None),
-        ("fallback", "success", "retry", "empty_final"),
+        (_usage_backend("primary"), "empty", "primary", None),
+        (_usage_backend("fallback"), "success", "retry", "empty_final"),
     ]
 
 
@@ -126,8 +128,8 @@ async def test_validated_usage_records_provider_error_and_retry_success():
         (event.backend_name, event.status, event.attempt_role, event.retry_reason)
         for event in sink.events
     ] == [
-        ("primary", "error", "primary", None),
-        ("fallback", "success", "retry", "provider_error"),
+        (_usage_backend("primary"), "error", "primary", None),
+        (_usage_backend("fallback"), "success", "retry", "provider_error"),
     ]
 
 
@@ -144,8 +146,8 @@ async def test_validated_usage_records_empty_and_retry_success():
         (event.backend_name, event.status, event.attempt_role, event.retry_reason)
         for event in sink.events
     ] == [
-        ("primary", "empty", "primary", None),
-        ("fallback", "success", "retry", "empty_final"),
+        (_usage_backend("primary"), "empty", "primary", None),
+        (_usage_backend("fallback"), "success", "retry", "empty_final"),
     ]
 
 
@@ -173,8 +175,20 @@ async def test_validated_usage_attributes_semantic_failure_to_primary_attempt():
         )
         for event in sink.events
     ] == [
-        ("primary", "error", "primary", "validation_error", "ValueError"),
-        ("fallback", "success", "retry", "validation_error", None),
+        (
+            _usage_backend("primary"),
+            "error",
+            "primary",
+            "validation_error",
+            "error-type-a9ff2a4e6afba086",
+        ),
+        (
+            _usage_backend("fallback"),
+            "success",
+            "retry",
+            "validation_error",
+            None,
+        ),
     ]
 
 

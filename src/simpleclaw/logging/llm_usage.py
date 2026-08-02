@@ -20,6 +20,7 @@ from simpleclaw.db.migrations import run_usage_migrations
 from simpleclaw.llm.usage import (
     BackendPricing,
     LLMUsageEvent,
+    UsageDimensionRegistry,
     estimate_cost_microusd,
     microusd_to_decimal_usd,
     sanitize_usage_dimension,
@@ -48,10 +49,20 @@ class UsageThresholdClaim:
 class LLMUsageStore:
     """별도 SQLite DB에 usage event와 durable alert claim을 저장한다."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        dimension_registry: UsageDimensionRegistry | None = None,
+    ) -> None:
         """DB 경로를 고정하고 usage 전용 migration을 적용한다."""
         self.db_path = Path(db_path)
+        self.dimension_registry = dimension_registry or UsageDimensionRegistry()
         run_usage_migrations(self.db_path)
+
+    def configure_dimension_registry(self, registry: UsageDimensionRegistry) -> None:
+        """composition root가 검증한 bounded dimension registry를 설치한다."""
+        self.dimension_registry = registry
 
     def _connect(self) -> sqlite3.Connection:
         """짧은 transaction마다 WAL·foreign key 설정이 적용된 연결을 연다."""
@@ -63,7 +74,12 @@ class LLMUsageStore:
 
     def record(self, event: LLMUsageEvent) -> bool:
         """문자열을 fail-closed 정규화한 event를 idempotent하게 저장한다."""
-        event = event.sanitized()
+        inserted, _ = self.record_with_event(event)
+        return inserted
+
+    def record_with_event(self, event: LLMUsageEvent) -> tuple[bool, LLMUsageEvent]:
+        """정규화 후 저장하고 DB·log가 공유할 safe event를 함께 반환한다."""
+        event = event.sanitized(self.dimension_registry)
         values = (
             event.event_id,
             event.occurred_at_utc,
@@ -95,7 +111,7 @@ class LLMUsageStore:
                     "INSERT OR IGNORE INTO llm_usage_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     values,
                 )
-            return cur.rowcount == 1
+            return cur.rowcount == 1, event
         finally:
             conn.close()
 
@@ -360,14 +376,33 @@ class LLMUsageService:
         self.alert_max_attempts = max(1, min(alert_max_attempts, 10))
         self.alert_lease_seconds = max(1, min(alert_lease_seconds, 3_600))
 
+    def configure_dimension_registry(self, registry: UsageDimensionRegistry) -> None:
+        """라우터의 실제 구성 registry를 service와 저장 경계에 함께 설치한다."""
+        self.dimension_registry = registry
+        if hasattr(self.store, "configure_dimension_registry"):
+            self.store.configure_dimension_registry(registry)
+
+    def record_from_router(
+        self, event: LLMUsageEvent, registry: UsageDimensionRegistry
+    ) -> None:
+        """라우터 원본 event를 동일 registry의 단일 정규화 경계로 기록한다."""
+        self.configure_dimension_registry(registry)
+        self.record(event)
+
     def record(self, event: LLMUsageEvent) -> None:
         """event를 정규화·가격 계산 후 기록하되 모든 회계 장애를 격리한다."""
         try:
-            event = event.sanitized()
-            price = self.pricing.get(event.backend_name)
+            raw_backend_name = event.backend_name
+            registry = getattr(self, "dimension_registry", UsageDimensionRegistry())
+            price = self.pricing.get(raw_backend_name)
             cost = estimate_cost_microusd(event.usage, price)
-            persisted = event.with_cost(cost, price.version if price else None)
-            if not self.store.record(persisted):
+            priced_event = event.with_cost(cost, price.version if price else None)
+            if isinstance(self.store, LLMUsageStore):
+                inserted, persisted = self.store.record_with_event(priced_event)
+            else:
+                persisted = priced_event.sanitized(registry)
+                inserted = self.store.record(persisted)
+            if not inserted:
                 return
             if self.metrics and hasattr(self.metrics, "record_llm_usage"):
                 self.metrics.record_llm_usage(persisted)
@@ -376,7 +411,10 @@ class LLMUsageService:
         except Exception as exc:  # noqa: BLE001 — accounting is deliberately fail-open.
             if self.metrics and hasattr(self.metrics, "record_llm_usage_failure"):
                 self.metrics.record_llm_usage_failure()
-            logger.warning("llm_usage_record_failed error_type=%s", type(exc).__name__)
+            logger.warning(
+                "llm_usage_record_failed error_type=%s",
+                sanitize_usage_dimension(type(exc).__name__, field="error_type"),
+            )
 
     def _log(self, event: LLMUsageEvent) -> None:
         """내용 필드가 비어 있는 bounded structured usage log만 남긴다."""
