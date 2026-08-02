@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-538](mention://issue/2e969590-74fa-4f97-9971-488bb9d58d4c): Dreaming backend alias를 live router와 정합화** — `daemon.dreaming.model`을 현재 등록된 backend alias와 restart 전 교차 검증하고, 빈 값의 default-route 계약은 보존한다. unknown alias는 field-path 오류로 fail-closed하며 자동 fallback하지 않는다. [BIZ-539](mention://issue/19b1404f-ed4e-4965-897c-5c17e03491ea)에서 예시·회귀를 live registry로 검증한 `openrouter_gemini_3_6_flash`에 맞췄으며, Graphify/PR/CI와 live 한 필드 rollout·두 주기 no-send 관측 완료 전까지 진행 상태를 유지한다. (진행: 2026-08-02)
+
 - [>] **BIZ-17: LLM 토큰 사용량·비용 추적 및 임계 경보** — 실제 provider attempt 단위의 content-free usage event, versioned backend pricing 기반 micro-USD 예상 비용, 별도 SQLite 일/월 집계와 durable alert claim, dashboard API/panel, alert-only Telegram 배선을 구현한다. production 가격·threshold·enable/restart는 운영자 승인 전 적용하지 않는다. (진행: 2026-08-02)
 
 - [>] **BIZ-525: Capability-first Goal Resolution과 4-mode 실행 구조** — full-coverage exact Skill/Recipe를 mode 이전에 typed `asset_result.v1`로 실행하고 Asset 상태와 Goal 상태를 분리한다. 미해결 gap은 bounded evidence/complex controller로 전환하며 모든 경로를 공통 Evidence/Action Validator에 합류시킨다. 기본 architecture는 `legacy_v2`로 유지하고 유한 budget이 설정된 `capability_first_v3`만 명시 활성화한다. live rollout/restart는 별도 운영 승인 범위다. (진행: 2026-08-02)

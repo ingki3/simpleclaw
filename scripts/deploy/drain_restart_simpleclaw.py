@@ -41,6 +41,8 @@ from simpleclaw.config_sections.channels import load_admin_api_config
 from simpleclaw.config_sections.daemon import load_daemon_config
 from simpleclaw.config_sections.review import load_review_config
 from simpleclaw.daemon.drain import DrainController
+from simpleclaw.llm.models import LLMConfigError
+from simpleclaw.llm.router import create_router
 from simpleclaw.review.verification_ledger import VerificationEvidenceLedger
 
 DEFAULT_LABEL = "com.simpleclaw.bot"
@@ -124,6 +126,18 @@ def run_drain_restart(
     없이 sequence 를 검증할 수 있다.
     """
     daemon_cfg = load_daemon_config(args.config)
+    dreaming_model = daemon_cfg.get("dreaming", {}).get("model")
+    if dreaming_model:
+        try:
+            router = create_router(args.config)
+            router.validate_backend_name(
+                dreaming_model,
+                field_path="daemon.dreaming.model",
+            )
+        except LLMConfigError as exc:
+            print(f"[preflight] config validation failed: {exc}", flush=True)
+            return 2
+
     drain_cfg = daemon_cfg.get("drain", {}) or {}
     controller = DrainController(
         str(drain_cfg.get("state_file") or "~/.simpleclaw-agent/default/drain_state.json"),

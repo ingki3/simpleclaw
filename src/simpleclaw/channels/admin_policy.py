@@ -113,6 +113,12 @@ POLICY_CATALOG: dict[str, tuple[str, list[str]]] = {
     "daemon.pid_file": (PROCESS_RESTART, ["daemon"]),
     "daemon.status_file": (PROCESS_RESTART, ["daemon.heartbeat"]),
     "daemon.db_path": (PROCESS_RESTART, ["daemon.store"]),
+    # DreamingPipeline이 초기화 시 alias를 캡처하므로 model 변경은 hot reload가
+    # 아니라 router registry preflight를 거친 service restart 대상이다.
+    "daemon.dreaming.model": (
+        SERVICE_RESTART,
+        ["daemon.dreaming", "llm.router"],
+    ),
     "daemon.dreaming.*": (HOT, ["daemon.dreaming"]),
     "daemon.wait_state.*": (HOT, ["daemon.wait_states"]),
     "daemon.cron_retry.*": (HOT, ["daemon.scheduler"]),
