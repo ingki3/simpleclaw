@@ -145,7 +145,7 @@ def build_turn_planner_shadow_event(
         relation=plan.context.relation.value,
         selected_turn_count=len(plan.context.selected_turn_ids),
         execution_mode=plan.execution.mode.value,
-        asset_count=len(plan.execution.allowed_assets),
+        asset_count=len(plan.capability.supporting_assets),
         fact_required=plan.fact_check.required,
         latency_ms=_nonnegative_int(round(latency_ms)),
         input_tokens=_nonnegative_int(input_tokens),

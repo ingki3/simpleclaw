@@ -155,3 +155,32 @@ def test_intents_and_domains_are_normalized_to_lowercase():
     )
     assert cap.domains == ("sports",)
     assert cap.intents == ("standings", "current_result")
+
+
+def test_full_coverage_requires_query_and_asset_result_contracts() -> None:
+    cap = parse_capability_metadata(
+        {
+            "coverage": "full_coverage",
+            "input_contract": "query.v1",
+            "output_contract": "asset_result.v1",
+            "read_only": True,
+            "side_effects": False,
+            "fallback_modes": ["answer_with_evidence"],
+        }
+    )
+    assert cap.eligible_for_fast_path is True
+    assert cap.fallback_modes == ("answer_with_evidence",)
+
+
+def test_unknown_coverage_is_downgraded_from_fast_path() -> None:
+    cap = parse_capability_metadata(
+        {
+            "coverage": "magic",
+            "input_contract": "query.v1",
+            "output_contract": "asset_result.v1",
+            "read_only": True,
+            "side_effects": False,
+        }
+    )
+    assert cap.coverage == "partial_coverage"
+    assert cap.eligible_for_fast_path is False

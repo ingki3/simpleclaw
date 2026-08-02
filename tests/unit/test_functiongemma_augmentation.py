@@ -27,7 +27,7 @@ def _labeled(split: str, number: int, *, with_recipe: bool = False) -> LabeledCa
         ) if with_recipe else (),
         label=CompactIntentCall(
             "standalone",
-            "recipe" if with_recipe else "direct_answer",
+            "direct_answer",
             (),
             ("execute_recipe",) if with_recipe else ("explain",),
             "recipe:daily" if with_recipe else NO_ASSET,
@@ -90,7 +90,7 @@ def test_required_strata_update_text_label_candidates_and_fallback() -> None:
     assert not creation.label.fallback_required
 
     execution = by_stratum["recipe_execution"]
-    assert execution.label.execution_mode == "recipe"
+    assert execution.label.execution_mode == "direct_answer"
     assert execution.label.primary_asset == "recipe:daily"
     assert not execution.label.fallback_required
 

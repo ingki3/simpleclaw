@@ -26,7 +26,7 @@ def _case(number: int, *, fallback: bool = False) -> LabeledCase:
     candidate = CandidateAsset("skill:search", "skill", "search")
     label = CompactIntentCall(
         "standalone",
-        "execute_asset" if not fallback else "tool_loop",
+        "direct_answer" if not fallback else "answer_with_evidence",
         ("news",),
         ("lookup",),
         "skill:search" if not fallback else NO_ASSET,

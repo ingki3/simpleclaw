@@ -87,7 +87,7 @@ def _variant(item: LabeledCase, stratum: str) -> LabeledCase:
             text = f"{recipes[0].name} 레시피를 실행해줘"
             label = replace(
                 label,
-                execution_mode="recipe",
+                execution_mode="direct_answer",
                 intents=("execute_recipe",),
                 primary_asset=recipes[0].asset_id,
                 fallback_required=False,
@@ -96,7 +96,7 @@ def _variant(item: LabeledCase, stratum: str) -> LabeledCase:
             text = f"등록되지 않은 레시피를 실행해줘: {text}"
             label = replace(
                 label,
-                execution_mode="recipe",
+                execution_mode="direct_answer",
                 intents=("execute_recipe",),
                 primary_asset=NO_ASSET,
                 fallback_required=True,

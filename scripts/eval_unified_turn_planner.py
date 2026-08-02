@@ -5,13 +5,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from simpleclaw.evaluation.turn_planner_eval import (
     FixtureFormatError,
     evaluate_fixture_replays,
     load_fixtures,
 )
+from simpleclaw.eval.turn_planner import evaluate_capability_fixture_file
 
 _DEFAULT_FIXTURE = (
     Path(__file__).parents[1]
@@ -26,7 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate Unified TurnPlanner fixed-gold cases.",
     )
-    parser.add_argument("--fixture", type=Path, default=_DEFAULT_FIXTURE)
+    parser.add_argument("--fixture", "--fixtures", type=Path, default=_DEFAULT_FIXTURE)
+    parser.add_argument("--max-cases", type=int)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument(
         "--reasoning",
@@ -54,14 +59,31 @@ def main(argv: list[str] | None = None) -> int:
             "connect it after the production planner contract lands"
         )
     try:
-        fixtures = load_fixtures(args.fixture)
-        report = evaluate_fixture_replays(
-            fixtures,
-            repeat=args.repeat,
-            variant=args.reasoning,
-            baseline="unified",
+        if args.max_cases is not None and args.max_cases < 1:
+            parser.error("--max-cases must be at least 1")
+        first_row = json.loads(
+            next(
+                line
+                for line in args.fixture.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            )
         )
-    except FixtureFormatError as exc:
+        if isinstance(first_row, dict) and "coverage" in first_row:
+            report = evaluate_capability_fixture_file(
+                args.fixture,
+                max_cases=args.max_cases,
+            )
+        else:
+            fixtures = load_fixtures(args.fixture)
+            if args.max_cases is not None:
+                fixtures = fixtures[: args.max_cases]
+            report = evaluate_fixture_replays(
+                fixtures,
+                repeat=args.repeat,
+                variant=args.reasoning,
+                baseline="unified",
+            )
+    except (FixtureFormatError, OSError, ValueError, StopIteration) as exc:
         parser.error(str(exc))
     serialized = json.dumps(
         report,

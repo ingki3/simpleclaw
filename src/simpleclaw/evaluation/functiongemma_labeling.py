@@ -146,7 +146,7 @@ def compact_from_unified_plan(
     *,
     candidates: Sequence[CandidateAsset],
 ) -> CompactIntentCall:
-    primary = plan.execution.primary_asset
+    primary = plan.capability.primary_asset
     primary_id = (
         NO_ASSET
         if primary is None
@@ -154,7 +154,7 @@ def compact_from_unified_plan(
     )
     fallback = (
         primary_id == NO_ASSET
-        and plan.execution.mode.value in {"execute_asset", "recipe", "tool_loop"}
+        and plan.execution.mode.value == "answer_with_evidence"
     )
     payload = {
         "context_relation": plan.context.relation.value,
@@ -249,7 +249,11 @@ async def label_cases(
             compact = compact_from_unified_plan(plan, candidates=candidates)
             if plan.confidence < minimum_confidence:
                 reasons.append("confidence.low")
-            if plan.execution.mode.value == "recipe" and "create" in plan.intents:
+            if (
+                plan.capability.primary_asset is not None
+                and plan.capability.primary_asset.asset_type == "recipe"
+                and "create" in plan.intents
+            ):
                 reasons.append("boundary.creation_vs_execution")
         except TimeoutError:
             queue.append(AdjudicationItem(

@@ -46,6 +46,10 @@ class CapabilityMetadata:
     direct_answer: bool = False
     requires_confirmation: bool = False
     output_contract: str | None = None
+    coverage: str = "partial_coverage"
+    input_contract: str | None = None
+    fallback_modes: tuple[str, ...] = ()
+    retry_statuses: tuple[str, ...] = ()
     declared: bool = False
 
     @property
@@ -59,6 +63,20 @@ class CapabilityMetadata:
             and self.read_only
             and not self.side_effects
             and not self.requires_confirmation
+        )
+
+    @property
+    def eligible_for_fast_path(self) -> bool:
+        """Typed full-coverage asset만 mode 이전 직접 실행을 허용한다."""
+        return (
+            self.declared
+            and self.coverage == "full_coverage"
+            and self.input_contract == "query.v1"
+            and self.output_contract == "asset_result.v1"
+            and (
+                self.safe_for_auto_execution
+                or (self.side_effects and self.requires_confirmation)
+            )
         )
 
 
@@ -101,6 +119,17 @@ def parse_capability_metadata(
         return CapabilityMetadata()
 
     output_contract = raw.get("output_contract")
+    input_contract = raw.get("input_contract")
+    coverage = str(raw.get("coverage") or "partial_coverage").strip().lower()
+    if coverage not in {
+        "full_coverage",
+        "partial_coverage",
+        "no_match",
+        "ambiguous",
+        "needs_input",
+        "needs_confirmation",
+    }:
+        coverage = "partial_coverage"
     return CapabilityMetadata(
         domains=_coerce_str_tuple(raw.get("domains")),
         intents=_coerce_str_tuple(raw.get("intents")),
@@ -112,5 +141,9 @@ def parse_capability_metadata(
         direct_answer=bool(raw.get("direct_answer", False)),
         requires_confirmation=bool(raw.get("requires_confirmation", False)),
         output_contract=str(output_contract) if output_contract else None,
+        coverage=coverage,
+        input_contract=str(input_contract) if input_contract else None,
+        fallback_modes=_coerce_str_tuple(raw.get("fallback_modes")),
+        retry_statuses=_coerce_str_tuple(raw.get("retry_statuses")),
         declared=True,
     )

@@ -16,6 +16,26 @@ Unified TurnPlanner는 ordinary user turn마다 한 번 실행되어 다음 상�
 live shadow/canary 활성화, live 대화 수집, runtime restart는 코드 merge와
 분리된 운영자 승인 사항이다.
 
+## Capability-first v3 경계
+
+`capability_first_v3`에서는 capability coverage와 execution mode를 분리한다.
+catalog가 `full_coverage`·`query.v1`·`asset_result.v1`을 모두 선언한 exact
+Skill/Recipe는 ToolLoop 재선택이나 generic realtime collector보다 먼저 한 번만
+실행된다. 실행 관찰인 `AssetResult`와 원래 목표 평가인
+`GoalResolutionState`는 별도 타입이며, `empty`/`not_found`는 기술 실패로
+합치지 않고 필요하면 `ProblemTransition`을 생성한다.
+
+상위 mode는 `clarify`, `direct_answer`, `answer_with_evidence`,
+`resolve_complex_problem` 네 개뿐이다. evidence/complex loop는 유한 budget과
+attempt signature를 공유하고, complex 승격은 명시적 complexity signal,
+fallback policy, 남은 budget을 모두 요구한다. side-effect의 partial/unknown
+effect는 자동 retry/fallback하지 않는다. exact와 네 mode 결과는 모두 공통
+Evidence/Action Validator를 통과한다.
+
+기본값 `legacy_v2`는 BIZ-523 typed session/evidence 계약의 rollback 경로다.
+`capability_first_v3` canary/primary는 resolution budget 축 중 하나 이상이 유한할
+때만 실행되며, live config·restart·cohort 확대는 별도 운영자 승인을 요구한다.
+
 ## Outer turn과 inner loop
 
 Planner는 outer turn의 상위 실행 결정을 소유한다. 정상 경로에서는 user turn당

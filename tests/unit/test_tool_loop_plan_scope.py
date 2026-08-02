@@ -241,7 +241,7 @@ async def test_execute_asset_exposes_only_exact_primary_skill(primary_config):
         on_progress=None,
         plan=_plan(
             fingerprint="unused",
-            mode=ExecutionMode.EXECUTE_ASSET,
+            mode=ExecutionMode.DIRECT_ANSWER,
             primary_asset=alpha_ref,
             allowed_assets=(alpha_ref, AssetRef("skill", "beta-skill")),
             allowed_tools=("execute_skill",),
@@ -497,7 +497,7 @@ async def test_fact_check_plan_creates_common_evidence_gate_state(
             relation=ContextRelation.SAME_THREAD,
             selected_turn_ids=("msg:12",),
             standalone_question="롯데 오늘 경기 결과",
-            mode=ExecutionMode.FACT_CHECK,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             allowed_assets=(AssetRef("native_tool", "web_fetch"),),
             allowed_tools=("web_fetch",),
             fact_required=True,
@@ -537,7 +537,7 @@ async def test_fact_check_plan_still_executes_web_search(
     plan = _plan(
         fingerprint="unused",
         standalone_question="롯데 오늘 경기 결과",
-        mode=ExecutionMode.FACT_CHECK,
+        mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
         allowed_assets=(AssetRef("native_tool", "web_search"),),
         allowed_tools=("web_search",),
         fact_required=True,
@@ -599,7 +599,7 @@ async def test_web_search_empty_or_error_blocks_unverified_final(
     plan = _plan(
         fingerprint="unused",
         standalone_question="롯데 오늘 경기 결과",
-        mode=ExecutionMode.FACT_CHECK,
+        mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
         allowed_assets=(AssetRef("native_tool", "web_search"),),
         allowed_tools=("web_search",),
         fact_required=True,

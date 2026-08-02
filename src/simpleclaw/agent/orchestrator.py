@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -45,6 +46,10 @@ from simpleclaw.agent.asset_selector import (
 from simpleclaw.agent.capability_router import (
     CapabilityDecision,
 )
+from simpleclaw.agent.capability_executor import (
+    CapabilityExecutor,
+    decode_asset_result,
+)
 from simpleclaw.agent.clarify import (
     ClarifyRequest,
     clarify_chat_id_var,
@@ -64,8 +69,11 @@ from simpleclaw.agent.context_retrieval import (
     ContextRetrievalService,
 )
 from simpleclaw.agent.evidence_policy import (
+    EvidenceFreshness,
     EvidenceRequirement,
+    EvidenceSourceType,
     EvidenceState,
+    EvidenceStatus,
     no_evidence_requirement,
     requirement_from_turn_plan,
 )
@@ -82,6 +90,12 @@ from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
+from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.resolution_types import (
+    AssetExecutionStatus,
+    AssetResult,
+    ResolutionBudget,
+)
 from simpleclaw.agent.session_state import (
     PendingInteraction,
     SessionIdentity,
@@ -162,6 +176,7 @@ from simpleclaw.recipes.learning import (
     suggestion_from_recipe_payload,
 )
 from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.recipes.executor import execute_recipe
 from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.security import CommandGuard
 from simpleclaw.security.secrets import default_manager
@@ -230,20 +245,17 @@ def _canary_read_only_eligible(
         return False
     if execution.mode is ExecutionMode.DIRECT_ANSWER:
         return (
-            execution.primary_asset is None
-            and not execution.allowed_assets
+            plan.capability.primary_asset is None
+            and not plan.capability.supporting_assets
             and not execution.allowed_tools
             and not plan.fact_check.required
         )
-    if execution.mode not in {
-        ExecutionMode.EXECUTE_ASSET,
-        ExecutionMode.RECIPE,
-    }:
+    if plan.capability.coverage.value != "full_coverage":
         return False
 
-    refs = set(execution.allowed_assets)
-    if execution.primary_asset is not None:
-        refs.add(execution.primary_asset)
+    refs = set(plan.capability.supporting_assets)
+    if plan.capability.primary_asset is not None:
+        refs.add(plan.capability.primary_asset)
     refs.update(
         AssetRef("native_tool", tool_name)
         for tool_name in execution.allowed_tools
@@ -1578,18 +1590,227 @@ class AgentOrchestrator:
             if turn.plan is not None and turn.plan.fact_check.required
             else run_planned_tool_loop
         )
+        architecture = str(config.get("architecture", "legacy_v2"))
+        if architecture == "capability_first_v3":
+            if not bool(config.get("resolution_budget_valid", False)):
+                self._record_unified_rollout_path(
+                    path="fail_closed",
+                    reason="capability_first_budget_unbounded",
+                    execution_mode=effective_plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                turn.transition(TurnPhase.REJECTED)
+                return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+
+            budget_config = config.get("resolution_budget", {})
+            if not isinstance(budget_config, dict):
+                budget_config = {}
+            budget = ResolutionBudget.from_seconds(
+                max_seconds=budget_config.get("max_seconds"),
+                max_steps=budget_config.get("max_steps"),
+                max_tool_calls=budget_config.get("max_tool_calls"),
+                token_budget=budget_config.get("max_tokens"),
+            )
+
+            async def execute_exact_skill(name: str, question: str) -> object:
+                return await self._execute_skill(name, shlex.quote(question))
+
+            async def execute_exact_recipe(
+                name: str,
+                variables: dict[str, str],
+            ) -> object:
+                recipe = next(
+                    (
+                        item
+                        for item in getattr(self, "_recipes", ())
+                        if item.name == name
+                    ),
+                    None,
+                )
+                if recipe is None or not recipe.steps:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "unsupported",
+                        "limitations": ["typed_recipe_executor_unavailable"],
+                    }
+                result = await execute_recipe(
+                    recipe,
+                    variables,
+                    timeout=recipe.settings.timeout,
+                    command_guard=self._command_guard,
+                    metrics=self._metrics,
+                )
+                if not result.success:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "failed_terminal",
+                        "limitations": [result.error or "recipe_failed"],
+                    }
+                envelopes: list[dict[str, object]] = []
+                for step in result.step_results:
+                    try:
+                        decoded = json.loads(step.output)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if (
+                        isinstance(decoded, dict)
+                        and decoded.get("schema") == "asset_result.v1"
+                    ):
+                        envelopes.append(decoded)
+                if len(envelopes) != 1:
+                    return {
+                        "schema": "asset_result.v1",
+                        "status": "failed_terminal",
+                        "limitations": ["recipe_requires_one_typed_envelope"],
+                    }
+                return envelopes[0]
+
+            async def direct_mode(
+                callback_plan: UnifiedTurnPlan,
+                _transition: object,
+                _ledger: object,
+                _budget: ResolutionBudget,
+            ) -> str:
+                result = await self._run_tool_loop_result(
+                    callback_plan.context.standalone_question,
+                    attachments=attachments,
+                    on_text_delta=on_text_delta,
+                    on_progress=on_progress,
+                    operator_tools=operator_tools,
+                    plan=callback_plan,
+                    candidates=candidates,
+                    evidence_requirement=requirement_from_turn_plan(
+                        callback_plan,
+                        catalog=catalog,
+                    ),
+                )
+                return result.text
+
+            async def supporting_mode(
+                callback_plan: UnifiedTurnPlan,
+                transition: object,
+                _ledger: object,
+                _budget: ResolutionBudget,
+            ) -> AssetResult:
+                supporting = callback_plan.capability.supporting_assets
+                if not supporting:
+                    return AssetResult(
+                        asset_type="controller",
+                        asset_name="supporting_asset",
+                        status=AssetExecutionStatus.UNSUPPORTED,
+                        unresolved_claims=callback_plan.fact_check.required_claims,
+                        limitations=("supporting_asset_missing",),
+                    )
+                selected = supporting[0]
+                question = getattr(
+                    transition,
+                    "next_question",
+                    callback_plan.context.standalone_question,
+                )
+                if selected.asset_type != "skill":
+                    return AssetResult(
+                        asset_type=selected.asset_type,
+                        asset_name=selected.name,
+                        status=AssetExecutionStatus.UNSUPPORTED,
+                        limitations=("typed_supporting_executor_unavailable",),
+                    )
+                raw = await execute_exact_skill(selected.name, str(question))
+                catalog_asset = next(
+                    (
+                        item
+                        for item in catalog.assets
+                        if item.asset_type == selected.asset_type
+                        and item.name == selected.name
+                    ),
+                    None,
+                )
+                return decode_asset_result(
+                    raw,
+                    asset_type=selected.asset_type,
+                    asset_name=selected.name,
+                    side_effect=bool(
+                        catalog_asset is not None and catalog_asset.side_effects
+                    ),
+                )
+
+            turn.transition(TurnPhase.EXECUTING)
+            outcome = await ResolutionController(
+                capability_executor=CapabilityExecutor(
+                    catalog=catalog,
+                    execute_skill=execute_exact_skill,
+                    execute_recipe=execute_exact_recipe,
+                ),
+                direct_answer=direct_mode,
+                answer_with_evidence=supporting_mode,
+                resolve_complex_problem=supporting_mode,
+                complex_escalation_enabled=bool(
+                    config.get("complex_escalation", {}).get("enabled", False)
+                ),
+            ).resolve(effective_plan, budget=budget)
+            logger.info(
+                "Capability resolution: coverage=%s fast_path=%s asset_status=%s "
+                "goal_status=%s mode=%s stop_reason=%s attempts=%d "
+                "validator_allow_final=%s",
+                effective_plan.capability.coverage.value,
+                bool(effective_plan.capability.primary_asset),
+                (
+                    outcome.asset_result.status.value
+                    if outcome.asset_result is not None
+                    else "none"
+                ),
+                outcome.goal.status.value,
+                outcome.mode.value,
+                outcome.stop_reason,
+                len(outcome.ledger.attempted_signatures),
+                outcome.validation.allow_final,
+            )
+            if outcome.mode is ExecutionMode.CLARIFY:
+                turn.transition(TurnPhase.LIMITED_FINAL)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            elif effective_plan.fact_check.required and outcome.validation.allow_final:
+                turn.record_evidence(
+                    EvidenceState(
+                        required=True,
+                        attempted=True,
+                        status=EvidenceStatus.FOUND,
+                        source_type=EvidenceSourceType.APPROVED_TOOL,
+                        freshness=EvidenceFreshness.CURRENT_TURN,
+                        evidence_text="\n".join(
+                            item.source_url or item.provenance
+                            for item in outcome.ledger.evidence
+                            if item.usable
+                        ),
+                        query=effective_plan.context.standalone_question,
+                    )
+                )
+                turn.verify_evidence()
+                turn.transition(TurnPhase.FINALIZING)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            elif effective_plan.fact_check.required:
+                turn.transition(TurnPhase.LIMITED_FINAL)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            else:
+                turn.transition(TurnPhase.FINALIZING)
+                turn.set_final_text(outcome.text)
+                turn.transition(TurnPhase.COMPLETED)
+            self._record_unified_rollout_path(
+                path="capability_first_v3",
+                reason=outcome.stop_reason,
+                execution_mode=outcome.mode.value,
+                gate_status=gate_result.status.value,
+            )
+            return ToolLoopResult(
+                outcome.text,
+                success=turn.phase is TurnPhase.COMPLETED,
+            )
         router = self._build_execution_router(
             ExecutionCallbacks(
                 direct_answer=factual_handler,
-                execute_asset=factual_handler,
-                tool_loop=factual_handler,
-                fact_check=run_planned_fact_check,
-                complex_fact=run_planned_complex_fact,
-                recipe=(
-                    run_planned_fact_check
-                    if turn.plan is not None and turn.plan.fact_check.required
-                    else run_planned_recipe
-                ),
+                answer_with_evidence=run_planned_fact_check,
+                resolve_complex_problem=run_planned_complex_fact,
                 clarify=clarify,
             )
         )
@@ -2443,10 +2664,18 @@ class AgentOrchestrator:
 
         planned_allowed_assets: frozenset[tuple[str, str]] | None = None
         if plan is not None:
-            planned_allowed_assets = frozenset(
+            planned_asset_refs = set(
                 (asset.asset_type, asset.name)
-                for asset in plan.execution.allowed_assets
+                for asset in plan.capability.supporting_assets
             )
+            if plan.capability.primary_asset is not None:
+                planned_asset_refs.add(
+                    (
+                        plan.capability.primary_asset.asset_type,
+                        plan.capability.primary_asset.name,
+                    )
+                )
+            planned_allowed_assets = frozenset(planned_asset_refs)
             active_skills = [
                 skill
                 for skill in active_skills
@@ -2457,10 +2686,9 @@ class AgentOrchestrator:
                 for recipe in active_recipes
                 if ("recipe", recipe.name) in planned_allowed_assets
             ]
-            primary = plan.execution.primary_asset
+            primary = plan.capability.primary_asset
             if (
-                plan.execution.mode
-                in {ExecutionMode.EXECUTE_ASSET, ExecutionMode.RECIPE}
+                plan.capability.coverage.value == "full_coverage"
                 and primary is not None
             ):
                 if primary.asset_type == "skill":
@@ -2592,7 +2820,10 @@ class AgentOrchestrator:
         if plan is not None and (
             plan.fact_check.required
             or plan.execution.mode
-            in {ExecutionMode.FACT_CHECK, ExecutionMode.COMPLEX_FACT}
+            in {
+                ExecutionMode.ANSWER_WITH_EVIDENCE,
+                ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+            }
         ):
             effective_on_text_delta = None
 

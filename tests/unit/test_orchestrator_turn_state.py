@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -13,6 +14,7 @@ from simpleclaw.agent.orchestrator import (
 from simpleclaw.agent.session_state import SessionIdentity
 from simpleclaw.agent.turn_plan import (
     AssetRef,
+    CapabilityPlan,
     ClarificationPlan,
     ContextRelation,
     ContextSelection,
@@ -23,9 +25,12 @@ from simpleclaw.agent.turn_plan import (
     FactEntity,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.resolution_types import CapabilityCoverage
+from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
+from simpleclaw.skills.models import SkillDefinition
 
 
 @pytest.fixture
@@ -154,6 +159,96 @@ async def _async_response(text: str) -> LLMResponse:
 
 
 @pytest.mark.asyncio
+async def test_capability_first_exact_lpga_skips_generic_realtime_lookup(
+    config_file,
+    monkeypatch,
+) -> None:
+    config_file.write_text(
+        config_file.read_text(encoding="utf-8").replace(
+            "agent:\n",
+            "agent:\n"
+            "  unified_turn_planner:\n"
+            "    architecture: capability_first_v3\n"
+            "    resolution_budget:\n"
+            "      max_steps: 3\n"
+            "      max_tool_calls: 3\n",
+        ),
+        encoding="utf-8",
+    )
+    orchestrator = AgentOrchestrator(config_file)
+    skill = SkillDefinition(
+        name="naver-sports-skill",
+        description="typed sports result",
+        capability=CapabilityMetadata(
+            domains=("sports",),
+            intents=("current_result",),
+            read_only=True,
+            side_effects=False,
+            freshness_sensitive=True,
+            direct_answer=True,
+            output_contract="asset_result.v1",
+            coverage="full_coverage",
+            input_contract="query.v1",
+            declared=True,
+        ),
+    )
+    orchestrator._skills = [skill]
+    orchestrator._skills_by_name = {skill.name: skill}
+    orchestrator._reload_dynamic_files = lambda: None
+
+    async def planner(text, *, catalog, **_kwargs):
+        base = _plan(
+            text,
+            catalog.fingerprint,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact=True,
+        )
+        return replace(
+            base,
+            fact_check=replace(
+                base.fact_check,
+                owner=EvidenceOwner.ASSET,
+                search_query="",
+                required_claims=("score",),
+            ),
+            capability=CapabilityPlan(
+                coverage=CapabilityCoverage.FULL,
+                primary_asset=AssetRef("skill", "naver-sports-skill"),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        planner,
+    )
+    called: list[str] = []
+
+    async def execute_skill(name: str, _args: str) -> str:
+        called.append(name)
+        return json.dumps(
+            {
+                "schema": "asset_result.v1",
+                "status": "completed",
+                "resolved_claims": ["score"],
+                "evidence": [
+                    {
+                        "claim_id": "score",
+                        "value": "70",
+                        "source_url": "https://example.test/lpga",
+                        "fresh": True,
+                    }
+                ],
+                "data": {"text": "유해란 70타"},
+            }
+        )
+
+    orchestrator._execute_skill = execute_skill
+    result = await orchestrator.process_message("LPGA 유해란 스코어", 10, 20)
+    assert result == "유해란 70타"
+    assert called == ["naver-sports-skill"]
+
+
+@pytest.mark.asyncio
 async def test_planner_unavailable_fails_closed_without_tool_execution(
     config_file,
     monkeypatch,
@@ -193,7 +288,7 @@ async def test_unsupported_fact_lookup_never_enters_composer(
         return _plan(
             text,
             catalog.fingerprint,
-            mode=ExecutionMode.FACT_CHECK,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact=True,
         )
 
@@ -241,7 +336,7 @@ async def test_found_low_confidence_fact_returns_limited_final(
         return _plan(
             text,
             catalog.fingerprint,
-            mode=ExecutionMode.FACT_CHECK,
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
             fact=True,
         )
 

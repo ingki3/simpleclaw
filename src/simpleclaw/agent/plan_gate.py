@@ -15,6 +15,7 @@ from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
+    CapabilityCoverage,
     ContextRelation,
     EvidenceOwner,
     ExecutionMode,
@@ -259,20 +260,24 @@ class PlanGate:
             )
         )
         if (
-            mode is ExecutionMode.EXECUTE_ASSET
-            and plan.execution.primary_asset is None
+            plan.capability.coverage is CapabilityCoverage.FULL
+            and plan.capability.primary_asset is None
         ):
             violations.append(
                 _violation(
                     "execution.primary_asset_required",
                     "execution.primary_asset",
-                    "Execute-asset mode requires a primary asset.",
+                    "Full coverage requires a primary asset.",
                 )
             )
-        current_fact_mode = mode in {
-            ExecutionMode.FACT_CHECK,
-            ExecutionMode.COMPLEX_FACT,
-        }
+        current_fact_mode = (
+            plan.capability.coverage is not CapabilityCoverage.FULL
+            and mode
+            in {
+                ExecutionMode.ANSWER_WITH_EVIDENCE,
+                ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+            }
+        )
         if current_fact_mode and not fact_check.required:
             violations.append(
                 _violation(
@@ -349,9 +354,8 @@ class PlanGate:
             and fact_check.owner is EvidenceOwner.PLANNER
             and mode
             not in {
-                ExecutionMode.TOOL_LOOP,
-                ExecutionMode.FACT_CHECK,
-                ExecutionMode.COMPLEX_FACT,
+                ExecutionMode.ANSWER_WITH_EVIDENCE,
+                ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
             }
         ):
             violations.append(
@@ -378,9 +382,8 @@ class PlanGate:
             and fact_check.owner is EvidenceOwner.PLANNER
             and mode
             in {
-                ExecutionMode.TOOL_LOOP,
-                ExecutionMode.FACT_CHECK,
-                ExecutionMode.COMPLEX_FACT,
+                ExecutionMode.ANSWER_WITH_EVIDENCE,
+                ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
             }
             and not has_applicable_collector
         ):
@@ -391,27 +394,17 @@ class PlanGate:
                     "Planner-owned required evidence needs an allowed collector.",
                 )
             )
-        if mode is ExecutionMode.RECIPE:
-            primary = plan.execution.primary_asset
-            if primary is None or primary.asset_type != "recipe":
-                violations.append(
-                    _violation(
-                        "execution.recipe_asset_required",
-                        "execution.primary_asset",
-                        "Recipe mode requires a recipe primary asset.",
-                    )
+        if (
+            mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM
+            and not plan.execution.complexity_signals
+        ):
+            violations.append(
+                _violation(
+                    "execution.complexity_signal_required",
+                    "execution.complexity_signals",
+                    "Complex problem mode requires an explicit complexity signal.",
                 )
-            if fact_check.owner not in {
-                EvidenceOwner.NONE,
-                EvidenceOwner.ASSET,
-            }:
-                violations.append(
-                    _violation(
-                        "fact_check.recipe_owner_invalid",
-                        "fact_check.owner",
-                        "Recipe fact collection must be owned by the asset or none.",
-                    )
-                )
+            )
 
     @staticmethod
     def _validate_catalog_scope(
@@ -427,21 +420,11 @@ class PlanGate:
             for asset in catalog.assets
             if asset.runtime_visible
         }
-        primary = plan.execution.primary_asset
+        primary = plan.capability.primary_asset
         allowed_identities = {
             (asset.asset_type, asset.name)
-            for asset in plan.execution.allowed_assets
+            for asset in plan.capability.supporting_assets
         }
-        if primary is not None:
-            primary_identity = (primary.asset_type, primary.name)
-            if primary_identity not in allowed_identities:
-                violations.append(
-                    _violation(
-                        "asset.primary_not_allowed",
-                        "execution.primary_asset",
-                        "Primary asset must also be present in allowed_assets.",
-                    )
-                )
 
         referenced = set(allowed_identities)
         if primary is not None:
@@ -449,7 +432,7 @@ class PlanGate:
         allowed_skill = any(
             asset_type == "skill"
             for asset_type, _asset_name in allowed_identities
-        )
+        ) or (primary is not None and primary.asset_type == "skill")
         if (
             "execute_skill" in plan.execution.allowed_tools
             and not allowed_skill
@@ -505,7 +488,10 @@ class PlanGate:
                 )
             )
 
-        if plan.execution.mode is not ExecutionMode.EXECUTE_ASSET or primary is None:
+        if (
+            plan.capability.coverage is not CapabilityCoverage.FULL
+            or primary is None
+        ):
             return
         primary_catalog_asset = runtime_assets.get(
             (primary.asset_type, primary.name)
@@ -518,6 +504,19 @@ class PlanGate:
                     "asset.undeclared_direct_execution",
                     "execution.primary_asset",
                     "Undeclared assets cannot be executed directly.",
+                )
+            )
+            return
+        if (
+            primary_catalog_asset.coverage != "full_coverage"
+            or primary_catalog_asset.input_contract != "query.v1"
+            or primary_catalog_asset.output_contract != "asset_result.v1"
+        ):
+            rejected.append(
+                _violation(
+                    "asset.typed_fast_path_contract_required",
+                    "capability.primary_asset",
+                    "Full coverage requires query.v1 and asset_result.v1 contracts.",
                 )
             )
             return

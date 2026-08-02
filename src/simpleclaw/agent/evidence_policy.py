@@ -236,9 +236,9 @@ def approved_collectors_from_plan(
             collectors.add(name)
 
     if "execute_skill" in allowed_tools:
-        selected_assets = set(plan.execution.allowed_assets)
-        if plan.execution.primary_asset is not None:
-            selected_assets.add(plan.execution.primary_asset)
+        selected_assets = set(plan.capability.supporting_assets)
+        if plan.capability.primary_asset is not None:
+            selected_assets.add(plan.capability.primary_asset)
         if any(
             (
                 (asset := runtime_assets.get((ref.asset_type, ref.name))) is not None
@@ -274,7 +274,7 @@ def requirement_from_turn_plan(
         for name in sorted(collectors)
     )
     if fact_check.required and fact_check.owner.value == "asset":
-        primary = plan.execution.primary_asset
+        primary = plan.capability.primary_asset
         if primary is not None:
             asset_collector = f"asset:{primary.asset_type}:{primary.name}"
             collectors = frozenset((*collectors, asset_collector))
