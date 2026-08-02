@@ -54,7 +54,7 @@ def _load_cases(path: Path, max_cases: int) -> list[dict]:
 
 
 def _fact_action_planned(plan: UnifiedTurnPlan) -> bool:
-    """Canonical execution modes that schedule evidence-backed fact work."""
+    """근거 기반 사실 작업을 예약하는 canonical 실행 mode인지 판정한다."""
     return plan.fact_check.required and plan.execution.mode in {
         ExecutionMode.ANSWER_WITH_EVIDENCE,
         ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
