@@ -358,20 +358,67 @@ def _usable_sports_payload(*, status: str = "final") -> dict:
     }
 
 
-@pytest.mark.parametrize("status", ["final", "live"])
-def test_typed_current_sports_fact_is_usable(status):
+@pytest.mark.parametrize(
+    ("status", "required_claims"),
+    [("final", ["점수", "승패"]), ("live", ["현재 점수"])],
+)
+def test_typed_current_sports_fact_is_usable(status, required_claims):
     request = _request_payload(
         "롯데 야구 결과",
         domain="sports",
         as_of_kst="2026-07-29T08:00:00+09:00",
     )
     request["reference_date"] = "2026-07-28"
-    request["required_claims"] = ["점수", "승패"]
+    request["required_claims"] = required_claims
 
     assert realtime_lookup.is_usable_realtime_evidence(
         _usable_sports_payload(status=status),
         request,
     )
+
+
+@pytest.mark.parametrize(
+    ("required_claims", "fact_update"),
+    [
+        (["승자"], {"winner": None}),
+        (["관중 수"], {}),
+        (["점수", "관중 수"], {}),
+    ],
+)
+def test_missing_or_unsupported_sports_claim_is_unusable(
+    required_claims,
+    fact_update,
+):
+    payload = _usable_sports_payload()
+    payload["facts"][0].update(fact_update)
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(
+        reference_date="2026-07-28",
+        required_claims=required_claims,
+    )
+
+    assert not realtime_lookup.is_usable_realtime_evidence(payload, request)
+
+
+def test_final_draw_satisfies_outcome_claim() -> None:
+    payload = _usable_sports_payload()
+    payload["facts"][0].update(
+        away_score=3,
+        home_score=3,
+        winner=None,
+    )
+    request = _request_payload(
+        "롯데 야구 결과",
+        domain="sports",
+        as_of_kst="2026-07-29T08:00:00+09:00",
+    )
+    request.update(reference_date="2026-07-28", required_claims=["승패"])
+
+    assert realtime_lookup.is_usable_realtime_evidence(payload, request)
 
 
 @pytest.mark.parametrize(

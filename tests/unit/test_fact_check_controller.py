@@ -27,7 +27,10 @@ from simpleclaw.skills.realtime_contracts import (
 )
 
 
-def _plan() -> UnifiedTurnPlan:
+def _plan(
+    *,
+    required_claims: tuple[str, ...] = ("점수", "승패"),
+) -> UnifiedTurnPlan:
     return UnifiedTurnPlan(
         original_text="어제 유해란 LPGA 1라운드 성적 확인해줘",
         context=ContextSelection(
@@ -51,7 +54,7 @@ def _plan() -> UnifiedTurnPlan:
             ),
             reference_date="2026-07-30",
             search_query="유해란 LPGA 1라운드 2026-07-30",
-            required_claims=("1라운드 스코어", "순위"),
+            required_claims=required_claims,
             freshness_required=True,
         ),
         execution=ExecutionPlan(
@@ -67,26 +70,37 @@ def _plan() -> UnifiedTurnPlan:
     )
 
 
-def _state() -> TurnExecutionState:
+def _state(
+    *,
+    required_claims: tuple[str, ...] = ("점수", "승패"),
+) -> TurnExecutionState:
+    plan = _plan(required_claims=required_claims)
     state = TurnExecutionState.create(
         session_key="telegram:A",
-        original_text=_plan().original_text,
+        original_text=plan.original_text,
         turn_id="turn-1",
     )
-    state.attach_plan(_plan())
+    state.attach_plan(plan)
     state.transition(TurnPhase.PLAN_GATED)
     return state
 
 
-def _request() -> RealtimeLookupRequest:
+def _request(
+    *,
+    required_claims: tuple[str, ...] = ("점수", "승패"),
+) -> RealtimeLookupRequest:
     return RealtimeLookupRequest.from_plan(
-        _plan(),
+        _plan(required_claims=required_claims),
         as_of_kst="2026-07-31T08:32:15+09:00",
     )
 
 
-def _result(status: LookupStatus) -> RealtimeLookupResult:
-    request = _request()
+def _result(
+    status: LookupStatus,
+    *,
+    required_claims: tuple[str, ...] = ("점수", "승패"),
+) -> RealtimeLookupResult:
+    request = _request(required_claims=required_claims)
     if status is LookupStatus.FOUND:
         payload = {
             "lookup_status": "found",
@@ -238,7 +252,7 @@ async def test_found_semantically_unusable_payload_never_enters_composer(
 
 @pytest.mark.asyncio
 async def test_current_live_sports_fact_can_enter_composer() -> None:
-    result = _result(LookupStatus.FOUND)
+    result = _result(LookupStatus.FOUND, required_claims=("현재 점수",))
     payload = dict(result.payload)
     fact = dict(result.facts[0])
     fact.update(status="live", winner=None)
@@ -263,7 +277,38 @@ async def test_current_live_sports_fact_can_enter_composer() -> None:
         as_of=lambda: "2026-07-31T08:32:15+09:00",
     )
 
-    state = await controller.run(_state())
+    state = await controller.run(_state(required_claims=("현재 점수",)))
 
     assert state.evidence.status is EvidenceStatus.VERIFIED
     composer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_missing_required_claim_never_enters_composer() -> None:
+    required_claims = ("승자", "관중 수")
+    result = _result(LookupStatus.FOUND, required_claims=required_claims)
+    payload = dict(result.payload)
+    fact = dict(result.facts[0])
+    fact["winner"] = None
+    payload["facts"] = [fact]
+    unusable = RealtimeLookupResult(
+        request=result.request,
+        status=LookupStatus.FOUND,
+        evidence=(fact,),
+        facts=(fact,),
+        limitations=(),
+        payload=payload,
+    )
+    composer = AsyncMock()
+    controller = FactCheckController(
+        lookup=AsyncMock(return_value=unusable),
+        compose=composer,
+        max_attempts=1,
+        as_of=lambda: "2026-07-31T08:32:15+09:00",
+    )
+
+    state = await controller.run(_state(required_claims=required_claims))
+
+    assert state.evidence.status is EvidenceStatus.UNUSABLE
+    assert "확정할 수 없습니다" in (state.final_text or "")
+    composer.assert_not_awaited()

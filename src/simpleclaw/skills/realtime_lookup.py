@@ -399,6 +399,80 @@ def _expected_event_date(
         return None
 
 
+_SPORTS_CLAIM_CAPABILITIES = {
+    "점수": ("score",),
+    "스코어": ("score",),
+    "현재점수": ("score",),
+    "현재스코어": ("score",),
+    "최종점수": ("final_score",),
+    "최종스코어": ("final_score",),
+    "score": ("score",),
+    "currentscore": ("score",),
+    "finalscore": ("final_score",),
+    "승패": ("outcome",),
+    "승자": ("outcome",),
+    "경기결과": ("outcome",),
+    "최종결과": ("outcome",),
+    "winner": ("outcome",),
+    "outcome": ("outcome",),
+    "result": ("outcome",),
+    "finalresult": ("outcome",),
+    "경기상태": ("status",),
+    "진행상태": ("status",),
+    "status": ("status",),
+    "gamestatus": ("status",),
+    "팀": ("teams",),
+    "대진": ("teams",),
+    "경기팀": ("teams",),
+    "teams": ("teams",),
+    "matchup": ("teams",),
+    "경기일": ("event_date",),
+    "경기날짜": ("event_date",),
+    "날짜": ("event_date",),
+    "eventdate": ("event_date",),
+    "gamedate": ("event_date",),
+    "리그": ("league",),
+    "대회": ("league",),
+    "league": ("league",),
+}
+
+
+def _normalized_claim(claim: object) -> str:
+    """Planner claim을 명시적 capability key와 대조할 안정된 형태로 만든다."""
+    return "".join(character for character in str(claim).casefold() if character.isalnum())
+
+
+def _sports_claims_are_satisfied(
+    required_claims: list[object] | tuple[object, ...],
+    fact: Mapping[str, object],
+) -> bool:
+    """모든 sports claim이 실제 typed fact capability로 충족되는지 판정한다."""
+    status = fact["status"]
+    away_team = fact["away_team"]
+    home_team = fact["home_team"]
+    winner = fact["winner"]
+    is_draw = (
+        status == "final"
+        and winner is None
+        and fact["away_score"] == fact["home_score"]
+    )
+    capabilities = {
+        "score": True,
+        "final_score": status == "final",
+        "outcome": status == "final"
+        and (winner in {away_team, home_team} or is_draw),
+        "status": status in {"final", "live"},
+        "teams": bool(away_team and home_team),
+        "event_date": bool(fact["event_date"]),
+        "league": bool(fact["league"]),
+    }
+    for claim in required_claims:
+        required = _SPORTS_CLAIM_CAPABILITIES.get(_normalized_claim(claim))
+        if required is None or not all(capabilities[item] for item in required):
+            return False
+    return True
+
+
 def is_usable_realtime_evidence(
     result: object,
     request: RealtimeLookupRequest | Mapping[str, object] | None = None,
@@ -484,11 +558,21 @@ def is_usable_realtime_evidence(
         return False
     if fact["status"] == "live" and fact["winner"] is not None:
         return False
-    if fact["status"] == "final" and fact["winner"] not in {
-        fact["away_team"],
-        fact["home_team"],
-        None,
-    }:
+    if fact["status"] == "final":
+        winner_is_team = fact["winner"] in {
+            fact["away_team"],
+            fact["home_team"],
+        }
+        is_draw = (
+            fact["winner"] is None
+            and fact["away_score"] == fact["home_score"]
+        )
+        if not winner_is_team and not is_draw:
+            return False
+    if required_claims is not None and not _sports_claims_are_satisfied(
+        required_claims,
+        fact,
+    ):
         return False
     entities = _request_value(request, "entities")
     if isinstance(entities, (list, tuple)):
