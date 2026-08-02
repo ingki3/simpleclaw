@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **BIZ-523: Turn/Session/Evidence typed state 통합** — ordinary turn을 UnifiedTurnPlanner primary 단일 경로로 전환하고, session-scoped message/pending persistence, typed realtime request, verified-evidence finalization gate를 구현한다. 코드·오프라인 검증과 필수 리뷰 후 `dev`에 반영하며 live config/restart/smoke는 별도 운영자 승인 단계로 남긴다. (진행: 2026-07-31)
+- [x] **[BIZ-523](mention://issue/8f9d3edd-4755-43ba-9d7f-222aeaf52dbd): Turn/Session/Evidence typed state 통합** — PR #537을 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)하고 late-finding PR #544를 필수 Review Agent gate 후 squash merge(SHA `e0f2bf411bc239d402ee9ac5785547443c47701e`)해 코드·오프라인 검증을 완료했다. `main` 승격·live config·restart·deploy·smoke는 별도 named operator successor [BIZ-532](mention://issue/08da18c2-4a3d-4c6b-802a-acc0f8160fe1)가 운영자 승인 후 소유하며, 본 완료 범위에서는 수행하지 않았다. (완료: 2026-08-02)
 
 - [x] **BIZ-519: RAG embedding을 Telegram polling 전에 pre-warm** — RAG 활성 runtime이 Admin API 준비 후 기존 `EmbeddingService`의 model-only pre-warm을 worker thread에서 await하고, 완료 뒤 Cron scheduler와 Telegram polling을 시작하도록 구현했다. PR #533을 `dev`에 squash merge(SHA `cd37dd1aa76270569c6d4cbfad8251dd009a5737`)하고 release PR #538을 `main`에 merge commit(SHA `15a6041dafe754e9aa591af46e2b7905ed2d611d`)으로 반영해 `v2026.08.01`을 발행했다. Live restart 후 prewarm success(`29381.01ms`)가 scheduler·polling보다 먼저 완료됐고, no-send reuse probe에서 384차원 vector·동일 model instance·두 번째 prewarm `0.01ms`를 확인했다. Admin·Telegram·Dashboard·Scheduler·Webhook health 정상, FD 19, 재시작 이후 ERROR 및 Telegram send/edit 0건을 확인했다. (2026-08-01)
 
@@ -139,7 +139,9 @@
 
 ### 2026-08-02
 
-- [x] **[BIZ-527](mention://issue/cc0bf8e4-7883-4053-852c-f39637e37d04) / [BIZ-528](mention://issue/4c14d104-1ced-498d-991f-5d1603ca92af): Turn/Session/Evidence gate 코드·오프라인 검증 완료** — PR #537을 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)해 typed realtime request, verified-evidence finalization, required-claim capability 검증을 반영했다. `main` 승격·live config·restart·smoke는 계속 BIZ-523의 release/live gate가 소유한다. (2026-08-02)
+- [x] **[BIZ-527](mention://issue/cc0bf8e4-7883-4053-852c-f39637e37d04) / [BIZ-528](mention://issue/4c14d104-1ced-498d-991f-5d1603ca92af): Turn/Session/Evidence gate 코드·오프라인 검증 완료** — PR #537을 `dev`에 squash merge(SHA `d5005bddeb6ceba9a07e6a92b75c2858c06c61e7`)해 typed realtime request, verified-evidence finalization, required-claim capability 검증을 반영했다. `main` 승격·live config·restart·deploy·smoke는 named operator successor [BIZ-532](mention://issue/08da18c2-4a3d-4c6b-802a-acc0f8160fe1)가 운영자 승인 후 소유한다. (2026-08-02)
+
+- [-] **[BIZ-530](mention://issue/9c325c7a-17ff-4f18-ae06-2025843e6bb2): realtime late-finding 중복 작업** — canonical [BIZ-529](mention://issue/c3d46b6a-cc05-4d42-b2fb-b1c3c87e957c) / PR #544가 동일 범위를 포함해 `dev`에 반영됐으므로 중복 PR #545는 merge 없이 닫고 BIZ-530은 `cancelled`로 종료했다. (2026-08-02)
 
 - [x] **[BIZ-524](mention://issue/529b497b-ae11-4e82-818c-74fa36200f0d): 모든 Gemini 호출을 OpenRouter로 전환** — [PR #541](https://github.com/ingki3/simpleclaw/pull/541)을 `dev`에 squash merge(SHA `ef0dffb9d6f2677848d317eaf59ada5059f57af3`)하고 [release PR #542](https://github.com/ingki3/simpleclaw/pull/542)를 `main`에 merge commit(SHA `e3757f88d185c0d4f6aa7ff60967cf81058b8d53`)으로 반영해 `v2026.08.01.1`을 발행했다. live config backup 후 TurnAnalysis·Asset Selector·default retry·multimodal core route를 OpenRouter `google/gemini-3.6-flash`로 전환하고 LaunchAgent를 재시작했다. text/default·required structured·forced tool·image·PDF no-send, Admin UI·Webhook HTTP 200, Telegram polling·scheduler 정상, Telegram send/edit 0건, ERROR 0건, SimpleClaw core native Google Gemini 호출 0건을 확인했다. (완료: 2026-08-02)
 
