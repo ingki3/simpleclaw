@@ -12,11 +12,18 @@ from simpleclaw.agent.context_candidates import ContextCandidateBuilder
 from simpleclaw.agent.orchestrator import _planner_native_specs
 from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_planner import PlannerUnavailable, plan_turn_with_llm
 from simpleclaw.config import load_agent_config
 from simpleclaw.llm.router import create_router
 
 ROOT = Path(__file__).resolve().parents[1]
+_FACT_ACTION_MODES = frozenset(
+    {
+        ExecutionMode.ANSWER_WITH_EVIDENCE,
+        ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+    }
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -49,6 +56,15 @@ def _load_cases(path: Path, max_cases: int) -> list[dict]:
         and isinstance(row.get("user"), str)
     ]
     return cases[:max_cases]
+
+
+def _fact_action_planned(
+    *,
+    fact_required: bool,
+    execution_mode: ExecutionMode,
+) -> bool:
+    """Recognize fact work after legacy payloads normalize to canonical modes."""
+    return bool(fact_required and execution_mode in _FACT_ACTION_MODES)
 
 
 async def _run(args: argparse.Namespace) -> dict:
@@ -112,10 +128,9 @@ async def _run(args: argparse.Namespace) -> dict:
                         "plan_gate_status": gate.status.value,
                         "execution_mode": plan.execution.mode.value,
                         "fact_required": plan.fact_check.required,
-                        "fact_action_planned": bool(
-                            plan.fact_check.required
-                            and plan.execution.mode.value
-                            in {"fact_check", "complex_fact"}
+                        "fact_action_planned": _fact_action_planned(
+                            fact_required=plan.fact_check.required,
+                            execution_mode=plan.execution.mode,
                         ),
                         "execution_mode_accuracy": (
                             not case.get("expected_mode")
