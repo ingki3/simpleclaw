@@ -754,6 +754,14 @@ class TestPolicyEngine:
         assert "skills.executor" in result.affected_modules
         assert "secrets" in result.affected_modules
 
+    def test_service_restart_for_dreaming_backend_alias(self):
+        result = classify_keys("daemon", {"dreaming": {"model": "utility_fast"}})
+
+        assert result.level == SERVICE_RESTART
+        assert result.requires_restart is True
+        assert "daemon.dreaming" in result.affected_modules
+        assert "llm.router" in result.affected_modules
+
 
 class TestValidation:
     def test_history_limit_range(self):

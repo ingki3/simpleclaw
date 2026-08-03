@@ -42,6 +42,30 @@ _VALID_STEP_KEYS = frozenset(
 )
 
 
+def _parse_skills(value: object, source: Path) -> tuple[str, ...]:
+    """``skills:`` delegate allowlist를 stable tuple로 파싱한다.
+
+    instructions recipe의 exact 실행 경계에서 쓰이는 안전 정보이므로 잘못된
+    shape를 조용히 버리지 않는다. 문자열 하나와 문자열 리스트를 지원하고,
+    빈 이름 및 중복은 제거한다.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        values: list[object] = [value]
+    elif isinstance(value, list | tuple):
+        values = list(value)
+    else:
+        raise RecipeParseError(
+            f"'skills' must be a string or list of strings in {source}"
+        )
+    if any(not isinstance(item, str) for item in values):
+        raise RecipeParseError(
+            f"'skills' must contain only strings in {source}"
+        )
+    return tuple(dict.fromkeys(item.strip() for item in values if item.strip()))
+
+
 def _parse_on_error(value: object, source: Path) -> OnErrorPolicy | None:
     """``on_error`` 문자열을 ``OnErrorPolicy`` 로 변환한다.
 
@@ -263,6 +287,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
     return RecipeDefinition(
         name=name,
         description=data.get("description", ""),
+        skills=_parse_skills(data.get("skills"), recipe_path),
         parameters=parameters,
         steps=steps,
         instructions=data.get("instructions", ""),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +11,7 @@ import pytest
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.tool_loop import ToolLoopRunner
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolTraceStep
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     ClarificationPlan,
@@ -23,7 +25,32 @@ from simpleclaw.agent.turn_plan import (
 )
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.recipes.loader import load_recipe
 from simpleclaw.recipes.models import RecipeDefinition
+from simpleclaw.skills.models import SkillDefinition
+
+SPORTS_RECIPE = (
+    Path(__file__).parent.parent
+    / "fixtures"
+    / "recipes"
+    / "sports-live"
+    / "recipe.yaml"
+)
+
+
+def _delegate_trace(
+    skill_name: str = "naver-sports-skill",
+    *,
+    success: bool = True,
+) -> list[ToolTraceStep]:
+    return [
+        ToolTraceStep(
+            tool_name="execute_skill",
+            arguments={"skill_name": skill_name},
+            observation_preview='{"ok": true}',
+            success=success,
+        )
+    ]
 
 
 def _config(tmp_path):
@@ -149,6 +176,168 @@ async def test_recipe_mode_exposes_only_selected_recipe(tmp_path) -> None:
     assert state.execution_scope.allowed_assets == frozenset(
         {("recipe", "selected-recipe")}
     )
+
+
+@pytest.mark.asyncio
+async def test_exact_recipe_nested_scope_exposes_only_delegate_skill(tmp_path) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._skills = [
+        SkillDefinition(
+            name="naver-sports-skill",
+            description="ALLOWED_SPORTS_DELEGATE",
+        ),
+        SkillDefinition(
+            name="realtime-lookup-skill",
+            description="FORBIDDEN_GENERIC_DELEGATE",
+        ),
+    ]
+
+    state = await orchestrator._prepare_tool_loop_state(
+        "typed recipe instructions",
+        True,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        forced_skill_names=frozenset({"naver-sports-skill"}),
+        forced_tool_names=frozenset({"execute_skill"}),
+    )
+
+    assert "ALLOWED_SPORTS_DELEGATE" in state.system_prompt
+    assert "FORBIDDEN_GENERIC_DELEGATE" not in state.system_prompt
+    assert [tool.name for tool in state.tools] == ["execute_skill"]
+    assert state.execution_scope is not None
+    assert state.execution_scope.allowed_tools == frozenset({"execute_skill"})
+    assert state.execution_scope.allowed_assets == frozenset(
+        {("skill", "naver-sports-skill")}
+    )
+    assert state.execution_scope.operator_tools is False
+    assert state.execution_scope.allow_cron_mutation is False
+    assert state.execution_scope.max_tool_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    nested = AsyncMock(
+        return_value=ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "resolved_claims": ["score"],
+                    "evidence": [
+                        {
+                            "claim_id": "score",
+                            "source_url": "https://sports.example/result",
+                            "fresh": True,
+                        }
+                    ],
+                }
+            ),
+            trace=_delegate_trace(),
+            success=True,
+        )
+    )
+    orchestrator._run_tool_loop_result = nested
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {"query": "어제 유해란 LPGA 성적과 순위"},
+    )
+
+    assert isinstance(result, dict)
+    assert result["schema"] == "asset_result.v1"
+    assert result["status"] == "completed"
+    kwargs = nested.await_args.kwargs
+    assert kwargs["isolated"] is True
+    assert kwargs["on_text_delta"] is None
+    assert kwargs["operator_tools"] is False
+    assert kwargs["allow_cron_mutation"] is False
+    assert kwargs["forced_skill_names"] == frozenset({"naver-sports-skill"})
+    assert kwargs["forced_tool_names"] == frozenset({"execute_skill"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("trace", "success", "limitation"),
+    [
+        ([], True, "recipe_requires_one_successful_delegate"),
+        (
+            _delegate_trace(success=False),
+            True,
+            "recipe_requires_one_successful_delegate",
+        ),
+        (
+            _delegate_trace("realtime-lookup-skill"),
+            True,
+            "recipe_requires_one_successful_delegate",
+        ),
+        (_delegate_trace(), False, "typed_recipe_nested_loop_failed"),
+    ],
+    ids=(
+        "zero-call",
+        "failed-delegate",
+        "wrong-delegate",
+        "multiple-call-capped",
+    ),
+)
+async def test_exact_instructions_recipe_requires_one_successful_delegate(
+    tmp_path,
+    trace: list[ToolTraceStep],
+    success: bool,
+    limitation: str,
+) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    orchestrator._run_tool_loop_result = AsyncMock(
+        return_value=ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "resolved_claims": ["score"],
+                }
+            ),
+            trace=trace,
+            success=success,
+        )
+    )
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {"query": "현재 LPGA 결과"},
+    )
+
+    assert result == {
+        "schema": "asset_result.v1",
+        "status": "failed_terminal",
+        "limitations": [limitation],
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_instructions_recipe_rejects_untyped_nested_output(tmp_path) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    orchestrator._run_tool_loop_result = AsyncMock(
+        return_value=ToolLoopResult(
+            text="plain answer",
+            trace=_delegate_trace(),
+            success=True,
+        )
+    )
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {"query": "현재 LPGA 결과"},
+    )
+
+    assert result == {
+        "schema": "asset_result.v1",
+        "status": "failed_terminal",
+        "limitations": ["recipe_requires_one_typed_envelope"],
+    }
 
 
 

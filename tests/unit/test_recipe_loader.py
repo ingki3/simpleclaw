@@ -55,9 +55,29 @@ class TestRecipeLoader:
         assert recipe.steps[1].step_type == StepType.PROMPT
         assert "${date}" in recipe.steps[0].content
 
+    def test_sports_live_exact_recipe_contract_and_delegate_allowlist(self):
+        recipe = load_recipe(FIXTURES / "sports-live" / "recipe.yaml")
+
+        assert recipe.skills == ("naver-sports-skill",)
+        assert recipe.capability.eligible_for_fast_path is True
+        assert recipe.capability.freshness_sensitive is True
+        assert recipe.capability.input_contract == "query.v1"
+        assert recipe.capability.output_contract == "asset_result.v1"
+
+    def test_invalid_skill_allowlist_fails_closed(self, tmp_path):
+        recipe_dir = tmp_path / "bad-skills"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            "name: bad-skills\nskills: [valid, 7]\ninstructions: run\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(RecipeParseError, match="only strings"):
+            load_recipe(recipe_dir / "recipe.yaml")
+
     def test_discover_recipes(self):
         recipes = discover_recipes(FIXTURES)
-        assert len(recipes) == 2
+        assert len(recipes) == 3
         names = {r.name for r in recipes}
         assert "daily-report" in names
 

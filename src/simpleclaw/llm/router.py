@@ -571,6 +571,26 @@ class LLMRouter:
         """등록된 모든 백엔드의 이름 목록을 반환한다."""
         return list(self._providers.keys())
 
+    def validate_backend_name(
+        self,
+        backend_name: str | None,
+        *,
+        field_path: str = "backend_name",
+    ) -> None:
+        """설정 필드가 현재 등록된 backend alias를 가리키는지 검증한다.
+
+        빈 값은 요청의 기본 route를 사용한다는 기존 계약이므로 허용한다. 명시된
+        alias는 자동 fallback 없이 현재 router registry에 반드시 존재해야 한다.
+        """
+        if not backend_name:
+            return
+        if backend_name not in self._providers:
+            available = ", ".join(self._providers.keys())
+            raise LLMConfigError(
+                f"{field_path}: unknown backend alias '{backend_name}'. "
+                f"Available: {available}"
+            )
+
     def get_default_backend(self) -> str:
         """기본 백엔드 이름을 반환한다."""
         return self._default

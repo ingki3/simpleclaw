@@ -23,6 +23,7 @@ from simpleclaw.agent.evidence_policy import (
     EvidenceState,
     EvidenceStatus,
 )
+from simpleclaw.agent.tool_gate import ToolExecutionScope
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
@@ -102,6 +103,55 @@ def test_tool_loop_runner_contract_is_importable():
         "selected_turn_ids",
     }
     assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
+
+
+@pytest.mark.asyncio
+async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypatch):
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(return_value='{"ok": true}')
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        return_value=LLMResponse(
+            text="",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="first",
+                    name="execute_skill",
+                    arguments={"skill_name": "naver-sports-skill"},
+                ),
+                ToolCall(
+                    id="second",
+                    name="execute_skill",
+                    arguments={"skill_name": "naver-sports-skill"},
+                ),
+            ],
+        )
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+        ),
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is False
+    assert result.text == "scoped_tool_call_cap_exceeded"
+    assert len(result.trace) == 1
+    assert result.trace[0].tool_name == "execute_skill"
+    assert result.trace[0].arguments["skill_name"] == "naver-sports-skill"
+    assert result.trace[0].success is True
+    dispatch.assert_awaited_once()
 
 
 @pytest.mark.asyncio
