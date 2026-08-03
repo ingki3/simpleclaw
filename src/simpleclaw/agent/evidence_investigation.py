@@ -63,17 +63,43 @@ class EvidenceInvestigationController:
         ledger: ResolutionLedger,
     ) -> InvestigationOutcome:
         unresolved = transition.required_claims or (transition.unresolved_gap,)
+        prior_result = ledger.asset_results[-1] if ledger.asset_results else None
+        prior_goal: GoalResolutionState | None = None
+        if prior_result is not None:
+            prior_goal = self._goal_resolver.evaluate(
+                original_goal=transition.original_goal,
+                required_claims=unresolved,
+                result=prior_result,
+                ledger=ledger,
+            )
+            if prior_goal.status is GoalStatus.RESOLVED:
+                state = InvestigationState(
+                    original_goal=transition.original_goal,
+                    current_question=transition.next_question,
+                    observed_facts=prior_goal.resolved_claims,
+                    unresolved_claims=(),
+                    selected_gap="",
+                    next_investigation_question=transition.next_question,
+                )
+                return InvestigationOutcome(
+                    goal=prior_goal,
+                    ledger=ledger,
+                    state=state,
+                    stop_reason="resolved_from_existing_evidence",
+                    last_result=prior_result,
+                )
+            unresolved = prior_goal.unresolved_claims or unresolved
         current_question = transition.next_question
         selected_gap = unresolved[0]
         state = InvestigationState(
             original_goal=transition.original_goal,
             current_question=current_question,
-            observed_facts=(),
+            observed_facts=prior_goal.resolved_claims if prior_goal is not None else (),
             unresolved_claims=unresolved,
             selected_gap=selected_gap,
             next_investigation_question=current_question,
         )
-        unresolved_goal = GoalResolutionState(
+        unresolved_goal = prior_goal or GoalResolutionState(
             original_goal=transition.original_goal,
             status=GoalStatus.UNRESOLVED,
             resolved_claims=(),
@@ -88,13 +114,31 @@ class EvidenceInvestigationController:
             )
 
         last_result: AssetResult | None = None
+        terminal_assets: set[tuple[str, str]] = set()
         asset_index = 0
         while budget.snapshot(
             steps_used=ledger.steps_used,
             tool_calls_used=ledger.tool_calls_used,
             tokens_used=ledger.tokens_used,
         ).can_continue:
-            asset = supporting_assets[asset_index % len(supporting_assets)]
+            selected_asset: AssetRef | None = None
+            for offset in range(len(supporting_assets)):
+                candidate_index = (asset_index + offset) % len(supporting_assets)
+                candidate = supporting_assets[candidate_index]
+                if (candidate.asset_type, candidate.name) in terminal_assets:
+                    continue
+                selected_asset = candidate
+                asset_index = (candidate_index + 1) % len(supporting_assets)
+                break
+            if selected_asset is None:
+                return InvestigationOutcome(
+                    goal=unresolved_goal,
+                    ledger=ledger,
+                    state=state,
+                    stop_reason="terminal",
+                    last_result=last_result,
+                )
+            asset = selected_asset
             signature = attempt_signature(
                 question=current_question,
                 asset_type=asset.asset_type,
@@ -128,7 +172,6 @@ class EvidenceInvestigationController:
             )
             if not ledger.asset_results or ledger.asset_results[-1] is not last_result:
                 ledger.append_asset_result(last_result)
-            asset_index += 1
             goal = self._goal_resolver.evaluate(
                 original_goal=transition.original_goal,
                 required_claims=transition.required_claims,
@@ -155,10 +198,15 @@ class EvidenceInvestigationController:
                 return InvestigationOutcome(goal, ledger, state, "needs_user_input", last_result)
             if goal.status is GoalStatus.BLOCKED or last_result.status in {
                 AssetExecutionStatus.DENIED,
-                AssetExecutionStatus.FAILED_TERMINAL,
                 AssetExecutionStatus.UNKNOWN_EFFECT,
             }:
                 return InvestigationOutcome(goal, ledger, state, "terminal", last_result)
+            if last_result.status is AssetExecutionStatus.FAILED_TERMINAL:
+                if last_result.side_effect or "deadline_exhausted" in last_result.limitations:
+                    return InvestigationOutcome(goal, ledger, state, "terminal", last_result)
+                terminal_assets.add((asset.asset_type, asset.name))
+                unresolved_goal = goal
+                continue
             if next_question == current_question and not last_result.resolved_claims:
                 return InvestigationOutcome(goal, ledger, state, "no_progress", last_result)
             unresolved_goal = goal

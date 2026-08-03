@@ -5,15 +5,32 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from simpleclaw.agent.capability_executor import CapabilityExecutor
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.evidence_investigation import EvidenceInvestigationController
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
     AssetResult,
+    CapabilityCoverage,
+    ExecutionMode,
     GoalStatus,
+    ProblemTransition,
     ResolutionBudget,
+)
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.llm.models import LLMResponse
@@ -154,3 +171,140 @@ async def test_lpga_exact_asset_never_calls_generic_collector(
     ).resolve(plan, budget=ResolutionBudget(max_steps=3))
     assert outcome.goal.status is GoalStatus.RESOLVED
     generic_kbo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sports_exact_terminal_uses_one_bounded_allowlisted_fallback() -> None:
+    catalog = PlannerCatalog(
+        assets=(
+            PlannerAsset(
+                asset_type="recipe",
+                name="sports-live",
+                description="Structured live sports result",
+                domains=("sports",),
+                intents=("current_result",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                coverage="full_coverage",
+                input_contract="query.v1",
+                fallback_modes=("answer_with_evidence",),
+            ),
+            PlannerAsset(
+                asset_type="skill",
+                name="sports-secondary",
+                description="Secondary structured sports evidence",
+                domains=("sports",),
+                intents=("current_result",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                input_contract="query.v1",
+            ),
+        ),
+        fingerprint="terminal-fallback-catalog",
+    )
+    plan = UnifiedTurnPlan(
+        original_text="어제 유해란 LPGA 성적",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="어제 유해란 LPGA 성적",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("sports",),
+        intents=("current_result",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.ASSET,
+            domain="sports",
+            entities=(),
+            search_query="",
+            intents=("current_result",),
+            reference_date="2026-08-02",
+            required_claims=("score",),
+            freshness_required=True,
+        ),
+        execution=ExecutionPlan(mode=ExecutionMode.ANSWER_WITH_EVIDENCE),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.FULL,
+            primary_asset=AssetRef("recipe", "sports-live"),
+            supporting_assets=(AssetRef("skill", "sports-secondary"),),
+            fallback_modes=(ExecutionMode.ANSWER_WITH_EVIDENCE,),
+        ),
+        confidence=1,
+        decision_summary="exact then bounded fallback",
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    execute_recipe = AsyncMock(
+        return_value={
+            "schema": "asset_result.v1",
+            "status": "failed_terminal",
+            "unresolved_claims": ["score"],
+        }
+    )
+    execute_supporting = AsyncMock(
+        return_value=AssetResult(
+            asset_type="skill",
+            asset_name="sports-secondary",
+            status=AssetExecutionStatus.COMPLETED,
+            resolved_claims=("score",),
+            evidence=(
+                {
+                    "claim_id": "score",
+                    "value": "70",
+                    "source_url": "https://example.test/lpga",
+                    "fresh": True,
+                },
+            ),
+            data={"text": "70타"},
+        )
+    )
+
+    async def evidence_mode(
+        _plan: UnifiedTurnPlan,
+        transition: ProblemTransition | None,
+        ledger: ResolutionLedger,
+        budget: ResolutionBudget,
+    ) -> AssetResult:
+        assert transition is not None
+        investigated = await EvidenceInvestigationController(
+            execute_supporting_asset=execute_supporting
+        ).run(
+            transition,
+            supporting_assets=plan.capability.supporting_assets,
+            budget=budget,
+            ledger=ledger,
+        )
+        assert investigated.last_result is not None
+        return investigated.last_result
+
+    outcome = await ResolutionController(
+        capability_executor=CapabilityExecutor(
+            catalog=catalog,
+            execute_recipe=execute_recipe,
+        ),
+        answer_with_evidence=evidence_mode,
+    ).resolve(
+        plan,
+        budget=ResolutionBudget(max_steps=3, max_tool_calls=3),
+    )
+
+    assert outcome.goal.status is GoalStatus.RESOLVED
+    assert outcome.text == "70타"
+    assert outcome.transition is not None
+    assert outcome.transition.original_goal == plan.context.standalone_question
+    assert outcome.transition.required_claims == ("score",)
+    execute_recipe.assert_awaited_once()
+    execute_supporting.assert_awaited_once()

@@ -116,6 +116,10 @@ class ResolutionController:
                     and ExecutionMode.RESOLVE_COMPLEX_PROBLEM
                     in plan.capability.fallback_modes
                 ),
+                fallback_allows_evidence=(
+                    ExecutionMode.ANSWER_WITH_EVIDENCE
+                    in plan.capability.fallback_modes
+                ),
                 budget=budget,
                 steps_used=ledger.steps_used,
                 tool_calls_used=ledger.tool_calls_used,
@@ -140,7 +144,11 @@ class ResolutionController:
                     mode=mode,
                     asset_result=asset_result,
                     transition=None,
-                    stop_reason="exact_asset_blocked",
+                    stop_reason=(
+                        "exact_asset_blocked"
+                        if goal.status is GoalStatus.BLOCKED
+                        else "exact_asset_limited"
+                    ),
                 )
             mode = transition.recommended_mode
         else:
