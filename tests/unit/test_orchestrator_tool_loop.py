@@ -39,6 +39,7 @@ from simpleclaw.agent.tool_loop import (
     ToolLoopState,
     ToolTraceStep,
     _bounded_cap_observation,
+    _deterministic_typed_asset_final,
 )
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
@@ -398,7 +399,11 @@ async def test_scoped_cap_preserves_first_typed_observation(
     envelope = json.loads(result.text)
 
     assert result.success is True
-    assert result.failure_kind == "scoped_tool_call_cap_preserved"
+    assert result.failure_kind == (
+        "typed_observation_fast_final"
+        if expected_status == "completed"
+        else "scoped_tool_call_cap_preserved"
+    )
     assert len(result.trace) == 1
     assert result.trace[0].success is (expected_status != "failed_retryable")
     assert envelope["schema"] == "asset_result.v1"
@@ -569,6 +574,71 @@ def test_scoped_cap_unobserved_claims_fail_common_validator(
     )
     assert decision.allow_final is False
     assert decision.blocked_claims == (required_claim,)
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {"ok": True, "items": [], "claim_map": {}},
+        {
+            "ok": False,
+            "items": [],
+            "error": {"message": "timeout", "retryable": True},
+        },
+        {"ok": True, "items": [{"score": 5}], "claim_map": {}},
+        {
+            "ok": True,
+            "items": [{"score": 5}],
+            "claim_map": {
+                "score": {
+                    "records": [
+                        {
+                            "value": 5,
+                            "source_url": "https://sports.example/result",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                            "fresh": True,
+                        }
+                    ]
+                }
+            },
+        },
+    ],
+    ids=("empty", "error", "missing-claim", "missing-provenance"),
+)
+def test_incomplete_typed_observation_never_fast_finals(
+    observation: dict[str, object],
+) -> None:
+    requirement = EvidenceRequirement(
+        required=False,
+        query="조회",
+        domain="sports",
+        required_claims=("score",),
+        owner="asset",
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+        ),
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+        final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
+    )
+
+    finalized = _deterministic_typed_asset_final(
+        state,
+        [("execute_skill", json.dumps(observation))],
+    )
+
+    assert finalized is None
 
 
 @pytest.mark.asyncio
@@ -849,6 +919,87 @@ async def test_asset_finalization_preserves_first_typed_observation(
 
 
 @pytest.mark.asyncio
+async def test_complete_typed_observation_skips_slow_model_finalization(
+    config_file,
+    monkeypatch,
+) -> None:
+    """완전한 provider claim map은 두 번째 모델 호출 전에 즉시 확정한다."""
+    orch = AgentOrchestrator(config_file)
+    observation = {
+        "ok": True,
+        "items": [{"score": {"away": 3, "home": 5}, "winner": "한화"}],
+        "claim_map": {
+            claim: {
+                "records": [
+                    {
+                        "value": value,
+                        "source_url": "https://api-gw.sports.naver.com/result",
+                        "provenance": "Naver Sports structured API",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
+            }
+            for claim, value in (
+                ("score", {"away": 3, "home": 5}),
+                ("winner", {"side": "home", "name": "한화"}),
+            )
+        },
+    }
+    dispatch = AsyncMock(return_value=json.dumps(observation, ensure_ascii=False))
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+
+    async def router_send(*_args, **_kwargs):
+        if router_send.calls:
+            await asyncio.sleep(20.1)
+            raise AssertionError("slow model finalization must not run")
+        router_send.calls += 1
+        return _tool_response(
+            "delegate",
+            "execute_skill",
+            {"skill_name": "naver-sports-skill", "args": "--mode results"},
+        )
+
+    router_send.calls = 0
+    orch._router.send = AsyncMock(side_effect=router_send)
+    requirement = EvidenceRequirement(
+        required=False,
+        query="어제 프로야구 경기 결과",
+        domain="sports",
+        required_claims=("score", "winner"),
+        allowed_collectors=frozenset({"execute_skill"}),
+        owner="asset",
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+        ),
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+        final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+    envelope = json.loads(result.text)
+
+    assert result.success is True
+    assert result.failure_kind == "typed_observation_fast_final"
+    assert envelope["resolved_claims"] == ["score", "winner"]
+    assert envelope["unresolved_claims"] == []
+    assert orch._router.send.await_count == 1
+    dispatch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_exact_recipe_accepts_runtime_preserved_typed_observation(
     config_file,
 ) -> None:
@@ -920,6 +1071,12 @@ async def test_exact_recipe_accepts_runtime_preserved_typed_observation(
         "score",
         "winner",
     ]
+    nested_requirement = orch._run_tool_loop_result.await_args.kwargs[
+        "evidence_requirement"
+    ]
+    assert nested_requirement.owner == "asset"
+    assert nested_requirement.required_claims == ("score", "winner")
+    assert nested_requirement.allowed_collectors == frozenset({"execute_skill"})
 
 
 @pytest.mark.asyncio

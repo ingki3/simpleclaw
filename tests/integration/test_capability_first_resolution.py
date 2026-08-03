@@ -72,6 +72,13 @@ pytestmark = pytest.mark.offline
             True,
         ),
         (
+            "answer_with_evidence",
+            ["current_result"],
+            ["어제(2026-08-02) KBO 프로야구 경기 결과 및 스코어"],
+            ("game_result", "score"),
+            True,
+        ),
+        (
             "direct_answer",
             ["current_result"],
             ["2026년 8월 2일 KBO 프로야구 경기 결과"],
@@ -97,6 +104,13 @@ pytestmark = pytest.mark.offline
             ["current_result"],
             ["경기 결과와 관중 수"],
             ("경기 결과와 관중 수",),
+            True,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["어제(2026-08-02) KBO 프로야구 경기 결과 및 스코어와 관중 수"],
+            ("어제(2026-08-02) KBO 프로야구 경기 결과 및 스코어와 관중 수",),
             True,
         ),
         (
