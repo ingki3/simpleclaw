@@ -16,7 +16,7 @@ from simpleclaw.agent.planner_catalog import (
     PlannerCatalog,
     build_planner_catalog,
 )
-from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.resolution_controller import ResolutionController, ResolutionOutcome
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
@@ -177,35 +177,58 @@ async def test_exact_executor_never_runs_non_read_only_evidence_asset(
     execute_skill.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
-    tmp_path: Path,
-) -> None:
-    """Required claims는 planner output에서 production execution 경계로만 흐른다."""
-    helper = SkillDefinition(
+def _sports_helper(
+    *,
+    declared: bool = True,
+    read_only: bool = True,
+    side_effects: bool = False,
+    requires_confirmation: bool = False,
+) -> SkillDefinition:
+    return SkillDefinition(
         name="naver-sports-skill",
         description="registered fake structured sports helper",
         capability=CapabilityMetadata(
             domains=("sports",),
             intents=("current_result",),
-            read_only=True,
-            side_effects=False,
+            read_only=read_only,
+            side_effects=side_effects,
             freshness_sensitive=True,
             direct_answer=True,
-            requires_confirmation=False,
+            requires_confirmation=requires_confirmation,
             output_contract="asset_result.v1",
             coverage="full_coverage",
             input_contract="query.v1",
-            declared=True,
+            declared=declared,
         ),
     )
-    recipe = load_recipe(SPORTS_RECIPE)
-    catalog = build_planner_catalog(
-        skills=(helper,),
-        recipes=(recipe,),
-        native_specs=(),
-    )
-    planner_payload = {
+
+
+def _complete_sports_observation() -> dict[str, object]:
+    return {
+        "ok": True,
+        "items": [{"game_result": "한화 승", "score": {"away": 3, "home": 5}}],
+        "claim_map": {
+            claim: {
+                "records": [
+                    {
+                        "value": value,
+                        "source_url": "https://example.test/structured-result",
+                        "provenance": "registered fake structured helper",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
+            }
+            for claim, value in (
+                ("game_result", "한화 승"),
+                ("score", {"away": 3, "home": 5}),
+            )
+        },
+    }
+
+
+def _sports_planner_payload() -> dict[str, object]:
+    return {
         "context": {
             "relation": "standalone",
             "use_prior_context": False,
@@ -254,9 +277,26 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
         "confidence": 1,
         "decision_summary": "exact recipe",
     }
+
+
+async def _run_connected_exact_recipe(
+    tmp_path: Path,
+    *,
+    helper: SkillDefinition,
+    observation: dict[str, object],
+) -> tuple[UnifiedTurnPlan, ResolutionOutcome, AgentOrchestrator]:
+    """Raw planner부터 common validator까지 production exact 경계를 관통한다."""
+    recipe = load_recipe(SPORTS_RECIPE)
+    catalog = build_planner_catalog(
+        skills=(helper,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
     planner_router = AsyncMock()
     planner_router.send = AsyncMock(
-        return_value=LLMResponse(text=json.dumps(planner_payload, ensure_ascii=False))
+        return_value=LLMResponse(
+            text=json.dumps(_sports_planner_payload(), ensure_ascii=False)
+        )
     )
     candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
     plan = await plan_turn_with_llm(
@@ -286,27 +326,6 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
             ],
         )
     )
-    observation = {
-        "ok": True,
-        "items": [{"game_result": "한화 승", "score": {"away": 3, "home": 5}}],
-        "claim_map": {
-            claim: {
-                "records": [
-                    {
-                        "value": value,
-                        "source_url": "https://example.test/structured-result",
-                        "provenance": "registered fake structured helper",
-                        "observed_at": "2026-08-03T17:00:00+09:00",
-                        "fresh": True,
-                    }
-                ]
-            }
-            for claim, value in (
-                ("game_result", "한화 승"),
-                ("score", {"away": 3, "home": 5}),
-            )
-        },
-    }
     orchestrator._dispatch_external_skill = AsyncMock(
         return_value=json.dumps(observation, ensure_ascii=False)
     )
@@ -321,12 +340,152 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
         budget=ResolutionBudget(max_steps=2, max_tool_calls=1),
     )
 
+    return gated.effective_plan, outcome, orchestrator
+
+
+@pytest.mark.asyncio
+async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
+    tmp_path: Path,
+) -> None:
+    """Required claims는 planner output에서 production execution 경계로만 흐른다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(),
+        observation=_complete_sports_observation(),
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert plan.execution.requires_confirmation is False
     assert outcome.goal.status is GoalStatus.RESOLVED
     assert outcome.validation.allow_final is True
     assert outcome.asset_result is not None
     assert outcome.asset_result.status is AssetExecutionStatus.COMPLETED
     assert outcome.asset_result.resolved_claims == ("game_result", "score")
     assert orchestrator._router.send.await_count == 1
+    orchestrator._dispatch_external_skill.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capability_overrides",
+    [
+        {"declared": False},
+        {"read_only": False},
+        {"side_effects": True},
+        {"requires_confirmation": True},
+    ],
+    ids=("undeclared", "write", "side-effect", "confirmation"),
+)
+async def test_connected_exact_recipe_rejects_discovered_unsafe_helper(
+    tmp_path: Path,
+    capability_overrides: dict[str, bool],
+) -> None:
+    """Planner의 read-only 주장은 discovered SkillDefinition을 우회하지 못한다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(**capability_overrides),
+        observation=_complete_sports_observation(),
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert plan.execution.requires_confirmation is False
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is AssetExecutionStatus.FAILED_TERMINAL
+    assert outcome.asset_result.status is not AssetExecutionStatus.COMPLETED
+    assert outcome.asset_result.resolved_claims == ()
+    assert outcome.asset_result.limitations == (
+        "typed_recipe_nested_error:ValueError",
+    )
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.validation.allow_final is False
+    assert outcome.validation.supported_claims == ()
+    assert orchestrator._router.send.await_count == 0
+    orchestrator._dispatch_external_skill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observation", "expected_status", "expected_blocked_claims"),
+    [
+        (
+            {
+                "ok": True,
+                "items": [{"game_result": "한화 승", "score": 5}],
+                "claim_map": {
+                    "game_result": _complete_sports_observation()["claim_map"][
+                        "game_result"
+                    ]
+                },
+            },
+            AssetExecutionStatus.COMPLETED,
+            ("score",),
+        ),
+        (
+            {
+                "ok": True,
+                "items": [{"game_result": "한화 승", "score": 5}],
+                "claim_map": {
+                    "game_result": {
+                        "records": [
+                            {
+                                "value": "한화 승",
+                                "observed_at": "2026-08-03T17:00:00+09:00",
+                                "fresh": True,
+                            }
+                        ]
+                    },
+                    "score": {
+                        "records": [
+                            {
+                                "value": 5,
+                                "observed_at": "2026-08-03T17:00:00+09:00",
+                                "fresh": True,
+                            }
+                        ]
+                    },
+                },
+            },
+            AssetExecutionStatus.COMPLETED,
+            ("game_result", "score"),
+        ),
+        (
+            {"ok": True, "items": [], "claim_map": {}},
+            AssetExecutionStatus.EMPTY,
+            ("game_result", "score"),
+        ),
+        (
+            {
+                "ok": False,
+                "items": [],
+                "error": {"message": "timeout", "retryable": True},
+            },
+            AssetExecutionStatus.FAILED_TERMINAL,
+            ("game_result", "score"),
+        ),
+    ],
+    ids=("missing-claim", "missing-provenance", "empty", "error"),
+)
+async def test_connected_exact_recipe_rejects_incomplete_observation(
+    tmp_path: Path,
+    observation: dict[str, object],
+    expected_status: AssetExecutionStatus,
+    expected_blocked_claims: tuple[str, ...],
+) -> None:
+    """Incomplete helper observation은 connected path에서 final로 승격되지 않는다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(),
+        observation=observation,
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is expected_status
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.goal.unresolved_claims == expected_blocked_claims
+    assert outcome.validation.allow_final is False
+    assert outcome.validation.blocked_claims == expected_blocked_claims
+    assert orchestrator._router.send.await_count > 1
     orchestrator._dispatch_external_skill.assert_awaited_once()
 
 
