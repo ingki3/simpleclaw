@@ -14,8 +14,8 @@ from simpleclaw.agent.context_candidates import (
     ContextCandidateSet,
     ContextTrust,
 )
-from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.plan_gate import PlanGate
+from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
     UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
