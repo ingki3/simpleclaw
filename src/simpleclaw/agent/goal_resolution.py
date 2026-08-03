@@ -38,18 +38,7 @@ class GoalResolver:
 
         if result.status is AssetExecutionStatus.NEEDS_INPUT:
             status = GoalStatus.NEEDS_USER_INPUT
-        elif (
-            result.side_effect
-            and result.status
-            in {
-                AssetExecutionStatus.PARTIAL_SUCCESS,
-                AssetExecutionStatus.UNKNOWN_EFFECT,
-            }
-        ) or result.status in {
-            AssetExecutionStatus.DENIED,
-            AssetExecutionStatus.FAILED_TERMINAL,
-            AssetExecutionStatus.UNSUPPORTED,
-        }:
+        elif self._blocks_goal(result):
             status = GoalStatus.BLOCKED
         elif result.status in {
             AssetExecutionStatus.EMPTY,
@@ -81,3 +70,25 @@ class GoalResolver:
             explanation_needed=explanation,
             blockers=blockers,
         )
+
+    @staticmethod
+    def _blocks_goal(result: AssetResult) -> bool:
+        """Asset terminal과 사용자 Goal blocked를 분리한다.
+
+        읽기 전용 ``FAILED_TERMINAL``은 해당 asset의 자동 재시도만 끝낸다.
+        Goal은 다른 allowlisted evidence 경로로 해결할 수 있으므로 unresolved로
+        남긴다. 반면 권한 거부, 미지원 경계, side-effect의 불명/부분/terminal
+        상태는 안전하게 우회할 수 없으므로 Goal을 blocked로 유지한다.
+        """
+        if result.status in {
+            AssetExecutionStatus.DENIED,
+            AssetExecutionStatus.UNSUPPORTED,
+        }:
+            return True
+        if not result.side_effect:
+            return False
+        return result.status in {
+            AssetExecutionStatus.FAILED_TERMINAL,
+            AssetExecutionStatus.PARTIAL_SUCCESS,
+            AssetExecutionStatus.UNKNOWN_EFFECT,
+        }

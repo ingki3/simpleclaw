@@ -25,6 +25,7 @@ class ProblemTransitionBuilder:
         result: AssetResult,
         required_claims: tuple[str, ...],
         fallback_allows_complex: bool,
+        fallback_allows_evidence: bool = True,
         budget: ResolutionBudget,
         steps_used: int = 0,
         tool_calls_used: int = 0,
@@ -52,6 +53,16 @@ class ProblemTransitionBuilder:
         ):
             return None
         else:
+            snapshot = budget.snapshot(
+                steps_used=steps_used,
+                tool_calls_used=tool_calls_used,
+                tokens_used=tokens_used,
+            )
+            if (
+                result.status is AssetExecutionStatus.FAILED_TERMINAL
+                and (not fallback_allows_evidence or not snapshot.can_continue)
+            ):
+                return None
             escalation = decide_complex_escalation(
                 result=result,
                 fallback_allows_complex=fallback_allows_complex,
@@ -66,7 +77,9 @@ class ProblemTransitionBuilder:
             else:
                 mode = ExecutionMode.ANSWER_WITH_EVIDENCE
                 reason = (
-                    "needs_explanation"
+                    "read_only_terminal_fallback"
+                    if result.status is AssetExecutionStatus.FAILED_TERMINAL
+                    else "needs_explanation"
                     if goal.status is GoalStatus.NEEDS_EXPLANATION
                     else "unresolved_gap"
                 )
