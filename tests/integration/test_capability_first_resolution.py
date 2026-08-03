@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.capability_executor import CapabilityExecutor
-from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_investigation import EvidenceInvestigationController
+from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import (
     PlannerAsset,
