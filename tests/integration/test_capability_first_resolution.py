@@ -17,10 +17,12 @@ from simpleclaw.agent.resolution_types import (
     AssetResult,
     CapabilityCoverage,
     ExecutionMode,
+    GoalResolutionState,
     GoalStatus,
     ProblemTransition,
     ResolutionBudget,
 )
+from simpleclaw.agent.result_validator import CommonResultValidator
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
@@ -39,7 +41,87 @@ pytestmark = pytest.mark.offline
 
 
 @pytest.mark.asyncio
-async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() -> None:
+@pytest.mark.parametrize(
+    (
+        "execution_mode",
+        "planner_intents",
+        "planner_claims",
+        "expected_claims",
+        "planner_selected_asset",
+    ),
+    [
+        (
+            "direct_answer",
+            ["completed_result"],
+            ["score", "winner"],
+            ("score", "winner"),
+            False,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["각 경기의 최종 점수와 승리 팀"],
+            ("score", "winner"),
+            False,
+        ),
+        (
+            "answer_with_evidence",
+            ["current_result"],
+            ["2026년 8월 2일 KBO 프로야구 경기 결과 및 스코어"],
+            ("game_result", "score"),
+            True,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["2026년 8월 2일 KBO 프로야구 경기 결과"],
+            ("game_result",),
+            True,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["각 경기의 최종 점수", "관중 수"],
+            ("score", "관중 수"),
+            False,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["각 경기의 최종 점수와 관중 수"],
+            ("각 경기의 최종 점수와 관중 수",),
+            True,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["경기 결과와 관중 수"],
+            ("경기 결과와 관중 수",),
+            True,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["점수와 부상 선수 명단"],
+            ("점수와 부상 선수 명단",),
+            False,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["경기 결과 및 점수"],
+            ("game_result", "score"),
+            True,
+        ),
+    ],
+)
+async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
+    execution_mode: str,
+    planner_intents: list[str],
+    planner_claims: list[str],
+    expected_claims: tuple[str, ...],
+    planner_selected_asset: bool,
+) -> None:
     """production-like asset-0 planner output은 typed catalog로만 exact 보정한다."""
     catalog = PlannerCatalog(
         assets=(
@@ -80,31 +162,33 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() ->
             "reason": "",
         },
         "domains": ["sports"],
-        "intents": ["completed_result"],
+        "intents": planner_intents,
         "fact_check": {
             "required": True,
-            "owner": "planner",
+            "owner": "asset" if planner_selected_asset else "planner",
             "domain": "sports",
-            "intents": ["completed_result"],
+            "intents": planner_intents,
             "entities": [{"kind": "league", "value": "KBO"}],
             "reference_date": "2026-08-02",
             "search_query": "2026-08-02 KBO 경기 결과",
-            "required_claims": ["score", "winner"],
+            "required_claims": planner_claims,
             "freshness_required": True,
             "reason": "completed result needs evidence",
         },
         "capability": {
-            "coverage": "no_match",
+            "coverage": "full_coverage" if planner_selected_asset else "no_match",
             "primary_asset": {
-                "asset_type": "none",
-                "asset_name": "__none__",
+                "asset_type": "recipe" if planner_selected_asset else "none",
+                "asset_name": (
+                    "sports-live" if planner_selected_asset else "__none__"
+                ),
             },
             "supporting_assets": [],
             "fallback_modes": ["answer_with_evidence"],
             "reason": "planner omitted asset",
         },
         "execution": {
-            "mode": "answer_with_evidence",
+            "mode": execution_mode,
             "allowed_tools": [],
             "requires_confirmation": False,
             "complexity_signals": [],
@@ -127,7 +211,10 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() ->
     )
     gate = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
 
-    assert plan.capability.primary_asset is None
+    if planner_selected_asset:
+        assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    else:
+        assert plan.capability.primary_asset is None
     assert plan.execution.allowed_tools == ()
     assert gate.status is GateStatus.PASS
     assert gate.effective_plan is not None
@@ -135,6 +222,41 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() ->
         "recipe", "sports-live"
     )
     assert gate.effective_plan.fact_check.owner is EvidenceOwner.ASSET
+    assert gate.effective_plan.fact_check.required_claims == expected_claims
+    if any(term in planner_claims[0] for term in ("관중", "부상")):
+        supported_claim = "score" if "점수" in planner_claims[0] else "game_result"
+        ledger = ResolutionLedger()
+        ledger.append_asset_result(
+            AssetResult(
+                asset_type="recipe",
+                asset_name="sports-live",
+                status=AssetExecutionStatus.COMPLETED,
+                evidence=(
+                    {
+                        "claim_id": supported_claim,
+                        "value": "provider observation",
+                        "source_url": "https://sports.naver.com/result",
+                        "observed_at": "2026-08-03T20:00:00+09:00",
+                        "provenance": "Naver Sports structured API",
+                        "fresh": True,
+                        "usable": True,
+                    },
+                ),
+                resolved_claims=(supported_claim,),
+            )
+        )
+        decision = CommonResultValidator().validate(
+            goal=GoalResolutionState(
+                original_goal="compound sports result",
+                status=GoalStatus.RESOLVED,
+                resolved_claims=(supported_claim,),
+                unresolved_claims=(),
+            ),
+            ledger=ledger,
+            required_claims=expected_claims,
+        )
+        assert decision.allow_final is False
+        assert decision.blocked_claims == expected_claims
 
 
 @pytest.mark.asyncio

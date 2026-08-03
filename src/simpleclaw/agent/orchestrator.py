@@ -2759,6 +2759,11 @@ class AgentOrchestrator:
                     declared_resolved_claims=decoded.get("resolved_claims"),
                     declared_evidence=decoded.get("evidence"),
                 )
+                if not bindings and decoded.get("observation_preserved") is True:
+                    bindings = {
+                        claim: (claim,)
+                        for claim in required_claims
+                    }
                 resolved, unresolved, evidence = materialize_validated_claims(
                     observation,
                     required_claims=required_claims,

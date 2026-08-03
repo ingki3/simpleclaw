@@ -91,6 +91,8 @@ instructions: |
 
   exact 실행의 최종 출력은 `asset_result.v1` JSON object 하나뿐이다. Markdown fence나
   자연어 머리말을 붙이지 않는다. `data`에는 helper 결과를 bounded object로 보존한다.
+  helper가 typed JSON을 한 번 성공 반환한 뒤에는 final 출력 형식 오류가 있더라도
+  동일 helper를 다시 호출하지 않고, 첫 observation만으로 envelope를 완성한다.
   helper `claim_map`은 provider가 실제 관찰한 `game_result|score|winner` typed key와
   value/source_url/observed_at/fresh를 보존한다. `evidence` 각 항목은 정확한 required
   claim ID를 `claim_id`로 쓰고, 그 claim을 실제로 충족하는 `claim_map` key만
