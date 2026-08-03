@@ -271,6 +271,19 @@ class PlanGate:
                     "Full coverage requires a primary asset.",
                 )
             )
+        if (
+            plan.capability.coverage is CapabilityCoverage.FULL
+            and plan.capability.primary_asset is not None
+            and plan.capability.primary_asset.asset_type == "recipe"
+            and plan.execution.allowed_tools
+        ):
+            violations.append(
+                _violation(
+                    "execution.exact_recipe_top_level_tool_forbidden",
+                    "execution.allowed_tools",
+                    "A full-coverage recipe cannot widen execution to top-level tools.",
+                )
+            )
         current_fact_mode = (
             plan.capability.coverage is not CapabilityCoverage.FULL
             and mode

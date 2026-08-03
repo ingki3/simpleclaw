@@ -473,23 +473,53 @@ async def test_exact_recipe_redundant_top_level_delegate_is_narrowed() -> None:
 
 @pytest.mark.asyncio
 async def test_exact_recipe_unrelated_top_level_tool_is_not_narrowed() -> None:
-    """exact recipe라도 중복 delegate 이외의 top-level tool은 fail-closed한다."""
+    """runtime-visible unrelated tool도 owner narrowing으로 우회하지 못한다."""
     data = _exact_recipe_response_data()
     data["execution"]["allowed_tools"] = ["web_search"]
     router = AsyncMock()
     router.send = AsyncMock(
         return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
     )
-
-    with pytest.raises(PlannerUnavailable):
-        await plan_turn_with_llm(
-            "어제 유해란 LPGA 성적과 순위",
-            candidates=ContextCandidateSet(
-                candidates=(), total_chars=0, truncated=False
+    exact_catalog = _exact_recipe_catalog()
+    catalog = PlannerCatalog(
+        assets=(
+            *exact_catalog.assets,
+            PlannerAsset(
+                asset_type="native_tool",
+                name="web_search",
+                description="unrelated runtime-visible collector",
+                domains=("news",),
+                intents=("realtime_lookup",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
             ),
-            catalog=_exact_recipe_catalog(),
-            router=router,
-        )
+        ),
+        fingerprint=exact_catalog.fingerprint,
+    )
+    candidates = ContextCandidateSet(
+        candidates=(), total_chars=0, truncated=False
+    )
+
+    plan = await plan_turn_with_llm(
+        "어제 유해란 LPGA 성적과 순위",
+        candidates=candidates,
+        catalog=catalog,
+        router=router,
+    )
+    result = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+
+    assert plan.fact_check.owner.value == "planner"
+    assert plan.execution.allowed_tools == ("web_search",)
+    assert result.status.value == "repair"
+    assert {violation.code for violation in result.violations} == {
+        "execution.exact_recipe_top_level_tool_forbidden"
+    }
 
 
 @pytest.mark.asyncio
