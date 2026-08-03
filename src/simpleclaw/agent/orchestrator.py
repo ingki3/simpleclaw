@@ -96,6 +96,10 @@ from simpleclaw.agent.file_mutation_tracker import (
     TrackedRoot,
 )
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
+from simpleclaw.agent.observation_claims import (
+    declared_claim_bindings,
+    materialize_validated_claims,
+)
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
@@ -2673,9 +2677,27 @@ class AgentOrchestrator:
 
         if recipe.instructions:
             try:
+                def _typed_string_tuple(name: str) -> tuple[str, ...]:
+                    """CapabilityExecutor의 JSON string tuple 변수를 보수 파싱한다."""
+                    try:
+                        decoded = json.loads(str(variables.get(name) or "[]"))
+                    except json.JSONDecodeError:
+                        return ()
+                    if not isinstance(decoded, list):
+                        return ()
+                    return tuple(
+                        str(item).strip()
+                        for item in decoded
+                        if str(item).strip()
+                    )
+
                 rendered = render_exact_recipe_instructions(
                     recipe,
                     query=str(variables.get("query") or ""),
+                    domain=str(variables.get("domain") or ""),
+                    intents=_typed_string_tuple("intents"),
+                    reference_date=str(variables.get("reference_date") or ""),
+                    required_claims=_typed_string_tuple("required_claims"),
                 )
                 nested = await self._run_tool_loop_result(
                     rendered,
@@ -2729,6 +2751,22 @@ class AgentOrchestrator:
                     "status": "failed_terminal",
                     "limitations": ["recipe_requires_one_typed_envelope"],
                 }
+            required_claims = _typed_string_tuple("required_claims")
+            if required_claims and decoded.get("status") == "completed":
+                observation = decoded.get("data")
+                bindings = declared_claim_bindings(
+                    required_claims=required_claims,
+                    declared_resolved_claims=decoded.get("resolved_claims"),
+                    declared_evidence=decoded.get("evidence"),
+                )
+                resolved, unresolved, evidence = materialize_validated_claims(
+                    observation,
+                    required_claims=required_claims,
+                    claim_bindings=bindings,
+                )
+                decoded["resolved_claims"] = resolved
+                decoded["unresolved_claims"] = unresolved
+                decoded["evidence"] = evidence
             return decoded
 
         if not recipe.steps:

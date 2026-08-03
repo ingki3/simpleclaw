@@ -462,6 +462,68 @@ async def test_execute_skill_prefers_registered_skill_when_command_also_present(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    (
+        "python -m naver_sports_skill --mode results --category kbo --json",
+        "python3 scripts/naver_sports.py --mode results --category kbo --json",
+    ),
+)
+async def test_registered_skill_strips_python_command_prefix_from_args(
+    config_file,
+    tmp_path,
+    monkeypatch,
+    command,
+):
+    """명시된 등록 skill은 모델이 만든 interpreter prefix를 shell로 실행하지 않는다."""
+    from types import SimpleNamespace
+
+    orch = AgentOrchestrator(config_file)
+    skill = _make_python_skill(tmp_path, "naver-sports-skill")
+    orch._skills_by_name = {skill.name: skill}
+    captured: dict[str, object] = {}
+
+    async def fake_run_skill(
+        skill_arg,
+        args=None,
+        timeout=60,
+        *,
+        metrics=None,
+        env_passthrough=None,
+        env_overrides=None,
+    ):
+        captured["skill"] = skill_arg
+        captured["args"] = args
+        return SimpleNamespace(output="registered-skill", success=True)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.skill_dispatch.run_skill",
+        fake_run_skill,
+    )
+
+    result = await orch._dispatch_tool_call(
+        ToolCall(
+            id="c-results",
+            name="execute_skill",
+            arguments={
+                "skill_name": "naver-sports-skill",
+                "command": command,
+            },
+        )
+    )
+
+    assert result == "registered-skill"
+    assert captured["skill"] == skill
+    assert captured["args"] == [
+        "--mode",
+        "results",
+        "--category",
+        "kbo",
+        "--json",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_execute_registered_skill_selects_only_exact_skill_override(
     config_file, tmp_path, monkeypatch,
 ):

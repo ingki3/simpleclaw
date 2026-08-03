@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 4
+version: 5
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -11,7 +11,8 @@ template: |-
   - domains=[sports], intents=[current_result], fact_check.required=true
   - fact_check.domain=sports, fact_check.intents=[current_result]
   - entities include athlete=유해란, league=LPGA, sport=golf, round=1
-  - reference_date resolves the user's relative date before source selection
+  - reference_date resolves the user's relative date against planner_clock before
+    source selection (for example, yesterday is current_date minus one day)
   - if catalog declares sports-live as a full_coverage query.v1/asset_result.v1 recipe,
     capability.primary_asset={"asset_type":"recipe","asset_name":"sports-live"}
     and capability.supporting_assets=[]; execution.allowed_tools=[] because the
@@ -25,7 +26,7 @@ template: |-
   - domains=[sports], intents=[current_result], fact_check.required=true
   - fact_check.domain=sports, fact_check.intents=[current_result]
   - entities include team=롯데 and league=KBO
-  - reference_date resolves 오늘
+  - reference_date resolves 오늘 to planner_clock.current_date
   - exact full coverage executes first; empty may transition to
     execution.mode=answer_with_evidence for schedule/status explanation
 

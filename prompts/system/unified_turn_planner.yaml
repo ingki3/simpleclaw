@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 6
+version: 7
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -60,6 +60,10 @@ system_prompt: |-
   Normalize a completed, current, or requested sports score/result to the
   canonical intent current_result. Preserve that same intent in both the
   top-level intents and fact_check.intents.
+  Resolve relative dates against planner_clock.current_date in
+  planner_clock.timezone and emit the resulting YYYY-MM-DD reference_date.
+  Never leave reference_date empty when a factual request contains a relative
+  day or otherwise identifies a concrete observation date.
   When required=true and no full-coverage asset owns evidence, choose
   answer_with_evidence or resolve_complex_problem, provide explicit required_claims,
   and allow at least one applicable supporting collector. Never choose direct_answer.

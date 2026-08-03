@@ -30,6 +30,7 @@ v2 동작 흐름:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -366,6 +367,10 @@ def render_exact_recipe_instructions(
     recipe: RecipeDefinition,
     *,
     query: str,
+    domain: str = "",
+    intents: tuple[str, ...] = (),
+    reference_date: str = "",
+    required_claims: tuple[str, ...] = (),
 ) -> str:
     """Instructions recipe를 strict ``query.v1`` 실행 프롬프트로 렌더한다.
 
@@ -395,12 +400,24 @@ def render_exact_recipe_instructions(
     variables["query"] = normalized_query
     rendered = render_instructions(recipe.instructions, variables=variables).rstrip()
     delegates = ", ".join(recipe.skills)
+    typed_context = json.dumps(
+        {
+            "domain": str(domain or ""),
+            "intents": list(intents),
+            "reference_date": str(reference_date or ""),
+            "required_claims": list(required_claims),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     return (
         f"{rendered}\n\n"
         "## Exact capability execution contract (mandatory)\n"
         f"- Input schema: query.v1\n- Standalone query: {normalized_query}\n"
+        f"- Typed fact contract: {typed_context}\n"
         f"- Allowed delegate skills: {delegates}\n"
-        "- Use only an allowed delegate skill and call it at most once.\n"
+        "- Call exactly one allowed delegate skill exactly once. Never answer "
+        "from memory or without that delegate observation.\n"
         "- Do not call web/search/browser/command/recipe/notification tools.\n"
         "- Return exactly one JSON object and no prose or Markdown fences.\n"
         "- The object schema must be asset_result.v1. Preserve distinct statuses "
@@ -409,6 +426,13 @@ def render_exact_recipe_instructions(
         "- Current factual claims may be resolved only when evidence includes "
         "source URL/provenance and freshness. Otherwise list them under "
         "unresolved_claims and do not invent a factual final.\n"
+        "- When required_claims is non-empty, resolved_claims and evidence.claim_id "
+        "must use those exact claim IDs; do not replace them with prose or objects.\n"
+        "- Resolve a claim only by binding evidence.claim_keys to exact keys present "
+        "in data.claim_map. Each claim key contains item-level records whose value "
+        "is bound to its own source URL and freshness metadata; never replace that "
+        "record-level provenance with an aggregate source. Never infer a claim from "
+        "non-empty data/items alone.\n"
         "- Include schema, status, data, evidence, resolved_claims, "
         "unresolved_claims, limitations, retryable, and tokens_used."
     )
