@@ -14,6 +14,7 @@ from simpleclaw.agent.context_candidates import (
     ContextCandidateSet,
     ContextTrust,
 )
+from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
@@ -455,6 +456,19 @@ async def test_exact_recipe_redundant_top_level_delegate_is_narrowed() -> None:
     assert plan.capability.primary_asset.name == "sports-live"
     assert plan.capability.supporting_assets == ()
     assert plan.execution.allowed_tools == ()
+    assert plan.fact_check.owner.value == "asset"
+    assert (
+        PlanGate()
+        .evaluate(
+            plan,
+            candidates=ContextCandidateSet(
+                candidates=(), total_chars=0, truncated=False
+            ),
+            catalog=_exact_recipe_catalog(),
+        )
+        .status.value
+        == "pass"
+    )
 
 
 @pytest.mark.asyncio
