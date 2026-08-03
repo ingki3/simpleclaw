@@ -658,6 +658,55 @@ def _preserve_asset_observation_data(
     return finalized[0] if finalized is not None else final_text
 
 
+def _deterministic_typed_asset_final(
+    state: ToolLoopState,
+    tool_results: list[tuple[str, str]],
+) -> str | None:
+    """완전한 단일 read-only helper observation을 모델 호출 없이 확정한다.
+
+    Exact recipe가 만든 가장 좁은 execution scope와 provider claim map을 모두
+    검증한 경우에만 성공 envelope를 반환한다. empty/error/partial observation은
+    기존 fail-closed finalization 경로가 처리하도록 여기서 확정하지 않는다.
+    """
+    scope = state.execution_scope
+    if (
+        scope is None
+        or scope.allowed_tools != frozenset({"execute_skill"})
+        or len(scope.allowed_assets) != 1
+        or not all(asset_type == "skill" for asset_type, _ in scope.allowed_assets)
+        or scope.operator_tools
+        or scope.allow_cron_mutation
+        or scope.max_tool_calls != 1
+        or len(tool_results) != 1
+        or tool_results[0][0] != "execute_skill"
+        or not state.evidence_requirement.required_claims
+    ):
+        return None
+
+    finalized = _finalize_typed_asset_observation(state, tool_results)
+    if finalized is None:
+        return None
+    finalized_text, _ = finalized
+    try:
+        envelope = json.loads(finalized_text)
+        observation = json.loads(tool_results[0][1])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    required_claims = list(state.evidence_requirement.required_claims)
+    if (
+        not isinstance(envelope, dict)
+        or not isinstance(observation, dict)
+        or observation.get("ok") is not True
+        or not observation.get("items")
+        or envelope.get("status") != "completed"
+        or envelope.get("resolved_claims") != required_claims
+        or envelope.get("unresolved_claims") != []
+        or len(envelope.get("evidence", ())) != len(required_claims)
+    ):
+        return None
+    return finalized_text
+
+
 class ToolLoopRunner:
     """LLM tool-call lifecycle을 반복 실행하는 전용 runner."""
 
@@ -1248,6 +1297,18 @@ class ToolLoopRunner:
                     "name": tc.name,
                     "content": sanitized[:_LLM_TOOL_RESULT_MESSAGE_MAX_CHARS],
                 })
+                deterministic_final = _deterministic_typed_asset_final(
+                    state,
+                    tool_results_for_empty_final,
+                )
+                if deterministic_final is not None:
+                    return ToolLoopResult(
+                        deterministic_final,
+                        trace=trace,
+                        iterations=i + 1,
+                        success=True,
+                        failure_kind="typed_observation_fast_final",
+                    )
                 if legacy_action is not None and tc.id == legacy_action.id:
                     state.user_content = (
                         f"{state.user_content}\n"
