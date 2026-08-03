@@ -17,6 +17,27 @@ _CRON_MUTATION_ACTIONS = frozenset({"add", "remove", "enable", "disable"})
 
 
 @dataclass(frozen=True)
+class TrustedAssetSafety:
+    """Discovered asset definition에서 파생된 실행 안전성 snapshot."""
+
+    asset_type: str
+    asset_name: str
+    declared: bool
+    read_only: bool
+    side_effects: bool
+    requires_confirmation: bool
+
+    @property
+    def safe_for_exact_read_only(self) -> bool:
+        return (
+            self.declared
+            and self.read_only
+            and not self.side_effects
+            and not self.requires_confirmation
+        )
+
+
+@dataclass(frozen=True)
 class ToolExecutionScope:
     """한 tool loop에서 planner/controller가 허용한 실행 범위."""
 
@@ -27,6 +48,16 @@ class ToolExecutionScope:
     # None은 기존 planned loop와 동일한 무제한(상위 iteration budget 적용).
     # exact nested recipe는 1로 고정해 delegate 중복 실행을 dispatch 전에 막는다.
     max_tool_calls: int | None = None
+    # Planner/model payload가 아니라 loaded asset definition에서 만든 값만 넣는다.
+    trusted_asset_safety: tuple[TrustedAssetSafety, ...] = ()
+
+    def safety_for(self, asset_type: str, asset_name: str) -> TrustedAssetSafety | None:
+        matches = tuple(
+            item
+            for item in self.trusted_asset_safety
+            if item.asset_type == asset_type and item.asset_name == asset_name
+        )
+        return matches[0] if len(matches) == 1 else None
 
 
 class ToolCallRejected(RuntimeError):
@@ -78,6 +109,12 @@ class ToolGate:
             skill = str(call.arguments.get("skill_name") or "").strip()
             if ("skill", skill) not in scope.allowed_assets:
                 raise ToolCallRejected("skill_not_allowed")
+            if scope.max_tool_calls == 1:
+                safety = scope.safety_for("skill", skill)
+                if safety is None:
+                    raise ToolCallRejected("skill_safety_metadata_missing")
+                if not safety.safe_for_exact_read_only:
+                    raise ToolCallRejected("skill_not_safe_for_exact_read_only")
             return
 
         spec = self._specs.get(call.name)
