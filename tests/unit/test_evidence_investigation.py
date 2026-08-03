@@ -125,6 +125,49 @@ async def test_investigation_deadline_cancels_supporting_asset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_partial_side_effect_terminal_does_not_start_fallback_asset() -> None:
+    execute = AsyncMock(
+        return_value=AssetResult(
+            asset_type="skill",
+            asset_name="first",
+            status=AssetExecutionStatus.FAILED_TERMINAL,
+            resolved_claims=("score",),
+            unresolved_claims=("rank",),
+            next_questions=("순위를 확인한다",),
+            side_effect=True,
+        )
+    )
+    transition = ProblemTransition(
+        original_goal="점수와 순위를 알려준다",
+        previous_question="점수와 순위?",
+        triggering_observation="failed_terminal",
+        goal_status=GoalStatus.UNRESOLVED,
+        unresolved_gap="score",
+        next_question="점수를 확인한다",
+        required_claims=("score", "rank"),
+        recommended_mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+        transition_reason="side_effect_terminal",
+    )
+
+    outcome = await EvidenceInvestigationController(
+        execute_supporting_asset=execute
+    ).run(
+        transition,
+        supporting_assets=(
+            AssetRef("skill", "first"),
+            AssetRef("skill", "second"),
+        ),
+        budget=ResolutionBudget(max_steps=3, max_tool_calls=3),
+        ledger=ResolutionLedger(),
+    )
+
+    assert outcome.stop_reason == "terminal"
+    assert outcome.goal.status is GoalStatus.BLOCKED
+    assert execute.await_count == 1
+    assert execute.await_args.args[0].name == "first"
+
+
+@pytest.mark.asyncio
 async def test_read_only_terminal_advances_to_next_distinct_supporting_asset() -> None:
     async def execute(asset: AssetRef, *_args: object) -> AssetResult:
         if asset.name == "first":
@@ -182,6 +225,102 @@ async def test_read_only_terminal_advances_to_next_distinct_supporting_asset() -
         "second",
     ]
     assert len(ledger.attempted_signatures) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("next_questions", "expected_question"),
+    [
+        (("순위를 확인한다",), "순위를 확인한다"),
+        ((), "점수를 확인한다"),
+    ],
+)
+async def test_partial_read_only_terminal_advances_latest_question_and_gap(
+    next_questions: tuple[str, ...],
+    expected_question: str,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def execute(
+        asset: AssetRef,
+        question: str,
+        _ledger: ResolutionLedger,
+    ) -> AssetResult:
+        calls.append((asset.name, question))
+        if asset.name == "first":
+            return AssetResult(
+                asset_type="skill",
+                asset_name=asset.name,
+                status=AssetExecutionStatus.FAILED_TERMINAL,
+                resolved_claims=("score",),
+                unresolved_claims=("rank",),
+                next_questions=next_questions,
+                evidence=(
+                    {
+                        "claim_id": "score",
+                        "value": "70",
+                        "source_url": "https://example.test/score",
+                        "fresh": True,
+                    },
+                ),
+            )
+        return AssetResult(
+            asset_type="skill",
+            asset_name=asset.name,
+            status=AssetExecutionStatus.COMPLETED,
+            resolved_claims=("rank",),
+            evidence=(
+                {
+                    "claim_id": "rank",
+                    "value": "5",
+                    "source_url": "https://example.test/rank",
+                    "fresh": True,
+                },
+            ),
+        )
+
+    transition = ProblemTransition(
+        original_goal="점수와 순위를 알려준다",
+        previous_question="점수와 순위?",
+        triggering_observation="failed_terminal",
+        goal_status=GoalStatus.UNRESOLVED,
+        unresolved_gap="score",
+        next_question="점수를 확인한다",
+        required_claims=("score", "rank"),
+        recommended_mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+        transition_reason="read_only_terminal_fallback",
+    )
+    ledger = ResolutionLedger()
+
+    outcome = await EvidenceInvestigationController(
+        execute_supporting_asset=execute
+    ).run(
+        transition,
+        supporting_assets=(
+            AssetRef("skill", "first"),
+            AssetRef("skill", "second"),
+        ),
+        budget=ResolutionBudget(max_steps=3, max_tool_calls=3),
+        ledger=ledger,
+    )
+
+    assert outcome.stop_reason == "resolved"
+    assert outcome.goal.original_goal == transition.original_goal
+    assert outcome.goal.status is GoalStatus.RESOLVED
+    assert outcome.goal.resolved_claims == ("rank", "score")
+    assert calls == [("first", "점수를 확인한다"), ("second", expected_question)]
+    assert attempt_signature(
+        question=expected_question,
+        asset_type="skill",
+        asset_name="second",
+        parameters={"selected_gap": "rank"},
+    ) in ledger.attempted_signatures
+    assert attempt_signature(
+        question=expected_question,
+        asset_type="skill",
+        asset_name="second",
+        parameters={"selected_gap": "score"},
+    ) not in ledger.attempted_signatures
 
 
 @pytest.mark.asyncio

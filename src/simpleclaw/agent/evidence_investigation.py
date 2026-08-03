@@ -206,6 +206,8 @@ class EvidenceInvestigationController:
                     return InvestigationOutcome(goal, ledger, state, "terminal", last_result)
                 terminal_assets.add((asset.asset_type, asset.name))
                 unresolved_goal = goal
+                current_question = next_question
+                selected_gap = next_gap or selected_gap
                 continue
             if next_question == current_question and not last_result.resolved_claims:
                 return InvestigationOutcome(goal, ledger, state, "no_progress", last_result)
