@@ -6,38 +6,75 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-def _validated_claim_map(observation: object) -> dict[str, dict[str, Any]]:
-    """출처·시각·freshness가 완전한 provider claim만 반환한다."""
+def _validated_claim_map(observation: object) -> dict[str, list[dict[str, Any]]]:
+    """모든 item의 출처·시각·freshness가 완전한 provider claim만 반환한다."""
     if not isinstance(observation, Mapping):
         return {}
     raw_claims = observation.get("claim_map")
     if not isinstance(raw_claims, Mapping):
         return {}
 
-    validated: dict[str, dict[str, Any]] = {}
-    for raw_key, raw_record in raw_claims.items():
+    validated: dict[str, list[dict[str, Any]]] = {}
+    for raw_key, raw_claim in raw_claims.items():
         key = str(raw_key).strip()
-        if not key or not isinstance(raw_record, Mapping) or "value" not in raw_record:
+        if not key or not isinstance(raw_claim, Mapping):
             continue
-        source_url = str(raw_record.get("source_url") or "").strip()
-        observed_at = str(
-            raw_record.get("observed_at") or raw_record.get("fetched_at") or ""
-        ).strip()
-        if (
-            not source_url
-            or not observed_at
-            or raw_record.get("fresh") is not True
-            or raw_record.get("usable", True) is not True
-        ):
+        raw_records = raw_claim.get("records")
+        if not isinstance(raw_records, list | tuple) or not raw_records:
             continue
-        validated[key] = {
-            "value": raw_record["value"],
-            "source_url": source_url,
-            "provenance": str(raw_record.get("provenance") or "").strip(),
-            "observed_at": observed_at,
-            "fresh": True,
-            "usable": True,
-        }
+        raw_sources = raw_claim.get("sources")
+        sources = (
+            [str(source).strip() for source in raw_sources]
+            if isinstance(raw_sources, list | tuple)
+            else []
+        )
+        records: list[dict[str, Any]] = []
+        for raw_record in raw_records:
+            if not isinstance(raw_record, Mapping) or "value" not in raw_record:
+                records = []
+                break
+            source_url = str(raw_record.get("source_url") or "").strip()
+            source_index = raw_record.get("source_index")
+            if (
+                not source_url
+                and isinstance(source_index, int)
+                and not isinstance(source_index, bool)
+                and 0 <= source_index < len(sources)
+            ):
+                source_url = sources[source_index]
+            observed_at = str(
+                raw_record.get("observed_at")
+                or raw_record.get("fetched_at")
+                or raw_claim.get("observed_at")
+                or raw_claim.get("fetched_at")
+                or ""
+            ).strip()
+            provenance = str(
+                raw_record.get("provenance") or raw_claim.get("provenance") or ""
+            ).strip()
+            fresh = raw_record.get("fresh", raw_claim.get("fresh"))
+            usable = raw_record.get("usable", raw_claim.get("usable", True))
+            if (
+                not source_url
+                or not observed_at
+                or not provenance
+                or fresh is not True
+                or usable is not True
+            ):
+                records = []
+                break
+            records.append(
+                {
+                    "value": raw_record["value"],
+                    "source_url": source_url,
+                    "provenance": provenance,
+                    "observed_at": observed_at,
+                    "fresh": True,
+                    "usable": True,
+                }
+            )
+        if records:
+            validated[key] = records
     return validated
 
 
@@ -67,19 +104,21 @@ def materialize_validated_claims(
                 if str(item).strip()
             )
         )
-        records = [claim_map[key] for key in keys if key in claim_map]
-        if not keys or len(records) != len(keys):
+        bound_records = [claim_map[key] for key in keys if key in claim_map]
+        if not keys or len(bound_records) != len(keys):
             continue
+        records = [record for group in bound_records for record in group]
         source_urls = {record["source_url"] for record in records}
         observed_times = {record["observed_at"] for record in records}
-        if len(source_urls) != 1 or len(observed_times) != 1:
+        provenances = {record["provenance"] for record in records}
+        if len(observed_times) != 1 or "" in provenances:
             continue
         value = (
-            records[0]["value"]
-            if len(records) == 1
+            bound_records[0]
+            if len(bound_records) == 1
             else {
-                key: record["value"]
-                for key, record in zip(keys, records, strict=True)
+                key: claim_records
+                for key, claim_records in zip(keys, bound_records, strict=True)
             }
         )
         resolved.append(claim_id)
@@ -87,8 +126,8 @@ def materialize_validated_claims(
             {
                 "claim_id": claim_id,
                 "value": value,
-                "source_url": records[0]["source_url"],
-                "provenance": records[0]["provenance"],
+                "source_url": next(iter(source_urls)) if len(source_urls) == 1 else "",
+                "provenance": "; ".join(sorted(provenances)),
                 "observed_at": records[0]["observed_at"],
                 "fresh": True,
                 "usable": True,

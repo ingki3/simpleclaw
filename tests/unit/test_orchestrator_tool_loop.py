@@ -235,8 +235,14 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
                             "event_state": "final",
                             "score": {"away": 3, "home": 5},
                             "winner": {"side": "home", "name": "한화"},
+                            "source_url": "https://api-gw.sports.naver.com/ended",
+                        },
+                        {
+                            "event_state": "final",
+                            "score": {"away": 1, "home": 2},
+                            "winner": {"side": "home", "name": "LG"},
                             "source_url": "https://api-gw.sports.naver.com/result",
-                        }
+                        },
                     ],
                     "fetched_at": "2026-08-03T17:00:00+09:00",
                     "source": {
@@ -245,14 +251,40 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
                     },
                     "claim_map": {
                         "score": {
-                            "value": [{"away": 3, "home": 5}],
-                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "sources": [
+                                "https://api-gw.sports.naver.com/ended",
+                                "https://api-gw.sports.naver.com/result",
+                            ],
+                            "records": [
+                                {
+                                    "value": {"away": 3, "home": 5},
+                                    "source_index": 0,
+                                },
+                                {
+                                    "value": {"away": 1, "home": 2},
+                                    "source_index": 1,
+                                },
+                            ],
+                            "provenance": "Naver Sports structured API",
                             "observed_at": "2026-08-03T17:00:00+09:00",
                             "fresh": True,
                         },
                         "winner": {
-                            "value": [{"side": "home", "name": "한화"}],
-                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "sources": [
+                                "https://api-gw.sports.naver.com/ended",
+                                "https://api-gw.sports.naver.com/result",
+                            ],
+                            "records": [
+                                {
+                                    "value": {"side": "home", "name": "한화"},
+                                    "source_index": 0,
+                                },
+                                {
+                                    "value": {"side": "home", "name": "LG"},
+                                    "source_index": 1,
+                                },
+                            ],
+                            "provenance": "Naver Sports structured API",
                             "observed_at": "2026-08-03T17:00:00+09:00",
                             "fresh": True,
                         },
@@ -365,6 +397,12 @@ async def test_scoped_cap_preserves_first_typed_observation(
     assert envelope["unresolved_claims"] == (
         [] if expected_status == "completed" else ["score", "winner"]
     )
+    if expected_status == "completed":
+        for item in envelope["evidence"]:
+            assert [record["source_url"] for record in item["value"]] == [
+                "https://api-gw.sports.naver.com/ended",
+                "https://api-gw.sports.naver.com/result",
+            ]
     dispatch.assert_awaited_once()
 
 
@@ -375,10 +413,15 @@ async def test_scoped_cap_preserves_first_typed_observation(
             "attendance",
             {
                 "score": {
-                    "value": [{"away": 3, "home": 5}],
-                    "source_url": "https://api-gw.sports.naver.com/result",
-                    "observed_at": "2026-08-03T17:00:00+09:00",
-                    "fresh": True,
+                    "records": [
+                        {
+                            "value": {"away": 3, "home": 5},
+                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "provenance": "Naver Sports structured API",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                            "fresh": True,
+                        }
+                    ]
                 }
             },
         ),
@@ -386,10 +429,15 @@ async def test_scoped_cap_preserves_first_typed_observation(
             "score",
             {
                 "score": {
-                    "value": [{"away": 3, "home": 5}],
-                    "source_url": "",
-                    "observed_at": "2026-08-03T17:00:00+09:00",
-                    "fresh": True,
+                    "records": [
+                        {
+                            "value": {"away": 3, "home": 5},
+                            "source_url": "",
+                            "provenance": "Naver Sports structured API",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                            "fresh": True,
+                        }
+                    ]
                 }
             },
         ),
@@ -397,9 +445,20 @@ async def test_scoped_cap_preserves_first_typed_observation(
             "score",
             {
                 "score": {
-                    "value": [{"away": 3, "home": 5}],
-                    "source_url": "https://api-gw.sports.naver.com/result",
+                    "sources": ["https://api-gw.sports.naver.com/ended"],
+                    "provenance": "Naver Sports structured API",
+                    "observed_at": "2026-08-03T17:00:00+09:00",
                     "fresh": True,
+                    "records": [
+                        {
+                            "value": {"away": 3, "home": 5},
+                            "source_index": 0,
+                        },
+                        {
+                            "value": {"away": 1, "home": 2},
+                            "source_index": 1,
+                        },
+                    ]
                 }
             },
         ),
@@ -407,9 +466,29 @@ async def test_scoped_cap_preserves_first_typed_observation(
             "score",
             {
                 "score": {
-                    "value": [{"away": 3, "home": 5}],
-                    "source_url": "https://api-gw.sports.naver.com/result",
-                    "observed_at": "2026-08-03T17:00:00+09:00",
+                    "records": [
+                        {
+                            "value": {"away": 3, "home": 5},
+                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "provenance": "Naver Sports structured API",
+                            "fresh": True,
+                        }
+                    ]
+                }
+            },
+        ),
+        (
+            "score",
+            {
+                "score": {
+                    "records": [
+                        {
+                            "value": {"away": 3, "home": 5},
+                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "provenance": "Naver Sports structured API",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                        }
+                    ]
                 }
             },
         ),
@@ -417,6 +496,7 @@ async def test_scoped_cap_preserves_first_typed_observation(
     ids=(
         "absent-claim",
         "missing-source",
+        "partial-invalid-source-index",
         "missing-observed-at",
         "missing-freshness",
     ),
@@ -491,16 +571,26 @@ async def test_scoped_cap_forces_typed_final_without_second_dispatch(
         "items": [{"score": {"away": 3, "home": 5}}],
         "claim_map": {
             "game_result": {
-                "value": [{"score": {"away": 3, "home": 5}}],
-                "source_url": "https://api-gw.sports.naver.com/result",
-                "observed_at": "2026-08-03T17:00:00+09:00",
-                "fresh": True,
+                "records": [
+                    {
+                        "value": {"score": {"away": 3, "home": 5}},
+                        "source_url": "https://api-gw.sports.naver.com/result",
+                        "provenance": "Naver Sports structured API",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
             },
             "score": {
-                "value": [{"away": 3, "home": 5}],
-                "source_url": "https://api-gw.sports.naver.com/result",
-                "observed_at": "2026-08-03T17:00:00+09:00",
-                "fresh": True,
+                "records": [
+                    {
+                        "value": {"away": 3, "home": 5},
+                        "source_url": "https://api-gw.sports.naver.com/result",
+                        "provenance": "Naver Sports structured API",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
             },
         },
     }

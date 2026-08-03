@@ -291,23 +291,54 @@ async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_p
                 "away_team": "두산",
                 "home_score": 3,
                 "away_score": 2,
+                "source_url": "https://sports.example/ended",
+            },
+            {
+                "home_team": "LG",
+                "away_team": "KT",
+                "home_score": 4,
+                "away_score": 1,
                 "source_url": "https://sports.example/result",
-            }
+            },
         ],
         "provider": "naver_sports",
         "fetched_at": "2026-08-03T09:00:00+09:00",
         "claim_map": {
             "score": {
-                "value": [{"away": 2, "home": 3}],
-                "source_url": "https://sports.example/result",
+                "sources": [
+                    "https://sports.example/ended",
+                    "https://sports.example/result",
+                ],
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_index": 0,
+                    },
+                    {
+                        "value": {"away": 1, "home": 4},
+                        "source_index": 1,
+                    },
+                ],
                 "provenance": "naver_sports",
                 "observed_at": "2026-08-03T09:00:00+09:00",
                 "fresh": True,
                 "usable": True,
             },
             "winner": {
-                "value": [{"side": "home", "name": "한화"}],
-                "source_url": "https://sports.example/result",
+                "sources": [
+                    "https://sports.example/ended",
+                    "https://sports.example/result",
+                ],
+                "records": [
+                    {
+                        "value": {"side": "home", "name": "한화"},
+                        "source_index": 0,
+                    },
+                    {
+                        "value": {"side": "home", "name": "LG"},
+                        "source_index": 1,
+                    },
+                ],
                 "provenance": "naver_sports",
                 "observed_at": "2026-08-03T09:00:00+09:00",
                 "fresh": True,
@@ -345,18 +376,38 @@ async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_p
     assert result["data"] == observation
     assert result["resolved_claims"] == ["score", "winner"]
     assert result["unresolved_claims"] == []
-    assert result["evidence"] == [
-        {
-            "claim_id": claim,
-            "value": observation["claim_map"][claim]["value"],
-            "source_url": "https://sports.example/result",
-            "provenance": "naver_sports",
-            "observed_at": "2026-08-03T09:00:00+09:00",
-            "fresh": True,
-            "usable": True,
-        }
-        for claim in ("score", "winner")
+    assert [item["claim_id"] for item in result["evidence"]] == ["score", "winner"]
+    assert all(item["source_url"] == "" for item in result["evidence"])
+    assert [
+        [record["source_url"] for record in item["value"]]
+        for item in result["evidence"]
+    ] == [
+        ["https://sports.example/ended", "https://sports.example/result"],
+        ["https://sports.example/ended", "https://sports.example/result"],
     ]
+    assert [record["value"] for record in result["evidence"][0]["value"]] == [
+        {"away": 2, "home": 3},
+        {"away": 1, "home": 4},
+    ]
+    typed = decode_asset_result(
+        result,
+        asset_type="recipe",
+        asset_name="sports-live",
+        side_effect=False,
+    )
+    ledger = ResolutionLedger()
+    ledger.append_asset_result(typed)
+    decision = CommonResultValidator().validate(
+        goal=GoalResolutionState(
+            original_goal="조회",
+            status=GoalStatus.RESOLVED,
+            resolved_claims=("score", "winner"),
+            unresolved_claims=(),
+        ),
+        ledger=ledger,
+        required_claims=("score", "winner"),
+    )
+    assert decision.allow_final is True
 
 
 @pytest.mark.asyncio
@@ -367,44 +418,85 @@ async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_p
             "attendance",
             "attendance",
             {
-                "value": [{"away": 2, "home": 3}],
-                "source_url": "https://sports.example/result",
-                "observed_at": "2026-08-03T09:00:00+09:00",
-                "fresh": True,
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_url": "https://sports.example/result",
+                        "provenance": "naver_sports",
+                        "observed_at": "2026-08-03T09:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
             },
         ),
         (
             "score",
             "score",
             {
-                "value": [{"away": 2, "home": 3}],
-                "source_url": "",
-                "observed_at": "2026-08-03T09:00:00+09:00",
-                "fresh": True,
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_url": "",
+                        "provenance": "naver_sports",
+                        "observed_at": "2026-08-03T09:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
             },
         ),
         (
             "score",
             "score",
             {
-                "value": [{"away": 2, "home": 3}],
-                "source_url": "https://sports.example/result",
+                "sources": ["https://sports.example/ended"],
+                "provenance": "naver_sports",
+                "observed_at": "2026-08-03T09:00:00+09:00",
                 "fresh": True,
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_index": 0,
+                    },
+                    {
+                        "value": {"away": 1, "home": 4},
+                        "source_index": 1,
+                    },
+                ]
             },
         ),
         (
             "score",
             "score",
             {
-                "value": [{"away": 2, "home": 3}],
-                "source_url": "https://sports.example/result",
-                "observed_at": "2026-08-03T09:00:00+09:00",
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_url": "https://sports.example/result",
+                        "provenance": "naver_sports",
+                        "fresh": True,
+                    }
+                ]
+            },
+        ),
+        (
+            "score",
+            "score",
+            {
+                "records": [
+                    {
+                        "value": {"away": 2, "home": 3},
+                        "source_url": "https://sports.example/result",
+                        "provenance": "naver_sports",
+                        "observed_at": "2026-08-03T09:00:00+09:00",
+                    }
+                ]
             },
         ),
     ],
     ids=(
         "absent-claim",
         "missing-source",
+        "partial-invalid-source-index",
         "missing-observed-at",
         "missing-freshness",
     ),

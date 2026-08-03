@@ -893,35 +893,61 @@ def _result_claim_map(
     fetched_at: str,
 ) -> dict[str, dict[str, Any]]:
     """확정 결과에서 실제 관찰된 typed claim만 provenance와 함께 투영한다."""
-    source_url = next(
-        (
-            str(item.get("source_url") or "")
-            for item in items
-            if str(item.get("source_url") or "")
-        ),
-        "",
-    )
-    if not items or not source_url or not fetched_at:
+    if not items or not fetched_at:
         return {}
 
-    common = {
-        "source_url": source_url,
-        "provenance": "Naver Sports structured API",
-        "observed_at": fetched_at,
-        "fresh": True,
-        "usable": True,
-    }
+    source_urls = list(
+        dict.fromkeys(str(item.get("source_url") or "").strip() for item in items)
+    )
+    if not source_urls or "" in source_urls:
+        return {}
+    source_indexes = {url: index for index, url in enumerate(source_urls)}
+
+    def records_for(field: str | None = None) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for item in items:
+            source_url = str(item.get("source_url") or "").strip()
+            value = item if field is None else item.get(field)
+            if not source_url or (field is not None and not isinstance(value, dict)):
+                return []
+            records.append(
+                {
+                    "value": (
+                        {
+                            key: item_value
+                            for key, item_value in item.items()
+                            if key not in {"source_url", "fetched_at"}
+                        }
+                        if field is None
+                        else value
+                    ),
+                    "source_index": source_indexes[source_url],
+                }
+            )
+        return records
+
+    def claim(records: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "sources": source_urls,
+            "records": records,
+            "provenance": "Naver Sports structured API",
+            "observed_at": fetched_at,
+            "fresh": True,
+            "usable": True,
+        }
+
+    game_results = records_for()
+    if not game_results:
+        return {}
     claims: dict[str, dict[str, Any]] = {
-        "game_result": {"value": items, **common},
+        "game_result": claim(game_results),
     }
-    scores = [item["score"] for item in items if isinstance(item.get("score"), dict)]
-    winners = [
-        item["winner"] for item in items if isinstance(item.get("winner"), dict)
-    ]
-    if len(scores) == len(items):
-        claims["score"] = {"value": scores, **common}
-    if len(winners) == len(items):
-        claims["winner"] = {"value": winners, **common}
+    scores = records_for("score")
+    winners = records_for("winner")
+    if scores:
+        claims["score"] = claim(scores)
+    if winners:
+        claims["winner"] = claim(winners)
     return claims
 
 

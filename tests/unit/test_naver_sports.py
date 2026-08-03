@@ -168,13 +168,85 @@ def test_results_returns_typed_score_winner_and_provenance(status_code):
     ]
     assert result["items"][0]["fetched_at"].endswith("+09:00")
     assert set(result["claim_map"]) == {"game_result", "score", "winner"}
-    assert result["claim_map"]["score"]["value"] == [{"away": 3, "home": 5}]
-    assert result["claim_map"]["winner"]["value"] == [
-        {"side": "home", "name": "한화"}
+    score_record = result["claim_map"]["score"]["records"][0]
+    winner_record = result["claim_map"]["winner"]["records"][0]
+    assert score_record["value"] == {"away": 3, "home": 5}
+    assert winner_record["value"] == {"side": "home", "name": "한화"}
+    assert score_record["source_index"] == 0
+    assert result["claim_map"]["score"]["sources"] == [
+        result["items"][0]["source_url"]
     ]
     assert result["claim_map"]["score"]["fresh"] is True
     assert any("statusCode=ENDED" in url for url in result["source"]["urls"])
     assert any("statusCode=RESULT" in url for url in result["source"]["urls"])
+
+
+def test_results_claim_map_preserves_mixed_endpoint_provenance_and_deduplicates():
+    base = {
+        "categoryId": "kbo",
+        "categoryName": "KBO리그",
+        "gameDate": "2026-08-02",
+        "gameDateTime": "2026-08-02T18:30:00",
+        "statusInfo": "경기 종료",
+        "cancel": False,
+        "suspended": False,
+    }
+    ended_game = {
+        **base,
+        "gameId": "ended-game",
+        "homeTeamName": "한화",
+        "awayTeamName": "두산",
+        "homeTeamScore": 2,
+        "awayTeamScore": 1,
+        "statusCode": "ENDED",
+    }
+    duplicate = {
+        **ended_game,
+        "homeTeamScore": 99,
+        "awayTeamScore": 98,
+        "statusCode": "RESULT",
+    }
+    result_game = {
+        **base,
+        "gameId": "result-game",
+        "homeTeamName": "LG",
+        "awayTeamName": "KT",
+        "homeTeamScore": 4,
+        "awayTeamScore": 3,
+        "statusCode": "RESULT",
+    }
+
+    result = naver_sports.run(
+        mode="results",
+        category="kbo",
+        date="2026-08-02",
+        limit=10,
+        client=FakeClient(
+            [sports_response(ended_game), sports_response(duplicate, result_game)]
+        ),
+    )
+
+    assert [item["game_id"] for item in result["items"]] == [
+        "ended-game",
+        "result-game",
+    ]
+    assert [record["value"] for record in result["claim_map"]["score"]["records"]] == [
+        {"away": 1, "home": 2},
+        {"away": 3, "home": 4},
+    ]
+    score_claim = result["claim_map"]["score"]
+    winner_claim = result["claim_map"]["winner"]
+    score_sources = [
+        score_claim["sources"][record["source_index"]]
+        for record in score_claim["records"]
+    ]
+    winner_sources = [
+        winner_claim["sources"][record["source_index"]]
+        for record in winner_claim["records"]
+    ]
+    assert "statusCode=ENDED" in score_sources[0]
+    assert "statusCode=RESULT" in score_sources[1]
+    assert winner_sources == score_sources
 
 
 def test_results_preserves_cancelled_suspended_postponed_as_excluded_states():

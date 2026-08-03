@@ -429,7 +429,10 @@ def render_exact_recipe_instructions(
         "- When required_claims is non-empty, resolved_claims and evidence.claim_id "
         "must use those exact claim IDs; do not replace them with prose or objects.\n"
         "- Resolve a claim only by binding evidence.claim_keys to exact keys present "
-        "in data.claim_map. Never infer a claim from non-empty data/items alone.\n"
+        "in data.claim_map. Each claim key contains item-level records whose value "
+        "is bound to its own source URL and freshness metadata; never replace that "
+        "record-level provenance with an aggregate source. Never infer a claim from "
+        "non-empty data/items alone.\n"
         "- Include schema, status, data, evidence, resolved_claims, "
         "unresolved_claims, limitations, retryable, and tokens_used."
     )
