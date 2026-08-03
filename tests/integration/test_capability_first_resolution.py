@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from simpleclaw.agent.capability_executor import CapabilityExecutor
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_investigation import EvidenceInvestigationController
@@ -44,9 +47,9 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
-from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse, ToolCall
 from simpleclaw.recipes.loader import load_recipe
+from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.models import SkillDefinition
 
 pytestmark = pytest.mark.offline
@@ -180,30 +183,44 @@ async def test_exact_executor_never_runs_non_read_only_evidence_asset(
     execute_skill.assert_not_awaited()
 
 
-def _sports_helper(
+def _installed_sports_helper(
+    tmp_path: Path,
     *,
-    declared: bool = True,
-    read_only: bool = True,
-    side_effects: bool = False,
-    requires_confirmation: bool = False,
+    capability_mutation: str | None = None,
 ) -> SkillDefinition:
-    return SkillDefinition(
-        name="naver-sports-skill",
-        description="registered fake structured sports helper",
-        capability=CapabilityMetadata(
-            domains=("sports",),
-            intents=("current_result",),
-            read_only=read_only,
-            side_effects=side_effects,
-            freshness_sensitive=True,
-            direct_answer=True,
-            requires_confirmation=requires_confirmation,
-            output_contract="asset_result.v1",
-            coverage="full_coverage",
-            input_contract="query.v1",
-            declared=declared,
-        ),
-    )
+    """실제 installer 산출물을 runtime discovery로 다시 읽는다."""
+    global_dir = tmp_path / "installed_global_skills"
+    skill_dir = install_naver_sports_skill(global_dir)
+    skill_md = skill_dir / "SKILL.md"
+
+    if capability_mutation is not None:
+        content = skill_md.read_text(encoding="utf-8")
+        _, frontmatter, body = content.split("---", 2)
+        metadata = yaml.safe_load(frontmatter)
+        capability = metadata.get("capability", {})
+        if capability_mutation == "undeclared":
+            metadata.pop("capability")
+        elif capability_mutation == "write":
+            capability["read_only"] = False
+        elif capability_mutation == "side_effect":
+            capability["side_effects"] = True
+        elif capability_mutation == "confirmation":
+            capability["requires_confirmation"] = True
+        elif capability_mutation == "identity_mismatch":
+            metadata["name"] = "lookalike-sports-skill"
+        else:  # pragma: no cover - test helper contract
+            raise AssertionError(f"unknown mutation: {capability_mutation}")
+        skill_md.write_text(
+            "---\n"
+            + yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False)
+            + "---"
+            + body,
+            encoding="utf-8",
+        )
+
+    discovered = discover_skills(tmp_path / "missing_local_skills", global_dir)
+    assert len(discovered) == 1
+    return discovered[0]
 
 
 def _complete_sports_observation() -> dict[str, object]:
@@ -285,11 +302,17 @@ def _sports_planner_payload() -> dict[str, object]:
 async def _run_connected_exact_recipe(
     tmp_path: Path,
     *,
-    helper: SkillDefinition,
+    capability_mutation: str | None = None,
     observation: dict[str, object],
 ) -> tuple[UnifiedTurnPlan, ResolutionOutcome, AgentOrchestrator]:
-    """Raw planner부터 common validator까지 production exact 경계를 관통한다."""
-    recipe = load_recipe(SPORTS_RECIPE)
+    """실제 설치 asset으로 raw planner부터 validator까지 관통한다."""
+    helper = _installed_sports_helper(
+        tmp_path,
+        capability_mutation=capability_mutation,
+    )
+    installed_recipe_dir = tmp_path / "installed_recipes" / "sports-live"
+    shutil.copytree(SPORTS_RECIPE.parent, installed_recipe_dir)
+    recipe = load_recipe(installed_recipe_dir / "recipe.yaml")
     catalog = build_planner_catalog(
         skills=(helper,),
         recipes=(recipe,),
@@ -353,7 +376,6 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
     """Required claims는 planner output에서 production execution 경계로만 흐른다."""
     plan, outcome, orchestrator = await _run_connected_exact_recipe(
         tmp_path,
-        helper=_sports_helper(),
         observation=_complete_sports_observation(),
     )
 
@@ -370,23 +392,24 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "capability_overrides",
+    "capability_mutation",
     [
-        {"declared": False},
-        {"read_only": False},
-        {"side_effects": True},
-        {"requires_confirmation": True},
+        "undeclared",
+        "write",
+        "side_effect",
+        "confirmation",
+        "identity_mismatch",
     ],
-    ids=("undeclared", "write", "side-effect", "confirmation"),
+    ids=("undeclared", "write", "side-effect", "confirmation", "identity-mismatch"),
 )
 async def test_connected_exact_recipe_rejects_discovered_unsafe_helper(
     tmp_path: Path,
-    capability_overrides: dict[str, bool],
+    capability_mutation: str,
 ) -> None:
     """Planner의 read-only 주장은 discovered SkillDefinition을 우회하지 못한다."""
     plan, outcome, orchestrator = await _run_connected_exact_recipe(
         tmp_path,
-        helper=_sports_helper(**capability_overrides),
+        capability_mutation=capability_mutation,
         observation=_complete_sports_observation(),
     )
 
@@ -477,7 +500,6 @@ async def test_connected_exact_recipe_rejects_incomplete_observation(
     """Incomplete helper observation은 connected path에서 final로 승격되지 않는다."""
     plan, outcome, orchestrator = await _run_connected_exact_recipe(
         tmp_path,
-        helper=_sports_helper(),
         observation=observation,
     )
 
