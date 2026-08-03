@@ -36,7 +36,10 @@ from simpleclaw.agent.evidence_policy import (
     no_evidence_requirement,
 )
 from simpleclaw.agent.file_mutation_tracker import format_footer
-from simpleclaw.agent.observation_claims import materialize_validated_claims
+from simpleclaw.agent.observation_claims import (
+    declared_claim_bindings,
+    materialize_validated_claims,
+)
 from simpleclaw.agent.progress import (
     ProgressCallback,
     ProgressEvent,
@@ -485,7 +488,61 @@ def _bounded_cap_observation(
     버리지 않는다. raw helper의 ``ok/items/error`` 또는 이미 완성된
     ``asset_result.v1``만 수용하며 임의 평문을 성공으로 승격하지 않는다.
     """
+    finalized = _finalize_typed_asset_observation(state, tool_results)
+    if finalized is not None or _asset_result_schema_required(state):
+        return finalized
     if not tool_results:
+        return None
+    try:
+        payload = json.loads(tool_results[-1][1])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    ok = payload.get("ok")
+    items = payload.get("items")
+    error = payload.get("error")
+    if not isinstance(ok, bool) or not isinstance(items, list):
+        return None
+    if ok and items:
+        detail = json.dumps(items, ensure_ascii=False, separators=(",", ":"))[:2000]
+        source = payload.get("source")
+        source_urls = source.get("urls") if isinstance(source, dict) else []
+        source_url = (
+            next((str(url) for url in source_urls if str(url).strip()), "")
+            if isinstance(source_urls, list)
+            else ""
+        )
+        fetched_at = str(payload.get("fetched_at") or "")
+        provenance = f"\n출처: {source_url}" if source_url else ""
+        freshness = f"\n조회 시각: {fetched_at}" if fetched_at else ""
+        return f"확인된 결과: {detail}{provenance}{freshness}", True
+    if ok:
+        return str(payload.get("message") or "정상 조회 결과가 비어 있습니다.")[:500], True
+    if isinstance(error, dict):
+        detail = str(error.get("message") or "조회에 실패했습니다.")[:500]
+        retry_hint = (
+            " 일시적 오류라 재확인이 필요합니다."
+            if error.get("retryable") is True
+            else ""
+        )
+        return f"조회 실패: {detail}{retry_hint}", False
+    return None
+
+
+def _finalize_typed_asset_observation(
+    state: ToolLoopState,
+    tool_results: list[tuple[str, str]],
+    *,
+    candidate_text: str | None = None,
+) -> tuple[str, bool] | None:
+    """첫 typed helper observation을 검증된 ``asset_result.v1``로 만든다.
+
+    모델의 정상 envelope가 있으면 명시된 claim binding만 사용하고, prose/invalid
+    envelope이면 provider claim key와 이름이 정확히 같은 required claim만 보수적으로
+    bind한다. 두 경우 모두 raw observation의 status/data/provenance가 authoritative다.
+    """
+    if not _asset_result_schema_required(state) or not tool_results:
         return None
     _tool_name, content = tool_results[-1]
     try:
@@ -505,16 +562,44 @@ def _bounded_cap_observation(
     error = payload.get("error")
     if not isinstance(ok, bool) or not isinstance(items, list):
         return None
+    candidate: dict[str, Any] | None = None
+    try:
+        decoded_candidate = json.loads(candidate_text or "")
+    except (TypeError, json.JSONDecodeError):
+        decoded_candidate = None
+    if (
+        isinstance(decoded_candidate, dict)
+        and decoded_candidate.get("schema") == "asset_result.v1"
+    ):
+        candidate = decoded_candidate
+
     requirement = state.evidence_requirement
     required_claims = list(requirement.required_claims)
     if ok and items:
         status = "completed"
+        bindings = (
+            declared_claim_bindings(
+                required_claims=required_claims,
+                declared_resolved_claims=candidate.get("resolved_claims"),
+                declared_evidence=candidate.get("evidence"),
+            )
+            if candidate is not None
+            else {claim: (claim,) for claim in required_claims}
+        )
         resolved_claims, unresolved_claims, evidence = materialize_validated_claims(
             payload,
             required_claims=required_claims,
-            claim_bindings={claim: (claim,) for claim in required_claims},
+            claim_bindings=bindings,
         )
-        limitations: list[str] = []
+        for item in evidence:
+            claim_id = str(item.get("claim_id") or "")
+            item["claim_keys"] = list(bindings.get(claim_id, ()))
+        limitations = (
+            [str(item)[:500] for item in candidate.get("limitations", ())]
+            if candidate is not None
+            and isinstance(candidate.get("limitations"), list | tuple)
+            else []
+        )
     elif ok:
         status = "empty"
         resolved_claims = []
@@ -535,39 +620,28 @@ def _bounded_cap_observation(
     else:
         return None
 
-    if _asset_result_schema_required(state):
-        envelope = {
-            "schema": "asset_result.v1",
-            "status": status,
-            "data": payload,
-            "evidence": evidence,
-            "resolved_claims": resolved_claims,
-            "unresolved_claims": unresolved_claims,
-            "limitations": limitations,
-            "retryable": status == "failed_retryable",
-        }
-        return json.dumps(
-            envelope,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ), True
-
-    if status == "completed":
-        detail = json.dumps(items, ensure_ascii=False, separators=(",", ":"))[:2000]
-        source = payload.get("source")
-        source_urls = source.get("urls") if isinstance(source, dict) else []
-        source_url = next(
-            (str(url) for url in source_urls if str(url).strip()),
-            "",
-        ) if isinstance(source_urls, list) else ""
-        fetched_at = str(payload.get("fetched_at") or "")
-        provenance = f"\n출처: {source_url}" if source_url else ""
-        freshness = f"\n조회 시각: {fetched_at}" if fetched_at else ""
-        return f"확인된 결과: {detail}{provenance}{freshness}", True
-    if status == "empty":
-        return limitations[0], True
-    retry_hint = " 일시적 오류라 재확인이 필요합니다." if status == "failed_retryable" else ""
-    return f"조회 실패: {limitations[0]}{retry_hint}", False
+    envelope = {
+        "schema": "asset_result.v1",
+        "status": status,
+        "observation_preserved": True,
+        "data": payload,
+        "evidence": evidence,
+        "resolved_claims": resolved_claims,
+        "unresolved_claims": unresolved_claims,
+        "limitations": limitations,
+        "retryable": status == "failed_retryable",
+        "tokens_used": (
+            candidate.get("tokens_used", 0)
+            if candidate is not None
+            and isinstance(candidate.get("tokens_used", 0), int)
+            else 0
+        ),
+    }
+    return json.dumps(
+        envelope,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ), True
 
 
 def _preserve_asset_observation_data(
@@ -576,23 +650,12 @@ def _preserve_asset_observation_data(
     tool_results: list[tuple[str, str]],
 ) -> str:
     """정상 final envelope가 helper observation의 원본 data를 바꾸지 못하게 한다."""
-    if not _asset_result_schema_required(state) or not tool_results:
-        return final_text
-    try:
-        envelope = json.loads(final_text)
-        observation = json.loads(tool_results[-1][1])
-    except (TypeError, json.JSONDecodeError):
-        return final_text
-    if not (
-        isinstance(envelope, dict)
-        and envelope.get("schema") == "asset_result.v1"
-        and isinstance(observation, dict)
-        and isinstance(observation.get("ok"), bool)
-        and isinstance(observation.get("items"), list)
-    ):
-        return final_text
-    envelope["data"] = observation
-    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
+    finalized = _finalize_typed_asset_observation(
+        state,
+        tool_results,
+        candidate_text=final_text,
+    )
+    return finalized[0] if finalized is not None else final_text
 
 
 class ToolLoopRunner:

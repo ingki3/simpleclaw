@@ -94,7 +94,11 @@ def _repair_unscoped_evidence_plan(
     fail-closed한다. 사용자 원문이나 keyword는 이 경계에서 읽지 않는다.
     """
     if not (
-        plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
+        plan.execution.mode
+        in {
+            ExecutionMode.DIRECT_ANSWER,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
+        }
         and plan.fact_check.required
         and plan.capability.primary_asset is None
         and not plan.capability.supporting_assets

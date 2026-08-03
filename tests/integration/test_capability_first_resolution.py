@@ -39,7 +39,10 @@ pytestmark = pytest.mark.offline
 
 
 @pytest.mark.asyncio
-async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() -> None:
+@pytest.mark.parametrize("execution_mode", ["direct_answer", "answer_with_evidence"])
+async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
+    execution_mode: str,
+) -> None:
     """production-like asset-0 planner output은 typed catalog로만 exact 보정한다."""
     catalog = PlannerCatalog(
         assets=(
@@ -104,7 +107,7 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() ->
             "reason": "planner omitted asset",
         },
         "execution": {
-            "mode": "answer_with_evidence",
+            "mode": execution_mode,
             "allowed_tools": [],
             "requires_confirmation": False,
             "complexity_signals": [],
