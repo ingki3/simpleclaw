@@ -12,11 +12,13 @@ from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.resolution_controller import ResolutionController
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
+from simpleclaw.agent.result_validator import CommonResultValidator
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
     AssetResult,
     CapabilityCoverage,
     ExecutionMode,
+    GoalResolutionState,
     GoalStatus,
     ProblemTransition,
     ResolutionBudget,
@@ -82,6 +84,34 @@ pytestmark = pytest.mark.offline
             ["각 경기의 최종 점수", "관중 수"],
             ("score", "관중 수"),
             False,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["각 경기의 최종 점수와 관중 수"],
+            ("각 경기의 최종 점수와 관중 수",),
+            True,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["경기 결과와 관중 수"],
+            ("경기 결과와 관중 수",),
+            True,
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
+            ["점수와 부상 선수 명단"],
+            ("점수와 부상 선수 명단",),
+            False,
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["경기 결과 및 점수"],
+            ("game_result", "score"),
+            True,
         ),
     ],
 )
@@ -193,6 +223,40 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
     )
     assert gate.effective_plan.fact_check.owner is EvidenceOwner.ASSET
     assert gate.effective_plan.fact_check.required_claims == expected_claims
+    if any(term in planner_claims[0] for term in ("관중", "부상")):
+        supported_claim = "score" if "점수" in planner_claims[0] else "game_result"
+        ledger = ResolutionLedger()
+        ledger.append_asset_result(
+            AssetResult(
+                asset_type="recipe",
+                asset_name="sports-live",
+                status=AssetExecutionStatus.COMPLETED,
+                evidence=(
+                    {
+                        "claim_id": supported_claim,
+                        "value": "provider observation",
+                        "source_url": "https://sports.naver.com/result",
+                        "observed_at": "2026-08-03T20:00:00+09:00",
+                        "provenance": "Naver Sports structured API",
+                        "fresh": True,
+                        "usable": True,
+                    },
+                ),
+                resolved_claims=(supported_claim,),
+            )
+        )
+        decision = CommonResultValidator().validate(
+            goal=GoalResolutionState(
+                original_goal="compound sports result",
+                status=GoalStatus.RESOLVED,
+                resolved_claims=(supported_claim,),
+                unresolved_claims=(),
+            ),
+            ledger=ledger,
+            required_claims=expected_claims,
+        )
+        assert decision.allow_final is False
+        assert decision.blocked_claims == expected_claims
 
 
 @pytest.mark.asyncio

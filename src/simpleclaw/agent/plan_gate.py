@@ -118,10 +118,44 @@ def _canonical_sports_result_claims(
             "gameresult",
             "gameresults",
             "finalresult",
+            "results",
+            "result",
             "경기결과",
             "최종결과",
+            "결과",
         ),
     }
+    safe_context = (
+        "professionalbaseball",
+        "information",
+        "baseball",
+        "games",
+        "game",
+        "each",
+        "every",
+        "final",
+        "info",
+        "and",
+        "the",
+        "프로야구",
+        "그리고",
+        "경기별",
+        "경기의",
+        "경기",
+        "모든",
+        "해당",
+        "최종",
+        "정보",
+        "kbo",
+        "각",
+        "및",
+        "와",
+        "과",
+        "의",
+        "년",
+        "월",
+        "일",
+    )
     normalized: list[str] = []
     for claim in claims:
         compact = "".join(char for char in claim.casefold() if char.isalnum())
@@ -130,7 +164,17 @@ def _canonical_sports_result_claims(
             for key in ("game_result", "score", "winner")
             if any(alias in compact for alias in aliases[key])
         ]
-        normalized.extend(keys or [claim])
+        if not keys:
+            normalized.append(claim)
+            continue
+        residual = compact
+        for key in keys:
+            for alias in sorted(aliases[key], key=len, reverse=True):
+                residual = residual.replace(alias, "")
+        for fragment in sorted(safe_context, key=len, reverse=True):
+            residual = residual.replace(fragment, "")
+        residual = "".join(char for char in residual if not char.isdigit())
+        normalized.extend(keys if not residual else [claim])
     return tuple(dict.fromkeys(normalized))
 
 
