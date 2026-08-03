@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.capability_executor import ASSET_RESULT_RESPONSE_SCHEMA
+from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolTraceStep
@@ -324,8 +324,10 @@ async def test_exact_instructions_recipe_requires_one_successful_delegate(
     [
         "plain answer",
         '```json\n{"schema":"asset_result.v1","status":"completed"}\n```',
-        '{"schema":"asset_result.v1","status":"completed"}\n'
-        '{"schema":"asset_result.v1","status":"completed"}',
+        (
+            '{"schema":"asset_result.v1","status":"completed"}\n'
+            '{"schema":"asset_result.v1","status":"completed"}'
+        ),
     ],
     ids=("plain", "fenced", "multiple-objects"),
 )
