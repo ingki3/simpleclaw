@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 5
+version: 6
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -37,6 +37,9 @@ system_prompt: |-
   - Do not invent an asset or tool that is absent from the supplied catalog.
   - full_coverage requires catalog-declared query.v1 input and asset_result.v1 output.
     It executes before execution.mode without ToolLoop reselection.
+    A full_coverage Recipe owns any delegated Skill or tool calls inside its own
+    instructions. Do not repeat those implementation details in capability.supporting_assets
+    or top-level execution.allowed_tools; emit both as empty arrays for the exact path.
   - partial_coverage assets may appear only in supporting_assets and execute inside
     answer_with_evidence or resolve_complex_problem.
   - empty/not_found are observations, not proof that the user's goal is resolved.

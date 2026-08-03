@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.capability_executor import ASSET_RESULT_RESPONSE_SCHEMA
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolTraceStep
@@ -256,6 +257,7 @@ async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) ->
     assert kwargs["allow_cron_mutation"] is False
     assert kwargs["forced_skill_names"] == frozenset({"naver-sports-skill"})
     assert kwargs["forced_tool_names"] == frozenset({"execute_skill"})
+    assert kwargs["final_response_schema"] is ASSET_RESULT_RESPONSE_SCHEMA
 
 
 @pytest.mark.asyncio
@@ -317,12 +319,25 @@ async def test_exact_instructions_recipe_requires_one_successful_delegate(
 
 
 @pytest.mark.asyncio
-async def test_exact_instructions_recipe_rejects_untyped_nested_output(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "nested_text",
+    [
+        "plain answer",
+        '```json\n{"schema":"asset_result.v1","status":"completed"}\n```',
+        '{"schema":"asset_result.v1","status":"completed"}\n'
+        '{"schema":"asset_result.v1","status":"completed"}',
+    ],
+    ids=("plain", "fenced", "multiple-objects"),
+)
+async def test_exact_instructions_recipe_rejects_untyped_nested_output(
+    tmp_path,
+    nested_text: str,
+) -> None:
     orchestrator = AgentOrchestrator(_config(tmp_path))
     orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
     orchestrator._run_tool_loop_result = AsyncMock(
         return_value=ToolLoopResult(
-            text="plain answer",
+            text=nested_text,
             trace=_delegate_trace(),
             success=True,
         )

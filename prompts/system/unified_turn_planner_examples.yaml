@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 3
+version: 4
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -14,7 +14,8 @@ template: |-
   - reference_date resolves the user's relative date before source selection
   - if catalog declares sports-live as a full_coverage query.v1/asset_result.v1 recipe,
     capability.primary_asset={"asset_type":"recipe","asset_name":"sports-live"}
-    and capability.supporting_assets=[]; the primary executes before mode
+    and capability.supporting_assets=[]; execution.allowed_tools=[] because the
+    recipe owns its delegate; the primary executes before mode
   - execution.mode=answer_with_evidence is only the unresolved fallback path
   - failed, unsupported, or unusable retrieval never means absence
 

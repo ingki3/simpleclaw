@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
+from simpleclaw.agent.capability_executor import ASSET_RESULT_RESPONSE_SCHEMA
 from simpleclaw.agent.evidence_policy import (
     EvidenceFreshness,
     EvidenceRequirement,
@@ -103,6 +104,61 @@ def test_tool_loop_runner_contract_is_importable():
         "selected_turn_ids",
     }
     assert set(ToolLoopResult.__dataclass_fields__) >= {"text"}
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_requires_structured_final_only_after_delegate(
+    config_file,
+    monkeypatch,
+):
+    """첫 tool 선택은 자유롭게 두고 delegate observation 뒤 final만 schema로 강제한다."""
+    orch = AgentOrchestrator(config_file)
+    dispatch = AsyncMock(return_value='{"ok":true,"items":[{"rank":5}]}')
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    orch._router.send = AsyncMock(
+        side_effect=[
+            _tool_response(
+                "delegate-1",
+                "execute_skill",
+                {
+                    "skill_name": "naver-sports-skill",
+                    "command": "--mode live --category lpga --json",
+                },
+            ),
+            _text_response(
+                '{"schema":"asset_result.v1","status":"completed"}'
+            ),
+        ]
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+        ),
+        final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is True
+    assert len(result.trace) == 1
+    assert dispatch.await_count == 1
+    initial_request, final_request = [
+        call.args[0] for call in orch._router.send.await_args_list
+    ]
+    assert initial_request.response_schema is None
+    assert initial_request.require_structured_output is False
+    assert final_request.response_mime_type == "application/json"
+    assert final_request.response_schema is ASSET_RESULT_RESPONSE_SCHEMA
+    assert final_request.require_structured_output is True
 
 
 @pytest.mark.asyncio
