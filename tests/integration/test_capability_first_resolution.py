@@ -39,9 +39,26 @@ pytestmark = pytest.mark.offline
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("execution_mode", ["direct_answer", "answer_with_evidence"])
+@pytest.mark.parametrize(
+    ("execution_mode", "planner_claims", "expected_claims"),
+    [
+        ("direct_answer", ["score", "winner"], ("score", "winner")),
+        (
+            "answer_with_evidence",
+            ["각 경기의 최종 점수와 승리 팀"],
+            ("score", "winner"),
+        ),
+        (
+            "answer_with_evidence",
+            ["각 경기의 최종 점수", "관중 수"],
+            ("score", "관중 수"),
+        ),
+    ],
+)
 async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
     execution_mode: str,
+    planner_claims: list[str],
+    expected_claims: tuple[str, ...],
 ) -> None:
     """production-like asset-0 planner output은 typed catalog로만 exact 보정한다."""
     catalog = PlannerCatalog(
@@ -92,7 +109,7 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
             "entities": [{"kind": "league", "value": "KBO"}],
             "reference_date": "2026-08-02",
             "search_query": "2026-08-02 KBO 경기 결과",
-            "required_claims": ["score", "winner"],
+            "required_claims": planner_claims,
             "freshness_required": True,
             "reason": "completed result needs evidence",
         },
@@ -138,6 +155,7 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
         "recipe", "sports-live"
     )
     assert gate.effective_plan.fact_check.owner is EvidenceOwner.ASSET
+    assert gate.effective_plan.fact_check.required_claims == expected_claims
 
 
 @pytest.mark.asyncio

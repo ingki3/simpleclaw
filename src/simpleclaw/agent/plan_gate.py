@@ -83,6 +83,62 @@ def _eligible_exact_asset(
     )
 
 
+def _canonical_sports_result_claims(
+    claims: tuple[str, ...],
+    *,
+    intents: frozenset[str],
+) -> tuple[str, ...]:
+    """종료 경기 claim을 provider의 bounded typed key로만 정규화한다.
+
+    exact sports recipe가 지원하는 completed-result 경계에서만 적용한다. 알려진
+    score/winner/game-result 표현은 canonical key로 축소하고, attendance처럼 알 수
+    없는 표현은 원문 claim을 그대로 남겨 downstream validator가 fail-closed한다.
+    """
+    if "completed_result" not in intents:
+        return claims
+
+    aliases = {
+        "score": (
+            "score",
+            "scores",
+            "finalscore",
+            "gamescore",
+            "점수",
+            "스코어",
+        ),
+        "winner": (
+            "winner",
+            "winners",
+            "winningteam",
+            "승리팀",
+            "승자",
+            "승패",
+        ),
+        "game_result": (
+            "gameresult",
+            "gameresults",
+            "finalresult",
+            "경기결과",
+            "최종결과",
+        ),
+    }
+    normalized: list[str] = []
+    for claim in claims:
+        compact = "".join(char for char in claim.casefold() if char.isalnum())
+        specific = [
+            key
+            for key in ("score", "winner")
+            if any(alias in compact for alias in aliases[key])
+        ]
+        keys = specific or [
+            "game_result"
+            for alias in aliases["game_result"]
+            if alias in compact
+        ][:1]
+        normalized.extend(keys or [claim])
+    return tuple(dict.fromkeys(normalized))
+
+
 def _repair_unscoped_evidence_plan(
     plan: UnifiedTurnPlan,
     *,
@@ -121,6 +177,12 @@ def _repair_unscoped_evidence_plan(
         return plan, True
     selected = candidates[0]
     selected_ref = AssetRef(selected.asset_type, selected.name)
+    required_claims = plan.fact_check.required_claims
+    if _asset_identity(selected) == ("recipe", "sports-live") and domain == "sports":
+        required_claims = _canonical_sports_result_claims(
+            required_claims,
+            intents=intents,
+        )
     return (
         replace(
             plan,
@@ -143,7 +205,11 @@ def _repair_unscoped_evidence_plan(
                 allowed_tools=(),
                 reason="unique_typed_catalog_repair",
             ),
-            fact_check=replace(plan.fact_check, owner=EvidenceOwner.ASSET),
+            fact_check=replace(
+                plan.fact_check,
+                owner=EvidenceOwner.ASSET,
+                required_claims=required_claims,
+            ),
         ),
         False,
     )
