@@ -253,7 +253,22 @@ def _tool_result_looks_like_explicit_error(content: str) -> bool:
     이 ledger 에서는 unknown 인데 legacy fallback 에서는 오류로 갈라지는 일이
     없게 한다.
     """
-    return looks_like_explicit_error_header(content)
+    if looks_like_explicit_error_header(content):
+        return True
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("ok") is False:
+        return True
+    return str(payload.get("status") or "") in {
+        "failed_retryable",
+        "failed_terminal",
+        "denied",
+        "unknown_effect",
+    }
 
 
 def _tool_result_looks_like_not_found(content: str) -> bool:
@@ -442,6 +457,161 @@ def fallback_for_empty_final_after_tools(tool_results: list[tuple[str, str]]) ->
 
     detail = stripped.replace("\n", " ")[:240]
     return _TOOL_RESULT_EMPTY_FINAL_GENERIC_MESSAGE.format(detail=f"{name}: {detail}")
+
+
+def _asset_result_schema_required(state: ToolLoopState) -> bool:
+    """현재 final schema가 strict asset_result.v1 envelope를 요구하는지 확인한다."""
+    schema = state.final_response_schema
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    schema_property = properties.get("schema")
+    return (
+        isinstance(schema_property, dict)
+        and "asset_result.v1" in schema_property.get("enum", ())
+    )
+
+
+def _bounded_cap_observation(
+    state: ToolLoopState,
+    tool_results: list[tuple[str, str]],
+) -> tuple[str, bool] | None:
+    """scope cap 이전의 typed observation을 결정적 final로 보존한다.
+
+    두 번째 호출은 dispatch하지 않되 첫 allowed call이 반환한 명시적 JSON 상태를
+    버리지 않는다. raw helper의 ``ok/items/error`` 또는 이미 완성된
+    ``asset_result.v1``만 수용하며 임의 평문을 성공으로 승격하지 않는다.
+    """
+    if not tool_results:
+        return None
+    _tool_name, content = tool_results[-1]
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    if payload.get("schema") == "asset_result.v1" and isinstance(
+        payload.get("status"), str
+    ):
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")), True
+
+    ok = payload.get("ok")
+    items = payload.get("items")
+    error = payload.get("error")
+    if not isinstance(ok, bool) or not isinstance(items, list):
+        return None
+    requirement = state.evidence_requirement
+    required_claims = list(requirement.required_claims)
+    source = payload.get("source")
+    source_urls = source.get("urls") if isinstance(source, dict) else []
+    source_url = next(
+        (
+            str(item.get("source_url") or "")
+            for item in items
+            if isinstance(item, dict) and item.get("source_url")
+        ),
+        "",
+    ) or next(
+        (str(url) for url in source_urls if str(url).strip()),
+        "",
+    ) if isinstance(source_urls, list) else ""
+    fetched_at = str(payload.get("fetched_at") or "")
+
+    if ok and items:
+        status = "completed"
+        resolved_claims = required_claims
+        unresolved_claims: list[str] = []
+        limitations: list[str] = []
+    elif ok:
+        status = "empty"
+        resolved_claims = []
+        unresolved_claims = required_claims
+        limitations = [
+            str(payload.get("message") or "정상 조회 결과가 비어 있습니다.")[:500]
+        ]
+    elif isinstance(error, dict):
+        status = (
+            "failed_retryable" if error.get("retryable") is True
+            else "failed_terminal"
+        )
+        resolved_claims = []
+        unresolved_claims = required_claims
+        limitations = [str(error.get("message") or "조회에 실패했습니다.")[:500]]
+    else:
+        return None
+
+    if _asset_result_schema_required(state):
+        evidence = []
+        if status == "completed" and source_url and fetched_at:
+            evidence = [
+                {
+                    "claim_id": claim,
+                    "value": items,
+                    "source_url": source_url,
+                    "provenance": (
+                        str(source.get("provider") or "")
+                        if isinstance(source, dict)
+                        else ""
+                    ),
+                    "fetched_at": fetched_at,
+                    "fresh": True,
+                }
+                for claim in resolved_claims
+            ]
+        envelope = {
+            "schema": "asset_result.v1",
+            "status": status,
+            "data": payload,
+            "evidence": evidence,
+            "resolved_claims": resolved_claims,
+            "unresolved_claims": unresolved_claims,
+            "limitations": limitations,
+            "retryable": status == "failed_retryable",
+        }
+        return json.dumps(
+            envelope,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ), True
+
+    if status == "completed":
+        detail = json.dumps(items, ensure_ascii=False, separators=(",", ":"))[:2000]
+        provenance = f"\n출처: {source_url}" if source_url else ""
+        freshness = f"\n조회 시각: {fetched_at}" if fetched_at else ""
+        return f"확인된 결과: {detail}{provenance}{freshness}", True
+    if status == "empty":
+        return limitations[0], True
+    retry_hint = " 일시적 오류라 재확인이 필요합니다." if status == "failed_retryable" else ""
+    return f"조회 실패: {limitations[0]}{retry_hint}", False
+
+
+def _preserve_asset_observation_data(
+    state: ToolLoopState,
+    final_text: str,
+    tool_results: list[tuple[str, str]],
+) -> str:
+    """정상 final envelope가 helper observation의 원본 data를 바꾸지 못하게 한다."""
+    if not _asset_result_schema_required(state) or not tool_results:
+        return final_text
+    try:
+        envelope = json.loads(final_text)
+        observation = json.loads(tool_results[-1][1])
+    except (TypeError, json.JSONDecodeError):
+        return final_text
+    if not (
+        isinstance(envelope, dict)
+        and envelope.get("schema") == "asset_result.v1"
+        and isinstance(observation, dict)
+        and isinstance(observation.get("ok"), bool)
+        and isinstance(observation.get("items"), list)
+    ):
+        return final_text
+    envelope["data"] = observation
+    return json.dumps(envelope, ensure_ascii=False, separators=(",", ":"))
 
 
 class ToolLoopRunner:
@@ -711,6 +881,11 @@ class ToolLoopRunner:
                 )
                 final_text = (response.text or "").strip()
                 if final_text:
+                    final_text = _preserve_asset_observation_data(
+                        state,
+                        final_text,
+                        tool_results_for_empty_final,
+                    )
                     if (
                         state.evidence_requirement.required
                         and state.evidence_requirement.owner == "asset"
@@ -810,6 +985,19 @@ class ToolLoopRunner:
                         scoped_tool_calls_used,
                         state.execution_scope.max_tool_calls,
                     )
+                    preserved = _bounded_cap_observation(
+                        state,
+                        tool_results_for_empty_final,
+                    )
+                    if preserved is not None:
+                        preserved_text, preserved_success = preserved
+                        return ToolLoopResult(
+                            preserved_text,
+                            trace=trace,
+                            iterations=i + 1,
+                            success=preserved_success,
+                            failure_kind="scoped_tool_call_cap_preserved",
+                        )
                     return ToolLoopResult(
                         "scoped_tool_call_cap_exceeded",
                         trace=trace,

@@ -39,6 +39,17 @@ SPORTS_RECIPE = (
 )
 
 
+def test_sports_recipe_routes_completed_result_to_results_mode() -> None:
+    """전일 종료 결과는 STARTED 전용 live가 아닌 typed results로 전달한다."""
+    recipe = load_recipe(SPORTS_RECIPE)
+
+    assert "completed_result" in recipe.capability.intents
+    assert "`live|completed_result|standings` typed intent" in recipe.instructions
+    assert "`completed_result→results`" in recipe.instructions
+    assert "`STARTED` empty를 과거 종료 경기 부재로 해석" in recipe.instructions
+    assert "--mode <live|results|standings>" in recipe.instructions
+
+
 def _delegate_trace(
     skill_name: str = "naver-sports-skill",
     *,
@@ -258,6 +269,66 @@ async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) ->
     assert kwargs["forced_skill_names"] == frozenset({"naver-sports-skill"})
     assert kwargs["forced_tool_names"] == frozenset({"execute_skill"})
     assert kwargs["final_response_schema"] is ASSET_RESULT_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_path) -> None:
+    """Exact 결과의 raw 관찰은 exact claim ID와 typed freshness로 정규화한다."""
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    observation = {
+        "ok": True,
+        "items": [
+            {
+                "home_team": "한화",
+                "away_team": "두산",
+                "home_score": 3,
+                "away_score": 2,
+                "source_url": "https://sports.example/result",
+            }
+        ],
+        "provider": "naver_sports",
+        "fetched_at": "2026-08-03T09:00:00+09:00",
+    }
+    orchestrator._run_tool_loop_result = AsyncMock(
+        return_value=ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "data": observation,
+                    "resolved_claims": [],
+                    "evidence": [],
+                }
+            ),
+            trace=_delegate_trace(),
+            success=True,
+        )
+    )
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {
+            "query": "어제 프로야구 경기 결과 알려줘",
+            "required_claims": json.dumps(["score", "winner"]),
+        },
+    )
+
+    assert result["data"] == observation
+    assert result["resolved_claims"] == ["score", "winner"]
+    assert result["unresolved_claims"] == []
+    assert result["evidence"] == [
+        {
+            "claim_id": claim,
+            "value": observation,
+            "source_url": "https://sports.example/result",
+            "provenance": "naver_sports",
+            "observed_at": "2026-08-03T09:00:00+09:00",
+            "fresh": True,
+            "usable": True,
+        }
+        for claim in ("score", "winner")
+    ]
 
 
 @pytest.mark.asyncio

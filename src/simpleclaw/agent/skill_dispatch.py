@@ -213,6 +213,10 @@ def _extract_registered_skill_args_from_command(skill_name: str, command: str) -
     stripped = command.strip()
     if not stripped:
         return ""
+    try:
+        tokens = shlex.split(stripped)
+    except ValueError:
+        tokens = stripped.split()
     first = stripped.split(None, 1)
     if first[0] == skill_name:
         return first[1] if len(first) > 1 else ""
@@ -227,6 +231,19 @@ def _extract_registered_skill_args_from_command(skill_name: str, command: str) -
         and pipx_parts[2] == skill_name
     ):
         return pipx_parts[3] if len(pipx_parts) > 3 else ""
+    if len(tokens) >= 3 and tokens[0] in {"python", "python3"}:
+        if tokens[1] == "-m":
+            return shlex.join(tokens[3:])
+        script_index = next(
+            (
+                index
+                for index, token in enumerate(tokens[1:], start=1)
+                if token.endswith(".py")
+            ),
+            None,
+        )
+        if script_index is not None:
+            return shlex.join(tokens[script_index + 1 :])
     return stripped
 
 

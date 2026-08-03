@@ -193,7 +193,22 @@ class CapabilityExecutor:
                 )
             elif asset_ref.asset_type == "recipe" and self._execute_recipe is not None:
                 raw = await budget.wait_for(
-                    self._execute_recipe(asset_ref.name, {"query": question})
+                    self._execute_recipe(
+                        asset_ref.name,
+                        {
+                            "query": question,
+                            "domain": plan.fact_check.domain,
+                            "intents": json.dumps(
+                                plan.fact_check.intents,
+                                ensure_ascii=False,
+                            ),
+                            "reference_date": plan.fact_check.reference_date,
+                            "required_claims": json.dumps(
+                                plan.fact_check.required_claims,
+                                ensure_ascii=False,
+                            ),
+                        },
+                    )
                 )
             else:
                 raise ValueError("exact executor unavailable")

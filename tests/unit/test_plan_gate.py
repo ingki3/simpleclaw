@@ -36,13 +36,15 @@ def _asset(
     side_effects: bool = False,
     requires_confirmation: bool = False,
     freshness_sensitive: bool = False,
+    domains: tuple[str, ...] = (),
+    intents: tuple[str, ...] = (),
 ) -> PlannerAsset:
     return PlannerAsset(
         asset_type=asset_type,
         name=name,
         description="test asset",
-        domains=(),
-        intents=(),
+        domains=domains,
+        intents=intents,
         read_only=read_only,
         side_effects=side_effects,
         freshness_sensitive=freshness_sensitive,
@@ -295,6 +297,100 @@ def test_current_fact_invariants_fail_closed(
 
     assert result.status is GateStatus.REPAIR
     assert code in {item.code for item in result.violations}
+
+
+def test_unscoped_evidence_plan_repairs_unique_typed_exact_asset() -> None:
+    sports = _asset(
+        "sports-live",
+        asset_type="recipe",
+        freshness_sensitive=True,
+        domains=("sports",),
+        intents=("current_result",),
+    )
+    plan = replace(
+        _plan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="bounded sports query",
+            intents=("current_result",),
+        ),
+        domains=("sports",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="bounded sports query",
+            intents=("current_result",),
+            reference_date="2026-08-02",
+            required_claims=("score",),
+            freshness_required=True,
+        ),
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(sports),
+    )
+
+    assert result.status is GateStatus.PASS
+    assert result.effective_plan is not None
+    assert result.effective_plan.capability.primary_asset == AssetRef(
+        "recipe", "sports-live"
+    )
+    assert result.effective_plan.capability.coverage.value == "full_coverage"
+    assert result.effective_plan.fact_check.owner is EvidenceOwner.ASSET
+    assert result.effective_plan.execution.allowed_tools == ()
+
+
+@pytest.mark.parametrize("asset_count", (0, 2))
+def test_unscoped_evidence_plan_without_unique_exact_asset_repairs(
+    asset_count: int,
+) -> None:
+    assets = tuple(
+        _asset(
+            f"sports-{index}",
+            asset_type="recipe",
+            domains=("sports",),
+            intents=("current_result",),
+        )
+        for index in range(asset_count)
+    )
+    plan = replace(
+        _plan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="bounded sports query",
+            intents=("current_result",),
+        ),
+        domains=("sports",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="bounded sports query",
+            intents=("current_result",),
+            reference_date="2026-08-02",
+            required_claims=("score",),
+            freshness_required=True,
+        ),
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(*assets),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert result.effective_plan is None
+    assert "fact_check.exact_asset_not_unique" in {
+        violation.code for violation in result.violations
+    }
 
 
 def test_current_result_cannot_disable_freshness_at_plan_gate() -> None:
