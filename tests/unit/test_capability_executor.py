@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from simpleclaw.agent.capability_executor import CapabilityExecutor
+from simpleclaw.agent.capability_executor import CapabilityExecutor, decode_asset_result
 from simpleclaw.agent.planner_catalog import (
     PlannerAsset,
     PlannerCatalog,
@@ -114,6 +114,46 @@ def test_sports_live_catalog_asset_is_exact_and_safe() -> None:
     assert asset.freshness_sensitive is True
 
 
+@pytest.mark.parametrize(
+    ("effect_fields", "expected_status", "expected_side_effect"),
+    [
+        ({"side_effect": False}, AssetExecutionStatus.COMPLETED, False),
+        ({"side_effect": True}, AssetExecutionStatus.UNKNOWN_EFFECT, True),
+        ({}, AssetExecutionStatus.UNKNOWN_EFFECT, True),
+        (
+            {"side_effect": True, "status": "partial_success"},
+            AssetExecutionStatus.PARTIAL_SUCCESS,
+            True,
+        ),
+    ],
+    ids=("verified-none", "reported", "missing", "partial"),
+)
+def test_decode_asset_result_preserves_effect_state_fail_closed(
+    effect_fields: dict[str, object],
+    expected_status: AssetExecutionStatus,
+    expected_side_effect: bool,
+) -> None:
+    payload = {
+        "schema": "asset_result.v1",
+        "status": "completed",
+        "resolved_claims": ["score"],
+        **effect_fields,
+    }
+
+    result = decode_asset_result(
+        payload,
+        asset_type="recipe",
+        asset_name="sports-live",
+        side_effect=False,
+    )
+
+    assert result.status is expected_status
+    assert result.side_effect is expected_side_effect
+    assert result.resolved_claims == (
+        ("score",) if expected_status is AssetExecutionStatus.COMPLETED else ()
+    )
+
+
 @pytest.mark.asyncio
 async def test_exact_skill_receives_one_query_v1_argument_without_reselection() -> None:
     execute = AsyncMock(
@@ -121,6 +161,7 @@ async def test_exact_skill_receives_one_query_v1_argument_without_reselection() 
             {
                 "schema": "asset_result.v1",
                 "status": "completed",
+                "side_effect": False,
                 "resolved_claims": ["score"],
                 "data": {"text": "70타"},
             }
@@ -178,6 +219,7 @@ async def test_exact_recipe_identity_executes_once() -> None:
         return_value={
             "schema": "asset_result.v1",
             "status": "completed",
+            "side_effect": False,
             "resolved_claims": ["score"],
         }
     )

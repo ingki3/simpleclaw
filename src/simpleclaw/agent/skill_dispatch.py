@@ -145,6 +145,7 @@ async def dispatch_external_skill(
     args: dict,
     *,
     allowed_skill_names: frozenset[str] | None = None,
+    resolved_skill: SkillDefinition | None = None,
 ) -> str:
     """execute_skill 도구 호출을 처리한다.
 
@@ -158,11 +159,13 @@ async def dispatch_external_skill(
     exact_scope = allowed_skill_names is not None
     if exact_scope and skill_name not in allowed_skill_names:
         return f"[Skill '{skill_name}' is not allowed in this planned turn.]"
-    resolved = (
-        getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
-        if exact_scope
-        else orchestrator._resolve_skill_name(skill_name)
-    )
+    if exact_scope:
+        current = getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
+        if resolved_skill is None or current is not resolved_skill:
+            return f"[Skill '{skill_name}' definition changed before dispatch.]"
+        resolved = resolved_skill
+    else:
+        resolved = orchestrator._resolve_skill_name(skill_name)
     if skill_name and resolved is not None:
         if not skill_args and command:
             skill_args = _extract_registered_skill_args_from_command(skill_name, command)
@@ -171,6 +174,7 @@ async def dispatch_external_skill(
             skill_name,
             skill_args,
             exact=exact_scope,
+            resolved_skill=resolved if exact_scope else None,
         )
         return result or "[no output]"
     if exact_scope:
@@ -253,13 +257,14 @@ async def execute_registered_skill(
     args_str: str,
     *,
     exact: bool = False,
+    resolved_skill: SkillDefinition | None = None,
 ) -> str | None:
     """계획 경로는 exact, legacy 경로는 기존 fuzzy 이름으로 스킬을 찾는다."""
-    skill = (
-        getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
-        if exact
-        else orchestrator._resolve_skill_name(skill_name)
-    )
+    if exact:
+        current = getattr(orchestrator, "_skills_by_name", {}).get(skill_name)
+        skill = resolved_skill if current is resolved_skill else None
+    else:
+        skill = orchestrator._resolve_skill_name(skill_name)
     if skill is None:
         logger.warning("Skill '%s' not found in registry", skill_name)
         return f"[Skill '{skill_name}' not found. Available: {', '.join(orchestrator._skills_by_name.keys())}]"
