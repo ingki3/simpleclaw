@@ -177,6 +177,67 @@ def _requested_asset_scope(
     )
 
 
+def _normalize_redundant_exact_recipe_delegate(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """안전한 exact recipe가 소유한 중복 top-level delegate만 제거한다.
+
+    provider가 recipe 내부 구현 세부인 ``execute_skill``을 top-level scope에도
+    복제하는 경우가 있다. capability-native full recipe, 빈 supporting scope,
+    단일 ``execute_skill``이라는 닫힌 형태이고 catalog의 typed/read-only 계약까지
+    일치할 때만 실행 범위를 빈 allowlist로 축소한다. 그 밖의 tool/asset은 원문을
+    보존해 기존 boundary/PlanGate가 fail-closed하도록 한다.
+    """
+    capability = raw_data.get("capability")
+    execution = raw_data.get("execution")
+    if not isinstance(capability, Mapping) or not isinstance(execution, Mapping):
+        return raw_data
+    if capability.get("coverage") != "full_coverage":
+        return raw_data
+    try:
+        primary = _raw_asset_identity(
+            capability.get("primary_asset"),
+            allow_none=True,
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    if primary is None or primary[0] != "recipe":
+        return raw_data
+    if capability.get("supporting_assets") != []:
+        return raw_data
+    if execution.get("allowed_tools") != ["execute_skill"]:
+        return raw_data
+
+    catalog_asset = next(
+        (
+            asset
+            for asset in catalog.assets
+            if asset.runtime_visible
+            and (asset.asset_type, asset.name) == primary
+        ),
+        None,
+    )
+    if (
+        catalog_asset is None
+        or not catalog_asset.declared
+        or catalog_asset.coverage != "full_coverage"
+        or catalog_asset.input_contract != "query.v1"
+        or catalog_asset.output_contract != "asset_result.v1"
+        or not catalog_asset.read_only
+        or catalog_asset.side_effects
+        or catalog_asset.requires_confirmation
+    ):
+        return raw_data
+
+    normalized = dict(raw_data)
+    normalized_execution = dict(execution)
+    normalized_execution["allowed_tools"] = []
+    normalized["execution"] = normalized_execution
+    return normalized
+
+
 def validate_turn_plan_boundaries(
     plan: UnifiedTurnPlan,
     *,
@@ -474,6 +535,10 @@ async def plan_turn_with_llm(
             data: Mapping[str, object],
         ) -> UnifiedTurnPlan:
             """raw object를 모델로 조립한 뒤 실제 runtime 경계와 대조한다."""
+            data = _normalize_redundant_exact_recipe_delegate(
+                data,
+                catalog=catalog,
+            )
             plan = parse_turn_plan_data(
                 data,
                 original_text=original,

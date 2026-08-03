@@ -187,6 +187,7 @@ class ToolLoopState:
     evidence_state: EvidenceState | None = None
     attempted_collectors: set[str] = field(default_factory=set)
     turn: TurnExecutionState | None = None
+    final_response_schema: dict[str, object] | None = None
 
 
 @dataclass
@@ -664,6 +665,10 @@ class ToolLoopRunner:
                     system_blocks=state.system_blocks,
                     usage_task="tool_loop",
                 )
+                if invoked_tool_sequence and state.final_response_schema is not None:
+                    request.response_mime_type = "application/json"
+                    request.response_schema = state.final_response_schema
+                    request.require_structured_output = True
                 text_delta_callback = (
                     state.on_text_delta
                     if (
@@ -1029,6 +1034,10 @@ class ToolLoopRunner:
                 system_blocks=state.system_blocks,
                 usage_task="tool_loop",
             )
+            if invoked_tool_sequence and state.final_response_schema is not None:
+                final_request.response_mime_type = "application/json"
+                final_request.response_schema = state.final_response_schema
+                final_request.require_structured_output = True
             if state.on_text_delta is not None:
                 final_send = self._orchestrator._router.send(
                     final_request,
