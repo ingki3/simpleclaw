@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Install the version-controlled Naver Sports runtime skill wrapper.
 
 실제 조회 로직은 배포 package의 :mod:`simpleclaw.skills.naver_sports`가 단일 SoT다.

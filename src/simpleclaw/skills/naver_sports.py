@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fetch bounded live scores, completed results, and standings from Naver.
 
 ``live``와 ``results``를 provider의 구조화 상태 enum으로 분리한다. 전자는
@@ -24,7 +23,6 @@ from urllib.request import (
     build_opener,
 )
 from zoneinfo import ZoneInfo
-
 
 KST = ZoneInfo("Asia/Seoul")
 SPORTS_HOST = "api-gw.sports.naver.com"
@@ -114,7 +112,7 @@ class SportsClient:
                 f"네이버 스포츠 API가 HTTP {exc.code}를 반환했습니다.",
                 retryable=500 <= exc.code < 600,
             ) from exc
-        except (TimeoutError, socket.timeout) as exc:
+        except TimeoutError as exc:
             raise SportsError(
                 "TIMEOUT",
                 "네이버 스포츠 API 응답 시간이 초과되었습니다.",
@@ -122,7 +120,7 @@ class SportsClient:
             ) from exc
         except URLError as exc:
             reason = getattr(exc, "reason", None)
-            if isinstance(reason, (TimeoutError, socket.timeout)):
+            if isinstance(reason, TimeoutError):
                 code = "TIMEOUT"
                 message = "네이버 스포츠 API 응답 시간이 초과되었습니다."
             elif isinstance(reason, socket.gaierror):
@@ -270,19 +268,7 @@ _PLAYER_STANDINGS = _GOLF_IDS
 def _canonical_category(value: str) -> str:
     canonical = _CATEGORY_ALIASES.get(str(value or "").strip().lower())
     if canonical is None:
-        supported = ", ".join(
-            (
-                "kbo",
-                "mlb",
-                "kleague",
-                "epl",
-                "basketball",
-                "volleyball",
-                "general",
-                "golf",
-                "esports",
-            )
-        )
+        supported = "kbo, mlb, kleague, epl, basketball, volleyball, general, golf, esports"
         raise SportsError(
             "INVALID_ARGUMENT",
             f"지원하지 않는 category입니다. 지원 값: {supported}",
@@ -585,7 +571,7 @@ def _as_kst_iso(value: Any) -> str | None:
     if not text:
         return None
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return text
     if parsed.tzinfo is None:
@@ -1451,7 +1437,7 @@ def run(
             selected_date=safe_date,
             client=client,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - public CLI fail-closed error boundary
         return _error_payload(
             SportsError(
                 "INTERNAL_ERROR",
