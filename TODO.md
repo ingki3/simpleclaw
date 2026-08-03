@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [x] **[BIZ-545](mention://issue/600c651b-b7ef-4b8c-96fd-bfd7c881ac1a): Actual-provider sports exact 경로를 3/3 결정적으로 보정** — 안전한 typed `full_coverage` recipe가 소유한 중복 top-level `execute_skill`만 빈 allowlist로 축소하고, exact recipe delegate 실행 뒤 provider final에 strict `asset_result.v1` structured-output 계약을 전달한다. unknown/unrelated/confirmation 경계와 단일 성공 delegate invariant는 fail-closed로 유지하며, [PR #569](https://github.com/ingki3/simpleclaw/pull/569)를 `dev`에 squash merge(SHA `4b3b1858a388cd53a202735e084b8e0a10a58480`)했다. live 설치·재시작·actual-provider no-send 3/3 재검증과 release/live activation은 부모 BIZ-541의 Review gate가 소유한다. (완료: 2026-08-03)
+
 - [x] **[BIZ-544](mention://issue/442a75a3-68d5-4510-9f9d-92c69b252962): Exact primary asset allowlist 경계를 capability 계약과 정합화** — capability-native full primary를 supporting fallback과 독립적으로 runtime catalog 검증하고, legacy execution-only allowlist 호환 경계와 unknown/internal/confirmation fail-closed를 보존했다. LPGA `sports-live` canonical plan의 Planner→PlanGate→exact recipe 회귀 및 Graphify 산출물을 갱신하고, PR #566을 `dev`에 squash merge(SHA `703e8395c835a9a16f290d3f522e980b61c59c98`)했다. (완료: 2026-08-03)
 - [>] **[BIZ-541](mention://issue/a3cfc463-e4f6-4929-a38f-2015e79bb23f): Naver Sports exact asset 계약을 Capability-first v3와 정합화** — [PR #563](https://github.com/ingki3/simpleclaw/pull/563)의 코드·오프라인 검증 범위는 exact delegate trace 보정 head `2f73a3a03b5debc7fbc3ff144f0a375c504006ac`까지 반영되어 최종 Review와 `dev` merge를 기다린다. merge 뒤 BIZ-541이 live `sports-live` recipe의 timestamp backup·SHA-256·rollback 경로 생성과 contract 설치를 소유하고, 이후 부모 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 `capability_first_v3` activation·restart·no-send smoke를 재개하므로 아직 완료로 전환하지 않는다. (진행: 2026-08-02)
 

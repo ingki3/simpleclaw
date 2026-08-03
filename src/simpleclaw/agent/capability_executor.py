@@ -23,6 +23,21 @@ from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 SkillExecutor = Callable[[str, str], Awaitable[object]]
 RecipeExecutor = Callable[[str, dict[str, str]], Awaitable[object]]
 
+ASSET_RESULT_RESPONSE_SCHEMA: dict[str, object] = {
+    "type": "object",
+    "properties": {
+        "schema": {"type": "string", "enum": ["asset_result.v1"]},
+        "status": {
+            "type": "string",
+            "enum": [status.value for status in AssetExecutionStatus],
+        },
+    },
+    "required": ["schema", "status"],
+    # Recipe-owned ``data``/``evidence`` payloads are domain-specific. Runtime
+    # decode_asset_result performs the strict typed validation after generation.
+    "additionalProperties": True,
+}
+
 
 def _string_tuple(value: object) -> tuple[str, ...]:
     if not isinstance(value, list | tuple):

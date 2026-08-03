@@ -22,7 +22,10 @@ pytestmark = pytest.mark.offline
 
 
 @pytest.mark.asyncio
-async def test_lpga_exact_asset_never_calls_generic_collector() -> None:
+@pytest.mark.parametrize("allowed_tools", [[], ["execute_skill"]])
+async def test_lpga_exact_asset_never_calls_generic_collector(
+    allowed_tools: list[str],
+) -> None:
     catalog = PlannerCatalog(
         assets=(
             PlannerAsset(
@@ -90,7 +93,7 @@ async def test_lpga_exact_asset_never_calls_generic_collector() -> None:
         },
         "execution": {
             "mode": "answer_with_evidence",
-            "allowed_tools": [],
+            "allowed_tools": allowed_tools,
             "requires_confirmation": False,
             "complexity_signals": [],
             "reason": "unresolved fallback only",
@@ -126,6 +129,7 @@ async def test_lpga_exact_asset_never_calls_generic_collector() -> None:
     assert plan.capability.primary_asset is not None
     assert plan.capability.primary_asset.name == "sports-live"
     assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ()
 
     exact = AsyncMock()
     exact.execute.return_value = AssetResult(

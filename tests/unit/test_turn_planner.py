@@ -149,6 +149,77 @@ def _catalog(
     )
 
 
+def _exact_recipe_catalog() -> PlannerCatalog:
+    """중복 delegate narrowing을 허용하는 typed exact recipe catalog."""
+    return PlannerCatalog(
+        assets=(
+            PlannerAsset(
+                asset_type="native_tool",
+                name="execute_skill",
+                description="selected skill delegate",
+                domains=(),
+                intents=(),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+            PlannerAsset(
+                asset_type="recipe",
+                name="sports-live",
+                description="typed sports result recipe",
+                domains=("sports",),
+                intents=("current_result",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                coverage="full_coverage",
+                input_contract="query.v1",
+            ),
+        ),
+        fingerprint="sports-live-catalog",
+    )
+
+
+def _exact_recipe_response_data() -> dict[str, object]:
+    data = _response_data()
+    data["context"] = {
+        "relation": "standalone",
+        "use_prior_context": False,
+        "selected_turn_ids": [],
+        "standalone_question": "어제 유해란 LPGA 성적과 순위",
+        "unresolved_references": [],
+        "ignored_context_reason": "",
+    }
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "recipe",
+            "asset_name": "sports-live",
+        },
+        "supporting_assets": [],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "exact recipe",
+    }
+    data["execution"] = {
+        "mode": "answer_with_evidence",
+        "allowed_tools": ["execute_skill"],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "fallback only",
+    }
+    return data
+
+
 def _response_data() -> dict[str, object]:
     """성공 응답 JSON을 trust-boundary 변형 가능한 dict로 반환한다."""
     data = json.loads(_response_payload())
@@ -361,6 +432,50 @@ async def test_capability_primary_does_not_require_supporting_duplicate() -> Non
     assert plan.capability.primary_asset is not None
     assert plan.capability.primary_asset.name == "realtime-lookup-skill"
     assert plan.capability.supporting_assets == ()
+
+
+@pytest.mark.asyncio
+async def test_exact_recipe_redundant_top_level_delegate_is_narrowed() -> None:
+    """recipe 내부 delegate의 top-level 복제는 빈 실행 scope로 축소한다."""
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(_exact_recipe_response_data(), ensure_ascii=False)
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "어제 유해란 LPGA 성적과 순위",
+        candidates=ContextCandidateSet(candidates=(), total_chars=0, truncated=False),
+        catalog=_exact_recipe_catalog(),
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "sports-live"
+    assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ()
+
+
+@pytest.mark.asyncio
+async def test_exact_recipe_unrelated_top_level_tool_is_not_narrowed() -> None:
+    """exact recipe라도 중복 delegate 이외의 top-level tool은 fail-closed한다."""
+    data = _exact_recipe_response_data()
+    data["execution"]["allowed_tools"] = ["web_search"]
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable):
+        await plan_turn_with_llm(
+            "어제 유해란 LPGA 성적과 순위",
+            candidates=ContextCandidateSet(
+                candidates=(), total_chars=0, truncated=False
+            ),
+            catalog=_exact_recipe_catalog(),
+            router=router,
+        )
 
 
 @pytest.mark.asyncio

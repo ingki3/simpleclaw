@@ -44,6 +44,7 @@ from simpleclaw.agent.asset_selector import (
     normalize_selector_response,
 )
 from simpleclaw.agent.capability_executor import (
+    ASSET_RESULT_RESPONSE_SCHEMA,
     CapabilityExecutor,
     decode_asset_result,
 )
@@ -2686,6 +2687,7 @@ class AgentOrchestrator:
                     evidence_requirement=no_evidence_requirement(),
                     forced_skill_names=frozenset(recipe.skills),
                     forced_tool_names=frozenset({"execute_skill"}),
+                    final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
                 )
             except Exception as exc:
                 return {
@@ -2784,6 +2786,7 @@ class AgentOrchestrator:
         turn: TurnExecutionState | None = None,
         forced_skill_names: frozenset[str] | None = None,
         forced_tool_names: frozenset[str] | None = None,
+        final_response_schema: dict[str, object] | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -3119,6 +3122,7 @@ class AgentOrchestrator:
             evidence_state=evidence_state,
             attempted_collectors=attempted_collectors,
             turn=turn,
+            final_response_schema=final_response_schema,
         )
 
     async def _run_tool_loop_result(
@@ -3138,6 +3142,7 @@ class AgentOrchestrator:
         turn: TurnExecutionState | None = None,
         forced_skill_names: frozenset[str] | None = None,
         forced_tool_names: frozenset[str] | None = None,
+        final_response_schema: dict[str, object] | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
@@ -3170,6 +3175,7 @@ class AgentOrchestrator:
             turn=turn,
             forced_skill_names=forced_skill_names,
             forced_tool_names=forced_tool_names,
+            final_response_schema=final_response_schema,
         )
         result = await ToolLoopRunner(self).run(state)
         return result
