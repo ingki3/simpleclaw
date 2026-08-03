@@ -96,6 +96,10 @@ from simpleclaw.agent.file_mutation_tracker import (
     TrackedRoot,
 )
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
+from simpleclaw.agent.observation_claims import (
+    declared_claim_bindings,
+    materialize_validated_claims,
+)
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
 from simpleclaw.agent.progress import ProgressCallback
@@ -2750,71 +2754,19 @@ class AgentOrchestrator:
             required_claims = _typed_string_tuple("required_claims")
             if required_claims and decoded.get("status") == "completed":
                 observation = decoded.get("data")
-                resolved_raw = decoded.get("resolved_claims")
-                evidence_raw = decoded.get("evidence")
-                candidate_claims = {
-                    str(item).strip()
-                    for item in resolved_raw
-                    if str(item).strip()
-                } if isinstance(resolved_raw, list | tuple) else set()
-                if isinstance(evidence_raw, list | tuple):
-                    candidate_claims.update(
-                        str(item.get("claim_id") or "").strip()
-                        for item in evidence_raw
-                        if isinstance(item, dict)
-                        and str(item.get("claim_id") or "").strip()
-                    )
-                if (
-                    isinstance(observation, dict)
-                    and observation.get("ok") is True
-                    and isinstance(observation.get("items"), list | tuple)
-                    and bool(observation["items"])
-                ):
-                    candidate_claims.update(required_claims)
-                resolved_claims = tuple(
-                    claim for claim in required_claims if claim in candidate_claims
+                bindings = declared_claim_bindings(
+                    required_claims=required_claims,
+                    declared_resolved_claims=decoded.get("resolved_claims"),
+                    declared_evidence=decoded.get("evidence"),
                 )
-                if resolved_claims and isinstance(observation, dict):
-                    source_url = str(observation.get("source_url") or "")
-                    items = observation.get("items")
-                    if not source_url and isinstance(items, list | tuple):
-                        source_url = next(
-                            (
-                                str(item.get("source_url") or "")
-                                for item in items
-                                if isinstance(item, dict)
-                                and str(item.get("source_url") or "")
-                            ),
-                            "",
-                        )
-                    provenance = str(
-                        observation.get("provider")
-                        or observation.get("source")
-                        or name
-                    )
-                    observed_at = str(
-                        observation.get("fetched_at")
-                        or observation.get("observed_at")
-                        or ""
-                    )
-                    decoded["resolved_claims"] = list(resolved_claims)
-                    decoded["unresolved_claims"] = [
-                        claim
-                        for claim in required_claims
-                        if claim not in resolved_claims
-                    ]
-                    decoded["evidence"] = [
-                        {
-                            "claim_id": claim,
-                            "value": observation,
-                            "source_url": source_url,
-                            "provenance": provenance,
-                            "observed_at": observed_at,
-                            "fresh": True,
-                            "usable": True,
-                        }
-                        for claim in resolved_claims
-                    ]
+                resolved, unresolved, evidence = materialize_validated_claims(
+                    observation,
+                    required_claims=required_claims,
+                    claim_bindings=bindings,
+                )
+                decoded["resolved_claims"] = resolved
+                decoded["unresolved_claims"] = unresolved
+                decoded["evidence"] = evidence
             return decoded
 
         if not recipe.steps:

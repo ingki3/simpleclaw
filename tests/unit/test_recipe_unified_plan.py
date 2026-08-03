@@ -8,10 +8,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from simpleclaw.agent.capability_executor import ASSET_RESULT_RESPONSE_SCHEMA
+from simpleclaw.agent.capability_executor import (
+    ASSET_RESULT_RESPONSE_SCHEMA,
+    decode_asset_result,
+)
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import requirement_from_turn_plan
 from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
+from simpleclaw.agent.resolution_types import GoalResolutionState, GoalStatus
+from simpleclaw.agent.result_validator import CommonResultValidator
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolTraceStep
 from simpleclaw.agent.turn_plan import (
     AssetRef,
@@ -46,6 +52,7 @@ def test_sports_recipe_routes_completed_result_to_results_mode() -> None:
     assert "completed_result" in recipe.capability.intents
     assert "`live|completed_result|standings` typed intent" in recipe.instructions
     assert "`completed_result→results`" in recipe.instructions
+    assert "`claim_keys` 배열" in recipe.instructions
     assert "`STARTED` empty를 과거 종료 경기 부재로 해석" in recipe.instructions
     assert "--mode <live|results|standings>" in recipe.instructions
 
@@ -272,8 +279,8 @@ async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_path) -> None:
-    """Exact 결과의 raw 관찰은 exact claim ID와 typed freshness로 정규화한다."""
+async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_path) -> None:
+    """Exact 결과는 provider typed claim map에 bind된 claim만 해결한다."""
     orchestrator = AgentOrchestrator(_config(tmp_path))
     orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
     observation = {
@@ -289,6 +296,24 @@ async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_p
         ],
         "provider": "naver_sports",
         "fetched_at": "2026-08-03T09:00:00+09:00",
+        "claim_map": {
+            "score": {
+                "value": [{"away": 2, "home": 3}],
+                "source_url": "https://sports.example/result",
+                "provenance": "naver_sports",
+                "observed_at": "2026-08-03T09:00:00+09:00",
+                "fresh": True,
+                "usable": True,
+            },
+            "winner": {
+                "value": [{"side": "home", "name": "한화"}],
+                "source_url": "https://sports.example/result",
+                "provenance": "naver_sports",
+                "observed_at": "2026-08-03T09:00:00+09:00",
+                "fresh": True,
+                "usable": True,
+            },
+        },
     }
     orchestrator._run_tool_loop_result = AsyncMock(
         return_value=ToolLoopResult(
@@ -297,8 +322,11 @@ async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_p
                     "schema": "asset_result.v1",
                     "status": "completed",
                     "data": observation,
-                    "resolved_claims": [],
-                    "evidence": [],
+                    "resolved_claims": ["score", "winner"],
+                    "evidence": [
+                        {"claim_id": "score", "claim_keys": ["score"]},
+                        {"claim_id": "winner", "claim_keys": ["winner"]},
+                    ],
                 }
             ),
             trace=_delegate_trace(),
@@ -320,7 +348,7 @@ async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_p
     assert result["evidence"] == [
         {
             "claim_id": claim,
-            "value": observation,
+            "value": observation["claim_map"][claim]["value"],
             "source_url": "https://sports.example/result",
             "provenance": "naver_sports",
             "observed_at": "2026-08-03T09:00:00+09:00",
@@ -329,6 +357,120 @@ async def test_exact_recipe_normalizes_evidence_from_preserved_observation(tmp_p
         }
         for claim in ("score", "winner")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required_claim", "claim_key", "claim_record"),
+    [
+        (
+            "attendance",
+            "attendance",
+            {
+                "value": [{"away": 2, "home": 3}],
+                "source_url": "https://sports.example/result",
+                "observed_at": "2026-08-03T09:00:00+09:00",
+                "fresh": True,
+            },
+        ),
+        (
+            "score",
+            "score",
+            {
+                "value": [{"away": 2, "home": 3}],
+                "source_url": "",
+                "observed_at": "2026-08-03T09:00:00+09:00",
+                "fresh": True,
+            },
+        ),
+        (
+            "score",
+            "score",
+            {
+                "value": [{"away": 2, "home": 3}],
+                "source_url": "https://sports.example/result",
+                "fresh": True,
+            },
+        ),
+        (
+            "score",
+            "score",
+            {
+                "value": [{"away": 2, "home": 3}],
+                "source_url": "https://sports.example/result",
+                "observed_at": "2026-08-03T09:00:00+09:00",
+            },
+        ),
+    ],
+    ids=(
+        "absent-claim",
+        "missing-source",
+        "missing-observed-at",
+        "missing-freshness",
+    ),
+)
+async def test_exact_recipe_unobserved_claims_fail_common_validator(
+    tmp_path,
+    required_claim: str,
+    claim_key: str,
+    claim_record: dict[str, object],
+) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    observation = {
+        "ok": True,
+        "items": [{"score": {"away": 2, "home": 3}}],
+        "claim_map": {"score": claim_record},
+    }
+    orchestrator._run_tool_loop_result = AsyncMock(
+        return_value=ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "data": observation,
+                    "resolved_claims": [required_claim],
+                    "evidence": [
+                        {"claim_id": required_claim, "claim_keys": [claim_key]}
+                    ],
+                }
+            ),
+            trace=_delegate_trace(),
+            success=True,
+        )
+    )
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {
+            "query": "조회",
+            "required_claims": json.dumps([required_claim]),
+        },
+    )
+
+    assert result["resolved_claims"] == []
+    assert result["unresolved_claims"] == [required_claim]
+    assert result["evidence"] == []
+    typed = decode_asset_result(
+        result,
+        asset_type="recipe",
+        asset_name="sports-live",
+        side_effect=False,
+    )
+    ledger = ResolutionLedger()
+    ledger.append_asset_result(typed)
+    decision = CommonResultValidator().validate(
+        goal=GoalResolutionState(
+            original_goal="조회",
+            status=GoalStatus.RESOLVED,
+            resolved_claims=(required_claim,),
+            unresolved_claims=(),
+        ),
+        ledger=ledger,
+        required_claims=(required_claim,),
+    )
+    assert decision.allow_final is False
+    assert decision.blocked_claims == (required_claim,)
 
 
 @pytest.mark.asyncio

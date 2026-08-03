@@ -167,6 +167,12 @@ def test_results_returns_typed_score_winner_and_provenance(status_code):
         }
     ]
     assert result["items"][0]["fetched_at"].endswith("+09:00")
+    assert set(result["claim_map"]) == {"game_result", "score", "winner"}
+    assert result["claim_map"]["score"]["value"] == [{"away": 3, "home": 5}]
+    assert result["claim_map"]["winner"]["value"] == [
+        {"side": "home", "name": "한화"}
+    ]
+    assert result["claim_map"]["score"]["fresh"] is True
     assert any("statusCode=ENDED" in url for url in result["source"]["urls"])
     assert any("statusCode=RESULT" in url for url in result["source"]["urls"])
 

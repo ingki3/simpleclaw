@@ -36,6 +36,7 @@ from simpleclaw.agent.evidence_policy import (
     no_evidence_requirement,
 )
 from simpleclaw.agent.file_mutation_tracker import format_footer
+from simpleclaw.agent.observation_claims import materialize_validated_claims
 from simpleclaw.agent.progress import (
     ProgressCallback,
     ProgressEvent,
@@ -506,30 +507,19 @@ def _bounded_cap_observation(
         return None
     requirement = state.evidence_requirement
     required_claims = list(requirement.required_claims)
-    source = payload.get("source")
-    source_urls = source.get("urls") if isinstance(source, dict) else []
-    source_url = next(
-        (
-            str(item.get("source_url") or "")
-            for item in items
-            if isinstance(item, dict) and item.get("source_url")
-        ),
-        "",
-    ) or next(
-        (str(url) for url in source_urls if str(url).strip()),
-        "",
-    ) if isinstance(source_urls, list) else ""
-    fetched_at = str(payload.get("fetched_at") or "")
-
     if ok and items:
         status = "completed"
-        resolved_claims = required_claims
-        unresolved_claims: list[str] = []
+        resolved_claims, unresolved_claims, evidence = materialize_validated_claims(
+            payload,
+            required_claims=required_claims,
+            claim_bindings={claim: (claim,) for claim in required_claims},
+        )
         limitations: list[str] = []
     elif ok:
         status = "empty"
         resolved_claims = []
         unresolved_claims = required_claims
+        evidence = []
         limitations = [
             str(payload.get("message") or "정상 조회 결과가 비어 있습니다.")[:500]
         ]
@@ -540,28 +530,12 @@ def _bounded_cap_observation(
         )
         resolved_claims = []
         unresolved_claims = required_claims
+        evidence = []
         limitations = [str(error.get("message") or "조회에 실패했습니다.")[:500]]
     else:
         return None
 
     if _asset_result_schema_required(state):
-        evidence = []
-        if status == "completed" and source_url and fetched_at:
-            evidence = [
-                {
-                    "claim_id": claim,
-                    "value": items,
-                    "source_url": source_url,
-                    "provenance": (
-                        str(source.get("provider") or "")
-                        if isinstance(source, dict)
-                        else ""
-                    ),
-                    "fetched_at": fetched_at,
-                    "fresh": True,
-                }
-                for claim in resolved_claims
-            ]
         envelope = {
             "schema": "asset_result.v1",
             "status": status,
@@ -580,6 +554,13 @@ def _bounded_cap_observation(
 
     if status == "completed":
         detail = json.dumps(items, ensure_ascii=False, separators=(",", ":"))[:2000]
+        source = payload.get("source")
+        source_urls = source.get("urls") if isinstance(source, dict) else []
+        source_url = next(
+            (str(url) for url in source_urls if str(url).strip()),
+            "",
+        ) if isinstance(source_urls, list) else ""
+        fetched_at = str(payload.get("fetched_at") or "")
         provenance = f"\n출처: {source_url}" if source_url else ""
         freshness = f"\n조회 시각: {fetched_at}" if fetched_at else ""
         return f"확인된 결과: {detail}{provenance}{freshness}", True
@@ -632,6 +613,54 @@ class ToolLoopRunner:
             build_empty_final_recovery_clarify_request()
         )
         return ""
+
+    async def _force_asset_final_after_scope_cap(
+        self,
+        state: ToolLoopState,
+        *,
+        blocked_call: Any,
+        tool_results: list[tuple[str, str]],
+    ) -> str | None:
+        """추가 tool 없이 첫 observation의 typed claim binding만 완성한다."""
+        if not _asset_result_schema_required(state) or not tool_results:
+            return None
+        state.messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": blocked_call.id,
+                "name": blocked_call.name,
+                "content": (
+                    "scoped_tool_call_cap_exceeded: do not call another tool; "
+                    "return asset_result.v1 from the existing observation"
+                ),
+            }
+        )
+        request = LLMRequest(
+            system_prompt=state.system_prompt,
+            user_message=state.user_content,
+            messages=state.messages,
+            tools=None,
+            system_blocks=state.system_blocks,
+            response_mime_type="application/json",
+            response_schema=state.final_response_schema,
+            require_structured_output=True,
+            usage_task="tool_loop",
+        )
+        try:
+            response = await self._orchestrator._router.send(request)
+        except Exception as exc:  # noqa: BLE001 - bounded fail-closed fallback
+            logger.warning(
+                "Scoped cap forced final failed (error_type=%s)",
+                type(exc).__name__,
+            )
+            return None
+        if response.tool_calls or not (response.text or "").strip():
+            return None
+        return _preserve_asset_observation_data(
+            state,
+            response.text.strip(),
+            tool_results,
+        )
 
     async def run(self, state: ToolLoopState) -> ToolLoopResult:
         """tool loop를 실행하고 생성된 final 및 실행 실패 상태를 그대로 반환한다."""
@@ -985,6 +1014,19 @@ class ToolLoopRunner:
                         scoped_tool_calls_used,
                         state.execution_scope.max_tool_calls,
                     )
+                    forced_final = await self._force_asset_final_after_scope_cap(
+                        state,
+                        blocked_call=tc,
+                        tool_results=tool_results_for_empty_final,
+                    )
+                    if forced_final is not None:
+                        return ToolLoopResult(
+                            forced_final,
+                            trace=trace,
+                            iterations=i + 1,
+                            success=True,
+                            failure_kind="scoped_tool_call_cap_preserved",
+                        )
                     preserved = _bounded_cap_observation(
                         state,
                         tool_results_for_empty_final,

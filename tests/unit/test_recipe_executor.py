@@ -40,6 +40,7 @@ class TestRecipeExecutor:
         assert '"intents":["completed_result"]' in rendered
         assert '"required_claims":["score","rank"]' in rendered
         assert "exact claim IDs" in rendered
+        assert "evidence.claim_keys" in rendered
         assert "exactly one allowed delegate skill exactly once" in rendered
         assert "Return exactly one JSON object" in rendered
         assert "Telegram" not in rendered

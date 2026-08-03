@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent import AgentOrchestrator
-from simpleclaw.agent.capability_executor import ASSET_RESULT_RESPONSE_SCHEMA
+from simpleclaw.agent.capability_executor import (
+    ASSET_RESULT_RESPONSE_SCHEMA,
+    decode_asset_result,
+)
 from simpleclaw.agent.evidence_policy import (
     EvidenceFreshness,
     EvidenceRequirement,
@@ -25,8 +28,16 @@ from simpleclaw.agent.evidence_policy import (
     EvidenceState,
     EvidenceStatus,
 )
+from simpleclaw.agent.resolution_ledger import ResolutionLedger
+from simpleclaw.agent.resolution_types import GoalResolutionState, GoalStatus
+from simpleclaw.agent.result_validator import CommonResultValidator
 from simpleclaw.agent.tool_gate import ToolExecutionScope
-from simpleclaw.agent.tool_loop import ToolLoopResult, ToolLoopRunner, ToolLoopState
+from simpleclaw.agent.tool_loop import (
+    ToolLoopResult,
+    ToolLoopRunner,
+    ToolLoopState,
+    _bounded_cap_observation,
+)
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.daemon.models import CronFailureKind
 from simpleclaw.llm.models import LLMResponse, ToolCall
@@ -232,6 +243,20 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
                         "provider": "Naver Sports structured API",
                         "urls": ["https://api-gw.sports.naver.com/result"],
                     },
+                    "claim_map": {
+                        "score": {
+                            "value": [{"away": 3, "home": 5}],
+                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                            "fresh": True,
+                        },
+                        "winner": {
+                            "value": [{"side": "home", "name": "한화"}],
+                            "source_url": "https://api-gw.sports.naver.com/result",
+                            "observed_at": "2026-08-03T17:00:00+09:00",
+                            "fresh": True,
+                        },
+                    },
                     "error": None,
                 },
                 ensure_ascii=False,
@@ -340,6 +365,214 @@ async def test_scoped_cap_preserves_first_typed_observation(
     assert envelope["unresolved_claims"] == (
         [] if expected_status == "completed" else ["score", "winner"]
     )
+    dispatch.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("required_claim", "claim_map"),
+    [
+        (
+            "attendance",
+            {
+                "score": {
+                    "value": [{"away": 3, "home": 5}],
+                    "source_url": "https://api-gw.sports.naver.com/result",
+                    "observed_at": "2026-08-03T17:00:00+09:00",
+                    "fresh": True,
+                }
+            },
+        ),
+        (
+            "score",
+            {
+                "score": {
+                    "value": [{"away": 3, "home": 5}],
+                    "source_url": "",
+                    "observed_at": "2026-08-03T17:00:00+09:00",
+                    "fresh": True,
+                }
+            },
+        ),
+        (
+            "score",
+            {
+                "score": {
+                    "value": [{"away": 3, "home": 5}],
+                    "source_url": "https://api-gw.sports.naver.com/result",
+                    "fresh": True,
+                }
+            },
+        ),
+        (
+            "score",
+            {
+                "score": {
+                    "value": [{"away": 3, "home": 5}],
+                    "source_url": "https://api-gw.sports.naver.com/result",
+                    "observed_at": "2026-08-03T17:00:00+09:00",
+                }
+            },
+        ),
+    ],
+    ids=(
+        "absent-claim",
+        "missing-source",
+        "missing-observed-at",
+        "missing-freshness",
+    ),
+)
+def test_scoped_cap_unobserved_claims_fail_common_validator(
+    required_claim: str,
+    claim_map: dict[str, object],
+) -> None:
+    requirement = EvidenceRequirement(
+        required=True,
+        query="조회",
+        domain="sports",
+        required_claims=(required_claim,),
+        owner="asset",
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+        final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
+    )
+    observation = {
+        "ok": True,
+        "items": [{"score": {"away": 3, "home": 5}}],
+        "claim_map": claim_map,
+    }
+
+    preserved = _bounded_cap_observation(
+        state,
+        [("execute_skill", json.dumps(observation))],
+    )
+
+    assert preserved is not None
+    envelope = json.loads(preserved[0])
+    assert envelope["resolved_claims"] == []
+    assert envelope["unresolved_claims"] == [required_claim]
+    assert envelope["evidence"] == []
+    typed = decode_asset_result(
+        envelope,
+        asset_type="recipe",
+        asset_name="sports-live",
+        side_effect=False,
+    )
+    ledger = ResolutionLedger()
+    ledger.append_asset_result(typed)
+    decision = CommonResultValidator().validate(
+        goal=GoalResolutionState(
+            original_goal="조회",
+            status=GoalStatus.RESOLVED,
+            resolved_claims=(required_claim,),
+            unresolved_claims=(),
+        ),
+        ledger=ledger,
+        required_claims=(required_claim,),
+    )
+    assert decision.allow_final is False
+    assert decision.blocked_claims == (required_claim,)
+
+
+@pytest.mark.asyncio
+async def test_scoped_cap_forces_typed_final_without_second_dispatch(
+    config_file,
+    monkeypatch,
+) -> None:
+    orch = AgentOrchestrator(config_file)
+    observation = {
+        "ok": True,
+        "items": [{"score": {"away": 3, "home": 5}}],
+        "claim_map": {
+            "game_result": {
+                "value": [{"score": {"away": 3, "home": 5}}],
+                "source_url": "https://api-gw.sports.naver.com/result",
+                "observed_at": "2026-08-03T17:00:00+09:00",
+                "fresh": True,
+            },
+            "score": {
+                "value": [{"away": 3, "home": 5}],
+                "source_url": "https://api-gw.sports.naver.com/result",
+                "observed_at": "2026-08-03T17:00:00+09:00",
+                "fresh": True,
+            },
+        },
+    }
+    dispatch = AsyncMock(return_value=json.dumps(observation))
+    monkeypatch.setattr(orch, "_dispatch_tool_call", dispatch)
+    repeated = {
+        "skill_name": "naver-sports-skill",
+        "args": "--mode results --category kbo --date 2026-08-02 --json",
+    }
+    orch._router.send = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                text="",
+                model="test",
+                tool_calls=[
+                    ToolCall(id="first", name="execute_skill", arguments=repeated),
+                    ToolCall(id="second", name="execute_skill", arguments=repeated),
+                ],
+            ),
+            LLMResponse(
+                text=json.dumps(
+                    {
+                        "schema": "asset_result.v1",
+                        "status": "completed",
+                        "data": {},
+                        "evidence": [
+                            {
+                                "claim_id": "game score",
+                                "claim_keys": ["game_result", "score"],
+                            }
+                        ],
+                        "resolved_claims": ["game score"],
+                        "unresolved_claims": [],
+                        "limitations": [],
+                        "retryable": False,
+                        "tokens_used": 0,
+                    }
+                )
+            ),
+        ]
+    )
+    requirement = EvidenceRequirement(
+        required=True,
+        query="조회",
+        domain="sports",
+        required_claims=("game score",),
+        owner="asset",
+    )
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+        ),
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+        final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
+    )
+
+    result = await ToolLoopRunner(orch).run(state)
+
+    assert result.success is True
+    assert len(result.trace) == 1
+    assert json.loads(result.text)["data"] == observation
+    assert orch._router.send.await_count == 2
     dispatch.assert_awaited_once()
 
 

@@ -428,6 +428,8 @@ def render_exact_recipe_instructions(
         "unresolved_claims and do not invent a factual final.\n"
         "- When required_claims is non-empty, resolved_claims and evidence.claim_id "
         "must use those exact claim IDs; do not replace them with prose or objects.\n"
+        "- Resolve a claim only by binding evidence.claim_keys to exact keys present "
+        "in data.claim_map. Never infer a claim from non-empty data/items alone.\n"
         "- Include schema, status, data, evidence, resolved_claims, "
         "unresolved_claims, limitations, retryable, and tokens_used."
     )

@@ -91,9 +91,14 @@ instructions: |
 
   exact 실행의 최종 출력은 `asset_result.v1` JSON object 하나뿐이다. Markdown fence나
   자연어 머리말을 붙이지 않는다. `data`에는 helper 결과를 bounded object로 보존한다.
-  `evidence` 각 항목은 claim_id/value/source_url/provenance/fetched_at/fresh를 가진다.
-  source URL, provenance, freshness가 모두 확인된 현재 사실만 resolved_claims에 넣고,
-  나머지는 unresolved_claims와 limitations에 둔다. results item의 event_state,
+  helper `claim_map`은 provider가 실제 관찰한 `game_result|score|winner` typed key와
+  value/source_url/observed_at/fresh를 보존한다. `evidence` 각 항목은 정확한 required
+  claim ID를 `claim_id`로 쓰고, 그 claim을 실제로 충족하는 `claim_map` key만
+  `claim_keys` 배열에 넣는다. 예를 들어 경기 결과와 점수 claim은
+  `game_result`와 `score`를 bind한다. claim_map에 없는 attendance 같은 key를 만들거나
+  non-empty items만으로 claim을 해결하지 않는다. source URL, 관찰시각, freshness가
+  완전한 typed key만 resolved_claims에 넣고 나머지는 unresolved_claims와 limitations에
+  둔다. results item의 event_state,
   status_code, score, winner, date, fetched_at, source_url을 그대로 보존한다. Naver 지연
   가능성도 limitation으로 남긴다. 정상 empty/not_found를 실패나 사실 단정으로
   바꾸지 않는다.

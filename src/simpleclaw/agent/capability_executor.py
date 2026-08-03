@@ -31,11 +31,40 @@ ASSET_RESULT_RESPONSE_SCHEMA: dict[str, object] = {
             "type": "string",
             "enum": [status.value for status in AssetExecutionStatus],
         },
+        "data": {"type": "object"},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "string"},
+                    "claim_keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["claim_id", "claim_keys"],
+            },
+        },
+        "resolved_claims": {"type": "array", "items": {"type": "string"}},
+        "unresolved_claims": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "retryable": {"type": "boolean"},
+        "tokens_used": {"type": "integer"},
     },
-    "required": ["schema", "status"],
+    "required": [
+        "schema",
+        "status",
+        "data",
+        "evidence",
+        "resolved_claims",
+        "unresolved_claims",
+        "limitations",
+        "retryable",
+        "tokens_used",
+    ],
     # Recipe-owned ``data``/``evidence`` payloads are domain-specific. Runtime
     # decode_asset_result performs the strict typed validation after generation.
-    "additionalProperties": True,
 }
 
 

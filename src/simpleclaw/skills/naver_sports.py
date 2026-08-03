@@ -887,6 +887,44 @@ def _sports_results(
     return items, excluded
 
 
+def _result_claim_map(
+    items: list[dict[str, Any]],
+    *,
+    fetched_at: str,
+) -> dict[str, dict[str, Any]]:
+    """확정 결과에서 실제 관찰된 typed claim만 provenance와 함께 투영한다."""
+    source_url = next(
+        (
+            str(item.get("source_url") or "")
+            for item in items
+            if str(item.get("source_url") or "")
+        ),
+        "",
+    )
+    if not items or not source_url or not fetched_at:
+        return {}
+
+    common = {
+        "source_url": source_url,
+        "provenance": "Naver Sports structured API",
+        "observed_at": fetched_at,
+        "fresh": True,
+        "usable": True,
+    }
+    claims: dict[str, dict[str, Any]] = {
+        "game_result": {"value": items, **common},
+    }
+    scores = [item["score"] for item in items if isinstance(item.get("score"), dict)]
+    winners = [
+        item["winner"] for item in items if isinstance(item.get("winner"), dict)
+    ]
+    if len(scores) == len(items):
+        claims["score"] = {"value": scores, **common}
+    if len(winners) == len(items):
+        claims["winner"] = {"value": winners, **common}
+    return claims
+
+
 def _leader(entry: dict[str, Any]) -> dict[str, Any] | None:
     name = entry.get("name") or entry.get("playerName")
     if not name:
@@ -1428,6 +1466,11 @@ def run(
         payload["source"]["urls"] = list(
             dict.fromkeys(getattr(client, "urls", []))
         )
+        if safe_mode == "results":
+            payload["claim_map"] = _result_claim_map(
+                payload["items"],
+                fetched_at=now,
+            )
         return payload
     except SportsError as exc:
         return _error_payload(
