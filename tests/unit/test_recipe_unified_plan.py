@@ -216,6 +216,9 @@ async def test_exact_recipe_nested_scope_exposes_only_delegate_skill(tmp_path) -
             description="FORBIDDEN_GENERIC_DELEGATE",
         ),
     ]
+    orchestrator._skills_by_name = {
+        skill.name: skill for skill in orchestrator._skills
+    }
 
     state = await orchestrator._prepare_tool_loop_state(
         "typed recipe instructions",
@@ -270,6 +273,9 @@ async def test_exact_recipe_nested_scope_rejects_unsafe_discovered_capability(
             capability=capability,
         )
     ]
+    orchestrator._skills_by_name = {
+        skill.name: skill for skill in orchestrator._skills
+    }
 
     with pytest.raises(ValueError, match="not read-only safe"):
         await orchestrator._prepare_tool_loop_state(
@@ -291,6 +297,7 @@ async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) ->
                 {
                     "schema": "asset_result.v1",
                     "status": "completed",
+                    "side_effect": False,
                     "resolved_claims": ["score"],
                     "evidence": [
                         {
@@ -332,6 +339,7 @@ async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_p
     orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
     observation = {
         "ok": True,
+        "side_effect": False,
         "items": [
             {
                 "home_team": "한화",
@@ -399,6 +407,7 @@ async def test_exact_recipe_validates_provider_claim_map_before_resolution(tmp_p
                 {
                     "schema": "asset_result.v1",
                     "status": "completed",
+                    "side_effect": False,
                     "data": observation,
                     "resolved_claims": ["score", "winner"],
                     "evidence": [

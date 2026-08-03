@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -226,6 +227,7 @@ def _installed_sports_helper(
 def _complete_sports_observation() -> dict[str, object]:
     return {
         "ok": True,
+        "side_effect": False,
         "items": [{"game_result": "한화 승", "score": {"away": 3, "home": 5}}],
         "claim_map": {
             claim: {
@@ -304,6 +306,8 @@ async def _run_connected_exact_recipe(
     *,
     capability_mutation: str | None = None,
     observation: dict[str, object],
+    default_verified_no_effect: bool = True,
+    registry_replacement: str | None = None,
 ) -> tuple[UnifiedTurnPlan, ResolutionOutcome, AgentOrchestrator]:
     """실제 설치 asset으로 raw planner부터 validator까지 관통한다."""
     helper = _installed_sports_helper(
@@ -336,7 +340,25 @@ async def _run_connected_exact_recipe(
 
     orchestrator = AgentOrchestrator(_orchestrator_config(tmp_path))
     orchestrator._skills = [helper]
-    orchestrator._skills_by_name = {helper.name: helper}
+    actual_helper = helper
+    if registry_replacement == "unsafe":
+        actual_helper = replace(
+            helper,
+            capability=replace(
+                helper.capability,
+                read_only=False,
+                side_effects=True,
+                requires_confirmation=True,
+            ),
+        )
+    elif registry_replacement == "fingerprint":
+        actual_helper = replace(
+            helper,
+            script_path=str(tmp_path / "same-name-replacement.py"),
+        )
+    elif registry_replacement is not None:
+        raise AssertionError(f"unknown registry replacement: {registry_replacement}")
+    orchestrator._skills_by_name = {helper.name: actual_helper}
     orchestrator._skills_prompt = orchestrator._format_skills_for_prompt([helper])
     orchestrator._recipes = [recipe]
     orchestrator._router.send = AsyncMock(
@@ -352,6 +374,8 @@ async def _run_connected_exact_recipe(
             ],
         )
     )
+    if default_verified_no_effect:
+        observation.setdefault("side_effect", False)
     orchestrator._dispatch_external_skill = AsyncMock(
         return_value=json.dumps(observation, ensure_ascii=False)
     )
@@ -392,6 +416,84 @@ async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "registry_replacement",
+    ["unsafe", "fingerprint"],
+    ids=("unsafe-same-name", "same-capability-different-source"),
+)
+async def test_connected_exact_recipe_rejects_same_name_registry_drift(
+    tmp_path: Path,
+    registry_replacement: str,
+) -> None:
+    """Trusted discovery와 actual dispatch registry가 다르면 helper를 실행하지 않는다."""
+    _plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        observation=_complete_sports_observation(),
+        registry_replacement=registry_replacement,
+    )
+
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is AssetExecutionStatus.FAILED_TERMINAL
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.validation.allow_final is False
+    assert orchestrator._router.send.await_count == 0
+    orchestrator._dispatch_external_skill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observation", "expected_status", "expected_action_state"),
+    [
+        (
+            {**_complete_sports_observation(), "side_effect": True},
+            AssetExecutionStatus.UNKNOWN_EFFECT,
+            "unknown_effect",
+        ),
+        (
+            {
+                key: value
+                for key, value in _complete_sports_observation().items()
+                if key != "side_effect"
+            },
+            AssetExecutionStatus.UNKNOWN_EFFECT,
+            "unknown_effect",
+        ),
+        (
+            {
+                **_complete_sports_observation(),
+                "side_effect": True,
+                "effect_status": "partial",
+            },
+            AssetExecutionStatus.PARTIAL_SUCCESS,
+            "partial_success",
+        ),
+    ],
+    ids=("reported-side-effect", "effect-unknown", "effect-partial"),
+)
+async def test_connected_exact_recipe_preserves_unverified_effect_state(
+    tmp_path: Path,
+    observation: dict[str, object],
+    expected_status: AssetExecutionStatus,
+    expected_action_state: str,
+) -> None:
+    """Raw helper effect 상태는 typed result와 common validator까지 보존된다."""
+    _plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        observation=observation,
+        default_verified_no_effect=False,
+    )
+
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is expected_status
+    assert outcome.asset_result.side_effect is True
+    assert outcome.asset_result.resolved_claims == ()
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.validation.action_state == expected_action_state
+    assert outcome.validation.allow_final is False
+    orchestrator._dispatch_external_skill.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "capability_mutation",
     [
         "undeclared",
@@ -421,6 +523,7 @@ async def test_connected_exact_recipe_rejects_discovered_unsafe_helper(
     assert outcome.asset_result.resolved_claims == ()
     assert outcome.asset_result.limitations == (
         "typed_recipe_nested_error:ValueError",
+        "side_effect_status_unknown",
     )
     assert outcome.goal.status is not GoalStatus.RESOLVED
     assert outcome.validation.allow_final is False
@@ -960,6 +1063,7 @@ async def test_sports_exact_terminal_uses_one_bounded_allowlisted_fallback() -> 
         return_value={
             "schema": "asset_result.v1",
             "status": "failed_terminal",
+            "side_effect": False,
             "unresolved_claims": ["score"],
         }
     )

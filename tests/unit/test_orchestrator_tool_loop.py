@@ -70,6 +70,8 @@ def _trusted_sports_skill(
         read_only=read_only,
         side_effects=side_effects,
         requires_confirmation=requires_confirmation,
+        definition_identity=1,
+        definition_fingerprint="test-definition-fingerprint",
     )
 
 
@@ -262,6 +264,7 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
             json.dumps(
                 {
                     "ok": True,
+                    "side_effect": False,
                     "items": [
                         {
                             "event_state": "final",
@@ -332,6 +335,7 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
             json.dumps(
                 {
                     "ok": True,
+                    "side_effect": False,
                     "items": [],
                     "message": "ENDED/RESULT 기준의 확정 경기 결과가 없습니다.",
                     "fetched_at": "2026-08-03T17:00:00+09:00",
@@ -347,6 +351,7 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
             json.dumps(
                 {
                     "ok": False,
+                    "side_effect": False,
                     "items": [],
                     "fetched_at": "2026-08-03T17:00:00+09:00",
                     "source": {"urls": ["https://api-gw.sports.naver.com/result"]},
@@ -561,6 +566,7 @@ def test_scoped_cap_unobserved_claims_fail_common_validator(
     )
     observation = {
         "ok": True,
+        "side_effect": False,
         "items": [{"score": {"away": 3, "home": 5}}],
         "claim_map": claim_map,
     }
@@ -687,6 +693,7 @@ def test_typed_observation_fast_final_requires_trusted_read_only_safety(
     )
     observation = {
         "ok": True,
+        "side_effect": False,
         "items": [{"score": {"away": 3, "home": 5}}],
         "claim_map": {
             "score": {
@@ -936,6 +943,7 @@ async def test_asset_finalization_preserves_first_typed_observation(
     orch = AgentOrchestrator(config_file)
     observation = {
         "ok": True,
+        "side_effect": False,
         "items": [{"score": {"away": 3, "home": 5}, "winner": "한화"}],
         "claim_map": {
             claim: {
@@ -1019,6 +1027,7 @@ async def test_complete_typed_observation_skips_slow_model_finalization(
     orch = AgentOrchestrator(config_file)
     observation = {
         "ok": True,
+        "side_effect": False,
         "items": [{"score": {"away": 3, "home": 5}, "winner": "한화"}],
         "claim_map": {
             claim: {

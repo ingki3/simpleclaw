@@ -121,7 +121,11 @@ from simpleclaw.agent.session_state import (
     current_turn_id_var,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
-from simpleclaw.agent.tool_gate import ToolExecutionScope, TrustedAssetSafety
+from simpleclaw.agent.tool_gate import (
+    ToolExecutionScope,
+    TrustedAssetSafety,
+    skill_definition_fingerprint,
+)
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
@@ -3015,24 +3019,31 @@ class AgentOrchestrator:
             active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
         if forced_skill_names is not None:
-            active_skills = [
-                skill for skill in active_skills
+            trusted_by_name = {
+                skill.name: skill
+                for skill in active_skills
                 if skill.name in forced_skill_names
-            ]
+            }
+            execution_by_name = getattr(self, "_skills_by_name", {})
+            active_skills = []
+            for name in sorted(forced_skill_names):
+                trusted = trusted_by_name.get(name)
+                actual = execution_by_name.get(name)
+                if trusted is None or actual is None:
+                    continue
+                if (
+                    trusted is not actual
+                    or skill_definition_fingerprint(trusted)
+                    != skill_definition_fingerprint(actual)
+                ):
+                    raise ValueError(f"forced skill definition drift: {name}")
+                active_skills.append(actual)
             loaded_names = frozenset(skill.name for skill in active_skills)
             if loaded_names != forced_skill_names:
                 missing = ",".join(sorted(forced_skill_names - loaded_names))
                 raise ValueError(f"forced skill scope unavailable: {missing}")
             trusted_asset_safety = tuple(
-                TrustedAssetSafety(
-                    asset_type="skill",
-                    asset_name=skill.name,
-                    declared=skill.capability.declared,
-                    read_only=skill.capability.read_only,
-                    side_effects=skill.capability.side_effects,
-                    requires_confirmation=skill.capability.requires_confirmation,
-                )
-                for skill in active_skills
+                TrustedAssetSafety.from_skill(skill) for skill in active_skills
             )
             unsafe = tuple(
                 item.asset_name
@@ -3414,12 +3425,14 @@ class AgentOrchestrator:
         args: dict,
         *,
         allowed_skill_names: frozenset[str] | None = None,
+        resolved_skill: SkillDefinition | None = None,
     ) -> str:
         """execute_skill 도구 dispatch 를 전용 모듈에 위임한다."""
         return await skill_dispatch.dispatch_external_skill(
             self,
             args,
             allowed_skill_names=allowed_skill_names,
+            resolved_skill=resolved_skill,
         )
 
     # ------------------------------------------------------------------

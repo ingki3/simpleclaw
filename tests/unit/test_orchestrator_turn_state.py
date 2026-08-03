@@ -230,6 +230,7 @@ async def test_capability_first_exact_lpga_skips_generic_realtime_lookup(
             {
                 "schema": "asset_result.v1",
                 "status": "completed",
+                "side_effect": False,
                 "resolved_claims": ["score"],
                 "evidence": [
                     {
@@ -333,6 +334,7 @@ async def test_capability_first_partial_path_runs_gap_controller_with_shared_bud
                 {
                     "schema": "asset_result.v1",
                     "status": "partial_success",
+                    "side_effect": False,
                     "resolved_claims": ["score"],
                     "unresolved_claims": ["rank"],
                     "next_questions": ["현재 순위를 확인한다"],
@@ -351,6 +353,7 @@ async def test_capability_first_partial_path_runs_gap_controller_with_shared_bud
             {
                 "schema": "asset_result.v1",
                 "status": "completed",
+                "side_effect": False,
                 "resolved_claims": ["rank"],
                 "usage": {"total_tokens": 3},
                 "evidence": [
@@ -425,6 +428,7 @@ async def test_capability_first_complex_path_runs_ordered_controller(
             {
                 "schema": "asset_result.v1",
                 "status": "completed",
+                "side_effect": False,
                 "resolved_claims": [claim],
                 "usage": {"total_tokens": 2},
                 "evidence": [
@@ -502,6 +506,7 @@ async def test_capability_first_exact_path_enforces_in_flight_deadline(
             {
                 "schema": "asset_result.v1",
                 "status": "completed",
+                "side_effect": False,
                 "resolved_claims": ["score"],
             }
         )

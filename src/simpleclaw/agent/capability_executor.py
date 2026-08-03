@@ -50,6 +50,8 @@ ASSET_RESULT_RESPONSE_SCHEMA: dict[str, object] = {
         "unresolved_claims": {"type": "array", "items": {"type": "string"}},
         "limitations": {"type": "array", "items": {"type": "string"}},
         "retryable": {"type": "boolean"},
+        "side_effect": {"type": "boolean"},
+        "effect_id": {"type": "string"},
         "tokens_used": {"type": "integer"},
     },
     "required": [
@@ -61,6 +63,7 @@ ASSET_RESULT_RESPONSE_SCHEMA: dict[str, object] = {
         "unresolved_claims",
         "limitations",
         "retryable",
+        "side_effect",
         "tokens_used",
     ],
     # Recipe-owned ``data``/``evidence`` payloads are domain-specific. Runtime
@@ -126,20 +129,47 @@ def decode_asset_result(
         if isinstance(token_value, int) and not isinstance(token_value, bool)
         else 0
     )
+    reported_side_effect = data.get("side_effect")
+    effect_unknown = not isinstance(reported_side_effect, bool)
+    effect_reported = reported_side_effect is True or side_effect
+    if effect_unknown or effect_reported:
+        if status is AssetExecutionStatus.COMPLETED:
+            status = AssetExecutionStatus.UNKNOWN_EFFECT
+        resolved_claims = (
+            ()
+            if status in {
+                AssetExecutionStatus.UNKNOWN_EFFECT,
+                AssetExecutionStatus.PARTIAL_SUCCESS,
+            }
+            else _string_tuple(data.get("resolved_claims"))[:64]
+        )
+        unresolved_claims = _string_tuple(data.get("unresolved_claims"))
+        if not unresolved_claims:
+            unresolved_claims = _string_tuple(data.get("resolved_claims"))
+        limitations = list(_string_tuple(data.get("limitations"))[:32])
+        limitations.append(
+            "side_effect_status_unknown"
+            if effect_unknown
+            else "reported_side_effect_unverified"
+        )
+    else:
+        resolved_claims = _string_tuple(data.get("resolved_claims"))[:64]
+        unresolved_claims = _string_tuple(data.get("unresolved_claims"))[:64]
+        limitations = list(_string_tuple(data.get("limitations"))[:32])
     return AssetResult(
         asset_type=asset_type,
         asset_name=asset_name,
         status=status,
         data=dict(result_data) if isinstance(result_data, Mapping) else {},
         evidence=evidence[:64],
-        resolved_claims=_string_tuple(data.get("resolved_claims"))[:64],
-        unresolved_claims=_string_tuple(data.get("unresolved_claims"))[:64],
+        resolved_claims=resolved_claims,
+        unresolved_claims=unresolved_claims,
         next_questions=_string_tuple(data.get("next_questions"))[:16],
         complexity_signals=tuple(signals),
-        side_effect=side_effect or bool(data.get("side_effect", False)),
+        side_effect=effect_unknown or effect_reported,
         effect_id=str(data.get("effect_id") or "")[:256],
         retryable=bool(data.get("retryable", False)),
-        limitations=_string_tuple(data.get("limitations"))[:32],
+        limitations=tuple(dict.fromkeys(limitations))[:32],
         tokens_used=max(0, tokens_used),
     )
 

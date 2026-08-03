@@ -552,10 +552,15 @@ def _finalize_typed_asset_observation(
     if not isinstance(payload, dict):
         return None
 
+    required_claims = list(state.evidence_requirement.required_claims)
     if payload.get("schema") == "asset_result.v1" and isinstance(
         payload.get("status"), str
     ):
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")), True
+        normalized = _normalize_exact_effect_metadata(
+            payload,
+            required_claims=required_claims,
+        )
+        return json.dumps(normalized, ensure_ascii=False, separators=(",", ":")), True
 
     ok = payload.get("ok")
     items = payload.get("items")
@@ -573,8 +578,6 @@ def _finalize_typed_asset_observation(
     ):
         candidate = decoded_candidate
 
-    requirement = state.evidence_requirement
-    required_claims = list(requirement.required_claims)
     if ok and items:
         status = "completed"
         bindings = (
@@ -637,11 +640,65 @@ def _finalize_typed_asset_observation(
             else 0
         ),
     }
+    envelope = _normalize_exact_effect_metadata(
+        envelope,
+        reported_payload=payload,
+        required_claims=required_claims,
+    )
     return json.dumps(
         envelope,
         ensure_ascii=False,
         separators=(",", ":"),
     ), True
+
+
+def _normalize_exact_effect_metadata(
+    envelope: dict[str, Any],
+    *,
+    required_claims: list[str],
+    reported_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """exact helper가 명시한 effect 상태를 top-level typed contract로 보존한다.
+
+    이 경로는 read-only helper 전용이다. 따라서 명시적인 ``side_effect=false``만
+    verified no-effect로 인정하고 true/missing/invalid는 실행 결과를 unknown 또는
+    partial effect로 낮춰 evidence final을 차단한다.
+    """
+    source = envelope if reported_payload is None else reported_payload
+    normalized = dict(envelope)
+    reported_side_effect = source.get("side_effect")
+    effect_id = str(source.get("effect_id") or normalized.get("effect_id") or "")[:256]
+    if reported_side_effect is False:
+        normalized["side_effect"] = False
+        if effect_id:
+            normalized["effect_id"] = effect_id
+        return normalized
+
+    effect_status = str(source.get("effect_status") or source.get("status") or "")
+    current_status = str(normalized.get("status") or "")
+    if effect_status in {"partial", "partial_success"}:
+        normalized["status"] = "partial_success"
+    elif current_status == "completed":
+        normalized["status"] = "unknown_effect"
+    normalized["side_effect"] = True
+    normalized["effect_id"] = effect_id
+    if current_status in {"completed", "partial_success"}:
+        normalized["evidence"] = []
+        normalized["resolved_claims"] = []
+        normalized["unresolved_claims"] = required_claims
+    normalized["retryable"] = False
+    limitations = [
+        str(item)[:500]
+        for item in normalized.get("limitations", ())
+        if str(item).strip()
+    ]
+    limitations.append(
+        "reported_side_effect_unverified"
+        if reported_side_effect is True
+        else "side_effect_status_unknown"
+    )
+    normalized["limitations"] = list(dict.fromkeys(limitations))
+    return normalized
 
 
 def _preserve_asset_observation_data(
@@ -713,8 +770,10 @@ def _deterministic_typed_asset_final(
         not isinstance(envelope, dict)
         or not isinstance(observation, dict)
         or observation.get("ok") is not True
+        or observation.get("side_effect") is not False
         or not observation.get("items")
         or envelope.get("status") != "completed"
+        or envelope.get("side_effect") is not False
         or envelope.get("resolved_claims") != required_claims
         or envelope.get("unresolved_claims") != []
         or len(envelope.get("evidence", ())) != len(required_claims)
