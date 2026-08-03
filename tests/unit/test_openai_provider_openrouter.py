@@ -361,9 +361,38 @@ async def test_openrouter_profile_maps_reasoning_hint(monkeypatch):
     )
 
     assert create.call_args.kwargs["extra_body"]["reasoning"] == {
-        "enabled": True,
         "effort": "medium",
     }
+
+
+@pytest.mark.asyncio
+async def test_openrouter_profile_maps_reasoning_budget(monkeypatch):
+    """provider-neutral budget_tokens를 OpenRouter max_tokens로 변환한다."""
+    create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="ok", tool_calls=None))],
+            usage=None,
+        )
+    )
+    client = MagicMock()
+    client.chat.completions.create = create
+    monkeypatch.setattr(
+        "simpleclaw.llm.providers.openai_provider.openai.AsyncOpenAI",
+        lambda **_: client,
+    )
+    provider = OpenAIProvider(
+        model="vendor/model",
+        api_key="test-key",
+        profile=get_provider_profile("openrouter"),
+    )
+
+    await provider.send(
+        system_prompt="",
+        user_message="hi",
+        reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
+    )
+
+    assert create.call_args.kwargs["extra_body"] == {"reasoning": {"max_tokens": 512}}
 
 
 @pytest.mark.asyncio

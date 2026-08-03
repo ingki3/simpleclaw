@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import ExecutionMode
 from simpleclaw.agent.turn_planner import (
@@ -112,9 +113,65 @@ def _catalog() -> PlannerCatalog:
                 declared=True,
                 runtime_visible=True,
             ),
+            PlannerAsset(
+                asset_type="recipe",
+                name="sports-live",
+                description="현재 스포츠 결과 exact recipe",
+                domains=("sports",),
+                intents=("current_result", "ranking"),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                coverage="full_coverage",
+                input_contract="query.v1",
+            ),
         ),
         fingerprint="catalog-v1",
     )
+
+
+def _valid_exact_sports_payload() -> str:
+    """실제 LPGA 입력의 exact sports-live structured 계획을 만든다."""
+    data = json.loads(_valid_payload())
+    data["context"]["standalone_question"] = (
+        "어제 유해란 LPGA 1라운드 성적과 순위를 현재 공식 결과로 확인해줘"
+    )
+    data["domains"] = ["sports"]
+    data["intents"] = ["current_result", "ranking"]
+    data["fact_check"] = {
+        "required": True,
+        "owner": "planner",
+        "domain": "sports",
+        "entities": ["유해란", "LPGA"],
+        "reference_date": "2026-08-02",
+        "search_query": "유해란 LPGA 1라운드 공식 결과 순위",
+        "required_claims": ["1라운드 성적", "순위"],
+        "freshness_required": True,
+        "reason": "공식 현재 결과 확인",
+    }
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "recipe",
+            "asset_name": "sports-live",
+        },
+        "supporting_assets": [],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "exact recipe",
+    }
+    data["execution"] = {
+        "mode": "answer_with_evidence",
+        "allowed_tools": ["execute_skill"],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "recipe owns its delegate",
+    }
+    return json.dumps(data, ensure_ascii=False)
 
 
 def test_repair_recovers_payload_cut_inside_decision_summary() -> None:
@@ -197,6 +254,96 @@ async def test_planner_retries_route_once_after_parse_and_repair_fail() -> None:
     assert plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
     primary.send.assert_awaited_once()
     retry.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_output_cap_retries_same_route_once_with_minimal_reasoning() -> None:
+    """reasoning이 cap을 잠식하면 동일 cap에서 최소 reasoning으로 한 번 복구한다."""
+    provider = AsyncMock()
+    provider.send = AsyncMock(
+        side_effect=[
+            LLMResponse(text='{"context":', finish_reason="length"),
+            LLMResponse(text=_valid_exact_sports_payload(), finish_reason="stop"),
+        ]
+    )
+    router = LLMRouter(
+        backends={},
+        providers={"primary": provider},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary")},
+    )
+
+    plan = await plan_turn_with_llm(
+        "어제 유해란 LPGA 1라운드 성적과 순위를 현재 공식 결과로 확인해줘",
+        candidates=_empty_candidates(),
+        catalog=_catalog(),
+        router=router,
+        max_tokens=2048,
+        reasoning={"enabled": True, "effort": "medium", "budget_tokens": 512},
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "sports-live"
+    assert plan.execution.allowed_tools == ()
+    assert plan.fact_check.owner.value == "asset"
+    assert (
+        PlanGate()
+        .evaluate(
+            plan,
+            candidates=_empty_candidates(),
+            catalog=_catalog(),
+        )
+        .status.value
+        == "pass"
+    )
+    assert provider.send.await_count == 2
+    first_call, retry_call = provider.send.await_args_list
+    assert first_call.kwargs["max_tokens"] == 2048
+    assert retry_call.kwargs["max_tokens"] == 2048
+    assert first_call.kwargs["reasoning"]["enabled"] is True
+    assert retry_call.kwargs["reasoning"] == {
+        "enabled": True,
+        "effort": "minimal",
+    }
+
+
+@pytest.mark.asyncio
+async def test_output_cap_twice_is_stable_fail_closed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """primary/retry cap은 세 번째 시도 없이 원문 비기록 fail-closed한다."""
+    private_body = "PRIVATE_CAPPED_PLANNER_BODY"
+    private_user = "PRIVATE_CAPPED_USER_TEXT"
+    provider = AsyncMock()
+    provider.send = AsyncMock(
+        side_effect=[
+            LLMResponse(text=private_body, finish_reason="length"),
+            LLMResponse(text=private_body, finish_reason="length"),
+        ]
+    )
+    router = LLMRouter(
+        backends={},
+        providers={"primary": provider},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary")},
+    )
+
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(PlannerUnavailable, match="unavailable"),
+    ):
+        await plan_turn_with_llm(
+            private_user,
+            candidates=_empty_candidates(),
+            catalog=_catalog(),
+            router=router,
+            reasoning={"enabled": True, "budget_tokens": 512},
+        )
+
+    assert provider.send.await_count == 2
+    assert private_body not in caplog.text
+    assert private_user not in caplog.text
+    assert "finish_reason=length" in caplog.text
 
 
 @pytest.mark.asyncio
