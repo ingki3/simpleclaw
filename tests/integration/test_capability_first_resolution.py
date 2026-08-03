@@ -16,7 +16,10 @@ from simpleclaw.agent.planner_catalog import (
     PlannerCatalog,
     build_planner_catalog,
 )
-from simpleclaw.agent.resolution_controller import ResolutionController, ResolutionOutcome
+from simpleclaw.agent.resolution_controller import (
+    ResolutionController,
+    ResolutionOutcome,
+)
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
