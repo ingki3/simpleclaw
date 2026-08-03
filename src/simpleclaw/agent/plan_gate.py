@@ -8,7 +8,7 @@ downstream이 repair/clarify/confirmation/reject 중 하나를 결정할 수 있
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
@@ -16,6 +16,7 @@ from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
 from simpleclaw.agent.freshness_policy import freshness_is_required
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.turn_plan import (
+    AssetRef,
     CapabilityCoverage,
     ContextRelation,
     EvidenceOwner,
@@ -60,6 +61,90 @@ def _asset_identity(asset: PlannerAsset) -> tuple[str, str]:
     return asset.asset_type, asset.name
 
 
+def _eligible_exact_asset(
+    asset: PlannerAsset,
+    *,
+    domain: str,
+    intents: frozenset[str],
+) -> bool:
+    """typed domain/intent를 모두 덮는 안전한 exact read-only asset만 고른다."""
+    return (
+        asset.runtime_visible
+        and asset.declared
+        and asset.coverage == "full_coverage"
+        and asset.input_contract == "query.v1"
+        and asset.output_contract == "asset_result.v1"
+        and asset.read_only
+        and not asset.side_effects
+        and not asset.requires_confirmation
+        and domain in asset.domains
+        and bool(intents)
+        and intents.issubset(asset.intents)
+    )
+
+
+def _repair_unscoped_evidence_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog,
+) -> tuple[UnifiedTurnPlan, bool]:
+    """asset-0 evidence plan을 유일한 typed exact asset으로만 좁힌다.
+
+    두 후보 이상이거나 후보가 없으면 원래 plan을 돌려주고 caller가 REPAIR로
+    fail-closed한다. 사용자 원문이나 keyword는 이 경계에서 읽지 않는다.
+    """
+    if not (
+        plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
+        and plan.fact_check.required
+        and plan.capability.primary_asset is None
+        and not plan.capability.supporting_assets
+        and not plan.execution.allowed_assets
+        and not plan.execution.allowed_tools
+    ):
+        return plan, False
+    domain = plan.fact_check.domain.strip().lower()
+    intents = frozenset(
+        intent.strip().lower()
+        for intent in (plan.fact_check.intents or plan.intents)
+        if intent.strip()
+    )
+    candidates = [
+        asset
+        for asset in catalog.assets
+        if _eligible_exact_asset(asset, domain=domain, intents=intents)
+    ]
+    if len(candidates) != 1:
+        return plan, True
+    selected = candidates[0]
+    selected_ref = AssetRef(selected.asset_type, selected.name)
+    return (
+        replace(
+            plan,
+            capability=replace(
+                plan.capability,
+                coverage=CapabilityCoverage.FULL,
+                primary_asset=selected_ref,
+                supporting_assets=(),
+                fallback_modes=tuple(
+                    ExecutionMode(mode)
+                    for mode in selected.fallback_modes
+                    if mode in {item.value for item in ExecutionMode}
+                ),
+                reason="unique_typed_catalog_repair",
+            ),
+            execution=replace(
+                plan.execution,
+                primary_asset=selected_ref,
+                allowed_assets=(),
+                allowed_tools=(),
+                reason="unique_typed_catalog_repair",
+            ),
+            fact_check=replace(plan.fact_check, owner=EvidenceOwner.ASSET),
+        ),
+        False,
+    )
+
+
 class PlanGate:
     """현재 runtime snapshot만 사용해 UnifiedTurnPlan을 fail-closed 검증한다."""
 
@@ -87,6 +172,19 @@ class PlanGate:
         violations: list[PlanViolation] = []
         rejected: list[PlanViolation] = []
         confirmation: list[PlanViolation] = []
+
+        plan, unresolved_asset_scope = _repair_unscoped_evidence_plan(
+            plan,
+            catalog=catalog,
+        )
+        if unresolved_asset_scope:
+            violations.append(
+                _violation(
+                    "fact_check.exact_asset_not_unique",
+                    "capability.primary_asset",
+                    "Unscoped required evidence needs one unique typed exact asset.",
+                )
+            )
 
         if plan.catalog_fingerprint != catalog.fingerprint:
             violations.append(

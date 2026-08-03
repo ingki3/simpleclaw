@@ -192,7 +192,13 @@ async def test_exact_recipe_identity_executes_once() -> None:
     assert result.status is AssetExecutionStatus.COMPLETED
     execute.assert_awaited_once_with(
         "daily",
-        {"query": "LPGA 유해란 현재 스코어와 순위를 알려줘"},
+        {
+            "query": "LPGA 유해란 현재 스코어와 순위를 알려줘",
+            "domain": "sports",
+            "intents": "[]",
+            "reference_date": "",
+            "required_claims": '["score"]',
+        },
     )
 
 

@@ -289,10 +289,15 @@ def test_user_prompt_assembles_current_context_and_catalog() -> None:
         text="오늘 있었던 발표야. 체크해봐",
         candidates=_candidates(),
         catalog=catalog,
+        current_kst_date="2026-08-03",
     )
     data = json.loads(rendered)
 
     assert data["current_user_message"] == "오늘 있었던 발표야. 체크해봐"
+    assert data["planner_clock"] == {
+        "current_date": "2026-08-03",
+        "timezone": "Asia/Seoul",
+    }
     assert data["context_candidates"][0]["id"] == "msg:101"
     assert data["context_candidates"][1]["evidence_eligible"] is False
     assert data["capability_catalog"] == []

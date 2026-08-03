@@ -16,6 +16,7 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.planner_catalog import PlannerCatalog
@@ -322,10 +323,19 @@ def build_turn_planner_user_prompt(
     text: str,
     candidates: ContextCandidateSet,
     catalog: PlannerCatalog,
+    current_kst_date: str | None = None,
 ) -> str:
     """현재 turn·ID 문맥 후보·runtime catalog를 deterministic JSON으로 조립한다."""
+    if current_kst_date is None:
+        current_kst_date = datetime.now(
+            timezone(timedelta(hours=9)),
+        ).date().isoformat()
     payload = {
         "current_user_message": text or "",
+        "planner_clock": {
+            "current_date": current_kst_date,
+            "timezone": "Asia/Seoul",
+        },
         "context_candidates": json.loads(candidates.to_prompt_json()),
         "context_candidates_truncated": candidates.truncated,
         "capability_catalog": json.loads(catalog.to_prompt_json()),

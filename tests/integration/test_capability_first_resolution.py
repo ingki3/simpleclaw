@@ -39,6 +39,105 @@ pytestmark = pytest.mark.offline
 
 
 @pytest.mark.asyncio
+async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe() -> None:
+    """production-like asset-0 planner output은 typed catalog로만 exact 보정한다."""
+    catalog = PlannerCatalog(
+        assets=(
+            PlannerAsset(
+                asset_type="recipe",
+                name="sports-live",
+                description="Naver structured sports live and completed results",
+                domains=("sports",),
+                intents=("current_result", "completed_result"),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                coverage="full_coverage",
+                input_contract="query.v1",
+                fallback_modes=("answer_with_evidence",),
+            ),
+        ),
+        fingerprint="sports-results-catalog",
+    )
+    planner_payload = {
+        "context": {
+            "relation": "standalone",
+            "use_prior_context": False,
+            "selected_turn_ids": [],
+            "standalone_question": "어제 프로야구 경기 결과 알려줘",
+            "unresolved_references": [],
+            "ignored_context_reason": "",
+        },
+        "clarification": {
+            "required": False,
+            "question": "",
+            "options": [],
+            "reason": "",
+        },
+        "domains": ["sports"],
+        "intents": ["completed_result"],
+        "fact_check": {
+            "required": True,
+            "owner": "planner",
+            "domain": "sports",
+            "intents": ["completed_result"],
+            "entities": [{"kind": "league", "value": "KBO"}],
+            "reference_date": "2026-08-02",
+            "search_query": "2026-08-02 KBO 경기 결과",
+            "required_claims": ["score", "winner"],
+            "freshness_required": True,
+            "reason": "completed result needs evidence",
+        },
+        "capability": {
+            "coverage": "no_match",
+            "primary_asset": {
+                "asset_type": "none",
+                "asset_name": "__none__",
+            },
+            "supporting_assets": [],
+            "fallback_modes": ["answer_with_evidence"],
+            "reason": "planner omitted asset",
+        },
+        "execution": {
+            "mode": "answer_with_evidence",
+            "allowed_tools": [],
+            "requires_confirmation": False,
+            "complexity_signals": [],
+            "reason": "evidence required",
+        },
+        "confidence": 0.8,
+        "decision_summary": "completed KBO result",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(planner_payload, ensure_ascii=False))
+    )
+    candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+
+    plan = await plan_turn_with_llm(
+        "어제 프로야구 경기 결과 알려줘",
+        candidates=candidates,
+        catalog=catalog,
+        router=router,
+    )
+    gate = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+
+    assert plan.capability.primary_asset is None
+    assert plan.execution.allowed_tools == ()
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    assert gate.effective_plan.capability.primary_asset == AssetRef(
+        "recipe", "sports-live"
+    )
+    assert gate.effective_plan.fact_check.owner is EvidenceOwner.ASSET
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("allowed_tools", [[], ["execute_skill"]])
 async def test_lpga_exact_asset_never_calls_generic_collector(
     allowed_tools: list[str],
