@@ -94,7 +94,7 @@ def _canonical_sports_result_claims(
     score/winner/game-result 표현은 canonical key로 축소하고, attendance처럼 알 수
     없는 표현은 원문 claim을 그대로 남겨 downstream validator가 fail-closed한다.
     """
-    if "completed_result" not in intents:
+    if not intents.intersection({"current_result", "completed_result", "live_score"}):
         return claims
 
     aliases = {
@@ -125,16 +125,11 @@ def _canonical_sports_result_claims(
     normalized: list[str] = []
     for claim in claims:
         compact = "".join(char for char in claim.casefold() if char.isalnum())
-        specific = [
+        keys = [
             key
-            for key in ("score", "winner")
+            for key in ("game_result", "score", "winner")
             if any(alias in compact for alias in aliases[key])
         ]
-        keys = specific or [
-            "game_result"
-            for alias in aliases["game_result"]
-            if alias in compact
-        ][:1]
         normalized.extend(keys or [claim])
     return tuple(dict.fromkeys(normalized))
 

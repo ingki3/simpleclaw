@@ -40,16 +40,35 @@ pytestmark = pytest.mark.offline
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("execution_mode", "planner_claims", "expected_claims"),
+    ("execution_mode", "planner_intents", "planner_claims", "expected_claims"),
     [
-        ("direct_answer", ["score", "winner"], ("score", "winner")),
+        (
+            "direct_answer",
+            ["completed_result"],
+            ["score", "winner"],
+            ("score", "winner"),
+        ),
         (
             "answer_with_evidence",
+            ["completed_result"],
             ["각 경기의 최종 점수와 승리 팀"],
             ("score", "winner"),
         ),
         (
             "answer_with_evidence",
+            ["current_result"],
+            ["2026년 8월 2일 KBO 프로야구 경기 결과 및 스코어"],
+            ("game_result", "score"),
+        ),
+        (
+            "direct_answer",
+            ["current_result"],
+            ["2026년 8월 2일 KBO 프로야구 경기 결과"],
+            ("game_result",),
+        ),
+        (
+            "answer_with_evidence",
+            ["completed_result"],
             ["각 경기의 최종 점수", "관중 수"],
             ("score", "관중 수"),
         ),
@@ -57,6 +76,7 @@ pytestmark = pytest.mark.offline
 )
 async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
     execution_mode: str,
+    planner_intents: list[str],
     planner_claims: list[str],
     expected_claims: tuple[str, ...],
 ) -> None:
@@ -100,12 +120,12 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
             "reason": "",
         },
         "domains": ["sports"],
-        "intents": ["completed_result"],
+        "intents": planner_intents,
         "fact_check": {
             "required": True,
             "owner": "planner",
             "domain": "sports",
-            "intents": ["completed_result"],
+            "intents": planner_intents,
             "entities": [{"kind": "league", "value": "KBO"}],
             "reference_date": "2026-08-02",
             "search_query": "2026-08-02 KBO 경기 결과",
