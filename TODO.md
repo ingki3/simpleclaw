@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [x] **[BIZ-557](mention://issue/75867545-877a-47c8-b7d0-7fb98062dc16): typed sports recipe final envelope를 결정적으로 보존** — exact sports planner의 bounded completed-result claim을 provider canonical `game_result|score|winner` key로 정규화하고, 알 수 없는 claim은 원문 그대로 남겨 fail-closed한다. 성공한 typed helper observation의 단일 dispatch·provenance 보존과 code/offline 검증을 완료했다. live activation/restart/외부 전송은 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 소유한다. (완료: 2026-08-03)
+
 - [>] **[BIZ-556](mention://issue/290b839e-e35d-44be-9049-08cfe568b87e): 전일 스포츠 결과 조회와 evidence 보존 경계 보정** — Naver structured `STARTED` live와 `ENDED|RESULT` completed result를 typed mode로 분리하고, evidence-required asset-0 plan의 structural catalog repair 및 scope cap 이후 첫 observation 보존을 구현한다. Release/live 재활성화는 구현·CI·독립 Review 이후 부모 BIZ-540의 별도 gate가 소유한다. (진행: 2026-08-03)
 
 - [x] **[BIZ-553](mention://issue/02afa7d1-c7a3-4a4f-a174-658386931d56): Partial terminal 뒤 남은 evidence gap 전파** — 첫 supporting asset이 일부 claim을 해결하고 read-only `FAILED_TERMINAL`로 끝나도 다음 distinct allowlisted asset에 최신 질문과 남은 gap을 전달하도록 보정했다. 두 번째 attempt signature의 `selected_gap`이 남은 claim을 사용하고 해결된 claim을 재조사하지 않는 mutation-resistant 회귀를 추가했다. focused·integration `27 passed`, 전체 unit `3217 passed, 3 xfailed`, Ruff와 CI 3종(Unit Tests / Runtime Contracts / Offline Integration) SUCCESS를 확인했고, 필수 Review PASS 후 [PR #579](https://github.com/ingki3/simpleclaw/pull/579)를 `dev`에 squash merge(SHA `40a2270363032aea79a2b9306c9c264667d1124a`)했다. 부모 [BIZ-552](mention://issue/55f9b7c2-db10-47ff-8e60-ac8fae39f555)가 deterministic/actual-provider gate 재검증을 소유한다. (완료: 2026-08-03)

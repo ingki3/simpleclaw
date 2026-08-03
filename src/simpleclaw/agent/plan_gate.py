@@ -83,6 +83,142 @@ def _eligible_exact_asset(
     )
 
 
+def _canonical_sports_result_claims(
+    claims: tuple[str, ...],
+    *,
+    intents: frozenset[str],
+) -> tuple[str, ...]:
+    """종료 경기 claim을 provider의 bounded typed key로만 정규화한다.
+
+    exact sports recipe가 지원하는 completed-result 경계에서만 적용한다. 알려진
+    score/winner/game-result 표현은 canonical key로 축소하고, attendance처럼 알 수
+    없는 표현은 원문 claim을 그대로 남겨 downstream validator가 fail-closed한다.
+    """
+    if not intents.intersection({"current_result", "completed_result", "live_score"}):
+        return claims
+
+    aliases = {
+        "score": (
+            "score",
+            "scores",
+            "finalscore",
+            "gamescore",
+            "점수",
+            "스코어",
+        ),
+        "winner": (
+            "winner",
+            "winners",
+            "winningteam",
+            "승리팀",
+            "승자",
+            "승패",
+        ),
+        "game_result": (
+            "gameresult",
+            "gameresults",
+            "finalresult",
+            "results",
+            "result",
+            "경기결과",
+            "최종결과",
+            "결과",
+        ),
+    }
+    safe_context = (
+        "professionalbaseball",
+        "information",
+        "baseball",
+        "games",
+        "game",
+        "each",
+        "every",
+        "final",
+        "info",
+        "and",
+        "the",
+        "프로야구",
+        "그리고",
+        "경기별",
+        "경기의",
+        "경기",
+        "모든",
+        "해당",
+        "최종",
+        "정보",
+        "kbo",
+        "각",
+        "및",
+        "와",
+        "과",
+        "의",
+        "년",
+        "월",
+        "일",
+    )
+    normalized: list[str] = []
+    for claim in claims:
+        compact = "".join(char for char in claim.casefold() if char.isalnum())
+        keys = [
+            key
+            for key in ("game_result", "score", "winner")
+            if any(alias in compact for alias in aliases[key])
+        ]
+        if not keys:
+            normalized.append(claim)
+            continue
+        residual = compact
+        for key in keys:
+            for alias in sorted(aliases[key], key=len, reverse=True):
+                residual = residual.replace(alias, "")
+        for fragment in sorted(safe_context, key=len, reverse=True):
+            residual = residual.replace(fragment, "")
+        residual = "".join(char for char in residual if not char.isdigit())
+        normalized.extend(keys if not residual else [claim])
+    return tuple(dict.fromkeys(normalized))
+
+
+def _canonicalize_exact_sports_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog,
+) -> UnifiedTurnPlan:
+    """직접 선택·구조 보정된 exact sports plan에 같은 claim 경계를 적용한다."""
+    asset_ref = plan.capability.primary_asset
+    if asset_ref != AssetRef("recipe", "sports-live"):
+        return plan
+    domain = plan.fact_check.domain.strip().lower()
+    intents = frozenset(
+        intent.strip().lower()
+        for intent in (plan.fact_check.intents or plan.intents)
+        if intent.strip()
+    )
+    asset = next(
+        (
+            item
+            for item in catalog.assets
+            if _asset_identity(item) == (asset_ref.asset_type, asset_ref.name)
+        ),
+        None,
+    )
+    if (
+        asset is None
+        or domain != "sports"
+        or not _eligible_exact_asset(asset, domain=domain, intents=intents)
+    ):
+        return plan
+    required_claims = _canonical_sports_result_claims(
+        plan.fact_check.required_claims,
+        intents=intents,
+    )
+    if required_claims == plan.fact_check.required_claims:
+        return plan
+    return replace(
+        plan,
+        fact_check=replace(plan.fact_check, required_claims=required_claims),
+    )
+
+
 def _repair_unscoped_evidence_plan(
     plan: UnifiedTurnPlan,
     *,
@@ -94,7 +230,11 @@ def _repair_unscoped_evidence_plan(
     fail-closed한다. 사용자 원문이나 keyword는 이 경계에서 읽지 않는다.
     """
     if not (
-        plan.execution.mode is ExecutionMode.ANSWER_WITH_EVIDENCE
+        plan.execution.mode
+        in {
+            ExecutionMode.DIRECT_ANSWER,
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
+        }
         and plan.fact_check.required
         and plan.capability.primary_asset is None
         and not plan.capability.supporting_assets
@@ -139,7 +279,10 @@ def _repair_unscoped_evidence_plan(
                 allowed_tools=(),
                 reason="unique_typed_catalog_repair",
             ),
-            fact_check=replace(plan.fact_check, owner=EvidenceOwner.ASSET),
+            fact_check=replace(
+                plan.fact_check,
+                owner=EvidenceOwner.ASSET,
+            ),
         ),
         False,
     )
@@ -177,6 +320,7 @@ class PlanGate:
             plan,
             catalog=catalog,
         )
+        plan = _canonicalize_exact_sports_plan(plan, catalog=catalog)
         if unresolved_asset_scope:
             violations.append(
                 _violation(
