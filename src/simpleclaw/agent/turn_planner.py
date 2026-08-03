@@ -230,9 +230,12 @@ def _normalize_redundant_exact_recipe_delegate(
         or catalog_asset.requires_confirmation
     ):
         return raw_data
+    allowed_tools = execution.get("allowed_tools")
+    if allowed_tools not in ([], ["execute_skill"]):
+        return raw_data
 
     normalized = dict(raw_data)
-    if execution.get("allowed_tools") == ["execute_skill"]:
+    if allowed_tools == ["execute_skill"]:
         normalized_execution = dict(execution)
         normalized_execution["allowed_tools"] = []
         normalized["execution"] = normalized_execution
