@@ -40,37 +40,48 @@ pytestmark = pytest.mark.offline
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("execution_mode", "planner_intents", "planner_claims", "expected_claims"),
+    (
+        "execution_mode",
+        "planner_intents",
+        "planner_claims",
+        "expected_claims",
+        "planner_selected_asset",
+    ),
     [
         (
             "direct_answer",
             ["completed_result"],
             ["score", "winner"],
             ("score", "winner"),
+            False,
         ),
         (
             "answer_with_evidence",
             ["completed_result"],
             ["각 경기의 최종 점수와 승리 팀"],
             ("score", "winner"),
+            False,
         ),
         (
             "answer_with_evidence",
             ["current_result"],
             ["2026년 8월 2일 KBO 프로야구 경기 결과 및 스코어"],
             ("game_result", "score"),
+            True,
         ),
         (
             "direct_answer",
             ["current_result"],
             ["2026년 8월 2일 KBO 프로야구 경기 결과"],
             ("game_result",),
+            True,
         ),
         (
             "answer_with_evidence",
             ["completed_result"],
             ["각 경기의 최종 점수", "관중 수"],
             ("score", "관중 수"),
+            False,
         ),
     ],
 )
@@ -79,6 +90,7 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
     planner_intents: list[str],
     planner_claims: list[str],
     expected_claims: tuple[str, ...],
+    planner_selected_asset: bool,
 ) -> None:
     """production-like asset-0 planner output은 typed catalog로만 exact 보정한다."""
     catalog = PlannerCatalog(
@@ -123,7 +135,7 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
         "intents": planner_intents,
         "fact_check": {
             "required": True,
-            "owner": "planner",
+            "owner": "asset" if planner_selected_asset else "planner",
             "domain": "sports",
             "intents": planner_intents,
             "entities": [{"kind": "league", "value": "KBO"}],
@@ -134,10 +146,12 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
             "reason": "completed result needs evidence",
         },
         "capability": {
-            "coverage": "no_match",
+            "coverage": "full_coverage" if planner_selected_asset else "no_match",
             "primary_asset": {
-                "asset_type": "none",
-                "asset_name": "__none__",
+                "asset_type": "recipe" if planner_selected_asset else "none",
+                "asset_name": (
+                    "sports-live" if planner_selected_asset else "__none__"
+                ),
             },
             "supporting_assets": [],
             "fallback_modes": ["answer_with_evidence"],
@@ -167,7 +181,10 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
     )
     gate = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
 
-    assert plan.capability.primary_asset is None
+    if planner_selected_asset:
+        assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    else:
+        assert plan.capability.primary_asset is None
     assert plan.execution.allowed_tools == ()
     assert gate.status is GateStatus.PASS
     assert gate.effective_plan is not None

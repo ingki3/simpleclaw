@@ -134,6 +134,47 @@ def _canonical_sports_result_claims(
     return tuple(dict.fromkeys(normalized))
 
 
+def _canonicalize_exact_sports_plan(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog,
+) -> UnifiedTurnPlan:
+    """직접 선택·구조 보정된 exact sports plan에 같은 claim 경계를 적용한다."""
+    asset_ref = plan.capability.primary_asset
+    if asset_ref != AssetRef("recipe", "sports-live"):
+        return plan
+    domain = plan.fact_check.domain.strip().lower()
+    intents = frozenset(
+        intent.strip().lower()
+        for intent in (plan.fact_check.intents or plan.intents)
+        if intent.strip()
+    )
+    asset = next(
+        (
+            item
+            for item in catalog.assets
+            if _asset_identity(item) == (asset_ref.asset_type, asset_ref.name)
+        ),
+        None,
+    )
+    if (
+        asset is None
+        or domain != "sports"
+        or not _eligible_exact_asset(asset, domain=domain, intents=intents)
+    ):
+        return plan
+    required_claims = _canonical_sports_result_claims(
+        plan.fact_check.required_claims,
+        intents=intents,
+    )
+    if required_claims == plan.fact_check.required_claims:
+        return plan
+    return replace(
+        plan,
+        fact_check=replace(plan.fact_check, required_claims=required_claims),
+    )
+
+
 def _repair_unscoped_evidence_plan(
     plan: UnifiedTurnPlan,
     *,
@@ -172,12 +213,6 @@ def _repair_unscoped_evidence_plan(
         return plan, True
     selected = candidates[0]
     selected_ref = AssetRef(selected.asset_type, selected.name)
-    required_claims = plan.fact_check.required_claims
-    if _asset_identity(selected) == ("recipe", "sports-live") and domain == "sports":
-        required_claims = _canonical_sports_result_claims(
-            required_claims,
-            intents=intents,
-        )
     return (
         replace(
             plan,
@@ -203,7 +238,6 @@ def _repair_unscoped_evidence_plan(
             fact_check=replace(
                 plan.fact_check,
                 owner=EvidenceOwner.ASSET,
-                required_claims=required_claims,
             ),
         ),
         False,
@@ -242,6 +276,7 @@ class PlanGate:
             plan,
             catalog=catalog,
         )
+        plan = _canonicalize_exact_sports_plan(plan, catalog=catalog)
         if unresolved_asset_scope:
             violations.append(
                 _violation(
