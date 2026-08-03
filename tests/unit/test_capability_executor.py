@@ -3,12 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
 from simpleclaw.agent.capability_executor import CapabilityExecutor
-from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
+from simpleclaw.agent.planner_catalog import (
+    PlannerAsset,
+    PlannerCatalog,
+    build_planner_catalog,
+)
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
@@ -26,6 +31,15 @@ from simpleclaw.agent.turn_plan import (
     ExecutionPlan,
     FactCheckPlan,
     UnifiedTurnPlan,
+)
+from simpleclaw.recipes.loader import load_recipe
+
+SPORTS_RECIPE = (
+    Path(__file__).parent.parent
+    / "fixtures"
+    / "recipes"
+    / "sports-live"
+    / "recipe.yaml"
 )
 
 
@@ -83,6 +97,21 @@ def _catalog() -> PlannerCatalog:
         ),
         fingerprint="fp",
     )
+
+
+def test_sports_live_catalog_asset_is_exact_and_safe() -> None:
+    recipe = load_recipe(SPORTS_RECIPE)
+    catalog = build_planner_catalog(recipes=(recipe,), native_specs=())
+    asset = next(item for item in catalog.assets if item.name == "sports-live")
+
+    assert asset.asset_type == "recipe"
+    assert asset.declared is True
+    assert asset.coverage == "full_coverage"
+    assert asset.input_contract == "query.v1"
+    assert asset.output_contract == "asset_result.v1"
+    assert asset.read_only is True
+    assert asset.side_effects is False
+    assert asset.freshness_sensitive is True
 
 
 @pytest.mark.asyncio

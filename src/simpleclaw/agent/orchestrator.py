@@ -180,7 +180,10 @@ from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
-from simpleclaw.recipes.executor import execute_recipe
+from simpleclaw.recipes.executor import (
+    execute_recipe,
+    render_exact_recipe_instructions,
+)
 from simpleclaw.recipes.learning import (
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,
     RecipeSuggestion,
@@ -1636,51 +1639,11 @@ class AgentOrchestrator:
                 name: str,
                 variables: dict[str, str],
             ) -> object:
-                recipe = next(
-                    (
-                        item
-                        for item in getattr(self, "_recipes", ())
-                        if item.name == name
-                    ),
-                    None,
-                )
-                if recipe is None or not recipe.steps:
-                    return {
-                        "schema": "asset_result.v1",
-                        "status": "unsupported",
-                        "limitations": ["typed_recipe_executor_unavailable"],
-                    }
-                result = await execute_recipe(
-                    recipe,
+                return await self._execute_exact_recipe_asset(
+                    name,
                     variables,
-                    timeout=recipe.settings.timeout,
-                    command_guard=self._command_guard,
-                    metrics=self._metrics,
+                    on_progress=on_progress,
                 )
-                if not result.success:
-                    return {
-                        "schema": "asset_result.v1",
-                        "status": "failed_terminal",
-                        "limitations": [result.error or "recipe_failed"],
-                    }
-                envelopes: list[dict[str, object]] = []
-                for step in result.step_results:
-                    try:
-                        decoded = json.loads(step.output)
-                    except (TypeError, json.JSONDecodeError):
-                        continue
-                    if (
-                        isinstance(decoded, dict)
-                        and decoded.get("schema") == "asset_result.v1"
-                    ):
-                        envelopes.append(decoded)
-                if len(envelopes) != 1:
-                    return {
-                        "schema": "asset_result.v1",
-                        "status": "failed_terminal",
-                        "limitations": ["recipe_requires_one_typed_envelope"],
-                    }
-                return envelopes[0]
 
             async def direct_mode(
                 callback_plan: UnifiedTurnPlan,
@@ -2684,6 +2647,126 @@ class AgentOrchestrator:
             for tool in self._mcp_manager.list_tools()
         )
 
+    async def _execute_exact_recipe_asset(
+        self,
+        name: str,
+        variables: dict[str, str],
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> object:
+        """선택된 recipe identity 하나를 strict typed boundary로 실행한다."""
+        recipe = next(
+            (
+                item
+                for item in getattr(self, "_recipes", ())
+                if item.name == name
+            ),
+            None,
+        )
+        if recipe is None:
+            return {
+                "schema": "asset_result.v1",
+                "status": "unsupported",
+                "limitations": ["typed_recipe_executor_unavailable"],
+            }
+
+        if recipe.instructions:
+            try:
+                rendered = render_exact_recipe_instructions(
+                    recipe,
+                    query=str(variables.get("query") or ""),
+                )
+                nested = await self._run_tool_loop_result(
+                    rendered,
+                    isolated=True,
+                    on_text_delta=None,
+                    on_progress=on_progress,
+                    operator_tools=False,
+                    allow_cron_mutation=False,
+                    evidence_requirement=no_evidence_requirement(),
+                    forced_skill_names=frozenset(recipe.skills),
+                    forced_tool_names=frozenset({"execute_skill"}),
+                )
+            except Exception as exc:
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": [
+                        f"typed_recipe_nested_error:{type(exc).__name__}"
+                    ],
+                }
+            delegate_trace = [
+                step
+                for step in nested.trace
+                if step.tool_name == "execute_skill"
+                and str(step.arguments.get("skill_name") or "") in recipe.skills
+                and step.success
+            ]
+            if len(nested.trace) != 1 or len(delegate_trace) != 1:
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["recipe_requires_one_successful_delegate"],
+                }
+            if not nested.success:
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["typed_recipe_nested_loop_failed"],
+                }
+            try:
+                decoded = json.loads(nested.text)
+            except (TypeError, json.JSONDecodeError):
+                decoded = None
+            if (
+                not isinstance(decoded, dict)
+                or decoded.get("schema") != "asset_result.v1"
+            ):
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["recipe_requires_one_typed_envelope"],
+                }
+            return decoded
+
+        if not recipe.steps:
+            return {
+                "schema": "asset_result.v1",
+                "status": "unsupported",
+                "limitations": ["typed_recipe_executor_unavailable"],
+            }
+        result = await execute_recipe(
+            recipe,
+            variables,
+            timeout=recipe.settings.timeout,
+            command_guard=self._command_guard,
+            metrics=self._metrics,
+        )
+        if not result.success:
+            return {
+                "schema": "asset_result.v1",
+                "status": "failed_terminal",
+                "limitations": [result.error or "recipe_failed"],
+            }
+        envelopes: list[dict[str, object]] = []
+        for step in result.step_results:
+            try:
+                decoded = json.loads(step.output)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(decoded, dict)
+                and decoded.get("schema") == "asset_result.v1"
+            ):
+                envelopes.append(decoded)
+        if len(envelopes) != 1:
+            return {
+                "schema": "asset_result.v1",
+                "status": "failed_terminal",
+                "limitations": ["recipe_requires_one_typed_envelope"],
+            }
+        return envelopes[0]
+
     async def _prepare_tool_loop_state(
         self,
         text: str,
@@ -2699,6 +2782,8 @@ class AgentOrchestrator:
         candidates: ContextCandidateSet | None = None,
         evidence_requirement: EvidenceRequirement | None = None,
         turn: TurnExecutionState | None = None,
+        forced_skill_names: frozenset[str] | None = None,
+        forced_tool_names: frozenset[str] | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
 
@@ -2713,7 +2798,18 @@ class AgentOrchestrator:
         BIZ-495: ``plan``이 주어지면 selected turn과 exact asset/tool allowlist를
         그대로 사용한다. 이 경로에서는 legacy Asset Selector/RAG/fuzzy 확대를
         호출하지 않으며 loop iteration도 같은 immutable scope를 재사용한다.
+
+        BIZ-541: instructions exact recipe의 nested loop는 ``forced_*`` scope로
+        delegate skill과 실행 도구를 고정한다. planner/capability hint와 혼용하지
+        않아 selector/RAG/다른 runtime tool로 scope가 넓어지지 않게 한다.
         """
+        if forced_skill_names is not None:
+            if not forced_skill_names:
+                raise ValueError("forced skill scope must not be empty")
+            if plan is not None or capability_hint is not None:
+                raise ValueError("forced skill scope cannot be combined with a plan or hint")
+            if forced_tool_names is None or not forced_tool_names:
+                raise ValueError("forced skill scope requires a non-empty tool scope")
         if plan is not None and candidates is None:
             raise ValueError("planned tool loop requires context candidates")
         if evidence_requirement is None:
@@ -2860,6 +2956,19 @@ class AgentOrchestrator:
             active_skills_prompt = self._format_skills_for_prompt(active_skills)
             active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
+        if forced_skill_names is not None:
+            active_skills = [
+                skill for skill in active_skills
+                if skill.name in forced_skill_names
+            ]
+            loaded_names = frozenset(skill.name for skill in active_skills)
+            if loaded_names != forced_skill_names:
+                missing = ",".join(sorted(forced_skill_names - loaded_names))
+                raise ValueError(f"forced skill scope unavailable: {missing}")
+            active_recipes = []
+            active_skills_prompt = self._format_skills_for_prompt(active_skills)
+            active_recipes_prompt = ""
+
         # BIZ-425 — capability 힌트가 실제 후보와 매칭되면 그 자산을 유형 내
         # 유일 후보로 좁힌다. 힌트 자산이 목록에 없으면(리로드 경합 등) 조용히
         # 기존 selector 경로로 폴백한다.
@@ -2900,7 +3009,7 @@ class AgentOrchestrator:
 
         asset_selection = (
             None
-            if plan is not None or capability_hinted
+            if plan is not None or capability_hinted or forced_skill_names is not None
             else await self._select_assets_for_turn(text, active_skills, active_recipes)
         )
         if asset_selection is not None and not asset_selection.fallback_required:
@@ -2953,7 +3062,21 @@ class AgentOrchestrator:
             mcp_available=self._mcp_call_available(operator_tools=operator_tools),
         )
         execution_scope = None
-        if plan is not None:
+        if forced_skill_names is not None:
+            tools = filter_tool_definitions(
+                tools,
+                allowed_names=forced_tool_names or (),
+            )
+            execution_scope = ToolExecutionScope(
+                allowed_tools=frozenset(tool.name for tool in tools),
+                allowed_assets=frozenset(
+                    ("skill", name) for name in forced_skill_names
+                ),
+                operator_tools=False,
+                allow_cron_mutation=False,
+                max_tool_calls=1,
+            )
+        elif plan is not None:
             tools = filter_tool_definitions(
                 tools,
                 allowed_names=plan.execution.allowed_tools,
@@ -3013,6 +3136,8 @@ class AgentOrchestrator:
         candidates: ContextCandidateSet | None = None,
         evidence_requirement: EvidenceRequirement | None = None,
         turn: TurnExecutionState | None = None,
+        forced_skill_names: frozenset[str] | None = None,
+        forced_tool_names: frozenset[str] | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
 
@@ -3043,6 +3168,8 @@ class AgentOrchestrator:
             candidates=candidates,
             evidence_requirement=evidence_requirement,
             turn=turn,
+            forced_skill_names=forced_skill_names,
+            forced_tool_names=forced_tool_names,
         )
         result = await ToolLoopRunner(self).run(state)
         return result

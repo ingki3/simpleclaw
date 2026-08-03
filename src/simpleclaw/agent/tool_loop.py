@@ -643,6 +643,7 @@ class ToolLoopRunner:
         )
         trace: list[ToolTraceStep] = []
         agent_browser_call_count = 0
+        scoped_tool_calls_used = 0
         prev_snapshot = state.previous_mutation_snapshot
         evidence_blocked = await self._collect_required_evidence(
             state,
@@ -793,6 +794,24 @@ class ToolLoopRunner:
             state.messages.append(assistant_msg)
 
             for tc in response.tool_calls:
+                if (
+                    state.execution_scope is not None
+                    and state.execution_scope.max_tool_calls is not None
+                    and scoped_tool_calls_used
+                    >= state.execution_scope.max_tool_calls
+                ):
+                    logger.warning(
+                        "Scoped tool call cap exceeded (%d >= %d)",
+                        scoped_tool_calls_used,
+                        state.execution_scope.max_tool_calls,
+                    )
+                    return ToolLoopResult(
+                        "scoped_tool_call_cap_exceeded",
+                        trace=trace,
+                        iterations=i + 1,
+                        success=False,
+                    )
+                scoped_tool_calls_used += 1
                 invoked_tool_sequence.append(tc.name)
                 logger.info(
                     "Tool call: %s(%s)",
