@@ -2699,6 +2699,18 @@ class AgentOrchestrator:
                     reference_date=str(variables.get("reference_date") or ""),
                     required_claims=_typed_string_tuple("required_claims"),
                 )
+                nested_requirement = EvidenceRequirement(
+                    required=False,
+                    query=str(variables.get("query") or ""),
+                    domain=str(variables.get("domain") or ""),
+                    allowed_collectors=frozenset({"execute_skill"}),
+                    freshness_required=True,
+                    origin="exact_recipe",
+                    owner="asset",
+                    intents=_typed_string_tuple("intents"),
+                    reference_date=str(variables.get("reference_date") or ""),
+                    required_claims=_typed_string_tuple("required_claims"),
+                )
                 nested = await self._run_tool_loop_result(
                     rendered,
                     isolated=True,
@@ -2706,7 +2718,7 @@ class AgentOrchestrator:
                     on_progress=on_progress,
                     operator_tools=False,
                     allow_cron_mutation=False,
-                    evidence_requirement=no_evidence_requirement(),
+                    evidence_requirement=nested_requirement,
                     forced_skill_names=frozenset(recipe.skills),
                     forced_tool_names=frozenset({"execute_skill"}),
                     final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,

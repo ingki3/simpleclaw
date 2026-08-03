@@ -138,6 +138,7 @@ def _canonical_sports_result_claims(
         "and",
         "the",
         "프로야구",
+        "어제",
         "그리고",
         "경기별",
         "경기의",
