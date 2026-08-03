@@ -39,7 +39,21 @@ class OpenRouterProfile(ProviderProfile):
     ) -> dict[str, Any]:
         if not isinstance(reasoning, dict) or not reasoning.get("enabled"):
             return {}
-        return {"reasoning": copy.deepcopy(reasoning)}
+        budget = reasoning.get("budget_tokens")
+        if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0:
+            return {"reasoning": {"max_tokens": budget}}
+        effort = str(reasoning.get("effort") or "medium").strip().lower()
+        if effort not in {
+            "max",
+            "xhigh",
+            "high",
+            "medium",
+            "low",
+            "minimal",
+            "none",
+        }:
+            effort = "medium"
+        return {"reasoning": {"effort": effort}}
 
 
 OPENAI_PROFILE = ProviderProfile(

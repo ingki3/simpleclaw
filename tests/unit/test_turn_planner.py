@@ -14,6 +14,7 @@ from simpleclaw.agent.context_candidates import (
     ContextCandidateSet,
     ContextTrust,
 )
+from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
@@ -162,6 +163,21 @@ def _exact_recipe_catalog() -> PlannerCatalog:
                 read_only=True,
                 side_effects=False,
                 freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+            PlannerAsset(
+                asset_type="native_tool",
+                name="web_search",
+                description="runtime-visible read-only web search",
+                domains=("news",),
+                intents=("realtime_lookup",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
                 direct_answer=False,
                 requires_confirmation=False,
                 output_contract=None,
@@ -434,13 +450,18 @@ async def test_capability_primary_does_not_require_supporting_duplicate() -> Non
     assert plan.capability.supporting_assets == ()
 
 
+@pytest.mark.parametrize("allowed_tools", ([], ["execute_skill"]))
 @pytest.mark.asyncio
-async def test_exact_recipe_redundant_top_level_delegate_is_narrowed() -> None:
-    """recipe 내부 delegate의 top-level 복제는 빈 실행 scope로 축소한다."""
+async def test_exact_recipe_safe_top_level_scope_is_narrowed(
+    allowed_tools: list[str],
+) -> None:
+    """recipe의 빈 scope와 중복 delegate는 안전한 owner로 축소한다."""
+    data = _exact_recipe_response_data()
+    data["execution"]["allowed_tools"] = allowed_tools
     router = AsyncMock()
     router.send = AsyncMock(
         return_value=LLMResponse(
-            text=json.dumps(_exact_recipe_response_data(), ensure_ascii=False)
+            text=json.dumps(data, ensure_ascii=False)
         )
     )
 
@@ -455,6 +476,19 @@ async def test_exact_recipe_redundant_top_level_delegate_is_narrowed() -> None:
     assert plan.capability.primary_asset.name == "sports-live"
     assert plan.capability.supporting_assets == ()
     assert plan.execution.allowed_tools == ()
+    assert plan.fact_check.owner.value == "asset"
+    assert (
+        PlanGate()
+        .evaluate(
+            plan,
+            candidates=ContextCandidateSet(
+                candidates=(), total_chars=0, truncated=False
+            ),
+            catalog=_exact_recipe_catalog(),
+        )
+        .status.value
+        == "pass"
+    )
 
 
 @pytest.mark.asyncio
@@ -467,15 +501,31 @@ async def test_exact_recipe_unrelated_top_level_tool_is_not_narrowed() -> None:
         return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
     )
 
-    with pytest.raises(PlannerUnavailable):
-        await plan_turn_with_llm(
-            "어제 유해란 LPGA 성적과 순위",
-            candidates=ContextCandidateSet(
-                candidates=(), total_chars=0, truncated=False
-            ),
-            catalog=_exact_recipe_catalog(),
-            router=router,
-        )
+    candidates = ContextCandidateSet(
+        candidates=(), total_chars=0, truncated=False
+    )
+    catalog = _exact_recipe_catalog()
+    plan = await plan_turn_with_llm(
+        "어제 유해란 LPGA 성적과 순위",
+        candidates=candidates,
+        catalog=catalog,
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "sports-live"
+    assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ("web_search",)
+    assert plan.fact_check.owner.value == "planner"
+    gate_result = PlanGate().evaluate(
+        plan,
+        candidates=candidates,
+        catalog=catalog,
+    )
+    assert gate_result.status.value == "repair"
+    assert {
+        violation.code for violation in gate_result.violations
+    } >= {"asset.full_coverage_recipe_has_top_level_tools"}
 
 
 @pytest.mark.asyncio

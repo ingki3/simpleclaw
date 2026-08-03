@@ -111,6 +111,8 @@ class PlannerUsageCaptureRouter(LLMRouter):
         self,
         request: LLMRequest,
         validate_response: Callable[[LLMResponse], _Validated],
+        *,
+        validation_retry_request=None,
     ) -> _Validated:
         """Primary와 semantic retry 응답의 token usage를 모두 누적한다."""
 
@@ -118,7 +120,11 @@ class PlannerUsageCaptureRouter(LLMRouter):
             self._capture(response)
             return validate_response(response)
 
-        return await self._wrapped.send_validated(request, capture_then_validate)
+        return await self._wrapped.send_validated(
+            request,
+            capture_then_validate,
+            validation_retry_request=validation_retry_request,
+        )
 
 
 def build_turn_planner_shadow_event(

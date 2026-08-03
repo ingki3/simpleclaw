@@ -45,6 +45,9 @@ from simpleclaw.logging.trace_context import get_trace_id
 logger = logging.getLogger(__name__)
 
 _ValidatedResponse = TypeVar("_ValidatedResponse")
+_ValidationRetryRequest = Callable[
+    [LLMRequest, LLMResponse, Exception], LLMRequest | None
+]
 
 # Backward-compatible view for older tests/extensions that inspected the router
 # registry directly. create_router() uses simpleclaw.llm.transports instead.
@@ -435,19 +438,27 @@ class LLMRouter:
         self,
         request: LLMRequest,
         validate_response: Callable[[LLMResponse], _ValidatedResponse],
+        *,
+        validation_retry_request: _ValidationRetryRequest | None = None,
     ) -> _ValidatedResponse:
         """Send through a route and retry once when semantic validation fails.
 
         A caller may validate an otherwise non-empty provider response (for
         example, parse a structured JSON contract) without learning a backend
-        name or manually selecting the route retry.  This deliberately shares
-        the same route-only primary/retry policy as :meth:`send`.
+        name or manually selecting the route retry.  By default this deliberately
+        shares the same route-only primary/retry policy as :meth:`send`.
+
+        ``validation_retry_request`` may return a narrowed request for one
+        bounded recovery attempt.  In that explicit case only, a route without a
+        distinct retry backend reuses the primary backend once.  Returning
+        ``None`` preserves the normal route-only retry contract.
         """
         backend_name, fallback_name = self._resolve_request(request)
         required = self._required_capabilities(request, None)
         self._preflight_backend(backend_name, required)
 
         primary_started = time.monotonic()
+        retry_request = request
         try:
             primary_response = await self._send_to_backend(
                 backend_name, request, record_response=False
@@ -489,11 +500,25 @@ class LLMRouter:
                         primary_response,
                         type(exc).__name__,
                     )
+                    narrowed_retry_request = (
+                        validation_retry_request(request, primary_response, exc)
+                        if validation_retry_request is not None
+                        else None
+                    )
+                    if narrowed_retry_request is not None and not isinstance(
+                        narrowed_retry_request, LLMRequest
+                    ):
+                        raise TypeError(
+                            "validation_retry_request must return LLMRequest or None"
+                        )
                     retry_name = self._usable_retry(
                         backend_name, fallback_name, required
                     )
+                    if not retry_name and narrowed_retry_request is not None:
+                        retry_name = backend_name
                     if not retry_name:
                         raise
+                    retry_request = narrowed_retry_request or request
                     retry_reason = "validation_error"
                     error_type = type(exc).__name__
                 else:
@@ -521,7 +546,7 @@ class LLMRouter:
         retry_started = time.monotonic()
         retry_response = await self._send_to_backend(
             retry_name,
-            request,
+            retry_request,
             attempt_role="retry",
             retry_reason=retry_reason,
             record_response=False,

@@ -353,7 +353,13 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
             self.token_count = 0
             self.usage_supported = True
 
-        async def send_validated(self, request, validate_response):
+        async def send_validated(
+            self,
+            request,
+            validate_response,
+            *,
+            validation_retry_request=None,
+        ):
             provider_payload_audit.record(request)
 
             def capture_and_validate(response):
@@ -377,6 +383,7 @@ async def _label_async(args: argparse.Namespace, output: Path) -> None:
             return await self.wrapped.send_validated(
                 request,
                 capture_and_validate,
+                validation_retry_request=validation_retry_request,
             )
 
     async def planner(

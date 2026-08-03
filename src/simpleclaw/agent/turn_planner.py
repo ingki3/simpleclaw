@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import replace
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.planner_catalog import PlannerCatalog
@@ -182,13 +183,14 @@ def _normalize_redundant_exact_recipe_delegate(
     *,
     catalog: PlannerCatalog,
 ) -> Mapping[str, object]:
-    """안전한 exact recipe가 소유한 중복 top-level delegate만 제거한다.
+    """안전한 exact recipe의 top-level 실행·evidence scope를 축소한다.
 
     provider가 recipe 내부 구현 세부인 ``execute_skill``을 top-level scope에도
-    복제하는 경우가 있다. capability-native full recipe, 빈 supporting scope,
-    단일 ``execute_skill``이라는 닫힌 형태이고 catalog의 typed/read-only 계약까지
-    일치할 때만 실행 범위를 빈 allowlist로 축소한다. 그 밖의 tool/asset은 원문을
-    보존해 기존 boundary/PlanGate가 fail-closed하도록 한다.
+    복제하거나 exact recipe가 evidence를 소유하는데 planner owner를 반환하는 경우가
+    있다. capability-native full recipe, 빈 supporting scope, catalog의
+    typed/read-only 계약이 모두 일치할 때만 delegate allowlist를 비우고 required
+    evidence owner를 ``asset``으로 좁힌다. 그 밖의 tool/asset은 원문을 보존해 기존
+    boundary/PlanGate가 fail-closed하도록 한다.
     """
     capability = raw_data.get("capability")
     execution = raw_data.get("execution")
@@ -206,8 +208,6 @@ def _normalize_redundant_exact_recipe_delegate(
     if primary is None or primary[0] != "recipe":
         return raw_data
     if capability.get("supporting_assets") != []:
-        return raw_data
-    if execution.get("allowed_tools") != ["execute_skill"]:
         return raw_data
 
     catalog_asset = next(
@@ -230,11 +230,24 @@ def _normalize_redundant_exact_recipe_delegate(
         or catalog_asset.requires_confirmation
     ):
         return raw_data
+    allowed_tools = execution.get("allowed_tools")
+    if allowed_tools not in ([], ["execute_skill"]):
+        return raw_data
 
     normalized = dict(raw_data)
-    normalized_execution = dict(execution)
-    normalized_execution["allowed_tools"] = []
-    normalized["execution"] = normalized_execution
+    if allowed_tools == ["execute_skill"]:
+        normalized_execution = dict(execution)
+        normalized_execution["allowed_tools"] = []
+        normalized["execution"] = normalized_execution
+    fact_check = raw_data.get("fact_check")
+    if (
+        isinstance(fact_check, Mapping)
+        and fact_check.get("required") is True
+        and fact_check.get("owner") == "planner"
+    ):
+        normalized_fact_check = dict(fact_check)
+        normalized_fact_check["owner"] = "asset"
+        normalized["fact_check"] = normalized_fact_check
     return normalized
 
 
@@ -521,6 +534,8 @@ async def plan_turn_with_llm(
         "error_type": None,
         "raw_len": 0,
         "finish_reason": None,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
         "boundary_code": None,
     }
 
@@ -529,6 +544,20 @@ async def plan_turn_with_llm(
         response_text = getattr(response, "text", "") or ""
         diagnostic["raw_len"] = len(response_text)
         diagnostic["finish_reason"] = getattr(response, "finish_reason", None)
+        usage = getattr(response, "usage", None)
+        if isinstance(usage, Mapping):
+            output_tokens = usage.get("output_tokens")
+            reasoning_tokens = usage.get("reasoning_tokens")
+            diagnostic["output_tokens"] = (
+                output_tokens
+                if isinstance(output_tokens, int) and output_tokens >= 0
+                else 0
+            )
+            diagnostic["reasoning_tokens"] = (
+                reasoning_tokens
+                if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0
+                else 0
+            )
         diagnostic["boundary_code"] = None
 
         def _build_validated(
@@ -578,19 +607,46 @@ async def plan_turn_with_llm(
                 return repaired
             raise
 
+    def _build_output_cap_retry(request, response, exc):
+        """출력 cap일 때만 최소 reasoning의 동일-cap 요청으로 한 번 축소한다."""
+        finish_reason = getattr(response, "finish_reason", None)
+        if not (
+            not isinstance(exc, PlanBoundaryViolation)
+            and isinstance(finish_reason, str)
+            and finish_reason.lower() == "length"
+            and isinstance(request.reasoning, dict)
+            and request.reasoning.get("enabled")
+        ):
+            return None
+        logger.warning(
+            "Unified turn planner output cap triggered bounded recovery "
+            "(finish_reason=length route=turn_analysis retry=true "
+            "reasoning_effort=minimal output_tokens=%d reasoning_tokens=%d)",
+            diagnostic["output_tokens"],
+            diagnostic["reasoning_tokens"],
+        )
+        return replace(request, reasoning={"enabled": True, "effort": "minimal"})
+
     try:
         if isinstance(router, LLMRouter):
-            return await router.send_validated(request, _validate_response)
+            return await router.send_validated(
+                request,
+                _validate_response,
+                validation_retry_request=_build_output_cap_retry,
+            )
         return _validate_response(await router.send(request))
     except Exception as exc:  # noqa: BLE001 — raw 없이 명시적 fail-closed로 변환.
         diagnostic["error_type"] = type(exc).__name__
         logger.warning(
             "Unified turn planner unavailable after route retry "
-            "(error_type=%s raw_len=%d finish_reason=%s "
+            "(error_type=%s raw_len=%d finish_reason=%s output_tokens=%d "
+            "reasoning_tokens=%d "
             "route=turn_analysis repair_status=failed boundary_code=%s)",
             diagnostic["error_type"],
             diagnostic["raw_len"],
             diagnostic["finish_reason"],
+            diagnostic["output_tokens"],
+            diagnostic["reasoning_tokens"],
             diagnostic["boundary_code"],
         )
         boundary_code = (

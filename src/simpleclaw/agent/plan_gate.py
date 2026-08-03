@@ -532,6 +532,14 @@ class PlanGate:
                 )
             )
             return
+        if primary.asset_type == "recipe" and plan.execution.allowed_tools:
+            violations.append(
+                _violation(
+                    "asset.full_coverage_recipe_has_top_level_tools",
+                    "execution.allowed_tools",
+                    "Full-coverage recipes cannot retain top-level tool scope.",
+                )
+            )
         if (
             primary_catalog_asset.side_effects
             or primary_catalog_asset.requires_confirmation
