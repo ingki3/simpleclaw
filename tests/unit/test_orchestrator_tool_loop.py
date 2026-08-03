@@ -32,7 +32,7 @@ from simpleclaw.agent.evidence_policy import (
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import GoalResolutionState, GoalStatus
 from simpleclaw.agent.result_validator import CommonResultValidator
-from simpleclaw.agent.tool_gate import ToolExecutionScope
+from simpleclaw.agent.tool_gate import ToolExecutionScope, TrustedAssetSafety
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
@@ -53,6 +53,24 @@ SPORTS_RECIPE = (
     / "sports-live"
     / "recipe.yaml"
 )
+
+
+def _trusted_sports_skill(
+    *,
+    name: str = "naver-sports-skill",
+    declared: bool = True,
+    read_only: bool = True,
+    side_effects: bool = False,
+    requires_confirmation: bool = False,
+) -> TrustedAssetSafety:
+    return TrustedAssetSafety(
+        asset_type="skill",
+        asset_name=name,
+        declared=declared,
+        read_only=read_only,
+        side_effects=side_effects,
+        requires_confirmation=requires_confirmation,
+    )
 
 
 @pytest.fixture
@@ -166,6 +184,7 @@ async def test_tool_loop_requires_structured_final_only_after_delegate(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
     )
@@ -220,6 +239,7 @@ async def test_scoped_tool_call_cap_blocks_second_dispatch(config_file, monkeypa
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
     )
 
@@ -389,6 +409,7 @@ async def test_scoped_cap_preserves_first_typed_observation(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         evidence_requirement=requirement,
         evidence_state=requirement.initial_state(),
@@ -627,6 +648,7 @@ def test_incomplete_typed_observation_never_fast_finals(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         evidence_requirement=requirement,
         evidence_state=requirement.initial_state(),
@@ -636,9 +658,76 @@ def test_incomplete_typed_observation_never_fast_finals(
     finalized = _deterministic_typed_asset_final(
         state,
         [("execute_skill", json.dumps(observation))],
+        executed_skill_name="naver-sports-skill",
     )
 
     assert finalized is None
+
+
+@pytest.mark.parametrize(
+    "trusted_safety",
+    [
+        (),
+        (_trusted_sports_skill(read_only=False),),
+        (_trusted_sports_skill(side_effects=True),),
+        (_trusted_sports_skill(requires_confirmation=True),),
+        (_trusted_sports_skill(name="other-skill"),),
+    ],
+    ids=("missing", "write", "side-effect", "confirmation", "asset-mismatch"),
+)
+def test_typed_observation_fast_final_requires_trusted_read_only_safety(
+    trusted_safety: tuple[TrustedAssetSafety, ...],
+) -> None:
+    requirement = EvidenceRequirement(
+        required=False,
+        query="조회",
+        domain="sports",
+        required_claims=("score",),
+        owner="asset",
+    )
+    observation = {
+        "ok": True,
+        "items": [{"score": {"away": 3, "home": 5}}],
+        "claim_map": {
+            "score": {
+                "records": [
+                    {
+                        "value": {"away": 3, "home": 5},
+                        "source_url": "https://example.test/result",
+                        "provenance": "structured test provider",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
+            }
+        },
+    }
+    state = ToolLoopState(
+        user_content="typed recipe",
+        messages=[],
+        system_prompt="system",
+        tools=[],
+        system_blocks=[],
+        execution_scope=ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "naver-sports-skill")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+            trusted_asset_safety=trusted_safety,
+        ),
+        evidence_requirement=requirement,
+        evidence_state=requirement.initial_state(),
+    )
+
+    assert (
+        _deterministic_typed_asset_final(
+            state,
+            [("execute_skill", json.dumps(observation))],
+            executed_skill_name="naver-sports-skill",
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -732,6 +821,7 @@ async def test_scoped_cap_forces_typed_final_without_second_dispatch(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         evidence_requirement=requirement,
         evidence_state=requirement.initial_state(),
@@ -801,6 +891,7 @@ async def test_structured_final_preserves_raw_helper_data(config_file, monkeypat
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
     )
@@ -896,6 +987,7 @@ async def test_asset_finalization_preserves_first_typed_observation(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         evidence_requirement=requirement,
         evidence_state=requirement.initial_state(),
@@ -982,6 +1074,7 @@ async def test_complete_typed_observation_skips_slow_model_finalization(
             operator_tools=False,
             allow_cron_mutation=False,
             max_tool_calls=1,
+            trusted_asset_safety=(_trusted_sports_skill(),),
         ),
         evidence_requirement=requirement,
         evidence_state=requirement.initial_state(),

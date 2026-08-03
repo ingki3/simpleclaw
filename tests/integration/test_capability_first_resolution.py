@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,9 +9,17 @@ import pytest
 from simpleclaw.agent.capability_executor import CapabilityExecutor
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_investigation import EvidenceInvestigationController
+from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
-from simpleclaw.agent.resolution_controller import ResolutionController
+from simpleclaw.agent.planner_catalog import (
+    PlannerAsset,
+    PlannerCatalog,
+    build_planner_catalog,
+)
+from simpleclaw.agent.resolution_controller import (
+    ResolutionController,
+    ResolutionOutcome,
+)
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
 from simpleclaw.agent.resolution_types import (
     AssetExecutionStatus,
@@ -35,9 +44,452 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.llm.models import LLMResponse, ToolCall
+from simpleclaw.recipes.loader import load_recipe
+from simpleclaw.skills.models import SkillDefinition
 
 pytestmark = pytest.mark.offline
+
+SPORTS_RECIPE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "recipes"
+    / "sports-live"
+    / "recipe.yaml"
+)
+
+
+def _orchestrator_config(tmp_path: Path) -> Path:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"""
+llm:
+  default: gemini
+  providers:
+    gemini:
+      type: api
+      model: gemini-2.0-flash
+      api_key: test-key
+agent:
+  db_path: "{tmp_path}/conversations.db"
+  max_tool_iterations: 2
+skills:
+  local_dir: "{tmp_path}/local_skills"
+  global_dir: "{tmp_path}/global_skills"
+persona:
+  local_dir: "{tmp_path}/persona_local"
+  global_dir: "{tmp_path}/persona_global"
+  files:
+    - name: AGENT.md
+      type: agent
+memory:
+  rag:
+    enabled: false
+""",
+        encoding="utf-8",
+    )
+    persona = tmp_path / "persona_local"
+    persona.mkdir()
+    (persona / "AGENT.md").write_text("# Agent", encoding="utf-8")
+    (tmp_path / "local_skills").mkdir()
+    (tmp_path / "global_skills").mkdir()
+    return config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("read_only", "side_effects", "requires_confirmation"),
+    [
+        (False, False, False),
+        (True, True, False),
+        (True, False, True),
+    ],
+    ids=("write", "side-effect", "confirmation"),
+)
+async def test_exact_executor_never_runs_non_read_only_evidence_asset(
+    read_only: bool,
+    side_effects: bool,
+    requires_confirmation: bool,
+) -> None:
+    asset = PlannerAsset(
+        asset_type="skill",
+        name="unsafe-helper",
+        description="test helper",
+        domains=("sports",),
+        intents=("current_result",),
+        read_only=read_only,
+        side_effects=side_effects,
+        freshness_sensitive=True,
+        direct_answer=True,
+        requires_confirmation=requires_confirmation,
+        output_contract="asset_result.v1",
+        declared=True,
+        runtime_visible=True,
+        coverage="full_coverage",
+        input_contract="query.v1",
+    )
+    catalog = PlannerCatalog(assets=(asset,), fingerprint="trusted-catalog")
+    plan = UnifiedTurnPlan(
+        original_text="결과 조회",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="결과 조회",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("sports",),
+        intents=("current_result",),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="sports",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(mode=ExecutionMode.DIRECT_ANSWER),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.FULL,
+            primary_asset=AssetRef("skill", "unsafe-helper"),
+        ),
+        confidence=1,
+        decision_summary="test",
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    execute_skill = AsyncMock(
+        return_value={
+            "schema": "asset_result.v1",
+            "status": "completed",
+            "data": {"text": "must not resolve"},
+            "resolved_claims": [],
+        }
+    )
+
+    result = await CapabilityExecutor(
+        catalog=catalog,
+        execute_skill=execute_skill,
+    ).execute(
+        plan,
+        budget=ResolutionBudget(max_steps=1, max_tool_calls=1),
+        ledger=ResolutionLedger(),
+    )
+
+    assert result.status is AssetExecutionStatus.UNSUPPORTED
+    assert result.limitations == ("asset_not_fast_path_eligible",)
+    execute_skill.assert_not_awaited()
+
+
+def _sports_helper(
+    *,
+    declared: bool = True,
+    read_only: bool = True,
+    side_effects: bool = False,
+    requires_confirmation: bool = False,
+) -> SkillDefinition:
+    return SkillDefinition(
+        name="naver-sports-skill",
+        description="registered fake structured sports helper",
+        capability=CapabilityMetadata(
+            domains=("sports",),
+            intents=("current_result",),
+            read_only=read_only,
+            side_effects=side_effects,
+            freshness_sensitive=True,
+            direct_answer=True,
+            requires_confirmation=requires_confirmation,
+            output_contract="asset_result.v1",
+            coverage="full_coverage",
+            input_contract="query.v1",
+            declared=declared,
+        ),
+    )
+
+
+def _complete_sports_observation() -> dict[str, object]:
+    return {
+        "ok": True,
+        "items": [{"game_result": "한화 승", "score": {"away": 3, "home": 5}}],
+        "claim_map": {
+            claim: {
+                "records": [
+                    {
+                        "value": value,
+                        "source_url": "https://example.test/structured-result",
+                        "provenance": "registered fake structured helper",
+                        "observed_at": "2026-08-03T17:00:00+09:00",
+                        "fresh": True,
+                    }
+                ]
+            }
+            for claim, value in (
+                ("game_result", "한화 승"),
+                ("score", {"away": 3, "home": 5}),
+            )
+        },
+    }
+
+
+def _sports_planner_payload() -> dict[str, object]:
+    return {
+        "context": {
+            "relation": "standalone",
+            "use_prior_context": False,
+            "selected_turn_ids": [],
+            "standalone_question": "어제 프로야구 경기 결과 및 스코어",
+            "unresolved_references": [],
+            "ignored_context_reason": "",
+        },
+        "clarification": {
+            "required": False,
+            "question": "",
+            "options": [],
+            "reason": "",
+        },
+        "domains": ["sports"],
+        "intents": ["current_result"],
+        "fact_check": {
+            "required": True,
+            "owner": "asset",
+            "domain": "sports",
+            "intents": ["current_result"],
+            "entities": [],
+            "reference_date": "2026-08-02",
+            "search_query": "",
+            "required_claims": ["game_result", "score"],
+            "freshness_required": True,
+            "reason": "current result",
+        },
+        "capability": {
+            "coverage": "full_coverage",
+            "primary_asset": {
+                "asset_type": "recipe",
+                "asset_name": "sports-live",
+            },
+            "supporting_assets": [],
+            "fallback_modes": ["answer_with_evidence"],
+            "reason": "exact recipe",
+        },
+        "execution": {
+            "mode": "answer_with_evidence",
+            "allowed_tools": [],
+            "requires_confirmation": False,
+            "complexity_signals": [],
+            "reason": "exact recipe",
+        },
+        "confidence": 1,
+        "decision_summary": "exact recipe",
+    }
+
+
+async def _run_connected_exact_recipe(
+    tmp_path: Path,
+    *,
+    helper: SkillDefinition,
+    observation: dict[str, object],
+) -> tuple[UnifiedTurnPlan, ResolutionOutcome, AgentOrchestrator]:
+    """Raw planner부터 common validator까지 production exact 경계를 관통한다."""
+    recipe = load_recipe(SPORTS_RECIPE)
+    catalog = build_planner_catalog(
+        skills=(helper,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    planner_router = AsyncMock()
+    planner_router.send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(_sports_planner_payload(), ensure_ascii=False)
+        )
+    )
+    candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+    plan = await plan_turn_with_llm(
+        "어제 프로야구 경기 결과 및 스코어",
+        candidates=candidates,
+        catalog=catalog,
+        router=planner_router,
+    )
+    gated = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+    assert gated.status is GateStatus.PASS
+
+    orchestrator = AgentOrchestrator(_orchestrator_config(tmp_path))
+    orchestrator._skills = [helper]
+    orchestrator._skills_by_name = {helper.name: helper}
+    orchestrator._skills_prompt = orchestrator._format_skills_for_prompt([helper])
+    orchestrator._recipes = [recipe]
+    orchestrator._router.send = AsyncMock(
+        return_value=LLMResponse(
+            text="",
+            model="test",
+            tool_calls=[
+                ToolCall(
+                    id="fake-helper-1",
+                    name="execute_skill",
+                    arguments={"skill_name": helper.name, "command": "--json"},
+                )
+            ],
+        )
+    )
+    orchestrator._dispatch_external_skill = AsyncMock(
+        return_value=json.dumps(observation, ensure_ascii=False)
+    )
+
+    outcome = await ResolutionController(
+        capability_executor=CapabilityExecutor(
+            catalog=catalog,
+            execute_recipe=orchestrator._execute_exact_recipe_asset,
+        ),
+    ).resolve(
+        gated.effective_plan,
+        budget=ResolutionBudget(max_steps=2, max_tool_calls=1),
+    )
+
+    return gated.effective_plan, outcome, orchestrator
+
+
+@pytest.mark.asyncio
+async def test_planner_to_validator_connected_exact_recipe_uses_one_safe_helper(
+    tmp_path: Path,
+) -> None:
+    """Required claims는 planner output에서 production execution 경계로만 흐른다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(),
+        observation=_complete_sports_observation(),
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert plan.execution.requires_confirmation is False
+    assert outcome.goal.status is GoalStatus.RESOLVED
+    assert outcome.validation.allow_final is True
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is AssetExecutionStatus.COMPLETED
+    assert outcome.asset_result.resolved_claims == ("game_result", "score")
+    assert orchestrator._router.send.await_count == 1
+    orchestrator._dispatch_external_skill.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capability_overrides",
+    [
+        {"declared": False},
+        {"read_only": False},
+        {"side_effects": True},
+        {"requires_confirmation": True},
+    ],
+    ids=("undeclared", "write", "side-effect", "confirmation"),
+)
+async def test_connected_exact_recipe_rejects_discovered_unsafe_helper(
+    tmp_path: Path,
+    capability_overrides: dict[str, bool],
+) -> None:
+    """Planner의 read-only 주장은 discovered SkillDefinition을 우회하지 못한다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(**capability_overrides),
+        observation=_complete_sports_observation(),
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert plan.execution.requires_confirmation is False
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is AssetExecutionStatus.FAILED_TERMINAL
+    assert outcome.asset_result.status is not AssetExecutionStatus.COMPLETED
+    assert outcome.asset_result.resolved_claims == ()
+    assert outcome.asset_result.limitations == (
+        "typed_recipe_nested_error:ValueError",
+    )
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.validation.allow_final is False
+    assert outcome.validation.supported_claims == ()
+    assert orchestrator._router.send.await_count == 0
+    orchestrator._dispatch_external_skill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("observation", "expected_status", "expected_blocked_claims"),
+    [
+        (
+            {
+                "ok": True,
+                "items": [{"game_result": "한화 승", "score": 5}],
+                "claim_map": {
+                    "game_result": _complete_sports_observation()["claim_map"][
+                        "game_result"
+                    ]
+                },
+            },
+            AssetExecutionStatus.COMPLETED,
+            ("score",),
+        ),
+        (
+            {
+                "ok": True,
+                "items": [{"game_result": "한화 승", "score": 5}],
+                "claim_map": {
+                    "game_result": {
+                        "records": [
+                            {
+                                "value": "한화 승",
+                                "observed_at": "2026-08-03T17:00:00+09:00",
+                                "fresh": True,
+                            }
+                        ]
+                    },
+                    "score": {
+                        "records": [
+                            {
+                                "value": 5,
+                                "observed_at": "2026-08-03T17:00:00+09:00",
+                                "fresh": True,
+                            }
+                        ]
+                    },
+                },
+            },
+            AssetExecutionStatus.COMPLETED,
+            ("game_result", "score"),
+        ),
+        (
+            {"ok": True, "items": [], "claim_map": {}},
+            AssetExecutionStatus.EMPTY,
+            ("game_result", "score"),
+        ),
+        (
+            {
+                "ok": False,
+                "items": [],
+                "error": {"message": "timeout", "retryable": True},
+            },
+            AssetExecutionStatus.FAILED_TERMINAL,
+            ("game_result", "score"),
+        ),
+    ],
+    ids=("missing-claim", "missing-provenance", "empty", "error"),
+)
+async def test_connected_exact_recipe_rejects_incomplete_observation(
+    tmp_path: Path,
+    observation: dict[str, object],
+    expected_status: AssetExecutionStatus,
+    expected_blocked_claims: tuple[str, ...],
+) -> None:
+    """Incomplete helper observation은 connected path에서 final로 승격되지 않는다."""
+    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+        tmp_path,
+        helper=_sports_helper(),
+        observation=observation,
+    )
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert outcome.asset_result is not None
+    assert outcome.asset_result.status is expected_status
+    assert outcome.goal.status is not GoalStatus.RESOLVED
+    assert outcome.goal.unresolved_claims == expected_blocked_claims
+    assert outcome.validation.allow_final is False
+    assert outcome.validation.blocked_claims == expected_blocked_claims
+    assert orchestrator._router.send.await_count > 1
+    orchestrator._dispatch_external_skill.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -121,7 +121,7 @@ from simpleclaw.agent.session_state import (
     current_turn_id_var,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
-from simpleclaw.agent.tool_gate import ToolExecutionScope
+from simpleclaw.agent.tool_gate import ToolExecutionScope, TrustedAssetSafety
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
@@ -3023,6 +3023,25 @@ class AgentOrchestrator:
             if loaded_names != forced_skill_names:
                 missing = ",".join(sorted(forced_skill_names - loaded_names))
                 raise ValueError(f"forced skill scope unavailable: {missing}")
+            trusted_asset_safety = tuple(
+                TrustedAssetSafety(
+                    asset_type="skill",
+                    asset_name=skill.name,
+                    declared=skill.capability.declared,
+                    read_only=skill.capability.read_only,
+                    side_effects=skill.capability.side_effects,
+                    requires_confirmation=skill.capability.requires_confirmation,
+                )
+                for skill in active_skills
+            )
+            unsafe = tuple(
+                item.asset_name
+                for item in trusted_asset_safety
+                if not item.safe_for_exact_read_only
+            )
+            if unsafe:
+                names = ",".join(sorted(unsafe))
+                raise ValueError(f"forced skill scope is not read-only safe: {names}")
             active_recipes = []
             active_skills_prompt = self._format_skills_for_prompt(active_skills)
             active_recipes_prompt = ""
@@ -3133,6 +3152,7 @@ class AgentOrchestrator:
                 operator_tools=False,
                 allow_cron_mutation=False,
                 max_tool_calls=1,
+                trusted_asset_safety=trusted_asset_safety,
             )
         elif plan is not None:
             tools = filter_tool_definitions(

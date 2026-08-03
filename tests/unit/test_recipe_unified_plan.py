@@ -204,6 +204,12 @@ async def test_exact_recipe_nested_scope_exposes_only_delegate_skill(tmp_path) -
         SkillDefinition(
             name="naver-sports-skill",
             description="ALLOWED_SPORTS_DELEGATE",
+            capability=CapabilityMetadata(
+                declared=True,
+                read_only=True,
+                side_effects=False,
+                requires_confirmation=False,
+            ),
         ),
         SkillDefinition(
             name="realtime-lookup-skill",
@@ -229,11 +235,52 @@ async def test_exact_recipe_nested_scope_exposes_only_delegate_skill(tmp_path) -
     assert state.execution_scope.allowed_assets == frozenset(
         {("skill", "naver-sports-skill")}
     )
+    trusted = state.execution_scope.safety_for("skill", "naver-sports-skill")
+    assert trusted is not None
+    assert trusted.safe_for_exact_read_only is True
     assert state.execution_scope.operator_tools is False
     assert state.execution_scope.allow_cron_mutation is False
     assert state.execution_scope.max_tool_calls == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "capability",
+    [
+        CapabilityMetadata(),
+        CapabilityMetadata(declared=True, read_only=False, side_effects=False),
+        CapabilityMetadata(declared=True, read_only=True, side_effects=True),
+        CapabilityMetadata(
+            declared=True,
+            read_only=True,
+            side_effects=False,
+            requires_confirmation=True,
+        ),
+    ],
+    ids=("missing", "write", "side-effect", "confirmation"),
+)
+async def test_exact_recipe_nested_scope_rejects_unsafe_discovered_capability(
+    tmp_path,
+    capability: CapabilityMetadata,
+) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._skills = [
+        SkillDefinition(
+            name="naver-sports-skill",
+            capability=capability,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="not read-only safe"):
+        await orchestrator._prepare_tool_loop_state(
+            "typed recipe instructions",
+            True,
+            attachments=None,
+            on_text_delta=None,
+            on_progress=None,
+            forced_skill_names=frozenset({"naver-sports-skill"}),
+            forced_tool_names=frozenset({"execute_skill"}),
+        )
 @pytest.mark.asyncio
 async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) -> None:
     orchestrator = AgentOrchestrator(_config(tmp_path))

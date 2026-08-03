@@ -8,6 +8,7 @@ from simpleclaw.agent.tool_gate import (
     ToolCallRejected,
     ToolExecutionScope,
     ToolGate,
+    TrustedAssetSafety,
 )
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,
@@ -88,6 +89,75 @@ def test_allowlisted_skill_is_authorized() -> None:
         _scope(
             "execute_skill",
             assets=frozenset({("skill", "weather")}),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("safety", "expected_code"),
+    [
+        ((), "skill_safety_metadata_missing"),
+        (
+            (TrustedAssetSafety("skill", "weather", True, False, False, False),),
+            "skill_not_safe_for_exact_read_only",
+        ),
+        (
+            (TrustedAssetSafety("skill", "weather", True, True, True, False),),
+            "skill_not_safe_for_exact_read_only",
+        ),
+        (
+            (TrustedAssetSafety("skill", "weather", True, True, False, True),),
+            "skill_not_safe_for_exact_read_only",
+        ),
+        (
+            (TrustedAssetSafety("skill", "stocks", True, True, False, False),),
+            "skill_safety_metadata_missing",
+        ),
+    ],
+    ids=("missing", "write", "side-effect", "confirmation", "asset-mismatch"),
+)
+def test_exact_skill_scope_requires_matching_trusted_read_only_safety(
+    safety: tuple[TrustedAssetSafety, ...],
+    expected_code: str,
+) -> None:
+    scope = ToolExecutionScope(
+        allowed_tools=frozenset({"execute_skill"}),
+        allowed_assets=frozenset({("skill", "weather")}),
+        operator_tools=False,
+        allow_cron_mutation=False,
+        max_tool_calls=1,
+        trusted_asset_safety=safety,
+    )
+
+    with pytest.raises(ToolCallRejected) as exc:
+        ToolGate(native_specs=[]).authorize(
+            ToolCall(
+                id="1",
+                name="execute_skill",
+                arguments={"skill_name": "weather"},
+            ),
+            scope,
+        )
+
+    assert exc.value.code == expected_code
+
+
+def test_exact_skill_scope_authorizes_matching_trusted_read_only_safety() -> None:
+    ToolGate(native_specs=[]).authorize(
+        ToolCall(
+            id="1",
+            name="execute_skill",
+            arguments={"skill_name": "weather"},
+        ),
+        ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "weather")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+            trusted_asset_safety=(
+                TrustedAssetSafety("skill", "weather", True, True, False, False),
+            ),
         ),
     )
 
