@@ -185,6 +185,97 @@ async def test_read_only_terminal_advances_to_next_distinct_supporting_asset() -
 
 
 @pytest.mark.asyncio
+async def test_partial_terminal_propagates_remaining_gap_to_next_asset() -> None:
+    async def execute(
+        asset: AssetRef, question: str, _ledger: ResolutionLedger
+    ) -> AssetResult:
+        if asset.name == "first":
+            return AssetResult(
+                asset_type="skill",
+                asset_name=asset.name,
+                status=AssetExecutionStatus.FAILED_TERMINAL,
+                resolved_claims=("score",),
+                unresolved_claims=("rank",),
+                next_questions=("순위를 확인한다",),
+                evidence=(
+                    {
+                        "claim_id": "score",
+                        "value": "70",
+                        "source_url": "https://example.test/score",
+                        "fresh": True,
+                    },
+                ),
+            )
+        assert question == "순위를 확인한다"
+        return AssetResult(
+            asset_type="skill",
+            asset_name=asset.name,
+            status=AssetExecutionStatus.COMPLETED,
+            resolved_claims=("rank",),
+            evidence=(
+                {
+                    "claim_id": "rank",
+                    "value": "1",
+                    "source_url": "https://example.test/rank",
+                    "fresh": True,
+                },
+            ),
+        )
+
+    execute_mock = AsyncMock(side_effect=execute)
+    transition = ProblemTransition(
+        original_goal="점수와 순위를 알려준다",
+        previous_question="점수와 순위?",
+        triggering_observation="failed_terminal",
+        goal_status=GoalStatus.UNRESOLVED,
+        unresolved_gap="score",
+        next_question="점수를 확인한다",
+        required_claims=("score", "rank"),
+        recommended_mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+        transition_reason="read_only_terminal_fallback",
+    )
+    first = AssetRef("skill", "first")
+    second = AssetRef("skill", "second")
+    ledger = ResolutionLedger()
+
+    outcome = await EvidenceInvestigationController(
+        execute_supporting_asset=execute_mock
+    ).run(
+        transition,
+        supporting_assets=(first, second),
+        budget=ResolutionBudget(max_steps=3, max_tool_calls=3),
+        ledger=ledger,
+    )
+
+    assert outcome.stop_reason == "resolved"
+    assert outcome.goal.status is GoalStatus.RESOLVED
+    assert [call.args[:2] for call in execute_mock.await_args_list] == [
+        (first, "점수를 확인한다"),
+        (second, "순위를 확인한다"),
+    ]
+    assert ledger.attempted_signatures == {
+        attempt_signature(
+            question="점수를 확인한다",
+            asset_type="skill",
+            asset_name="first",
+            parameters={"selected_gap": "score"},
+        ),
+        attempt_signature(
+            question="순위를 확인한다",
+            asset_type="skill",
+            asset_name="second",
+            parameters={"selected_gap": "rank"},
+        ),
+    }
+    assert attempt_signature(
+        question="순위를 확인한다",
+        asset_type="skill",
+        asset_name="second",
+        parameters={"selected_gap": "score"},
+    ) not in ledger.attempted_signatures
+
+
+@pytest.mark.asyncio
 async def test_existing_ledger_evidence_resolves_before_new_retrieval() -> None:
     ledger = ResolutionLedger()
     prior = AssetResult(
