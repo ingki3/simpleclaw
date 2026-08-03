@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass
 import hashlib
 import json
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,

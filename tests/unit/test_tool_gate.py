@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.agent.tool_gate import (
     ToolCallRejected,
     ToolExecutionScope,
@@ -16,6 +15,7 @@ from simpleclaw.agent.tool_schemas import (
     ToolRisk,
     ToolScope,
 )
+from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import ToolCall, ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
 
