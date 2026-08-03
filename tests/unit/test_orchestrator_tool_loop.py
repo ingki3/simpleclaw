@@ -744,6 +744,7 @@ async def test_structured_final_preserves_raw_helper_data(config_file, monkeypat
 @pytest.mark.parametrize(
     "final_text",
     [
+        "",
         "어제 경기 결과를 확인했습니다.",
         '{"status":"completed","data":',
         json.dumps(
@@ -763,7 +764,7 @@ async def test_structured_final_preserves_raw_helper_data(config_file, monkeypat
             }
         ),
     ],
-    ids=("prose", "invalid-json", "typed-envelope"),
+    ids=("empty", "prose", "invalid-json", "typed-envelope"),
 )
 async def test_asset_finalization_preserves_first_typed_observation(
     config_file,

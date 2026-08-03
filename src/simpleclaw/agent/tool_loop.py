@@ -1030,6 +1030,19 @@ class ToolLoopRunner:
                         response.usage,
                         response.diagnostics,
                     )
+                    finalized = _finalize_typed_asset_observation(
+                        state,
+                        tool_results_for_empty_final,
+                    )
+                    if finalized is not None:
+                        finalized_text, finalized_success = finalized
+                        return ToolLoopResult(
+                            finalized_text,
+                            trace=trace,
+                            iterations=i + 1,
+                            success=finalized_success,
+                            failure_kind="empty_final_typed_observation_preserved",
+                        )
                     # BIZ-436: side-effect 성공이 확인된 turn 은 ledger 기반
                     # 결정적 fallback 으로 완료/부분성공을 보고한다. 그 외에는
                     # 빈 문자열이 반환되어 기존 text fallback UX 를 유지한다.
