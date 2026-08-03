@@ -661,6 +661,8 @@ def _preserve_asset_observation_data(
 def _deterministic_typed_asset_final(
     state: ToolLoopState,
     tool_results: list[tuple[str, str]],
+    *,
+    executed_skill_name: str = "",
 ) -> str | None:
     """완전한 단일 read-only helper observation을 모델 호출 없이 확정한다.
 
@@ -669,6 +671,16 @@ def _deterministic_typed_asset_final(
     기존 fail-closed finalization 경로가 처리하도록 여기서 확정하지 않는다.
     """
     scope = state.execution_scope
+    allowed_skill_name = ""
+    if scope is not None and len(scope.allowed_assets) == 1:
+        asset_type, allowed_skill_name = next(iter(scope.allowed_assets))
+        if asset_type != "skill":
+            allowed_skill_name = ""
+    safety = (
+        scope.safety_for("skill", executed_skill_name)
+        if scope is not None and executed_skill_name
+        else None
+    )
     if (
         scope is None
         or scope.allowed_tools != frozenset({"execute_skill"})
@@ -677,6 +689,10 @@ def _deterministic_typed_asset_final(
         or scope.operator_tools
         or scope.allow_cron_mutation
         or scope.max_tool_calls != 1
+        or not executed_skill_name
+        or executed_skill_name != allowed_skill_name
+        or safety is None
+        or not safety.safe_for_exact_read_only
         or len(tool_results) != 1
         or tool_results[0][0] != "execute_skill"
         or not state.evidence_requirement.required_claims
@@ -1300,6 +1316,11 @@ class ToolLoopRunner:
                 deterministic_final = _deterministic_typed_asset_final(
                     state,
                     tool_results_for_empty_final,
+                    executed_skill_name=(
+                        str(tc.arguments.get("skill_name") or "").strip()
+                        if tc.name == "execute_skill"
+                        else ""
+                    ),
                 )
                 if deterministic_final is not None:
                     return ToolLoopResult(

@@ -293,7 +293,11 @@ class CapabilityExecutor:
             and asset.input_contract == "query.v1"
             and asset.output_contract == "asset_result.v1"
         )
+        # Direct exact execution은 evidence-only read path다. Confirmation이나
+        # side effect가 필요한 자산은 별도 일반/confirmation 경로가 소유한다.
         safe = (
-            asset.read_only and not asset.side_effects and not asset.requires_confirmation
-        ) or (asset.side_effects and asset.requires_confirmation)
+            asset.read_only
+            and not asset.side_effects
+            and not asset.requires_confirmation
+        )
         return typed and safe

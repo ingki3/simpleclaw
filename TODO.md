@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-559](mention://issue/154a8ff5-fd9b-4f52-b22d-379d0d095a5c): fast-final의 skill capability 안전 경계를 강제** — exact nested scope에 실제 discovered `SkillDefinition.capability`에서 파생한 trusted safety snapshot을 전달하고, asset identity 일치와 declared read-only/no-side-effect/no-confirmation을 ToolGate·deterministic final·CapabilityExecutor 경계에서 fail-closed로 강제한다. raw planner output부터 PlanGate→CapabilityExecutor→recipe→ToolGate→fake helper→common validator까지 연결 회귀를 유지한다. 코드·offline 검증만 본 이슈가 소유하며 release 뒤 actual-provider no-send와 live activation/restart는 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 별도 소유한다. (진행: 2026-08-03)
+
 - [x] **[BIZ-557](mention://issue/75867545-877a-47c8-b7d0-7fb98062dc16): typed sports recipe final envelope를 결정적으로 보존** — exact sports planner의 bounded completed-result claim을 provider canonical `game_result|score|winner` key로 정규화하고, 알 수 없는 claim은 원문 그대로 남겨 fail-closed한다. 성공한 typed helper observation의 단일 dispatch·provenance 보존과 code/offline 검증을 완료했다. live activation/restart/외부 전송은 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 소유한다. (완료: 2026-08-03)
 
 - [x] **[BIZ-558](mention://issue/3de55bf9-3b3a-4691-9699-3c295ecf8cea): 20초 budget 안에서 sports observation을 즉시 확정** — exact read-only recipe의 단일 helper가 완전한 typed claim map과 provenance를 반환하면 추가 모델 finalization 없이 `asset_result.v1`을 결정적으로 생성한다. `어제(YYYY-MM-DD) KBO … 결과 및 스코어` supported-only 변형은 canonical claim으로 정규화하고, 미지원 잔여 의미와 불완전 observation은 fail-closed한다. production-like no-send 3/3에서 각 3.6–4.9초, helper dispatch 1회, 추가 finalization·generic limitation·외부 sink 0을 확인했다. live activation/restart/외부 전송은 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 소유한다. (완료: 2026-08-03)
