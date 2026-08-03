@@ -45,7 +45,6 @@ from simpleclaw.daemon.models import CronFailureKind
 from simpleclaw.llm.models import LLMResponse, ToolCall
 from simpleclaw.recipes.loader import load_recipe
 
-
 SPORTS_RECIPE = (
     Path(__file__).resolve().parents[1]
     / "fixtures"
