@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 2
+version: 3
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -12,8 +12,9 @@ template: |-
   - fact_check.domain=sports, fact_check.intents=[current_result]
   - entities include athlete=유해란, league=LPGA, sport=golf, round=1
   - reference_date resolves the user's relative date before source selection
-  - if catalog declares naver-sports-skill as full_coverage/query.v1/asset_result.v1,
-    capability.primary_asset is that exact skill and it executes before mode
+  - if catalog declares sports-live as a full_coverage query.v1/asset_result.v1 recipe,
+    capability.primary_asset={"asset_type":"recipe","asset_name":"sports-live"}
+    and capability.supporting_assets=[]; the primary executes before mode
   - execution.mode=answer_with_evidence is only the unresolved fallback path
   - failed, unsupported, or unusable retrieval never means absence
 

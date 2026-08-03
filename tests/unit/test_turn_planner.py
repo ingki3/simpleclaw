@@ -165,6 +165,7 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "not factual evidence" in prompt
     assert "execution.mode" in prompt
     assert "exact names from the capability catalog" in prompt
+    assert "Never duplicate capability.primary_asset" in prompt
     assert "chain-of-thought" in prompt
     assert "decision_summary" in prompt
 
@@ -306,8 +307,8 @@ async def test_empty_boundaries_reject_hallucinated_ids_assets_and_tools(
 
 
 @pytest.mark.asyncio
-async def test_primary_asset_must_also_be_in_allowed_assets() -> None:
-    """등록된 primary라도 allowed_assets에 없으면 allowlist 확장으로 거부한다."""
+async def test_legacy_primary_asset_must_also_be_in_allowed_assets() -> None:
+    """legacy execution-only primary는 기존 allowed_assets 경계를 유지한다."""
     data = _response_data()
     data["execution"]["allowed_assets"] = []
     router = AsyncMock()
@@ -322,6 +323,132 @@ async def test_primary_asset_must_also_be_in_allowed_assets() -> None:
             catalog=_catalog(),
             router=router,
         )
+
+
+@pytest.mark.asyncio
+async def test_capability_primary_does_not_require_supporting_duplicate() -> None:
+    """capability-native full primary는 빈 supporting fallback과 독립 검증한다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "skill",
+            "asset_name": "realtime-lookup-skill",
+        },
+        "supporting_assets": [],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "exact asset owns the request",
+    }
+    data["execution"] = {
+        "mode": "answer_with_evidence",
+        "allowed_tools": [],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "fallback only",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    plan = await plan_turn_with_llm(
+        "질문",
+        candidates=_candidates(),
+        catalog=_catalog(),
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "realtime-lookup-skill"
+    assert plan.capability.supporting_assets == ()
+
+
+@pytest.mark.asyncio
+async def test_unknown_capability_primary_is_rejected() -> None:
+    """catalog에 없는 capability-native primary는 fail-closed한다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "recipe",
+            "asset_name": "invented-sports-live",
+        },
+        "supporting_assets": [],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "invented exact asset",
+    }
+    data["execution"] = {
+        "mode": "answer_with_evidence",
+        "allowed_tools": [],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "fallback only",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_asset"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skill_runtime_visible", "side_effecting_skill", "boundary_code"),
+    [
+        (False, False, "unknown_or_internal_asset"),
+        (True, True, "confirmation_required"),
+    ],
+)
+async def test_capability_primary_preserves_catalog_trust_boundaries(
+    skill_runtime_visible: bool,
+    side_effecting_skill: bool,
+    boundary_code: str,
+) -> None:
+    """독립 primary도 internal/confirmation 경계를 우회하지 못한다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "skill",
+            "asset_name": "realtime-lookup-skill",
+        },
+        "supporting_assets": [],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "exact asset owns the request",
+    }
+    data["execution"] = {
+        "mode": "answer_with_evidence",
+        "allowed_tools": [],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "fallback only",
+    }
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=_catalog(
+                skill_runtime_visible=skill_runtime_visible,
+                side_effecting_skill=side_effecting_skill,
+            ),
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == boundary_code
 
 
 @pytest.mark.asyncio

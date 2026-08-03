@@ -117,8 +117,13 @@ def _raw_asset_identity(
 def _requested_asset_scope(
     plan: UnifiedTurnPlan,
     raw_data: Mapping[str, object] | None,
-) -> tuple[tuple[str, str] | None, tuple[tuple[str, str], ...], tuple[str, ...]]:
-    """raw 응답에서 primary/allowed asset과 tool 이름을 추출한다."""
+) -> tuple[
+    tuple[str, str] | None,
+    tuple[tuple[str, str], ...],
+    tuple[str, ...],
+    bool,
+]:
+    """raw 응답의 asset scope와 legacy execution-only 여부를 추출한다."""
     if raw_data is None or not isinstance(raw_data.get("execution"), Mapping):
         primary = plan.capability.primary_asset
         primary_identity = (
@@ -130,7 +135,7 @@ def _requested_asset_scope(
             (asset.asset_type, asset.name)
             for asset in plan.capability.supporting_assets
         )
-        return primary_identity, allowed, plan.execution.allowed_tools
+        return primary_identity, allowed, plan.execution.allowed_tools, False
 
     execution = raw_data["execution"]
     capability = raw_data.get("capability")
@@ -140,12 +145,14 @@ def _requested_asset_scope(
             allow_none=True,
         )
         raw_allowed = capability.get("supporting_assets")
+        legacy_execution_scope = False
     else:
         primary_identity = _raw_asset_identity(
             execution.get("primary_asset"),
             allow_none=True,
         )
         raw_allowed = execution.get("allowed_assets")
+        legacy_execution_scope = True
     if not isinstance(raw_allowed, list):
         raise PlanBoundaryViolation("invalid_allowed_assets")
     allowed: list[tuple[str, str]] = []
@@ -162,7 +169,12 @@ def _requested_asset_scope(
         if not isinstance(item, str) or not item.strip():
             raise PlanBoundaryViolation("invalid_allowed_tool")
         tools.append(item.strip())
-    return primary_identity, tuple(allowed), tuple(tools)
+    return (
+        primary_identity,
+        tuple(allowed),
+        tuple(tools),
+        legacy_execution_scope,
+    )
 
 
 def validate_turn_plan_boundaries(
@@ -198,11 +210,17 @@ def validate_turn_plan_boundaries(
         for asset in runtime_assets.values()
         if asset.asset_type == "native_tool"
     }
-    primary, allowed_assets, allowed_tools = _requested_asset_scope(
-        plan,
-        raw_data,
+    primary, allowed_assets, allowed_tools, legacy_execution_scope = (
+        _requested_asset_scope(
+            plan,
+            raw_data,
+        )
     )
-    if primary is not None and primary not in allowed_assets:
+    if (
+        legacy_execution_scope
+        and primary is not None
+        and primary not in allowed_assets
+    ):
         raise PlanBoundaryViolation("primary_not_allowed")
 
     referenced_assets = set(allowed_assets)
