@@ -644,3 +644,24 @@ def test_execute_skill_meta_tool_accepts_catalogued_allowed_skill() -> None:
     )
 
     assert result.status is GateStatus.PASS
+
+
+def test_full_coverage_recipe_with_top_level_tool_requests_repair() -> None:
+    recipe = AssetRef("recipe", "sports-live")
+    result = PlanGate().evaluate(
+        _plan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            primary_asset=recipe,
+            allowed_tools=("web_search",),
+        ),
+        candidates=_candidates(),
+        catalog=_catalog(
+            _asset("sports-live", asset_type="recipe"),
+            _asset("web_search", asset_type="native_tool"),
+        ),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "asset.full_coverage_recipe_has_top_level_tools" in {
+        violation.code for violation in result.violations
+    }
