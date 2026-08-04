@@ -1,5 +1,12 @@
 """LangGraph V4 런타임의 도메인 중립 계약과 상태 어휘를 공개한다."""
 
+from .adapters import (
+    AdapterResponse,
+    BoundSkillPayload,
+    GenericAssetAdapter,
+    GenericRecipeAdapter,
+    GenericSkillAdapter,
+)
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -33,6 +40,12 @@ from .events import (
     GraphEventV1,
     RouteTransitionV1,
 )
+from .idempotency import (
+    RedispatchDecision,
+    RedispatchGuardResult,
+    guard_redispatch,
+    invocation_signature,
+)
 from .reducers import ReducerInvariantError, reduce_state
 from .state import RuntimeGraphState, RuntimeSnapshotV1, new_runtime_snapshot
 from .status import (
@@ -47,12 +60,14 @@ from .status import (
 
 __all__ = [
     "ActionReceiptV1",
+    "AdapterResponse",
     "AssetBindingRefV1",
     "AssetDefinitionSnapshotV1",
     "AssetInvocationV1",
     "AssetRefV1",
     "AssetResultStatus",
     "AttachmentRefV1",
+    "BoundSkillPayload",
     "BudgetDeltaV1",
     "CanonicalPayload",
     "ContractDescriptorV1",
@@ -68,12 +83,17 @@ __all__ = [
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
     "FinalArtifactV1",
+    "GenericAssetAdapter",
+    "GenericRecipeAdapter",
+    "GenericSkillAdapter",
     "GraphEventKind",
     "GraphEventV1",
     "InvocationStatus",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
+    "RedispatchDecision",
+    "RedispatchGuardResult",
     "ReducerInvariantError",
     "RegistryAssetEntryV1",
     "RequestEnvelopeV1",
@@ -83,6 +103,8 @@ __all__ = [
     "RuntimeSnapshotV1",
     "TerminalOutcome",
     "build_contract_registry",
+    "guard_redispatch",
+    "invocation_signature",
     "new_runtime_snapshot",
     "reduce_state",
 ]
