@@ -12,6 +12,48 @@ from .contracts import AssetBindingRefV1, AssetInvocationV1
 from .status import EffectStatus
 
 
+class IdempotencyInvariantError(ValueError):
+    """동일 identity가 서로 다른 canonical payload를 가리킬 때 발생한다."""
+
+
+def _stable_id(namespace: str, *parts: str) -> str:
+    canonical = json.dumps(
+        [namespace, *parts], ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def delivery_id(request_id: str, artifact_hash: str, destination_ref: str) -> str:
+    """같은 final artifact와 destination의 전송 identity를 고정한다."""
+    return _stable_id("delivery.v1", request_id, artifact_hash, destination_ref)
+
+
+def persistence_id(session_key: str, request_id: str, artifact_hash: str) -> str:
+    """ConversationStore outbound write identity를 delivery와 분리한다."""
+    return _stable_id("persistence.v1", session_key, request_id, artifact_hash)
+
+
+class UniquePayloadLedger:
+    """identity unique + same bytes no-op 규칙을 구현하는 journal primitive다."""
+
+    def __init__(self) -> None:
+        self._payload_hashes: dict[str, str] = {}
+
+    def record(self, identity: str, payload_hash: str) -> bool:
+        existing = self._payload_hashes.get(identity)
+        if existing is None:
+            self._payload_hashes[identity] = payload_hash
+            return True
+        if existing != payload_hash:
+            raise IdempotencyInvariantError(
+                f"identity {identity!r} already has a different payload"
+            )
+        return False
+
+    def get(self, identity: str) -> str | None:
+        return self._payload_hashes.get(identity)
+
+
 class ActionReceiptLike(Protocol):
     """append-only graph action receipt와 공유하는 structural subset."""
 

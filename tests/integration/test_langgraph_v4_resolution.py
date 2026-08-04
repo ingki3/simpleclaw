@@ -7,7 +7,11 @@ import pytest
 
 from simpleclaw.graph_runtime.builder import compile_core_graph
 from simpleclaw.graph_runtime.checkpoint import InterruptRequestV1
-from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks, RouteContinuityV1
+from simpleclaw.graph_runtime.nodes import (
+    CoreCompletionCallbacks,
+    CoreNodeCallbacks,
+    RouteContinuityV1,
+)
 from simpleclaw.graph_runtime.routing import (
     GeneralRoute,
     RecipeMatchOutcome,
@@ -80,10 +84,26 @@ def _initial_state() -> dict:
     }
 
 
+def _completion() -> CoreCompletionCallbacks:
+    async def no_op(_state):
+        return {}
+
+    return CoreCompletionCallbacks(
+        final_composition=no_op,
+        prepare_delivery=no_op,
+        commit_delivery=no_op,
+        persist_delivery_outcome=no_op,
+    )
+
+
+def _compile(callbacks: CoreNodeCallbacks):
+    return compile_core_graph(callbacks, _completion())
+
+
 @pytest.mark.asyncio
 async def test_recipe_resolved_precedes_every_general_route() -> None:
     visits = []
-    graph = compile_core_graph(
+    graph = _compile(
         _callbacks(recipe_match=RecipeMatchOutcome.APPLICABLE, visits=visits)
     )
     result = await graph.ainvoke(_initial_state())
@@ -105,7 +125,7 @@ async def test_recipe_resolved_precedes_every_general_route() -> None:
 )
 async def test_safe_recipe_miss_reaches_exactly_one_general_route(route, expected) -> None:
     visits = []
-    graph = compile_core_graph(
+    graph = _compile(
         _callbacks(
             recipe_match=RecipeMatchOutcome.NO_MATCH,
             general_route=route,
@@ -138,7 +158,7 @@ async def test_react_escalation_preserves_control_state() -> None:
         return {"normalized_result": "deep"}
 
     callbacks = replace(callbacks, deep_research_subgraph=deep)
-    graph = compile_core_graph(callbacks)
+    graph = _compile(callbacks)
     await graph.ainvoke(_initial_state())
 
     continuity = seen[0]
@@ -151,7 +171,7 @@ async def test_react_escalation_preserves_control_state() -> None:
 @pytest.mark.asyncio
 async def test_budget_exhaustion_never_dispatches_deep_research() -> None:
     visits = []
-    graph = compile_core_graph(
+    graph = _compile(
         _callbacks(
             recipe_match=RecipeMatchOutcome.NO_MATCH,
             solver_outcome=SolverOutcome.BUDGET_EXHAUSTED,
@@ -231,7 +251,7 @@ async def test_recipe_input_and_unsafe_results_never_dispatch_general_solver(
             },
         )
 
-    graph = compile_core_graph(callbacks)
+    graph = _compile(callbacks)
     result = await graph.ainvoke(_initial_state())
 
     assert visits.count("select_general_route") == expected_general_calls
@@ -258,7 +278,7 @@ async def test_simple_and_react_terminal_matrix_compiles_to_one_artifact(
     route, outcome
 ) -> None:
     visits = []
-    graph = compile_core_graph(
+    graph = _compile(
         _callbacks(
             recipe_match=RecipeMatchOutcome.NO_MATCH,
             general_route=route,
@@ -280,7 +300,7 @@ async def test_simple_and_react_terminal_matrix_compiles_to_one_artifact(
 )
 async def test_deep_research_every_outcome_reaches_artifact_or_interrupt(outcome) -> None:
     visits = []
-    graph = compile_core_graph(
+    graph = _compile(
         _callbacks(
             recipe_match=RecipeMatchOutcome.NO_MATCH,
             general_route=GeneralRoute.DEEP_RESEARCH,

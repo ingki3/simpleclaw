@@ -8,7 +8,7 @@ from langgraph.types import Command
 
 from simpleclaw.graph_runtime.builder import compile_core_graph
 from simpleclaw.graph_runtime.checkpoint import InterruptRequestV1, UserDecisionV1
-from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks
+from simpleclaw.graph_runtime.nodes import CoreCompletionCallbacks, CoreNodeCallbacks
 from simpleclaw.graph_runtime.routing import (
     GeneralRoute,
     RecipeMatchOutcome,
@@ -141,6 +141,18 @@ def _interrupt_callbacks(
     )
 
 
+def _completion() -> CoreCompletionCallbacks:
+    async def no_op(_state):
+        return {}
+
+    return CoreCompletionCallbacks(
+        final_composition=no_op,
+        prepare_delivery=no_op,
+        commit_delivery=no_op,
+        persist_delivery_outcome=no_op,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "kind,expected_planner_calls,expected_dispatch_calls",
@@ -151,7 +163,9 @@ async def test_interrupt_resumes_exact_recipe_control_point(
 ) -> None:
     counters = {"planner": 0, "dispatch": 0}
     graph = compile_core_graph(
-        _interrupt_callbacks(kind, counters), checkpointer=InMemorySaver()
+        _interrupt_callbacks(kind, counters),
+        _completion(),
+        checkpointer=InMemorySaver(),
     )
     config = {"configurable": {"thread_id": "turn:interrupt-test"}}
 
@@ -183,6 +197,7 @@ async def test_clarification_resumes_exact_solver_control_point(resume_node) -> 
         _interrupt_callbacks(
             "clarification", counters, resume_node=resume_node
         ),
+        _completion(),
         checkpointer=InMemorySaver(),
     )
     config = {"configurable": {"thread_id": "turn:interrupt-test"}}

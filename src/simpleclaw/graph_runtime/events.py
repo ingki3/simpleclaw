@@ -131,4 +131,5 @@ class DeliveryReceiptV1(LedgerModel):
     occurred_at: datetime
     status: DeliveryStatus
     attempt: int = Field(default=1, gt=0)
+    external_message_id: str | None = None
     detail: str | None = None

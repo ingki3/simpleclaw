@@ -23,6 +23,7 @@ from .checkpoint import (
     resolve_checkpoint_path,
     validate_resume,
 )
+from .composition import FinalCompositionRuntime
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -57,12 +58,23 @@ from .events import (
     RouteTransitionV1,
 )
 from .idempotency import (
+    IdempotencyInvariantError,
     RedispatchDecision,
     RedispatchGuardResult,
+    UniquePayloadLedger,
+    delivery_id,
     guard_redispatch,
     invocation_signature,
+    persistence_id,
 )
-from .nodes import CoreGraphState, CoreNodeCallbacks, RouteContinuityV1
+from .nodes import (
+    CoreCompletionCallbacks,
+    CoreGraphState,
+    CoreNodeCallbacks,
+    RouteContinuityV1,
+    final_composition_node,
+    prepare_delivery_intent,
+)
 from .reducers import ReducerInvariantError, reduce_state
 from .routing import (
     CORE_TRANSITION_TABLES,
@@ -71,6 +83,16 @@ from .routing import (
     RecipeResultOutcome,
     RoutingInvariantError,
     SolverOutcome,
+)
+from .runtime import (
+    DeliveryRuntime,
+    GraphCompletionRuntime,
+    GraphDeliveryContext,
+    InMemoryDeliveryJournal,
+    InMemoryPersistenceJournal,
+    PersistenceReceiptV1,
+    PersistenceRuntime,
+    SQLiteDeliveryJournal,
 )
 from .state import RuntimeGraphState, RuntimeSnapshotV1, new_runtime_snapshot
 from .status import (
@@ -104,6 +126,7 @@ __all__ = [
     "ContractRefV1",
     "ContractRegistryError",
     "ContractRegistrySnapshotV1",
+    "CoreCompletionCallbacks",
     "CoreGraphState",
     "CoreNodeCallbacks",
     "CronGraphFacade",
@@ -113,22 +136,31 @@ __all__ = [
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryReceiptV1",
+    "DeliveryRuntime",
     "DeliveryStatus",
     "DraftArtifactV1",
     "EffectStatus",
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
     "FinalArtifactV1",
+    "FinalCompositionRuntime",
     "GeneralRoute",
     "GenericAssetAdapter",
     "GenericRecipeAdapter",
     "GenericSkillAdapter",
+    "GraphCompletionRuntime",
+    "GraphDeliveryContext",
     "GraphEventKind",
     "GraphEventV1",
+    "IdempotencyInvariantError",
+    "InMemoryDeliveryJournal",
+    "InMemoryPersistenceJournal",
     "InterruptRequestV1",
     "InvocationStatus",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
+    "PersistenceReceiptV1",
+    "PersistenceRuntime",
     "PlanStatus",
     "RecipeMatchOutcome",
     "RecipeResultOutcome",
@@ -144,15 +176,21 @@ __all__ = [
     "RoutingInvariantError",
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
+    "SQLiteDeliveryJournal",
     "SolverOutcome",
     "TerminalOutcome",
+    "UniquePayloadLedger",
     "UserDecisionV1",
     "build_contract_registry",
     "build_core_graph",
     "compile_core_graph",
+    "delivery_id",
+    "final_composition_node",
     "guard_redispatch",
     "invocation_signature",
     "new_runtime_snapshot",
+    "persistence_id",
+    "prepare_delivery_intent",
     "reduce_state",
     "resolve_checkpoint_path",
     "validate_resume",
