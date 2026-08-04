@@ -104,11 +104,14 @@ def _architecture_violations(sources: dict[str, str]) -> list[str]:
     for label, source in sources.items():
         tree = ast.parse(source, filename=label)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if CONCRETE_CONTRACT_ID.fullmatch(node.value):
-                    violations.append(
-                        f"{label}:{node.lineno}:static-contract-id:{node.value}"
-                    )
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and CONCRETE_CONTRACT_ID.fullmatch(node.value)
+            ):
+                violations.append(
+                    f"{label}:{node.lineno}:static-contract-id:{node.value}"
+                )
             for expression in _control_flow_expressions(node):
                 for lineno, key in _payload_key_accesses(expression):
                     violations.append(f"{label}:{lineno}:payload-key-branch:{key}")
