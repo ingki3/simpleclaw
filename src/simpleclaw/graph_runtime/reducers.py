@@ -7,7 +7,13 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
-from .events import ActionReceiptV1, DeliveryReceiptV1, GraphEventKind, GraphEventV1, RouteTransitionV1
+from .events import (
+    ActionReceiptV1,
+    DeliveryReceiptV1,
+    GraphEventKind,
+    GraphEventV1,
+    RouteTransitionV1,
+)
 from .state import (
     ArtifactStateV1,
     BudgetStateV1,
@@ -104,7 +110,7 @@ def reduce_state(
             if prior_fingerprints.get(ledger_id) != fingerprint:
                 raise ReducerInvariantError(f"conflicting previously processed ledger id: {ledger_id}")
             continue
-        request_id = getattr(item, "request_id")
+        request_id = item.request_id
         _ensure_request(current, request_id)
         current = _apply_item(current, item)
         prior_fingerprints[ledger_id] = fingerprint

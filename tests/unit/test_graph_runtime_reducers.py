@@ -10,8 +10,11 @@ from simpleclaw.graph_runtime.events import (
 )
 from simpleclaw.graph_runtime.reducers import ReducerInvariantError, reduce_state
 from simpleclaw.graph_runtime.state import new_runtime_snapshot
-from simpleclaw.graph_runtime.status import EffectStatus, LifecycleStatus, TerminalOutcome
-
+from simpleclaw.graph_runtime.status import (
+    EffectStatus,
+    LifecycleStatus,
+    TerminalOutcome,
+)
 
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
 

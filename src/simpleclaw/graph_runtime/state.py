@@ -8,7 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .contracts import RequestEnvelopeV1
 from .events import ActionReceiptV1, DeliveryReceiptV1, GraphEventV1, RouteTransitionV1
-from .status import DeliveryStatus, EffectStatus, LifecycleStatus, PlanStatus, TerminalOutcome
+from .status import (
+    DeliveryStatus,
+    EffectStatus,
+    LifecycleStatus,
+    PlanStatus,
+    TerminalOutcome,
+)
 
 
 class SnapshotModel(BaseModel):
