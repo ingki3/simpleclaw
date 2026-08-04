@@ -143,6 +143,8 @@ def _direct_plan(*, fingerprint: str) -> UnifiedTurnPlan:
 
 
 def _lookup_result(*, domain: str, claim: str, source_url: str) -> str:
+    """실시간 조회 대역이 현행 typed evidence 경계를 통과하도록 결과를 직렬화한다."""
+
     return json.dumps(
         {
             "kind": domain,
@@ -157,6 +159,8 @@ def _lookup_result(*, domain: str, claim: str, source_url: str) -> str:
 
 
 def _lookup_payload(token: str) -> dict:
+    """조회 요청의 도메인과 질의를 검증할 수 있도록 인코딩된 payload를 복원한다."""
+
     return json.loads(base64.urlsafe_b64decode(token).decode("utf-8"))
 
 
@@ -394,7 +398,7 @@ async def test_player_status_requires_current_turn_evidence_in_configured_modes(
     monkeypatch,
     mode,
 ) -> None:
-    """SP-01/SP-06: configured modes use the current unified plan gate."""
+    """SP-01/SP-06 설정 모드가 현행 unified plan gate를 사용함을 검증한다."""
 
     query = "롯데 홍민기 요즘 어떤 상태야??"
     orchestrator = AgentOrchestrator(_config(tmp_path, mode=mode))
