@@ -12,15 +12,17 @@ class TestSkillDiscovery:
     def test_discover_from_local(self, tmp_path):
         """Discover skills from local directory only."""
         result = discover_skills(FIXTURES, tmp_path / "no_global")
-        assert len(result) == 2
         names = {s.name for s in result}
-        assert "test-skill" in names
-        assert "another-skill" in names
+        assert names == {"another-skill", "contract-fixture-step", "test-skill"}
 
     def test_discover_from_global(self, tmp_path):
         """Discover skills from global directory only."""
         result = discover_skills(tmp_path / "no_local", FIXTURES)
-        assert len(result) == 2
+        assert {skill.name for skill in result} == {
+            "another-skill",
+            "contract-fixture-step",
+            "test-skill",
+        }
         for skill in result:
             assert skill.scope == SkillScope.GLOBAL
 

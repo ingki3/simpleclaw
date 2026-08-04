@@ -107,9 +107,13 @@ step_bindings:
 
     def test_discover_recipes(self):
         recipes = discover_recipes(FIXTURES)
-        assert len(recipes) == 3
         names = {r.name for r in recipes}
-        assert "daily-report" in names
+        assert names == {
+            "contract-fixture-workflow",
+            "daily-report",
+            "morning-briefing",
+            "sports-live",
+        }
 
     def test_discover_empty_dir(self, tmp_path):
         result = discover_recipes(tmp_path / "nonexistent")
