@@ -230,6 +230,13 @@ from simpleclaw.skills.realtime_lookup import (
     lookup_async as run_realtime_lookup,
 )
 from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
+from simpleclaw.graph_runtime.runtime import (
+    LangGraphV4RolloutFacade,
+    LegacyRunTelemetryV1,
+    ShadowBudgetUsageV1,
+)
+from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.status import TerminalOutcome
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -257,6 +264,16 @@ def _deterministic_rollout_sample(
         "big",
     )
     return bucket / float(1 << 64) < bounded_rate
+
+
+def _langgraph_v4_route_for_plan(plan: UnifiedTurnPlan) -> str:
+    """Primary plan의 asset/mode를 V4의 고정 3-way route로 투영한다."""
+    primary = plan.capability.primary_asset
+    if primary is not None and primary.asset_type == "recipe":
+        return "recipe"
+    if plan.execution.mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM:
+        return "deep_research"
+    return "react"
 
 
 def _canary_read_only_eligible(
@@ -1311,6 +1328,24 @@ class AgentOrchestrator:
                 )
                 response_text = tool_loop_result.text
 
+                if turn.plan is not None:
+                    self._schedule_unified_turn_planner_shadow(
+                        text,
+                        recent_rows=recent_rows,
+                        plan=turn.plan,
+                        legacy=LegacyRunTelemetryV1(
+                            selected_route=_langgraph_v4_route_for_plan(turn.plan),
+                            terminal_outcome=(
+                                TerminalOutcome.COMPLETED
+                                if tool_loop_result.success
+                                else TerminalOutcome.FAILED
+                            ),
+                            model_calls=0,
+                        ),
+                        request_id=turn.turn_id,
+                        session_key=turn.session_key,
+                    )
+
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
@@ -2081,6 +2116,10 @@ class AgentOrchestrator:
         text: str,
         *,
         recent_rows: list[tuple[int, ConversationMessage]] | None = None,
+        plan: UnifiedTurnPlan | None = None,
+        legacy: LegacyRunTelemetryV1 | None = None,
+        request_id: str = "",
+        session_key: str = "",
     ) -> None:
         """설정과 sampling을 통과한 ordinary turn만 background task로 예약한다."""
         config = self._unified_turn_planner_config
@@ -2105,6 +2144,10 @@ class AgentOrchestrator:
                 browser_handoff_available=bool(
                     self._browser_handoff_config.get("enabled", False)
                 ),
+                connected_plan=plan,
+                legacy=legacy,
+                request_id=request_id,
+                session_key=session_key,
             )
         )
         self._background_tasks.add(task)
@@ -2134,9 +2177,25 @@ class AgentOrchestrator:
         recipes: tuple[RecipeDefinition, ...],
         cron_available: bool,
         browser_handoff_available: bool,
+        connected_plan: UnifiedTurnPlan | None = None,
+        legacy: LegacyRunTelemetryV1 | None = None,
+        request_id: str = "",
+        session_key: str = "",
     ) -> None:
         """Planner→PlanGate를 실행하고 redacted telemetry만 남긴다."""
         config = self._unified_turn_planner_config
+        if str(config.get("architecture")) == "langgraph_v4":
+            if connected_plan is None or legacy is None or not request_id:
+                raise ValueError("langgraph_v4 shadow requires connected primary evidence")
+            await self._run_langgraph_v4_connected_shadow(
+                plan=connected_plan,
+                legacy=legacy,
+                request_id=request_id,
+                session_key=session_key,
+                skills=skills,
+                recipes=recipes,
+            )
+            return
         candidate_limit = int(config.get("context_candidate_limit", 8))
         candidates = ContextCandidateSet((), 0, False)
         catalog_fingerprint = ""
@@ -2199,6 +2258,115 @@ class AgentOrchestrator:
                 event,
                 structured_logger=self._structured_logger,
             )
+
+    async def _run_langgraph_v4_connected_shadow(
+        self,
+        *,
+        plan: UnifiedTurnPlan,
+        legacy: LegacyRunTelemetryV1,
+        request_id: str,
+        session_key: str,
+        skills: tuple[SkillDefinition, ...],
+        recipes: tuple[RecipeDefinition, ...],
+    ) -> None:
+        """Primary의 exact plan을 V4 graph와 rollout gate 끝까지 연결한다."""
+        v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
+        if not isinstance(v4, dict):
+            raise ValueError("langgraph_v4 configuration is required")
+        raw_budget = v4.get("budget", {})
+        checkpoint = v4.get("checkpoint", {})
+        if not isinstance(raw_budget, dict) or not isinstance(checkpoint, dict):
+            raise ValueError("langgraph_v4 budget/checkpoint configuration is required")
+        budget = ShadowBudgetUsageV1(
+            max_graph_steps=raw_budget.get("max_graph_steps"),
+            max_asset_calls=raw_budget.get("max_asset_calls"),
+            max_llm_calls=raw_budget.get("max_llm_calls"),
+            max_tokens=raw_budget.get("max_tokens"),
+            max_seconds=raw_budget.get("max_seconds"),
+            max_parallel_invocations=raw_budget.get("max_parallel_invocations"),
+            graph_steps=0,
+            asset_calls=0,
+            llm_calls=0,
+            tokens=0,
+            elapsed_seconds=0,
+            parallel_peak=0,
+            stop_condition="completed",
+        )
+        facade = LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="shadow",
+            shadow_no_send=bool(v4.get("shadow_no_send", False)),
+            budget=budget,
+            checkpoint_path=str(checkpoint.get("path") or ""),
+        )
+
+        async def execute_skill(definition, argv):
+            raw = await self._execute_skill(definition.name, shlex.join(argv))
+            decoded = json.loads(raw)
+            if not isinstance(decoded, dict):
+                raise TypeError("shadow skill output must be a JSON object")
+            return decoded
+
+        async def execute_recipe(definition, bound_steps):
+            if not bound_steps:
+                raise ValueError("shadow recipe requires declared binding")
+            payload = json.loads(bound_steps[0].source_payload_json)
+            if not isinstance(payload, dict):
+                raise TypeError("shadow recipe payload must be an object")
+            raw = await self._execute_exact_recipe_asset(
+                definition.name,
+                {
+                    key: (
+                        value
+                        if isinstance(value, str)
+                        else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    )
+                    for key, value in payload.items()
+                },
+            )
+            if not isinstance(raw, dict):
+                raise TypeError("shadow recipe output must be a JSON object")
+            return raw
+
+        result = await ConnectedShadowTurnRunner(
+            facade=facade,
+            definitions=(*recipes, *skills),
+            conversation_store=self._store,
+            recipe_executor=execute_recipe,
+            skill_executor=execute_skill,
+        ).run(
+            plan=plan,
+            legacy=legacy,
+            request_id=request_id,
+            session_key=session_key,
+            planner_model_calls=legacy.model_calls,
+            planner_tokens=0,
+        )
+        telemetry = self._unified_turn_planner_config.get("telemetry", {})
+        if (
+            self._structured_logger is None
+            or not isinstance(telemetry, dict)
+            or not telemetry.get("enabled", True)
+        ):
+            return
+        allowed = set(v4.get("telemetry_fields", ()))
+        shadow_fields = {
+            key: value
+            for key, value in result.telemetry.as_dict().items()
+            if key in allowed
+        }
+        self._structured_logger.log(
+            action_type="langgraph_v4_shadow_rollout",
+            status=(
+                "failure" if result.comparison.rollback_required else "success"
+            ),
+            trace_id="",
+            **shadow_fields,
+            side_effect_counts=result.side_effect_counts.as_dict(),
+            rollback_required=result.comparison.rollback_required,
+            rollback_reason=",".join(result.comparison.rollback_reasons) or None,
+            canary_eligible=result.canary.eligible,
+        )
 
     async def process_operator_message(
         self,

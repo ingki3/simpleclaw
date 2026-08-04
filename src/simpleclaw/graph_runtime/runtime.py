@@ -438,6 +438,18 @@ def compare_shadow_run(
         reasons.append("terminal_outcome_mismatch")
     if shadow.delivery_status is not DeliveryStatus.SHADOWED:
         reasons.append("no_send_delivery_violation")
+    if shadow.invocation_status is not InvocationStatus.SUCCEEDED:
+        reasons.append("invocation_not_succeeded")
+    if shadow.asset_result_status is not AssetResultStatus.RESOLVED:
+        reasons.append("asset_result_not_resolved")
+    if shadow.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}:
+        reasons.append("effect_not_safe")
+    if shadow.terminal_outcome is not TerminalOutcome.COMPLETED:
+        reasons.append("shadow_not_completed")
+    if shadow.budget_usage.stop_condition != "completed":
+        reasons.append("stop_condition_not_completed")
+    if shadow.budget_usage.exhausted:
+        reasons.append("budget_exhausted")
     if side_effect_counts.total:
         reasons.append("external_side_effect")
     return ShadowComparisonTelemetryV1(

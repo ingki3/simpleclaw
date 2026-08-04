@@ -108,6 +108,10 @@ class CoreGraphState(TypedDict, total=False):
     deadline_at: datetime
     cancellation_token: str
     planner_calls: int
+    invocation: object
+    invocation_status: object
+    asset_result_status: object
+    effect_status: object
 
 
 def final_composition_node(

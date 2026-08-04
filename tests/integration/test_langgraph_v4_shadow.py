@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
+from types import MethodType
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,14 @@ from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
     DeliveryIntentV1,
     NormalizedAssetResultV1,
+)
+from simpleclaw.graph_runtime.adapters.delivery import (
+    CronDeliveryAdapter,
+    SenderReceipt,
+    TelegramDeliveryAdapter,
+)
+from simpleclaw.graph_runtime.adapters.persistence import (
+    ConversationStorePersistenceAdapter,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.graph_runtime.runtime import (
@@ -27,6 +37,8 @@ from simpleclaw.graph_runtime.runtime import (
     compare_shadow_run,
     evaluate_read_only_canary,
 )
+from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.side_effect_monitor import capture_shadow_side_effects
 from simpleclaw.graph_runtime.status import (
     AssetResultStatus,
     DeliveryStatus,
@@ -35,6 +47,23 @@ from simpleclaw.graph_runtime.status import (
     TerminalOutcome,
 )
 from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.plan_gate import GateStatus, PlanGate
+from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
+)
+from simpleclaw.memory import ConversationStore
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -52,6 +81,54 @@ def _registry():
         if item.name in {"contract-fixture-workflow", "contract-fixture-step"}
     ]
     return build_contract_registry(definitions)
+
+
+def _definitions():
+    recipes = discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
+    skills = discover_skills(
+        REPO_ROOT / "tests/fixtures/skills",
+        REPO_ROOT / "tests/fixtures/global-skills",
+    )
+    return tuple(
+        item
+        for item in (*recipes, *skills)
+        if item.name in {"contract-fixture-workflow", "contract-fixture-step"}
+    )
+
+
+def _plan(asset_type: str, name: str, mode: ExecutionMode) -> UnifiedTurnPlan:
+    asset = AssetRef(asset_type=asset_type, name=name)
+    return UnifiedTurnPlan(
+        original_text="connected shadow fixture",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="connected-shadow-value",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("fixture",),
+        intents=("verify",),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="fixture",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(
+            mode=mode,
+            primary_asset=asset,
+            allowed_assets=(asset,),
+        ),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.PARTIAL,
+            primary_asset=asset,
+            supporting_assets=(asset,),
+        ),
+        confidence=1.0,
+        decision_summary="connected fixture",
+    )
 
 
 def _invocation(registry) -> AssetInvocationV1:
@@ -289,3 +366,341 @@ def test_shadow_budget_rejects_unbounded_axes_and_records_stop_condition() -> No
     budget = _budget(stop_condition="deadline")
     assert budget.stop_condition == "deadline"
     assert budget.exhausted is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("invocation_status", InvocationStatus.FAILED_TERMINAL, "invocation_not_succeeded"),
+        ("asset_result_status", AssetResultStatus.FAILED, "asset_result_not_resolved"),
+        ("effect_status", EffectStatus.UNKNOWN, "effect_not_safe"),
+        ("terminal_outcome", TerminalOutcome.FAILED, "terminal_outcome_mismatch"),
+    ],
+)
+def test_canary_gate_fails_closed_for_each_unsafe_status_axis(
+    field, value, reason
+) -> None:
+    registry = _registry()
+    invocation = _invocation(registry)
+    entry = registry.asset(invocation.asset_ref)
+    assert entry is not None
+    result = NormalizedAssetResultV1(
+        invocation_id=invocation.invocation_id,
+        output_contract=invocation.output_contract,
+        status=AssetResultStatus.RESOLVED,
+        payload={"fixture_result": "ok"},
+        payload_hash=hashlib.sha256(b"result").hexdigest(),
+    )
+    values = {
+        "invocation_status": InvocationStatus.SUCCEEDED,
+        "asset_result_status": AssetResultStatus.RESOLVED,
+        "effect_status": EffectStatus.NONE,
+        "terminal_outcome": TerminalOutcome.COMPLETED,
+    }
+    values[field] = value
+    if field == "asset_result_status":
+        result = result.model_copy(update={"status": value})
+    shadow = ShadowRunTelemetryV1.from_contract_run(
+        run_id="unsafe-run",
+        request_id="unsafe-request",
+        checkpoint_thread_id="shadow:unsafe",
+        plan_id="unsafe-plan",
+        plan_revision=1,
+        catalog_fingerprint=registry.fingerprint,
+        entry=entry,
+        invocation=invocation,
+        selected_route="recipe",
+        invocation_status=values["invocation_status"],
+        result=result,
+        effect_status=values["effect_status"],
+        terminal_outcome=values["terminal_outcome"],
+        delivery_status=DeliveryStatus.SHADOWED,
+        budget_usage=_budget(),
+        model_call_attribution={"planner": 1},
+    )
+    comparison = compare_shadow_run(
+        LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=1,
+        ),
+        shadow,
+        side_effect_counts=ShadowSideEffectCountsV1(),
+    )
+    decision = evaluate_read_only_canary(comparison, [entry.snapshot])
+
+    assert comparison.rollback_required is True
+    assert decision.eligible is False
+    assert reason in decision.reasons
+
+
+def test_canary_gate_rejects_budget_and_stop_condition_cross_product() -> None:
+    registry = _registry()
+    invocation = _invocation(registry)
+    entry = registry.asset(invocation.asset_ref)
+    assert entry is not None
+    result = NormalizedAssetResultV1(
+        invocation_id=invocation.invocation_id,
+        output_contract=invocation.output_contract,
+        status=AssetResultStatus.RESOLVED,
+        payload={"fixture_result": "ok"},
+        payload_hash=hashlib.sha256(b"result").hexdigest(),
+    )
+    exhausted = ShadowBudgetUsageV1(
+        max_graph_steps=1,
+        max_asset_calls=1,
+        max_llm_calls=1,
+        max_tokens=1,
+        max_seconds=1,
+        max_parallel_invocations=1,
+        graph_steps=2,
+        asset_calls=2,
+        llm_calls=2,
+        tokens=2,
+        elapsed_seconds=2,
+        parallel_peak=2,
+        stop_condition="deadline",
+    )
+    shadow = ShadowRunTelemetryV1.from_contract_run(
+        run_id="budget-run",
+        request_id="budget-request",
+        checkpoint_thread_id="shadow:budget",
+        plan_id="budget-plan",
+        plan_revision=1,
+        catalog_fingerprint=registry.fingerprint,
+        entry=entry,
+        invocation=invocation,
+        selected_route="recipe",
+        invocation_status=InvocationStatus.FAILED_TERMINAL,
+        result=result.model_copy(update={"status": AssetResultStatus.FAILED}),
+        effect_status=EffectStatus.UNKNOWN,
+        terminal_outcome=TerminalOutcome.FAILED,
+        delivery_status=DeliveryStatus.SHADOWED,
+        budget_usage=exhausted,
+        model_call_attribution={"planner": 1},
+    )
+    comparison = compare_shadow_run(
+        LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=1,
+        ),
+        shadow,
+        side_effect_counts=ShadowSideEffectCountsV1(),
+    )
+
+    assert comparison.rollback_required is True
+    assert {
+        "invocation_not_succeeded",
+        "asset_result_not_resolved",
+        "effect_not_safe",
+        "shadow_not_completed",
+        "stop_condition_not_completed",
+        "budget_exhausted",
+    }.issubset(comparison.rollback_reasons)
+
+
+@pytest.mark.asyncio
+async def test_connected_shadow_runs_graph_and_measures_production_call_points(
+    tmp_path,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    intent = DeliveryIntentV1(
+        delivery_id="reachable-delivery",
+        request_id="reachable-request",
+        artifact_id="reachable-artifact",
+        artifact_hash="reachable-hash",
+        channel="telegram",
+        destination_ref="reachable",
+        status=DeliveryStatus.READY,
+        max_attempts=1,
+    )
+
+    async def sender(_destination, _content):
+        return SenderReceipt(external_message_id="reachable-message")
+
+    # 세 counter가 literal이 아니라 실제 production adapter method 진입에서
+    # 증가하는지 setup에서 먼저 입증한 뒤 shadow run delta를 새로 캡처한다.
+    with capture_shadow_side_effects() as reachable:
+        await TelegramDeliveryAdapter(sender).send(intent, "telegram")
+        await CronDeliveryAdapter(sender).send(intent, "cron")
+        ConversationStorePersistenceAdapter(store)(
+            "setup-session",
+            "setup-persistence",
+            hashlib.sha256(b"setup").hexdigest(),
+            "setup",
+        )
+    assert (
+        reachable.telegram_send,
+        reachable.conversation_write,
+        reachable.notifier,
+    ) == (1, 1, 1)
+
+    async def recipe_executor(_definition, _bound_steps):
+        return {"fixture_result": "ok"}
+
+    async def skill_executor(_definition, _argv):
+        return {"operation_result": "ok"}
+
+    budget = _budget()
+    facade = LangGraphV4RolloutFacade(
+        architecture="langgraph_v4",
+        mode="shadow",
+        shadow_no_send=True,
+        budget=budget,
+        checkpoint_path=tmp_path / "shadow-checkpoint.sqlite3",
+        daemon_db_path=tmp_path / "daemon.db",
+        conversations_db_path=tmp_path / "conversation.db",
+    )
+    runner = ConnectedShadowTurnRunner(
+        facade=facade,
+        definitions=_definitions(),
+        conversation_store=store,
+        recipe_executor=recipe_executor,
+        skill_executor=skill_executor,
+    )
+    cases = (
+        ("recipe", "contract-fixture-workflow", ExecutionMode.DIRECT_ANSWER, "recipe"),
+        ("skill", "contract-fixture-step", ExecutionMode.ANSWER_WITH_EVIDENCE, "react"),
+        (
+            "skill",
+            "contract-fixture-step",
+            ExecutionMode.RESOLVE_COMPLEX_PROBLEM,
+            "deep_research",
+        ),
+    )
+    results = []
+    for index, (asset_type, name, mode, route) in enumerate(cases):
+        results.append(
+            await runner.run(
+                plan=_plan(asset_type, name, mode),
+                legacy=LegacyRunTelemetryV1(
+                    selected_route=route,
+                    terminal_outcome=TerminalOutcome.COMPLETED,
+                    model_calls=1,
+                ),
+                request_id=f"connected-{index}",
+                session_key="connected-session",
+                planner_model_calls=1,
+                planner_tokens=10,
+            )
+        )
+
+    assert {item.telemetry.selected_route for item in results} == {
+        "recipe",
+        "react",
+        "deep_research",
+    }
+    assert all(item.telemetry.invocation_status is InvocationStatus.SUCCEEDED for item in results)
+    assert all(item.telemetry.asset_result_status is AssetResultStatus.RESOLVED for item in results)
+    assert all(item.telemetry.delivery_status is DeliveryStatus.SHADOWED for item in results)
+    assert all(item.side_effect_counts.total == 0 for item in results)
+    assert all(item.comparison.rollback_required is False for item in results)
+    assert all(item.canary.eligible is True for item in results)
+    assert len(
+        {
+            (item.telemetry.input_contract_ref, item.telemetry.output_contract_ref)
+            for item in results
+        }
+    ) >= 2
+    # setup writer 한 건 외에는 shadow가 ConversationStore에 아무것도 추가하지 않는다.
+    assert [message.content for message in store.get_recent()] == ["setup"]
+
+
+@pytest.mark.asyncio
+async def test_production_orchestrator_consumes_v4_config_and_emits_rollout(
+    tmp_path,
+) -> None:
+    definitions = _definitions()
+    recipes = tuple(item for item in definitions if item.contract_asset_type == "recipe")
+    skills = tuple(item for item in definitions if item.contract_asset_type == "skill")
+    catalog = build_planner_catalog(skills=skills, recipes=recipes, native_specs=())
+    gate = PlanGate().evaluate(
+        replace(
+            _plan(
+                "recipe",
+                "contract-fixture-workflow",
+                ExecutionMode.DIRECT_ANSWER,
+            ),
+            catalog_fingerprint=catalog.fingerprint,
+        ),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+
+    class StructuredLogger:
+        def __init__(self):
+            self.events = []
+
+        def log(self, **event):
+            self.events.append(event)
+
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._store = ConversationStore(tmp_path / "production-conversation.db")
+    orchestrator._structured_logger = StructuredLogger()
+    orchestrator._unified_turn_planner_config = {
+        "architecture": "langgraph_v4",
+        "telemetry": {"enabled": True},
+        "langgraph_v4": {
+            "shadow_no_send": True,
+            "budget": {
+                "max_graph_steps": 40,
+                "max_asset_calls": 12,
+                "max_llm_calls": 8,
+                "max_tokens": 16000,
+                "max_seconds": 180,
+                "max_parallel_invocations": 3,
+            },
+            "checkpoint": {"path": str(tmp_path / "production-shadow.sqlite3")},
+            "telemetry_fields": (
+                "run_id",
+                "request_id",
+                "selected_route",
+                "invocation_status",
+                "asset_result_status",
+                "effect_status",
+                "delivery_status",
+                "budget_usage",
+                "stop_condition",
+            ),
+        },
+    }
+
+    async def execute_recipe(self, _name, _variables, *, on_progress=None):
+        return {"fixture_result": "production-connected"}
+
+    async def execute_skill(self, _name, _arguments):
+        return {"operation_result": "production-connected"}
+
+    orchestrator._execute_exact_recipe_asset = MethodType(
+        execute_recipe, orchestrator
+    )
+    orchestrator._execute_skill = MethodType(execute_skill, orchestrator)
+    await orchestrator._run_langgraph_v4_connected_shadow(
+        plan=gate.effective_plan,
+        legacy=LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=1,
+        ),
+        request_id="production-connected-request",
+        session_key="production-connected-session",
+        skills=skills,
+        recipes=recipes,
+    )
+
+    assert orchestrator._store.get_recent() == []
+    assert len(orchestrator._structured_logger.events) == 1
+    event = orchestrator._structured_logger.events[0]
+    assert event["action_type"] == "langgraph_v4_shadow_rollout"
+    assert event["status"] == "success"
+    assert event["selected_route"] == "recipe"
+    assert event["side_effect_counts"] == {
+        "telegram_send": 0,
+        "conversation_write": 0,
+        "notifier": 0,
+    }
+    assert event["rollback_required"] is False
+    assert event["canary_eligible"] is True
