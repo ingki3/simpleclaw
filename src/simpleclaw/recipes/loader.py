@@ -64,7 +64,7 @@ def _parse_step_bindings(
                 raw,
                 source=f"{source}:step_bindings[{index}]",
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise RecipeParseError(str(exc)) from exc
         if binding is None:  # pragma: no cover - list 원소는 None도 오류 처리됨
             raise RecipeParseError(
@@ -334,7 +334,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
             binding=step_bindings[0] if step_bindings else None,
             source=str(recipe_path),
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise RecipeParseError(str(exc)) from exc
 
     return RecipeDefinition(

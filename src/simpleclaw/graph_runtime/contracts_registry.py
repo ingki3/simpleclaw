@@ -461,7 +461,7 @@ def _validate_string(schema: dict[str, Any], value: str, *, path: str) -> None:
 
 def _validate_number(
     schema: dict[str, Any],
-    value: int | float,
+    value: float,
     *,
     path: str,
 ) -> None:

@@ -157,7 +157,7 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
                     binding=argument_binding,
                     source=str(skill_md),
                 )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             logger.warning("Invalid V4 contract metadata in %s: %s", skill_md, exc)
             return None
         except yaml.YAMLError:

@@ -466,7 +466,7 @@ def _contract_catalog_fields(definition: object) -> dict[str, str | None]:
         "input_schema_hash": input_contract.schema_hash,
         "output_schema_hash": output_contract.schema_hash,
         "binding_identity": f"{binding.binding_id}:{binding.binding_hash}",
-        "definition_fingerprint": getattr(definition, "definition_fingerprint"),
+        "definition_fingerprint": definition.definition_fingerprint,
     }
 
 

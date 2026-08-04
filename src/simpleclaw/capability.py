@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def _canonical_json(value: object, *, source: str) -> str:
     """계약 metadata를 순서와 입력 객체 mutation에 무관한 JSON으로 고정한다."""
     if not isinstance(value, dict):
-        raise ValueError(f"{source} must be a JSON object")
+        raise TypeError(f"{source} must be a JSON object")
     try:
         return json.dumps(
             value,
@@ -94,7 +94,7 @@ def parse_owned_contract_metadata(
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise ValueError(f"{source} must be a mapping")
+        raise TypeError(f"{source} must be a mapping")
     allowed = {
         "contract_id", "version", "owner_ref", "json_schema", "schema_hash"
     }
@@ -136,7 +136,7 @@ def parse_owned_binding_metadata(
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise ValueError(f"{source} must be a mapping")
+        raise TypeError(f"{source} must be a mapping")
     allowed = {"binding_id", "owner_ref", "binding", "binding_hash"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
