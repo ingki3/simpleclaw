@@ -57,11 +57,15 @@ class CallbackDeliveryAdapter:
             )
         except Exception as exc:  # noqa: BLE001 - 외부 sender 오류를 UNKNOWN으로 정규화
             return AdapterDeliveryResult(DeliveryStatus.UNKNOWN, detail=str(exc))
-        if receipt is None:
-            receipt = SenderReceipt()
         if not isinstance(receipt, SenderReceipt):
             return AdapterDeliveryResult(
-                DeliveryStatus.UNKNOWN, detail="sender returned an invalid receipt"
+                DeliveryStatus.UNKNOWN,
+                detail="sender returned no verifiable receipt",
+            )
+        if not receipt.external_message_id:
+            return AdapterDeliveryResult(
+                DeliveryStatus.UNKNOWN,
+                detail=receipt.detail or "sender receipt has no external identity",
             )
         return AdapterDeliveryResult(
             DeliveryStatus.DELIVERED,

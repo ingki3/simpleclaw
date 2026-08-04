@@ -13,14 +13,15 @@ from pathlib import Path
 from typing import Protocol
 
 from .adapters.delivery import DeliveryAdapter
-from .contracts import DeliveryIntentV1
+from .composition import FinalCompositionRuntime
+from .contracts import DeliveryIntentV1, FinalArtifactV1, NormalizedAssetResultV1
 from .events import DeliveryReceiptV1
 from .idempotency import (
     IdempotencyInvariantError,
     UniquePayloadLedger,
     persistence_id,
 )
-from .status import DeliveryStatus
+from .status import DeliveryStatus, TerminalOutcome
 
 
 def _content_hash(content: str) -> str:
@@ -309,7 +310,7 @@ class InMemoryPersistenceJournal:
         self.receipts: dict[str, PersistenceReceiptV1] = {}
 
 
-PersistenceWriter = Callable[[str, str, str], None | Awaitable[None]]
+PersistenceWriter = Callable[[str, str, str, str], None | Awaitable[None]]
 
 
 class PersistenceRuntime:
@@ -341,7 +342,7 @@ class PersistenceRuntime:
         existing = self._journal.receipts.get(identity)
         if existing is not None:
             return existing
-        result = self._writer(identity, payload_hash, content)
+        result = self._writer(session_key, identity, payload_hash, content)
         if inspect.isawaitable(result):
             await result
         receipt = PersistenceReceiptV1(identity, payload_hash, True)
@@ -360,3 +361,122 @@ class PersistenceRuntime:
             occurred_at=datetime.now(UTC),
             status=status,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class GraphDeliveryContext:
+    """startup/channel 경계가 graph turn에 주입하는 delivery 식별자다."""
+
+    channel: str
+    destination_ref: str
+    session_key: str
+    max_attempts: int = 1
+    shadow: bool = False
+
+
+DeliveryContextResolver = Callable[
+    [Mapping[str, object]],
+    GraphDeliveryContext | Awaitable[GraphDeliveryContext],
+]
+
+
+class GraphCompletionRuntime:
+    """core graph의 final composition부터 persistence까지 한 경로로 연결한다."""
+
+    def __init__(
+        self,
+        *,
+        composition: FinalCompositionRuntime,
+        delivery: DeliveryRuntime,
+        persistence: PersistenceRuntime,
+        resolve_context: DeliveryContextResolver,
+    ) -> None:
+        self._composition = composition
+        self._delivery = delivery
+        self._persistence = persistence
+        self._resolve_context = resolve_context
+
+    def callbacks(self):
+        """builder가 요구하는 production completion node callbacks를 반환한다."""
+        from .nodes import CoreCompletionCallbacks
+
+        return CoreCompletionCallbacks(
+            final_composition=self.final_composition,
+            prepare_delivery=self.prepare_delivery,
+            commit_delivery=self.commit_delivery,
+            persist_delivery_outcome=self.persist_delivery_outcome,
+        )
+
+    async def final_composition(self, state: Mapping[str, object]) -> dict[str, object]:
+        result = state.get("normalized_result")
+        request_id = state.get("request_id")
+        outcome = state.get("terminal_outcome")
+        if not isinstance(result, NormalizedAssetResultV1):
+            raise TypeError("final composition requires NormalizedAssetResultV1")
+        if not isinstance(request_id, str) or not request_id:
+            raise TypeError("final composition requires request_id")
+        if not isinstance(outcome, TerminalOutcome):
+            raise TypeError("final composition requires terminal_outcome")
+        final = await self._composition.finalize(
+            request_id=request_id,
+            normalized_result=result,
+            outcome=outcome,
+        )
+        return {} if final is None else {"final_artifact": final}
+
+    async def prepare_delivery(self, state: Mapping[str, object]) -> dict[str, object]:
+        from .nodes import prepare_delivery_intent
+
+        final = state.get("final_artifact")
+        if final is None:
+            return {}
+        if not isinstance(final, FinalArtifactV1):
+            raise TypeError("delivery preparation requires FinalArtifactV1")
+        context = self._resolve_context(state)
+        if inspect.isawaitable(context):
+            context = await context
+        if not isinstance(context, GraphDeliveryContext):
+            raise TypeError("delivery context resolver returned an invalid context")
+        intent = prepare_delivery_intent(
+            final,
+            channel=context.channel,
+            destination_ref=context.destination_ref,
+            max_attempts=context.max_attempts,
+            shadow=context.shadow,
+        )
+        return {"delivery_context": context, "delivery_intent": intent}
+
+    async def commit_delivery(self, state: Mapping[str, object]) -> dict[str, object]:
+        intent = state.get("delivery_intent")
+        final = state.get("final_artifact")
+        if intent is None or final is None:
+            return {}
+        if not isinstance(intent, DeliveryIntentV1) or not isinstance(
+            final, FinalArtifactV1
+        ):
+            raise TypeError("delivery commit requires typed intent and artifact")
+        receipt = await self._delivery.deliver(intent, final.content)
+        return {"delivery_receipt": receipt}
+
+    async def persist_delivery_outcome(
+        self, state: Mapping[str, object]
+    ) -> dict[str, object]:
+        final = state.get("final_artifact")
+        receipt = state.get("delivery_receipt")
+        context = state.get("delivery_context")
+        if final is None or receipt is None or context is None:
+            return {}
+        if not isinstance(final, FinalArtifactV1):
+            raise TypeError("persistence requires FinalArtifactV1")
+        if not isinstance(receipt, DeliveryReceiptV1):
+            raise TypeError("persistence requires DeliveryReceiptV1")
+        if not isinstance(context, GraphDeliveryContext):
+            raise TypeError("persistence requires GraphDeliveryContext")
+        persisted = await self._persistence.persist_delivered(
+            session_key=context.session_key,
+            request_id=final.request_id,
+            artifact_hash=final.content_hash,
+            content=final.content,
+            delivery_receipt=receipt,
+        )
+        return {} if persisted is None else {"persistence_receipt": persisted}

@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from .nodes import (
+    CoreCompletionCallbacks,
     CoreGraphState,
     CoreNodeCallbacks,
     callback_node,
@@ -39,7 +40,11 @@ LINEAR_CORE_EDGES = (
     ("react_subgraph", "assess_react_result"),
     ("preserve_react_handoff", "deep_research_subgraph"),
     ("deep_research_subgraph", "assess_deep_research_result"),
-    ("compose_candidate", END),
+    ("compose_candidate", "final_composition"),
+    ("final_composition", "prepare_delivery"),
+    ("prepare_delivery", "commit_delivery"),
+    ("commit_delivery", "persist_delivery_outcome"),
+    ("persist_delivery_outcome", END),
 )
 
 CONDITIONAL_CORE_EDGES = {
@@ -120,6 +125,10 @@ def validate_core_graph_tables() -> None:
         "assess_deep_research_result",
         "request_user_input",
         "compose_candidate",
+        "final_composition",
+        "prepare_delivery",
+        "commit_delivery",
+        "persist_delivery_outcome",
     }
     for source, destinations in CONDITIONAL_CORE_EDGES.items():
         if source not in node_names:
@@ -128,13 +137,16 @@ def validate_core_graph_tables() -> None:
             raise ValueError(f"conditional edge from {source} has unknown destination")
     outgoing = {source for source, _ in LINEAR_CORE_EDGES if source != START}
     outgoing.update(CONDITIONAL_CORE_EDGES)
-    dead_ends = node_names - outgoing - {"compose_candidate"}
+    dead_ends = node_names - outgoing - {"persist_delivery_outcome"}
     if dead_ends:
         raise ValueError(f"core graph contains dead-end nodes: {sorted(dead_ends)}")
 
 
-def build_core_graph(callbacks: CoreNodeCallbacks) -> StateGraph:
-    """실제 asset executor를 주입하지 않은 상태로 reusable graph definition을 만든다."""
+def build_core_graph(
+    callbacks: CoreNodeCallbacks,
+    completion: CoreCompletionCallbacks,
+) -> StateGraph:
+    """asset executor와 completion 경계를 주입한 reusable graph definition을 만든다."""
     validate_core_graph_tables()
     graph = StateGraph(CoreGraphState)
     callback_names = (
@@ -155,6 +167,13 @@ def build_core_graph(callbacks: CoreNodeCallbacks) -> StateGraph:
     )
     for name in callback_names:
         graph.add_node(name, callback_node(getattr(callbacks, name)))
+    for name in (
+        "final_composition",
+        "prepare_delivery",
+        "commit_delivery",
+        "persist_delivery_outcome",
+    ):
+        graph.add_node(name, callback_node(getattr(completion, name)))
     graph.add_node("preserve_react_handoff", preserve_react_handoff)
     graph.add_node(
         "request_user_input", request_user_input_node(callbacks.resume_user_input)
@@ -190,9 +209,14 @@ def build_core_graph(callbacks: CoreNodeCallbacks) -> StateGraph:
     return graph
 
 
-def compile_core_graph(callbacks: CoreNodeCallbacks, *, checkpointer=None):
+def compile_core_graph(
+    callbacks: CoreNodeCallbacks,
+    completion: CoreCompletionCallbacks,
+    *,
+    checkpointer=None,
+):
     """검증된 graph를 caller 소유 checkpointer와 compile한다."""
-    return build_core_graph(callbacks).compile(checkpointer=checkpointer)
+    return build_core_graph(callbacks, completion).compile(checkpointer=checkpointer)
 
 
 validate_core_graph_tables()

@@ -3,9 +3,15 @@ from __future__ import annotations
 import pytest
 
 from simpleclaw.graph_runtime.adapters.delivery import (
+    CronDeliveryAdapter,
     SenderReceipt,
+    SendNotStartedError,
     TelegramDeliveryAdapter,
 )
+from simpleclaw.graph_runtime.adapters.persistence import (
+    ConversationStorePersistenceAdapter,
+)
+from simpleclaw.graph_runtime.builder import compile_core_graph
 from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
 from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
@@ -13,17 +19,23 @@ from simpleclaw.graph_runtime.contracts import (
     DeliveryIntentV1,
     NormalizedAssetResultV1,
 )
+from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks
+from simpleclaw.graph_runtime.routing import RecipeMatchOutcome, RecipeResultOutcome
 from simpleclaw.graph_runtime.runtime import (
     DeliveryRuntime,
+    GraphCompletionRuntime,
+    GraphDeliveryContext,
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
     PersistenceRuntime,
+    SQLiteDeliveryJournal,
 )
 from simpleclaw.graph_runtime.status import (
     AssetResultStatus,
     DeliveryStatus,
     TerminalOutcome,
 )
+from simpleclaw.memory import ConversationStore
 
 
 def _result() -> NormalizedAssetResultV1:
@@ -40,6 +52,195 @@ def _result() -> NormalizedAssetResultV1:
         payload={"answer": "verified"},
         payload_hash="payload-hash",
     )
+
+
+def _core_callbacks(
+    *,
+    counters: dict[str, int],
+    guard_state_observations: list[tuple[bool, bool]],
+) -> CoreNodeCallbacks:
+    def no_op(_state):
+        return {}
+
+    def execute(_state):
+        counters["asset_dispatch"] += 1
+        return {"normalized_result": _result()}
+
+    def compose_candidate(state):
+        guard_state_observations.append(
+            ("final_artifact" in state, "delivery_intent" in state)
+        )
+        return {
+            "composition_candidate": "draft",
+            "terminal_outcome": TerminalOutcome.COMPLETED,
+        }
+
+    return CoreNodeCallbacks(
+        normalize_ingress=lambda _state: {"request_id": "request-1"},
+        load_existing_context=no_op,
+        analyze_request=no_op,
+        snapshot_asset_catalogs=no_op,
+        match_recipe=lambda _state: {
+            "recipe_match": RecipeMatchOutcome.APPLICABLE
+        },
+        execute_existing_recipe=execute,
+        assess_recipe_result=lambda _state: {
+            "recipe_result": RecipeResultOutcome.RESOLVED
+        },
+        select_general_route=no_op,
+        simple_conversation=no_op,
+        react_subgraph=no_op,
+        assess_react_result=no_op,
+        deep_research_subgraph=no_op,
+        assess_deep_research_result=no_op,
+        compose_candidate=compose_candidate,
+        resume_user_input=lambda _state, _control: {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_recipe_first_graph_connects_guard_delivery_and_store(tmp_path) -> None:
+    counters = {
+        "asset_dispatch": 0,
+        "compose": 0,
+        "guard": 0,
+        "safe": 0,
+        "send": 0,
+    }
+    pre_guard_state = []
+
+    async def compose(_result):
+        counters["compose"] += 1
+        return "unsafe draft"
+
+    async def guard(_content):
+        counters["guard"] += 1
+        return False
+
+    def safe(_result):
+        counters["safe"] += 1
+        return "안전 응답"
+
+    async def sender(_destination, _content):
+        counters["send"] += 1
+        return SenderReceipt(external_message_id="telegram-message-1")
+
+    store = ConversationStore(tmp_path / "conversation.db")
+    completion = GraphCompletionRuntime(
+        composition=FinalCompositionRuntime(
+            compose=compose,
+            guard=guard,
+            safe_render=safe,
+        ),
+        delivery=DeliveryRuntime(
+            journal=SQLiteDeliveryJournal(tmp_path / "delivery.db"),
+            adapters={"telegram": TelegramDeliveryAdapter(sender)},
+        ),
+        persistence=PersistenceRuntime(
+            journal=InMemoryPersistenceJournal(),
+            writer=ConversationStorePersistenceAdapter(
+                store,
+                channel="telegram",
+            ),
+        ),
+        resolve_context=lambda _state: GraphDeliveryContext(
+            channel="telegram",
+            destination_ref="chat-1",
+            session_key="session-1",
+        ),
+    )
+    graph = compile_core_graph(
+        _core_callbacks(
+            counters=counters,
+            guard_state_observations=pre_guard_state,
+        ),
+        completion.callbacks(),
+    )
+
+    result = await graph.ainvoke({"ingress": "hello"})
+
+    assert pre_guard_state == [(False, False)]
+    assert result["final_artifact"].content == "안전 응답"
+    assert result["delivery_receipt"].status is DeliveryStatus.DELIVERED
+    assert result["persistence_receipt"].persisted is True
+    assert [message.content for message in store.get_recent()] == ["안전 응답"]
+    assert counters == {
+        "asset_dispatch": 1,
+        "compose": 1,
+        "guard": 1,
+        "safe": 1,
+        "send": 1,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [
+        ("none", DeliveryStatus.UNKNOWN),
+        ("empty", DeliveryStatus.UNKNOWN),
+        ("failed_before_send", DeliveryStatus.FAILED_BEFORE_SEND),
+        ("suppressed", DeliveryStatus.SUPPRESSED),
+        ("shadowed", DeliveryStatus.SHADOWED),
+    ],
+)
+async def test_recipe_first_graph_persists_only_delivered_outcome(
+    tmp_path,
+    mode,
+    expected_status,
+) -> None:
+    counters = {"asset_dispatch": 0}
+
+    async def sender(_destination, _content):
+        if mode == "failed_before_send":
+            raise SendNotStartedError("preflight failed")
+        if mode == "empty":
+            return SenderReceipt()
+        return None
+
+    channel = "cron" if mode == "suppressed" else "telegram"
+    content = "[NO_NOTIFY] answer" if mode == "suppressed" else "answer"
+    adapter = (
+        CronDeliveryAdapter(sender)
+        if channel == "cron"
+        else TelegramDeliveryAdapter(sender)
+    )
+
+    store = ConversationStore(tmp_path / "conversation.db")
+    completion = GraphCompletionRuntime(
+        composition=FinalCompositionRuntime(
+            compose=lambda _result: content,
+            guard=lambda _content: True,
+            safe_render=lambda _result: "safe",
+        ),
+        delivery=DeliveryRuntime(
+            journal=SQLiteDeliveryJournal(tmp_path / "delivery.db"),
+            adapters={channel: adapter},
+        ),
+        persistence=PersistenceRuntime(
+            journal=InMemoryPersistenceJournal(),
+            writer=ConversationStorePersistenceAdapter(
+                store,
+                channel=channel,
+            ),
+        ),
+        resolve_context=lambda _state: GraphDeliveryContext(
+            channel=channel,
+            destination_ref="chat-1",
+            session_key="session-1",
+            shadow=mode == "shadowed",
+        ),
+    )
+    graph = compile_core_graph(
+        _core_callbacks(counters=counters, guard_state_observations=[]),
+        completion.callbacks(),
+    )
+
+    result = await graph.ainvoke({"ingress": "hello"})
+
+    assert result["delivery_receipt"].status is expected_status
+    assert "persistence_receipt" not in result
+    assert store.get_recent() == []
 
 
 @pytest.mark.asyncio
@@ -81,7 +282,7 @@ async def test_delivered_persistence_crash_recovers_without_resend() -> None:
         sends += 1
         return SenderReceipt(external_message_id="message-1")
 
-    async def persist(persistence_id, payload_hash, content):
+    async def persist(_session_key, persistence_id, payload_hash, content):
         nonlocal fail_after_write
         existing = rows.get(persistence_id)
         if existing is not None and existing != payload_hash:
@@ -142,7 +343,7 @@ async def test_delivered_persistence_crash_recovers_without_resend() -> None:
 async def test_non_delivered_receipt_never_persists(status) -> None:
     writes = 0
 
-    async def persist(_persistence_id, _payload_hash, _content):
+    async def persist(_session_key, _persistence_id, _payload_hash, _content):
         nonlocal writes
         writes += 1
 

@@ -8,13 +8,16 @@ from simpleclaw.memory.models import ConversationMessage, MessageRole
 class ConversationStorePersistenceAdapter:
     """PersistenceRuntime writer signature를 기존 ConversationStore에 연결한다."""
 
-    def __init__(self, store, *, session_key: str, channel: str | None = None) -> None:
+    def __init__(self, store, *, channel: str | None = None) -> None:
         self._store = store
-        self._session_key = session_key
         self._channel = channel
 
     def __call__(
-        self, persistence_id: str, payload_hash: str, content: str
+        self,
+        session_key: str,
+        persistence_id: str,
+        payload_hash: str,
+        content: str,
     ) -> None:
         self._store.save_outbound_once(
             ConversationMessage(
@@ -22,7 +25,7 @@ class ConversationStorePersistenceAdapter:
                 content=content,
                 channel=self._channel,
             ),
-            session_key=self._session_key,
+            session_key=session_key,
             persistence_id=persistence_id,
             payload_hash=payload_hash,
         )

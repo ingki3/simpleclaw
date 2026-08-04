@@ -89,8 +89,12 @@ class CoreGraphState(TypedDict, total=False):
     solver_outcome: SolverOutcome
     normalized_result: object
     composition_candidate: object
+    terminal_outcome: TerminalOutcome
     final_artifact: FinalArtifactV1
     delivery_intent: DeliveryIntentV1
+    delivery_receipt: object
+    persistence_receipt: object
+    delivery_context: object
     interrupt_request: InterruptRequestV1
     resume_control: ResumeControlV1
     resume_target: str
@@ -194,6 +198,16 @@ class CoreNodeCallbacks:
     assess_deep_research_result: NodeCallback
     compose_candidate: NodeCallback
     resume_user_input: ResumeCallback
+
+
+@dataclass(frozen=True, slots=True)
+class CoreCompletionCallbacks:
+    """composition 이후 delivery/persistence production 경계를 구성한다."""
+
+    final_composition: NodeCallback
+    prepare_delivery: NodeCallback
+    commit_delivery: NodeCallback
+    persist_delivery_outcome: NodeCallback
 
 
 def callback_node(callback: NodeCallback) -> NodeCallback:

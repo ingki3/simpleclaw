@@ -76,6 +76,32 @@ async def test_sender_started_failure_is_unknown_and_never_resent() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("receipt", [None, SenderReceipt()])
+async def test_sender_without_external_identity_is_unknown_and_never_resent(
+    receipt,
+) -> None:
+    calls = 0
+
+    async def sender(_destination, _content):
+        nonlocal calls
+        calls += 1
+        return receipt
+
+    runtime = DeliveryRuntime(
+        journal=InMemoryDeliveryJournal(),
+        adapters={"telegram": TelegramDeliveryAdapter(sender)},
+    )
+
+    first = await runtime.deliver(_intent(attempts=3), "hello")
+    replay = await runtime.deliver(_intent(attempts=3), "hello")
+
+    assert first.status is DeliveryStatus.UNKNOWN
+    assert first.external_message_id is None
+    assert replay == first
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_dispatching_without_receipt_recovers_as_unknown_without_send() -> None:
     calls = 0
 

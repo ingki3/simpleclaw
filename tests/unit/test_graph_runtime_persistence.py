@@ -39,14 +39,20 @@ def test_conversation_store_outbound_persistence_is_exactly_once(tmp_path) -> No
 def test_conversation_store_rejects_persistence_id_payload_conflict(tmp_path) -> None:
     store = ConversationStore(tmp_path / "conversations.db")
     adapter = ConversationStorePersistenceAdapter(
-        store, session_key="session-1", channel="telegram"
+        store, channel="telegram"
     )
     first = "first"
-    adapter("persistence-1", hashlib.sha256(first.encode()).hexdigest(), first)
+    adapter(
+        "session-1",
+        "persistence-1",
+        hashlib.sha256(first.encode()).hexdigest(),
+        first,
+    )
 
     second = "second"
     with pytest.raises(ValueError, match="different payload"):
         adapter(
+            "session-1",
             "persistence-1",
             hashlib.sha256(second.encode()).hexdigest(),
             second,

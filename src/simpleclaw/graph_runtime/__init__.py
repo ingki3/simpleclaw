@@ -61,6 +61,7 @@ from .idempotency import (
     persistence_id,
 )
 from .nodes import (
+    CoreCompletionCallbacks,
     CoreGraphState,
     CoreNodeCallbacks,
     RouteContinuityV1,
@@ -78,6 +79,8 @@ from .routing import (
 )
 from .runtime import (
     DeliveryRuntime,
+    GraphCompletionRuntime,
+    GraphDeliveryContext,
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
     PersistenceReceiptV1,
@@ -114,6 +117,7 @@ __all__ = [
     "ContractRefV1",
     "ContractRegistryError",
     "ContractRegistrySnapshotV1",
+    "CoreCompletionCallbacks",
     "CoreGraphState",
     "CoreNodeCallbacks",
     "CronSourceV1",
@@ -131,6 +135,8 @@ __all__ = [
     "GenericAssetAdapter",
     "GenericRecipeAdapter",
     "GenericSkillAdapter",
+    "GraphCompletionRuntime",
+    "GraphDeliveryContext",
     "GraphEventKind",
     "GraphEventV1",
     "IdempotencyInvariantError",
