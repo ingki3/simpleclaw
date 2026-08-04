@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.response_router import ResponseRoute
-from simpleclaw.agent.turn_analysis import TurnAnalysis
+from simpleclaw.agent.resolution_types import ComplexitySignal
 from simpleclaw.agent.turn_plan import (
     ClarificationPlan,
     ContextRelation,
@@ -86,6 +87,7 @@ def _plan(*, fingerprint: str, selected_ids: tuple[str, ...]) -> UnifiedTurnPlan
             domain="corporate_disclosure",
             entities=("SK", "NVIDIA"),
             search_query="SK NVIDIA official announcement",
+            intents=("current_fact",),
             required_claims=("공식 협력 발표 여부",),
             freshness_required=True,
         ),
@@ -96,6 +98,9 @@ def _plan(*, fingerprint: str, selected_ids: tuple[str, ...]) -> UnifiedTurnPlan
             allowed_tools=("web_search",),
             requires_confirmation=False,
             reason="verify official announcement",
+            complexity_signals=(
+                ComplexitySignal.ORDERED_CAPABILITY_COMPOSITION,
+            ),
         ),
         confidence=0.96,
         decision_summary="complex corporate fact",
@@ -137,6 +142,24 @@ def _direct_plan(*, fingerprint: str) -> UnifiedTurnPlan:
     )
 
 
+def _lookup_result(*, domain: str, claim: str, source_url: str) -> str:
+    return json.dumps(
+        {
+            "kind": domain,
+            "lookup_status": "found",
+            "confidence": "high",
+            "evidence": [{"source_url": source_url, "snippet": claim}],
+            "facts": [{"claim": claim, "source_url": source_url}],
+            "timeline_validation": {"status": "final"},
+            "limitations": [],
+        }
+    )
+
+
+def _lookup_payload(token: str) -> dict:
+    return json.loads(base64.urlsafe_b64decode(token).decode("utf-8"))
+
+
 @pytest.mark.asyncio
 async def test_sk_nvidia_initial_and_followup_use_one_plan_per_turn(
     tmp_path,
@@ -158,11 +181,11 @@ async def test_sk_nvidia_initial_and_followup_use_one_plan_per_turn(
             selected_ids=selected_ids,
         )
 
-    async def fake_search(_args, body_fetcher=None):
-        return (
-            "1. Official announcement\n"
-            "URL: https://official.example/sk-nvidia\n"
-            "Snippet: confirmed today by the official newsroom"
+    async def fake_lookup(_skill_name, _token):
+        return _lookup_result(
+            domain="corporate_disclosure",
+            claim="SK NVIDIA 공식 협력 발표 여부: 공식 뉴스룸에서 확정",
+            source_url="https://official.example/sk-nvidia",
         )
 
     async def fake_send(_request):
@@ -175,10 +198,7 @@ async def test_sk_nvidia_initial_and_followup_use_one_plan_per_turn(
         "simpleclaw.agent.orchestrator.plan_turn_with_llm",
         fake_planner,
     )
-    monkeypatch.setattr(
-        "simpleclaw.agent.evidence_retrieval.handle_web_search",
-        fake_search,
-    )
+    orchestrator._execute_skill = fake_lookup
     orchestrator._router.send = fake_send
     deltas: list[str] = []
 
@@ -224,16 +244,9 @@ async def test_canary_direct_answer_runs_plan_gate_and_primary_execution(
     async def fake_send(_request):
         return LLMResponse(text="정적 설명입니다.", model="test")
 
-    async def fail_legacy(*_args, **_kwargs):
-        raise AssertionError("legacy semantic path called")
-
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.plan_turn_with_llm",
         fake_planner,
-    )
-    monkeypatch.setattr(
-        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
-        fail_legacy,
     )
     orchestrator._router.send = fake_send
 
@@ -306,6 +319,7 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
                 domain="entertainment",
                 entities=entities,
                 search_query=search_query,
+                intents=("drama_info",),
                 required_claims=required_claims,
                 freshness_required=False,
             ),
@@ -315,22 +329,18 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
             ),
         )
 
-    search = AsyncMock(
-        return_value=(
-            "WEB_SEARCH_RESULTS: drama (1 results)\n"
-            '1. "이런 엿같은 사랑" Netflix 등장인물\n'
-            "URL: https://www.netflix.com/example\n"
-            "Snippet: 하영과 정해영 cast metadata"
+    lookup = AsyncMock(
+        return_value=_lookup_result(
+            domain="entertainment",
+            claim='"이런 엿같은 사랑" Netflix 하영 정해영 등장인물',
+            source_url="https://www.netflix.com/example",
         )
     )
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.plan_turn_with_llm",
         fake_planner,
     )
-    monkeypatch.setattr(
-        "simpleclaw.agent.tool_dispatch.handle_web_search",
-        search,
-    )
+    orchestrator._execute_skill = lookup
 
     seen_requests = []
 
@@ -360,8 +370,8 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
         and "정해영" in candidate.content
         for candidate in second_candidates
     )
-    assert search.await_count == 2
-    final_query = search.await_args_list[-1].args[0]["query"]
+    assert lookup.await_count == 2
+    final_query = _lookup_payload(lookup.await_args_list[-1].args[1])["query"]
     for clue in ("이런 엿같은 사랑", "Netflix", "하영", "정해영"):
         assert clue in final_query
     assert "하영(정해영)" not in final_query
@@ -379,27 +389,15 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["off", "primary"])
-async def test_player_status_requires_current_turn_evidence_in_legacy_and_unified(
+async def test_player_status_requires_current_turn_evidence_in_configured_modes(
     tmp_path,
     monkeypatch,
     mode,
 ) -> None:
-    """SP-01/SP-06: legacy와 Unified가 exact 선수 상태 질의를 같은 gate로 보낸다."""
+    """SP-01/SP-06: configured modes use the current unified plan gate."""
 
     query = "롯데 홍민기 요즘 어떤 상태야??"
     orchestrator = AgentOrchestrator(_config(tmp_path, mode=mode))
-    analyzer = AsyncMock(
-        return_value=TurnAnalysis(
-            original_text=query,
-            normalized_question=query,
-            confidence=0.98,
-            domains=("sports",),
-            intents=("realtime_lookup", "player_status"),
-            route=ResponseRoute.CURRENT_FACT_GUARDED_LOOP,
-            evidence_required=True,
-            needs_current_facts=True,
-        )
-    )
 
     async def fake_planner(text, *, catalog, **_kwargs):
         assert text == query
@@ -408,13 +406,14 @@ async def test_player_status_requires_current_turn_evidence_in_legacy_and_unifie
             plan,
             original_text=query,
             context=replace(plan.context, standalone_question=query),
-            domains=("sports",),
+            domains=("sports", "sports_news"),
             intents=("realtime_lookup", "player_status"),
             fact_check=replace(
                 plan.fact_check,
-                domain="sports",
+                domain="sports_news",
                 entities=("롯데", "홍민기"),
                 search_query=query,
+                intents=("realtime_lookup", "player_status"),
                 required_claims=("선수 상태",),
                 freshness_required=True,
             ),
@@ -425,26 +424,18 @@ async def test_player_status_requires_current_turn_evidence_in_legacy_and_unifie
         )
 
     planner = AsyncMock(side_effect=fake_planner)
-    search = AsyncMock(
-        return_value=(
-            "WEB_SEARCH_RESULTS: 롯데 홍민기 선수 상태 (1 results)\n"
-            "1. 롯데 홍민기 선수 상태\n"
-            "URL: https://sports.example/players/hong-min-ki\n"
-            "Snippet: 선수 상태 2026-07-30 기준"
+    lookup = AsyncMock(
+        return_value=_lookup_result(
+            domain="sports_news",
+            claim="롯데 홍민기 선수 상태 2026-07-30 기준",
+            source_url="https://sports.example/players/hong-min-ki",
         )
-    )
-    monkeypatch.setattr(
-        "simpleclaw.agent.orchestrator.analyze_turn_with_llm",
-        analyzer,
     )
     monkeypatch.setattr(
         "simpleclaw.agent.orchestrator.plan_turn_with_llm",
         planner,
     )
-    monkeypatch.setattr(
-        "simpleclaw.agent.tool_dispatch.handle_web_search",
-        search,
-    )
+    orchestrator._execute_skill = lookup
     orchestrator._router.send = AsyncMock(
         return_value=LLMResponse(
             text="검증된 현재 선수 상태 근거 기반 답변",
@@ -459,11 +450,6 @@ async def test_player_status_requires_current_turn_evidence_in_legacy_and_unifie
     )
 
     assert result == "검증된 현재 선수 상태 근거 기반 답변"
-    search.assert_awaited_once()
-    assert search.await_args.args[0]["query"] == query
-    if mode == "primary":
-        planner.assert_awaited_once()
-        analyzer.assert_not_awaited()
-    else:
-        analyzer.assert_awaited_once()
-        planner.assert_not_awaited()
+    lookup.assert_awaited_once()
+    assert _lookup_payload(lookup.await_args.args[1])["query"] == query
+    planner.assert_awaited_once()
