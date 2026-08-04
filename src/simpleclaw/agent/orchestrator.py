@@ -167,6 +167,13 @@ from simpleclaw.daemon.drain import (
     DrainController,
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
+from simpleclaw.graph_runtime.runtime import (
+    LangGraphV4RolloutFacade,
+    LegacyRunTelemetryV1,
+    ShadowBudgetUsageV1,
+)
+from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import (
     LLMRequest,
     MultimodalAttachment,
@@ -230,13 +237,6 @@ from simpleclaw.skills.realtime_lookup import (
     lookup_async as run_realtime_lookup,
 )
 from simpleclaw.study.retriever import StudyRetrievalConfig, StudyRetriever
-from simpleclaw.graph_runtime.runtime import (
-    LangGraphV4RolloutFacade,
-    LegacyRunTelemetryV1,
-    ShadowBudgetUsageV1,
-)
-from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
-from simpleclaw.graph_runtime.status import TerminalOutcome
 
 if TYPE_CHECKING:
     from simpleclaw.daemon.scheduler import CronScheduler
@@ -2272,11 +2272,11 @@ class AgentOrchestrator:
         """Primary의 exact plan을 V4 graph와 rollout gate 끝까지 연결한다."""
         v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
         if not isinstance(v4, dict):
-            raise ValueError("langgraph_v4 configuration is required")
+            raise TypeError("langgraph_v4 configuration is required")
         raw_budget = v4.get("budget", {})
         checkpoint = v4.get("checkpoint", {})
         if not isinstance(raw_budget, dict) or not isinstance(checkpoint, dict):
-            raise ValueError("langgraph_v4 budget/checkpoint configuration is required")
+            raise TypeError("langgraph_v4 budget/checkpoint configuration is required")
         budget = ShadowBudgetUsageV1(
             max_graph_steps=raw_budget.get("max_graph_steps"),
             max_asset_calls=raw_budget.get("max_asset_calls"),

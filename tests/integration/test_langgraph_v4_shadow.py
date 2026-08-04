@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from types import MethodType
 from pathlib import Path
+from types import MethodType
 
 import pytest
 
-from simpleclaw.graph_runtime.contracts import (
-    AssetInvocationV1,
-    AssetRefV1,
-    DeliveryIntentV1,
-    NormalizedAssetResultV1,
+from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.plan_gate import GateStatus, PlanGate
+from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
 )
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
@@ -22,6 +32,12 @@ from simpleclaw.graph_runtime.adapters.delivery import (
 )
 from simpleclaw.graph_runtime.adapters.persistence import (
     ConversationStorePersistenceAdapter,
+)
+from simpleclaw.graph_runtime.contracts import (
+    AssetInvocationV1,
+    AssetRefV1,
+    DeliveryIntentV1,
+    NormalizedAssetResultV1,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.graph_runtime.runtime import (
@@ -46,24 +62,8 @@ from simpleclaw.graph_runtime.status import (
     InvocationStatus,
     TerminalOutcome,
 )
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
-from simpleclaw.agent.orchestrator import AgentOrchestrator
-from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import build_planner_catalog
-from simpleclaw.agent.context_candidates import ContextCandidateSet
-from simpleclaw.agent.turn_plan import (
-    AssetRef,
-    CapabilityPlan,
-    ClarificationPlan,
-    ContextRelation,
-    ContextSelection,
-    EvidenceOwner,
-    ExecutionPlan,
-    FactCheckPlan,
-    UnifiedTurnPlan,
-)
 from simpleclaw.memory import ConversationStore
+from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]

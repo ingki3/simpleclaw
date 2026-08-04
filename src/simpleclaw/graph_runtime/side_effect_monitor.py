@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Iterator, Literal
+from typing import Literal
 
 SideEffectKind = Literal["telegram_send", "conversation_write", "notifier"]
 

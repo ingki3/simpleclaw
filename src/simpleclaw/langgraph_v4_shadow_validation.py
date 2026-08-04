@@ -12,11 +12,6 @@ from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
-from simpleclaw.llm.router import create_router
-from simpleclaw.memory import ConversationStore
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills.discovery import discover_skills
-
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
@@ -24,6 +19,10 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import TerminalOutcome
+from simpleclaw.llm.router import create_router
+from simpleclaw.memory import ConversationStore
+from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[3]
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
@@ -91,8 +90,10 @@ async def _run(args: argparse.Namespace) -> int:
             "react",
         ),
         (
-            "Use the exact skill contract-fixture-step for a complex multi-step request "
-            "with resolve_complex_problem mode.",
+            (
+                "Use the exact skill contract-fixture-step for a complex multi-step "
+                "request with resolve_complex_problem mode."
+            ),
             "deep_research",
         ),
     )

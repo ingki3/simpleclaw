@@ -31,7 +31,12 @@ from .contracts_registry import (
     build_contract_registry,
 )
 from .nodes import CoreNodeCallbacks
-from .routing import GeneralRoute, RecipeMatchOutcome, RecipeResultOutcome, SolverOutcome
+from .routing import (
+    GeneralRoute,
+    RecipeMatchOutcome,
+    RecipeResultOutcome,
+    SolverOutcome,
+)
 from .runtime import (
     CanaryGateDecisionV1,
     GraphCompletionRuntime,
@@ -77,7 +82,7 @@ def _question_payload(
     properties = schema.get("properties")
     required = schema.get("required")
     if not isinstance(properties, Mapping) or not isinstance(required, list):
-        raise ValueError("shadow input contract must declare object properties")
+        raise TypeError("shadow input contract must declare object properties")
     if not required or any(
         not isinstance(name, str)
         or properties.get(name, {}).get("type") != "string"
