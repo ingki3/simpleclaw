@@ -130,6 +130,8 @@ class PlannerAsset:
     fallback_modes: tuple[str, ...] = ()
     retry_statuses: tuple[str, ...] = ()
     contract_owner: str | None = None
+    input_contract_ref: str | None = None
+    output_contract_ref: str | None = None
     input_schema_hash: str | None = None
     output_schema_hash: str | None = None
     binding_identity: str | None = None
@@ -184,6 +186,8 @@ class PlannerAsset:
             )
         for field_name in (
             "contract_owner",
+            "input_contract_ref",
+            "output_contract_ref",
             "input_schema_hash",
             "output_schema_hash",
             "binding_identity",
@@ -266,6 +270,8 @@ def _asset_from_capability(
     capability: CapabilityMetadata,
     runtime_visible: bool,
     contract_owner: str | None = None,
+    input_contract_ref: str | None = None,
+    output_contract_ref: str | None = None,
     input_schema_hash: str | None = None,
     output_schema_hash: str | None = None,
     binding_identity: str | None = None,
@@ -302,6 +308,8 @@ def _asset_from_capability(
         declared=capability.declared,
         runtime_visible=runtime_visible,
         contract_owner=contract_owner,
+        input_contract_ref=input_contract_ref,
+        output_contract_ref=output_contract_ref,
         input_schema_hash=input_schema_hash,
         output_schema_hash=output_schema_hash,
         binding_identity=binding_identity,
@@ -390,6 +398,8 @@ def _snapshot_payload(asset: PlannerAsset) -> dict[str, Any]:
         "declared": asset.declared,
         "runtime_visible": asset.runtime_visible,
         "contract_owner": asset.contract_owner,
+        "input_contract_ref": asset.input_contract_ref,
+        "output_contract_ref": asset.output_contract_ref,
         "input_schema_hash": asset.input_schema_hash,
         "output_schema_hash": asset.output_schema_hash,
         "binding_identity": asset.binding_identity,
@@ -428,6 +438,8 @@ def _prompt_payload(asset: PlannerAsset) -> dict[str, Any]:
         payload["retry_statuses"] = list(asset.retry_statuses)
     if asset.contract_owner is not None:
         payload["contract_owner"] = asset.contract_owner
+        payload["input_contract_ref"] = asset.input_contract_ref
+        payload["output_contract_ref"] = asset.output_contract_ref
         payload["input_schema_hash"] = asset.input_schema_hash
         payload["output_schema_hash"] = asset.output_schema_hash
         payload["binding_identity"] = asset.binding_identity
@@ -445,6 +457,12 @@ def _contract_catalog_fields(definition: object) -> dict[str, str | None]:
     owner = f"{input_contract.owner_type}:{input_contract.owner_name}"
     return {
         "contract_owner": owner,
+        "input_contract_ref": (
+            f"{input_contract.contract_id}@{input_contract.version}"
+        ),
+        "output_contract_ref": (
+            f"{output_contract.contract_id}@{output_contract.version}"
+        ),
         "input_schema_hash": input_contract.schema_hash,
         "output_schema_hash": output_contract.schema_hash,
         "binding_identity": f"{binding.binding_id}:{binding.binding_hash}",

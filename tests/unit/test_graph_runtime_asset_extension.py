@@ -66,6 +66,8 @@ input_contract:
     assert [item.name for item in skills] == ["cosmic-extension"]
     assert registry.entries[0].snapshot.asset_ref.name == "cosmic-extension"
     assert asset["contract_owner"] == "skill:cosmic-extension"
+    assert asset["input_contract_ref"] == "cosmic.input@1"
+    assert asset["output_contract_ref"] == "cosmic.output@1"
     assert len(asset["input_schema_hash"]) == 64
     assert len(asset["binding_identity"].split(":", 1)[1]) == 64
     assert "quasar" not in json.dumps(asset)
@@ -106,4 +108,3 @@ def test_recipe_contract_and_step_bindings_are_opt_in_and_legacy_stays_loadable(
     assert [item.snapshot.asset_ref.name for item in registry.entries] == [
         "cosmic-recipe"
     ]
-
