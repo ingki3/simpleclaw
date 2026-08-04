@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -10,6 +11,35 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class CheckpointContractError(ValueError):
     """resume가 저장된 exact control point와 일치하지 않는다."""
+
+
+DEFAULT_GRAPH_CHECKPOINT_PATH = Path(
+    "~/.simpleclaw-agent/default/graph-checkpoints.sqlite3"
+)
+
+
+class CheckpointPathIsolationError(ValueError):
+    """graph checkpoint가 기존 operational DB와 같은 파일을 가리킨다."""
+
+
+def resolve_checkpoint_path(
+    path: str | Path = DEFAULT_GRAPH_CHECKPOINT_PATH,
+    *,
+    daemon_db_path: str | Path | None = None,
+    conversations_db_path: str | Path | None = None,
+) -> Path:
+    """checkpoint 경로를 정규화하고 daemon/conversation DB 혼용을 거부한다."""
+    resolved = Path(path).expanduser().resolve()
+    forbidden = {
+        Path(candidate).expanduser().resolve()
+        for candidate in (daemon_db_path, conversations_db_path)
+        if candidate is not None
+    }
+    if resolved in forbidden:
+        raise CheckpointPathIsolationError(
+            "graph checkpoint must use a file separate from daemon/conversations DB"
+        )
+    return resolved
 
 
 class InterruptModel(BaseModel):
