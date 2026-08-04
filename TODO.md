@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-564](mention://issue/db4158c9-8318-4322-8a5c-1384c8e35919): LangGraph V4 dependencies와 domain-neutral contracts 추가** — V4 계약·bounded config 구현과 코드/오프라인 검증, Stage D 코드 finding 보완은 완료했다. PR #593의 squash merge와 merge SHA 박제, 최신 `dev` 기반 별도 docs-only terminal bookkeeping PR merge를 기다린다. 이 terminal gate가 끝나기 전까지 본 항목과 Multica 이슈는 진행 중이다.
-
 - [x] **[BIZ-561](mention://issue/acfd688e-a0c2-4165-865e-942320da5012): 실행 SkillDefinition과 trusted safety snapshot을 원자적으로 검증** — exact recipe scope 생성 시 discovery와 actual dispatch registry의 동일 `SkillDefinition` 객체·canonical fingerprint를 대조하고, ToolGate가 dispatch 직전 registry 삭제·교체·내용 변경을 재검증한 뒤 검증된 definition 객체를 executor까지 전달하도록 보정했다. helper 결과는 명시적 `side_effect=false`만 verified no-effect로 인정하며 true/missing/partial은 top-level `AssetResult`와 common validator에서 unknown/partial action으로 보존해 completed/resolved/allow-final 승격을 차단한다. raw planner→PlanGate→CapabilityExecutor→production exact recipe→ToolGate→actual registry→helper→validator connected 회귀와 mutation 행렬을 추가했고, 구현 exact head `c4f9760e7176e8da0eec8e5b840e406521c90f79`에서 CI 3종과 독립 safety review(변경 integration/unit 7개 `178 passed`)를 통과해 code/offline hotfix 범위를 완료했다. `capability_first_v3` live 활성화·restart·외부 전송은 본 이슈의 out-of-scope이므로 수행하지 않았다. (완료: 2026-08-03)
 
 - [x] **[BIZ-560](mention://issue/5d71f6c7-122d-42b5-bd75-c3e85da6ba27): 설치된 sports skill capability를 runtime discovery에 연결** — version-controlled installer의 `SKILL.md` frontmatter에 production `sports-live`와 동일한 safe read-only/no-side-effect/no-confirmation capability 및 `query.v1 → asset_result.v1` typed contract를 선언했다. 실제 installer→filesystem→`discover_skills()`→production recipe→ToolGate→validator connected 경로에서 positive, undeclared/write/side-effect/confirmation/identity mismatch와 missing claim/provenance/empty/error를 고정해 본 이슈의 code/offline 범위를 완료했다. release 뒤 actual installed-asset finite-budget no-send 3/3과 live activation/restart는 [BIZ-540](mention://issue/9c2b8fc0-af9f-4884-9eb7-cfba1a426cda)이 별도 gate로 소유하며, 본 child에서는 live config 변경·restart·외부 전송을 수행하지 않는다. (완료: 2026-08-03)
@@ -168,6 +166,10 @@
 ---
 
 ## Done
+
+### 2026-08-05
+
+- [x] **[BIZ-564](mention://issue/db4158c9-8318-4322-8a5c-1384c8e35919): LangGraph V4 dependencies와 domain-neutral contracts 추가** — 요청·자산·계획·결과·artifact·delivery의 도메인 중립 V4 계약과 bounded config를 추가하고, canonical JSON 방어적 복사로 중첩 mutation과 hash 분리를 차단했다. 내부 `schema_version` + wire alias `schema`로 Pydantic shadow 경고를 제거했으며 task-owned 한국어 docstring, warnings-as-errors·hash continuity 회귀, Graphify 공유 산출물을 보강했다. focused `21 passed`, 전체 unit `3318 passed, 3 xfailed`, Ruff 0.16.1, 필수 CI 3종과 독립 Stage D 검증을 통과했고 [PR #593](https://github.com/ingki3/simpleclaw/pull/593)을 `dev`에 squash merge(SHA `0f14700681140b798d4b53f7a41051e4465b6f67`)했다. graph builder/node/reducer/checkpoint/delivery 실제 구현과 live config/restart/외부 전송은 후속 이슈 범위로 유지했다. (완료: 2026-08-05)
 
 ### 2026-08-02
 
