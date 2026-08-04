@@ -1,5 +1,12 @@
 """LangGraph V4 런타임의 도메인 중립 계약과 상태 어휘를 공개한다."""
 
+from .adapters import (
+    AdapterResponse,
+    BoundSkillPayload,
+    GenericAssetAdapter,
+    GenericRecipeAdapter,
+    GenericSkillAdapter,
+)
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -25,6 +32,12 @@ from .contracts_registry import (
     RegistryAssetEntryV1,
     build_contract_registry,
 )
+from .idempotency import (
+    RedispatchDecision,
+    RedispatchGuardResult,
+    guard_redispatch,
+    invocation_signature,
+)
 from .status import (
     AssetResultStatus,
     DeliveryStatus,
@@ -36,12 +49,14 @@ from .status import (
 )
 
 __all__ = [
+    "AdapterResponse",
     "AssetBindingRefV1",
     "AssetDefinitionSnapshotV1",
     "AssetInvocationV1",
     "AssetRefV1",
     "AssetResultStatus",
     "AttachmentRefV1",
+    "BoundSkillPayload",
     "CanonicalPayload",
     "ContractDescriptorV1",
     "ContractRefV1",
@@ -55,13 +70,20 @@ __all__ = [
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
     "FinalArtifactV1",
+    "GenericAssetAdapter",
+    "GenericRecipeAdapter",
+    "GenericSkillAdapter",
     "InvocationStatus",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
     "RegistryAssetEntryV1",
     "RequestEnvelopeV1",
+    "RedispatchDecision",
+    "RedispatchGuardResult",
     "RetryPolicyV1",
     "TerminalOutcome",
     "build_contract_registry",
+    "guard_redispatch",
+    "invocation_signature",
 ]
