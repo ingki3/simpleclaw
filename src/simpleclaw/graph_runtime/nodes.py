@@ -22,12 +22,20 @@ from .checkpoint import (
     UserDecisionV1,
     validate_resume,
 )
+from .composition import FinalCompositionRuntime
+from .contracts import (
+    DeliveryIntentV1,
+    FinalArtifactV1,
+    NormalizedAssetResultV1,
+)
+from .idempotency import delivery_id
 from .routing import (
     GeneralRoute,
     RecipeMatchOutcome,
     RecipeResultOutcome,
     SolverOutcome,
 )
+from .status import DeliveryStatus, TerminalOutcome
 
 NodeUpdate = dict[str, Any]
 NodeCallback = Callable[
@@ -70,6 +78,7 @@ class CoreGraphState(TypedDict, total=False):
     """Adapter-owned opaque values와 core-owned routing 값을 분리한 state다."""
 
     ingress: object
+    request_id: str
     envelope: object
     context: object
     analysis: object
@@ -80,6 +89,12 @@ class CoreGraphState(TypedDict, total=False):
     solver_outcome: SolverOutcome
     normalized_result: object
     composition_candidate: object
+    terminal_outcome: TerminalOutcome
+    final_artifact: FinalArtifactV1
+    delivery_intent: DeliveryIntentV1
+    delivery_receipt: object
+    persistence_receipt: object
+    delivery_context: object
     interrupt_request: InterruptRequestV1
     resume_control: ResumeControlV1
     resume_target: str
@@ -93,6 +108,55 @@ class CoreGraphState(TypedDict, total=False):
     deadline_at: datetime
     cancellation_token: str
     planner_calls: int
+
+
+def final_composition_node(
+    runtime: FinalCompositionRuntime,
+    *,
+    outcome: TerminalOutcome,
+) -> NodeCallback:
+    """normalized result를 guard 뒤에만 final artifact로 승격하는 node다."""
+
+    async def node(state: Mapping[str, Any]) -> NodeUpdate:
+        result = state.get("normalized_result")
+        request_id = state.get("request_id")
+        if not isinstance(result, NormalizedAssetResultV1):
+            raise TypeError("final composition requires NormalizedAssetResultV1")
+        if not isinstance(request_id, str) or not request_id:
+            raise TypeError("final composition requires request_id")
+        final = await runtime.finalize(
+            request_id=request_id,
+            normalized_result=result,
+            outcome=outcome,
+        )
+        return {} if final is None else {"final_artifact": final}
+
+    return node
+
+
+def prepare_delivery_intent(
+    final: FinalArtifactV1,
+    *,
+    channel: str,
+    destination_ref: str,
+    max_attempts: int = 1,
+    shadow: bool = False,
+) -> DeliveryIntentV1:
+    """guard가 만든 final artifact에 결합된 delivery intent만 허용한다."""
+    return DeliveryIntentV1(
+        delivery_id=delivery_id(
+            final.request_id, final.content_hash, destination_ref
+        ),
+        request_id=final.request_id,
+        artifact_id=final.artifact_id,
+        artifact_hash=final.content_hash,
+        channel=channel,
+        destination_ref=destination_ref,
+        status=(
+            DeliveryStatus.SHADOWED if shadow else DeliveryStatus.READY
+        ),
+        max_attempts=max_attempts,
+    )
 
 
 async def _invoke(callback: NodeCallback, state: Mapping[str, Any]) -> NodeUpdate:
@@ -134,6 +198,16 @@ class CoreNodeCallbacks:
     assess_deep_research_result: NodeCallback
     compose_candidate: NodeCallback
     resume_user_input: ResumeCallback
+
+
+@dataclass(frozen=True, slots=True)
+class CoreCompletionCallbacks:
+    """composition 이후 delivery/persistence production 경계를 구성한다."""
+
+    final_composition: NodeCallback
+    prepare_delivery: NodeCallback
+    commit_delivery: NodeCallback
+    persist_delivery_outcome: NodeCallback
 
 
 def callback_node(callback: NodeCallback) -> NodeCallback:
