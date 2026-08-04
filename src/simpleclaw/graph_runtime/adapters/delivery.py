@@ -55,7 +55,7 @@ class CallbackDeliveryAdapter:
             return AdapterDeliveryResult(
                 DeliveryStatus.FAILED_BEFORE_SEND, detail=str(exc)
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - 외부 sender 오류를 UNKNOWN으로 정규화
             return AdapterDeliveryResult(DeliveryStatus.UNKNOWN, detail=str(exc))
         if receipt is None:
             receipt = SenderReceipt()

@@ -56,14 +56,14 @@ class FinalCompositionRuntime:
             candidate = await _await_if_needed(self._compose(normalized_result))
             if isinstance(candidate, str) and candidate.strip():
                 content = candidate.strip()
-        except Exception:
+        except Exception:  # noqa: BLE001 - composer 실패는 deterministic fallback 대상
             content = None
 
         guarded = False
         if content is not None:
             try:
                 guarded = bool(await _await_if_needed(self._guard(content)))
-            except Exception:
+            except Exception:  # noqa: BLE001 - guard 실패는 fail-closed 거부
                 guarded = False
 
         if not guarded:
@@ -71,7 +71,7 @@ class FinalCompositionRuntime:
             # 않아 이 fallback이 새 dispatch 경로가 되지 않게 한다.
             try:
                 safe_content = self._safe_render(normalized_result)
-            except Exception:
+            except Exception:  # noqa: BLE001 - safe renderer 부재로 delivery를 억제
                 return None
             if not isinstance(safe_content, str) or not safe_content.strip():
                 return None

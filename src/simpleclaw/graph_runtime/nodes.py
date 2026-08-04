@@ -29,13 +29,13 @@ from .contracts import (
     NormalizedAssetResultV1,
 )
 from .idempotency import delivery_id
-from .status import DeliveryStatus, TerminalOutcome
 from .routing import (
     GeneralRoute,
     RecipeMatchOutcome,
     RecipeResultOutcome,
     SolverOutcome,
 )
+from .status import DeliveryStatus, TerminalOutcome
 
 NodeUpdate = dict[str, Any]
 NodeCallback = Callable[

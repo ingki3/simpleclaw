@@ -12,9 +12,9 @@ from simpleclaw.graph_runtime.contracts import (
 )
 from simpleclaw.graph_runtime.idempotency import (
     IdempotencyInvariantError,
+    RedispatchDecision,
     UniquePayloadLedger,
     delivery_id,
-    RedispatchDecision,
     guard_redispatch,
     invocation_signature,
     persistence_id,
