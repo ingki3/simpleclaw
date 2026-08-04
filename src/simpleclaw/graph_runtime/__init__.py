@@ -9,6 +9,13 @@ from .checkpoint import (
     UserDecisionV1,
     validate_resume,
 )
+from .adapters import (
+    AdapterResponse,
+    BoundSkillPayload,
+    GenericAssetAdapter,
+    GenericRecipeAdapter,
+    GenericSkillAdapter,
+)
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -43,6 +50,12 @@ from .events import (
     RouteTransitionV1,
 )
 from .nodes import CoreGraphState, CoreNodeCallbacks, RouteContinuityV1
+from .idempotency import (
+    RedispatchDecision,
+    RedispatchGuardResult,
+    guard_redispatch,
+    invocation_signature,
+)
 from .reducers import ReducerInvariantError, reduce_state
 from .routing import (
     CORE_TRANSITION_TABLES,
@@ -66,12 +79,14 @@ from .status import (
 __all__ = [
     "CORE_TRANSITION_TABLES",
     "ActionReceiptV1",
+    "AdapterResponse",
     "AssetBindingRefV1",
     "AssetDefinitionSnapshotV1",
     "AssetInvocationV1",
     "AssetRefV1",
     "AssetResultStatus",
     "AttachmentRefV1",
+    "BoundSkillPayload",
     "BudgetDeltaV1",
     "CanonicalPayload",
     "CheckpointContractError",
@@ -92,6 +107,9 @@ __all__ = [
     "ExecutionPlanV1",
     "FinalArtifactV1",
     "GeneralRoute",
+    "GenericAssetAdapter",
+    "GenericRecipeAdapter",
+    "GenericSkillAdapter",
     "GraphEventKind",
     "GraphEventV1",
     "InterruptRequestV1",
@@ -101,6 +119,8 @@ __all__ = [
     "PlanStatus",
     "RecipeMatchOutcome",
     "RecipeResultOutcome",
+    "RedispatchDecision",
+    "RedispatchGuardResult",
     "ReducerInvariantError",
     "RegistryAssetEntryV1",
     "RequestEnvelopeV1",
@@ -117,6 +137,8 @@ __all__ = [
     "build_contract_registry",
     "build_core_graph",
     "compile_core_graph",
+    "guard_redispatch",
+    "invocation_signature",
     "new_runtime_snapshot",
     "reduce_state",
     "validate_resume",
