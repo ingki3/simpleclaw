@@ -18,6 +18,13 @@ from .contracts import (
     RequestEnvelopeV1,
     RetryPolicyV1,
 )
+from .contracts_registry import (
+    CanonicalPayload,
+    ContractRegistryError,
+    ContractRegistrySnapshotV1,
+    RegistryAssetEntryV1,
+    build_contract_registry,
+)
 from .events import (
     ActionReceiptV1,
     BudgetDeltaV1,
@@ -47,8 +54,11 @@ __all__ = [
     "AssetResultStatus",
     "AttachmentRefV1",
     "BudgetDeltaV1",
+    "CanonicalPayload",
     "ContractDescriptorV1",
     "ContractRefV1",
+    "ContractRegistryError",
+    "ContractRegistrySnapshotV1",
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryReceiptV1",
@@ -64,6 +74,7 @@ __all__ = [
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
+    "RegistryAssetEntryV1",
     "ReducerInvariantError",
     "RequestEnvelopeV1",
     "RetryPolicyV1",
@@ -71,6 +82,7 @@ __all__ = [
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
     "TerminalOutcome",
+    "build_contract_registry",
     "new_runtime_snapshot",
     "reduce_state",
 ]

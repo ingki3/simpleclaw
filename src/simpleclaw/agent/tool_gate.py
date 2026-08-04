@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,
@@ -21,26 +19,7 @@ _CRON_MUTATION_ACTIONS = frozenset({"add", "remove", "enable", "disable"})
 
 def skill_definition_fingerprint(skill: SkillDefinition) -> str:
     """실행·안전성에 영향을 주는 SkillDefinition 전체를 canonical hash로 고정한다."""
-    payload = {
-        "name": skill.name,
-        "description": skill.description,
-        "script_path": skill.script_path,
-        "trigger": skill.trigger,
-        "scope": skill.scope.value,
-        "skill_dir": skill.skill_dir,
-        "commands": list(skill.commands),
-        "retry_policy": (
-            asdict(skill.retry_policy) if skill.retry_policy is not None else None
-        ),
-        "capability": asdict(skill.capability),
-    }
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return skill.definition_fingerprint
 
 
 @dataclass(frozen=True)
