@@ -7,6 +7,15 @@ from .adapters import (
     GenericRecipeAdapter,
     GenericSkillAdapter,
 )
+from .builder import build_core_graph, compile_core_graph
+from .checkpoint import (
+    CheckpointContractError,
+    ChoiceV1,
+    InterruptRequestV1,
+    ResumeControlV1,
+    UserDecisionV1,
+    validate_resume,
+)
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -46,7 +55,16 @@ from .idempotency import (
     guard_redispatch,
     invocation_signature,
 )
+from .nodes import CoreGraphState, CoreNodeCallbacks, RouteContinuityV1
 from .reducers import ReducerInvariantError, reduce_state
+from .routing import (
+    CORE_TRANSITION_TABLES,
+    GeneralRoute,
+    RecipeMatchOutcome,
+    RecipeResultOutcome,
+    RoutingInvariantError,
+    SolverOutcome,
+)
 from .state import RuntimeGraphState, RuntimeSnapshotV1, new_runtime_snapshot
 from .status import (
     AssetResultStatus,
@@ -59,6 +77,7 @@ from .status import (
 )
 
 __all__ = [
+    "CORE_TRANSITION_TABLES",
     "ActionReceiptV1",
     "AdapterResponse",
     "AssetBindingRefV1",
@@ -70,10 +89,14 @@ __all__ = [
     "BoundSkillPayload",
     "BudgetDeltaV1",
     "CanonicalPayload",
+    "CheckpointContractError",
+    "ChoiceV1",
     "ContractDescriptorV1",
     "ContractRefV1",
     "ContractRegistryError",
     "ContractRegistrySnapshotV1",
+    "CoreGraphState",
+    "CoreNodeCallbacks",
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryReceiptV1",
@@ -83,28 +106,40 @@ __all__ = [
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
     "FinalArtifactV1",
+    "GeneralRoute",
     "GenericAssetAdapter",
     "GenericRecipeAdapter",
     "GenericSkillAdapter",
     "GraphEventKind",
     "GraphEventV1",
+    "InterruptRequestV1",
     "InvocationStatus",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
+    "RecipeMatchOutcome",
+    "RecipeResultOutcome",
     "RedispatchDecision",
     "RedispatchGuardResult",
     "ReducerInvariantError",
     "RegistryAssetEntryV1",
     "RequestEnvelopeV1",
+    "ResumeControlV1",
     "RetryPolicyV1",
+    "RouteContinuityV1",
     "RouteTransitionV1",
+    "RoutingInvariantError",
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
+    "SolverOutcome",
     "TerminalOutcome",
+    "UserDecisionV1",
     "build_contract_registry",
+    "build_core_graph",
+    "compile_core_graph",
     "guard_redispatch",
     "invocation_signature",
     "new_runtime_snapshot",
     "reduce_state",
+    "validate_resume",
 ]
