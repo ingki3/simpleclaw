@@ -8,6 +8,7 @@ from .adapters import (
     GenericSkillAdapter,
 )
 from .builder import build_core_graph, compile_core_graph
+from .composition import FinalCompositionRuntime
 from .checkpoint import (
     CheckpointContractError,
     ChoiceV1,
@@ -50,12 +51,30 @@ from .events import (
     RouteTransitionV1,
 )
 from .idempotency import (
+    IdempotencyInvariantError,
     RedispatchDecision,
     RedispatchGuardResult,
+    UniquePayloadLedger,
+    delivery_id,
     guard_redispatch,
     invocation_signature,
+    persistence_id,
 )
-from .nodes import CoreGraphState, CoreNodeCallbacks, RouteContinuityV1
+from .runtime import (
+    DeliveryRuntime,
+    InMemoryDeliveryJournal,
+    InMemoryPersistenceJournal,
+    PersistenceReceiptV1,
+    PersistenceRuntime,
+    SQLiteDeliveryJournal,
+)
+from .nodes import (
+    CoreGraphState,
+    CoreNodeCallbacks,
+    RouteContinuityV1,
+    final_composition_node,
+    prepare_delivery_intent,
+)
 from .reducers import ReducerInvariantError, reduce_state
 from .routing import (
     CORE_TRANSITION_TABLES,
@@ -100,12 +119,14 @@ __all__ = [
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryReceiptV1",
+    "DeliveryRuntime",
     "DeliveryStatus",
     "DraftArtifactV1",
     "EffectStatus",
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
     "FinalArtifactV1",
+    "FinalCompositionRuntime",
     "GeneralRoute",
     "GenericAssetAdapter",
     "GenericRecipeAdapter",
@@ -113,10 +134,15 @@ __all__ = [
     "GraphEventKind",
     "GraphEventV1",
     "InterruptRequestV1",
+    "IdempotencyInvariantError",
+    "InMemoryDeliveryJournal",
+    "InMemoryPersistenceJournal",
     "InvocationStatus",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
+    "PersistenceReceiptV1",
+    "PersistenceRuntime",
     "RecipeMatchOutcome",
     "RecipeResultOutcome",
     "RedispatchDecision",
@@ -131,15 +157,21 @@ __all__ = [
     "RoutingInvariantError",
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
+    "SQLiteDeliveryJournal",
     "SolverOutcome",
     "TerminalOutcome",
     "UserDecisionV1",
+    "UniquePayloadLedger",
     "build_contract_registry",
     "build_core_graph",
     "compile_core_graph",
+    "delivery_id",
+    "final_composition_node",
     "guard_redispatch",
     "invocation_signature",
     "new_runtime_snapshot",
+    "persistence_id",
+    "prepare_delivery_intent",
     "reduce_state",
     "validate_resume",
 ]

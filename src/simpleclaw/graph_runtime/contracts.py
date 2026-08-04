@@ -368,7 +368,9 @@ class DeliveryIntentV1(ContractModel):
         default="delivery_intent.v1", alias="schema"
     )
     delivery_id: NonEmptyStr
+    request_id: NonEmptyStr
     artifact_id: NonEmptyStr
+    artifact_hash: NonEmptyStr
     channel: Literal["telegram", "cron", "internal"]
     destination_ref: NonEmptyStr
     status: DeliveryStatus = DeliveryStatus.READY

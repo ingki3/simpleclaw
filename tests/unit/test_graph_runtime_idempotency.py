@@ -11,9 +11,13 @@ from simpleclaw.graph_runtime.contracts import (
     ContractRefV1,
 )
 from simpleclaw.graph_runtime.idempotency import (
+    IdempotencyInvariantError,
+    UniquePayloadLedger,
+    delivery_id,
     RedispatchDecision,
     guard_redispatch,
     invocation_signature,
+    persistence_id,
 )
 from simpleclaw.graph_runtime.status import EffectStatus
 
@@ -96,3 +100,25 @@ def test_unrelated_receipt_does_not_block_and_started_without_receipt_is_unknown
     assert allowed.decision is RedispatchDecision.DISPATCH
     assert unknown.decision is RedispatchDecision.BLOCK_UNKNOWN
     assert unknown.effect_status is EffectStatus.UNKNOWN
+
+
+def test_delivery_and_persistence_ids_are_deterministic_and_separate() -> None:
+    first_delivery = delivery_id("request-1", "artifact-hash", "chat-1")
+    first_persistence = persistence_id(
+        "session-1", "request-1", "artifact-hash"
+    )
+
+    assert first_delivery == delivery_id("request-1", "artifact-hash", "chat-1")
+    assert first_persistence == persistence_id(
+        "session-1", "request-1", "artifact-hash"
+    )
+    assert first_delivery != first_persistence
+
+
+def test_unique_payload_ledger_noops_same_payload_and_rejects_conflict() -> None:
+    ledger = UniquePayloadLedger()
+
+    assert ledger.record("persistence-1", "hash-1") is True
+    assert ledger.record("persistence-1", "hash-1") is False
+    with pytest.raises(IdempotencyInvariantError, match="different payload"):
+        ledger.record("persistence-1", "hash-2")

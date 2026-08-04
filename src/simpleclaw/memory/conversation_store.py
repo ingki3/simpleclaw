@@ -29,6 +29,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -259,6 +260,64 @@ class ConversationStore:
                 (session_key, turn_id, now),
             )
         return ids[0], ids[1]
+
+    def save_outbound_once(
+        self,
+        assistant_message: ConversationMessage,
+        *,
+        session_key: str,
+        persistence_id: str,
+        payload_hash: str,
+    ) -> tuple[int, bool]:
+        """V4 delivered artifact를 persistence_id 기준 exactly-once 저장한다.
+
+        marker와 assistant message를 같은 SQLite transaction에 넣으므로 process가
+        어느 지점에서 종료돼도 둘 다 commit되거나 둘 다 rollback된다.
+        """
+        actual_hash = hashlib.sha256(
+            assistant_message.content.encode("utf-8")
+        ).hexdigest()
+        if actual_hash != payload_hash:
+            raise ValueError("payload_hash does not match assistant content")
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT payload_hash, message_id FROM graph_outbound_persistence "
+                "WHERE persistence_id = ?",
+                (persistence_id,),
+            ).fetchone()
+            if existing is not None:
+                if str(existing[0]) != payload_hash:
+                    raise ValueError(
+                        "persistence_id already exists with a different payload"
+                    )
+                return int(existing[1]), False
+            cursor = conn.execute(
+                "INSERT INTO messages "
+                "(role, content, timestamp, token_count, channel, session_key, turn_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    assistant_message.role.value,
+                    assistant_message.content,
+                    assistant_message.timestamp.isoformat(),
+                    assistant_message.token_count,
+                    assistant_message.channel,
+                    session_key,
+                    persistence_id,
+                ),
+            )
+            message_id = int(cursor.lastrowid)
+            conn.execute(
+                "INSERT INTO graph_outbound_persistence "
+                "(persistence_id, payload_hash, message_id, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    persistence_id,
+                    payload_hash,
+                    message_id,
+                    datetime.now().astimezone().isoformat(),
+                ),
+            )
+        return message_id, True
 
     def get_recent(
         self,
