@@ -110,7 +110,10 @@ class GenericSkillAdapter:
                 raw_result = await execute_skill(self._definition, argv)
             else:
                 raw_result = await self._executor(self._definition, argv)
-        except Exception:
+        # The injected executor is an external boundary. Unknown provider/runtime
+        # failures must become a fail-closed adapter response, never escape to a
+        # graph fallback path.
+        except Exception:  # noqa: BLE001
             return _failure(
                 invocation,
                 "executor.failed",
@@ -222,7 +225,7 @@ def _result_payload(raw_result: Mapping[str, Any] | SkillResult) -> Mapping[str,
         raise RuntimeError("skill executor returned failure")
     value = json.loads(raw_result.output)
     if not isinstance(value, dict):
-        raise ValueError("skill output must be a JSON object")
+        raise TypeError("skill output must be a JSON object")
     return value
 
 

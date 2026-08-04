@@ -114,7 +114,10 @@ class GenericRecipeAdapter:
                 )
             else:
                 raw_result = await self._executor(self._definition, bound_steps)
-        except Exception:
+        # The injected executor is an external boundary. Unknown provider/runtime
+        # failures must become a fail-closed adapter response, never escape to a
+        # graph fallback path.
+        except Exception:  # noqa: BLE001
             return _failure(
                 invocation,
                 "executor.failed",
@@ -192,7 +195,7 @@ class GenericRecipeAdapter:
             child: dict[str, Any] = {}
             for source, destination in mapping.items():
                 if not isinstance(source, str) or not isinstance(destination, str):
-                    raise ValueError("map entries must be strings")
+                    raise TypeError("map entries must be strings")
                 if source not in payload or destination in child:
                     raise ValueError("mapping source missing or destination duplicated")
                 child[destination] = payload[source]
@@ -248,7 +251,7 @@ def _result_payload(raw_result: Mapping[str, Any] | RecipeResult) -> Mapping[str
         raise ValueError("typed recipe output must be one JSON object")
     value = json.loads(raw_result.step_results[0].output)
     if not isinstance(value, dict):
-        raise ValueError("recipe output must be a JSON object")
+        raise TypeError("recipe output must be a JSON object")
     return value
 
 
