@@ -128,6 +128,12 @@ class CronActionResult:
     text: str
     success: bool = True
     failure_kind: CronFailureKind | None = None
+    # Legacy 경로는 scheduler가 job 단위 재시도를 소유한다. V4 결과는 graph가
+    # bounded retry를 이미 소유하므로 False로 반환해 중복 solver 실행을 막는다.
+    retryable: bool = True
+    # Graph delivery가 suppressed/shadowed/already-delivered/unknown이면 기존
+    # scheduler notifier를 다시 호출하지 않는다.
+    notify: bool = True
 
 
 @dataclass

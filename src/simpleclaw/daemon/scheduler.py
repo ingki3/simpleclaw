@@ -31,6 +31,10 @@ from simpleclaw.daemon.models import (
     ExecutionStatus,
 )
 from simpleclaw.daemon.store import DaemonStore
+from simpleclaw.graph_runtime.adapters.cron import (
+    CronGraphFacade,
+    CronIngressAdapter,
+)
 from simpleclaw.proactive.event_detector import EventDetector
 from simpleclaw.recipes.models import StepType
 
@@ -149,6 +153,7 @@ class CronScheduler:
         agent_orchestrator=None,
         notifier: Callable[[str, str], Awaitable[None]] | None = None,
         event_detector: EventDetector | None = None,
+        graph_runtime_facade: CronGraphFacade | None = None,
         recipes_dir: str | Path = "~/.simpleclaw-agent/default/recipes",
         legacy_recipes_dir: str | Path | None = ".agent/recipes",
     ) -> None:
@@ -158,6 +163,8 @@ class CronScheduler:
         self._agent = agent_orchestrator
         self._notifier = notifier
         self._event_detector = event_detector
+        self._graph_runtime_facade = graph_runtime_facade
+        self._cron_ingress_adapter = CronIngressAdapter()
         # BIZ-202: cron 의 action_reference 가 이름(예: "krstock") 일 때 어느 디렉터리에서
         # `recipe.yaml` 을 찾을지. 봇/데몬이 동일 절대 경로(`~/.simpleclaw-agent/default/recipes`)를 보도록
         # 호출 측(run_bot.py)에서 명시적으로 주입. 레거시 `.agent/recipes/` 는 한 번 폴백.
@@ -324,7 +331,14 @@ class CronScheduler:
         if job is None:
             raise CronJobNotFoundError(f"Cron job '{job_name}' not found")
 
-        max_attempts = max(1, int(job.max_attempts))
+        # V4 facade는 solver/tool retry를 graph 내부에서 bounded하게 소유한다.
+        # Scheduler job retry까지 겹치면 동일 run을 처음부터 중복 실행하므로,
+        # opt-in V4 경로는 schedule trigger당 정확히 한 번만 호출한다.
+        max_attempts = (
+            1
+            if self._graph_runtime_facade is not None
+            else max(1, int(job.max_attempts))
+        )
         last_execution: CronJobExecution | None = None
         last_error: str | None = None
         last_semantic_result: CronActionResult | None = None
@@ -406,6 +420,8 @@ class CronScheduler:
                     max_attempts,
                     failure_kind.value,
                 )
+                if not result.retryable:
+                    break
                 if attempt < max_attempts:
                     delay = _compute_backoff(
                         job.backoff_seconds, attempt, job.backoff_strategy
@@ -449,6 +465,7 @@ class CronScheduler:
             job,
             last_error or "",
             notify_circuit_break=last_semantic_result is None,
+            attempts_used=max_attempts,
         )
         if last_semantic_result is not None:
             await self._send_final_semantic_failure_notification(
@@ -490,6 +507,7 @@ class CronScheduler:
         last_error: str,
         *,
         notify_circuit_break: bool = True,
+        attempts_used: int | None = None,
     ) -> None:
         """모든 재시도 실패 후 누적 카운터를 증가시키고 임계값 도달 시 차단한다.
 
@@ -499,6 +517,7 @@ class CronScheduler:
         job.consecutive_failures = (job.consecutive_failures or 0) + 1
         job.updated_at = datetime.now()
         threshold = int(job.circuit_break_threshold or 0)
+        recorded_attempts = attempts_used or max(1, int(job.max_attempts))
 
         if threshold > 0 and job.consecutive_failures >= threshold:
             # 자동 일시 정지: APScheduler에서 해제하고 enabled=False 영속화.
@@ -518,22 +537,22 @@ class CronScheduler:
                 event_type="circuit_break",
                 job=job,
                 error_details=last_error,
-                attempt=max(1, int(job.max_attempts)),
-                max_attempts=max(1, int(job.max_attempts)),
+                attempt=recorded_attempts,
+                max_attempts=recorded_attempts,
             )
         else:
             self._store.save_job(job)
             logger.error(
                 "Cron job '%s' failed after %d retries (consecutive failures: %d).",
-                job.name, max(1, int(job.max_attempts)) - 1,
+                job.name, recorded_attempts - 1,
                 job.consecutive_failures,
             )
             await self._capture_cron_event(
                 event_type="failure",
                 job=job,
                 error_details=last_error,
-                attempt=max(1, int(job.max_attempts)),
-                max_attempts=max(1, int(job.max_attempts)),
+                attempt=recorded_attempts,
+                max_attempts=recorded_attempts,
             )
 
     async def _send_circuit_break_notification(
@@ -568,6 +587,7 @@ class CronScheduler:
         if (
             not self._notifier
             or not result.text
+            or not result.notify
             or _NO_NOTIFY_TOKEN in result.text
         ):
             return
@@ -626,7 +646,9 @@ class CronScheduler:
         )
 
         # NO_NOTIFY 토큰 감지 시 알림 건너뜀
-        if response.text and _NO_NOTIFY_TOKEN in response.text:
+        if not response.notify or (
+            response.text and _NO_NOTIFY_TOKEN in response.text
+        ):
             logger.info(
                 "Cron job '%s': nothing to notify, skipping.", job.name
             )
@@ -682,6 +704,11 @@ class CronScheduler:
           정상적으로는 발생할 수 없다. 그래도 안전망으로 WARN 을 남긴다(silent
           no-op 재발 방지).
         """
+        if self._graph_runtime_facade is not None:
+            ingress = self._cron_ingress_adapter.normalize(job)
+            graph_result = await self._graph_runtime_facade.execute_cron(ingress)
+            return self._cron_ingress_adapter.map_result(graph_result)
+
         if job.action_type == ActionType.RECIPE:
             from simpleclaw.recipes.executor import execute_recipe
             from simpleclaw.recipes.loader import load_recipe
