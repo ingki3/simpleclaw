@@ -40,7 +40,6 @@ def test_recipe_is_always_evaluated_before_exact_three_way_selector() -> None:
     [
         SolverOutcome.UNRESOLVED,
         SolverOutcome.COMPLEXITY_INCREASED,
-        SolverOutcome.BUDGET_EXHAUSTED,
     ],
 )
 def test_only_information_or_complexity_gap_escalates_react(outcome) -> None:
@@ -51,6 +50,7 @@ def test_only_information_or_complexity_gap_escalates_react(outcome) -> None:
     "outcome",
     [
         SolverOutcome.FAILED,
+        SolverOutcome.BUDGET_EXHAUSTED,
         SolverOutcome.PROVIDER_OUTAGE,
         SolverOutcome.TIMED_OUT,
         SolverOutcome.CANCELLED,

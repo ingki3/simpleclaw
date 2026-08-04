@@ -10,8 +10,10 @@ from simpleclaw.graph_runtime.builder import compile_core_graph
 from simpleclaw.graph_runtime.checkpoint import InterruptRequestV1, UserDecisionV1
 from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks
 from simpleclaw.graph_runtime.routing import (
+    GeneralRoute,
     RecipeMatchOutcome,
     RecipeResultOutcome,
+    SolverOutcome,
 )
 
 
@@ -20,6 +22,7 @@ def _request(kind: str, *, resume_node: str = "recipe") -> InterruptRequestV1:
         "interrupt_id": f"{kind}-1",
         "kind": kind,
         "question": "추가 입력이 필요합니다.",
+        "allow_free_text": True,
         "resume_node": resume_node,
         "checkpoint_thread_id": "turn:interrupt-test",
         "checkpoint_version": 1,
@@ -60,8 +63,10 @@ def _decision(request: InterruptRequestV1) -> UserDecisionV1:
     return UserDecisionV1(**values)
 
 
-def _interrupt_callbacks(kind: str, counters: dict[str, int]) -> CoreNodeCallbacks:
-    request = _request(kind)
+def _interrupt_callbacks(
+    kind: str, counters: dict[str, int], *, resume_node: str = "recipe"
+) -> CoreNodeCallbacks:
+    request = _request(kind, resume_node=resume_node)
 
     def empty(_state):
         return {}
@@ -85,6 +90,19 @@ def _interrupt_callbacks(kind: str, counters: dict[str, int]) -> CoreNodeCallbac
         )
         return {"recipe_result": outcome}
 
+    def run_solver(state):
+        if "resume_control" not in state:
+            return {"interrupt_request": request}
+        return {"normalized_result": resume_node}
+
+    def assess_solver(state):
+        outcome = (
+            SolverOutcome.RESOLVED
+            if "resume_control" in state
+            else SolverOutcome.NEEDS_INPUT
+        )
+        return {"solver_outcome": outcome}
+
     def resume(state, control):
         if kind == "clarification":
             counters["planner"] += 1
@@ -98,16 +116,26 @@ def _interrupt_callbacks(kind: str, counters: dict[str, int]) -> CoreNodeCallbac
         analyze_request=analyze,
         snapshot_asset_catalogs=empty,
         match_recipe=lambda _state: {
-            "recipe_match": RecipeMatchOutcome.APPLICABLE
+            "recipe_match": (
+                RecipeMatchOutcome.APPLICABLE
+                if resume_node == "recipe"
+                else RecipeMatchOutcome.NO_MATCH
+            )
         },
         execute_existing_recipe=execute,
         assess_recipe_result=assess,
-        select_general_route=empty,
+        select_general_route=lambda _state: {
+            "general_route": (
+                GeneralRoute.REACT
+                if resume_node == "react"
+                else GeneralRoute.DEEP_RESEARCH
+            )
+        },
         simple_conversation=empty,
-        react_subgraph=empty,
-        assess_react_result=empty,
-        deep_research_subgraph=empty,
-        assess_deep_research_result=empty,
+        react_subgraph=run_solver,
+        assess_react_result=assess_solver,
+        deep_research_subgraph=run_solver,
+        assess_deep_research_result=assess_solver,
         compose_candidate=lambda _state: {"composition_candidate": "draft"},
         resume_user_input=resume,
     )
@@ -145,3 +173,31 @@ async def test_interrupt_resumes_exact_recipe_control_point(
         assert resumed["resume_control"].payload_hash == "payload-hash"
     else:
         assert resumed["resume_control"].next_revision == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume_node", ["react", "deep_research"])
+async def test_clarification_resumes_exact_solver_control_point(resume_node) -> None:
+    counters = {"planner": 0, "dispatch": 0}
+    graph = compile_core_graph(
+        _interrupt_callbacks(
+            "clarification", counters, resume_node=resume_node
+        ),
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "turn:interrupt-test"}}
+
+    interrupted = await graph.ainvoke({"ingress": "request"}, config)
+    assert interrupted["__interrupt__"]
+    assert counters["dispatch"] == 0
+
+    request = _request("clarification", resume_node=resume_node)
+    resumed = await graph.ainvoke(
+        Command(resume=_decision(request).model_dump(mode="json")), config
+    )
+
+    assert resumed["composition_candidate"] == "draft"
+    assert resumed["normalized_result"] == resume_node
+    assert resumed["resume_target"] == resume_node
+    assert resumed["resume_control"].next_revision == 2
+    assert counters == {"planner": 2, "dispatch": 0}

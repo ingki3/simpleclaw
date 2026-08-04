@@ -36,6 +36,7 @@ class InterruptRequestV1(InterruptModel):
     kind: Literal["clarification", "confirmation"]
     question: str = Field(min_length=1)
     choices: tuple[ChoiceV1, ...] = ()
+    allow_free_text: bool = False
     resume_node: Literal["recipe", "react", "deep_research"]
     checkpoint_thread_id: str = Field(min_length=1)
     checkpoint_version: int = Field(ge=0)
@@ -156,8 +157,20 @@ def validate_resume(
 
     if decision.confirmed is not None:
         raise CheckpointContractError("clarification cannot authorize an invocation")
-    answer = decision.text or decision.choice_id
-    if not answer:
+    if decision.text is not None and decision.choice_id is not None:
+        raise CheckpointContractError(
+            "clarification must contain either text or a choice, not both"
+        )
+    if decision.choice_id is not None:
+        allowed_choice_ids = {choice.choice_id for choice in request.choices}
+        if decision.choice_id not in allowed_choice_ids:
+            raise CheckpointContractError("clarification choice is not allowed")
+        answer = decision.choice_id
+    elif decision.text is not None:
+        if not request.allow_free_text:
+            raise CheckpointContractError("clarification does not allow free text")
+        answer = decision.text
+    else:
         raise CheckpointContractError("clarification requires text or a choice")
     next_revision = 1 if request.plan_revision is None else request.plan_revision + 1
     return ResumeControlV1(

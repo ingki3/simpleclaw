@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from simpleclaw.graph_runtime.builder import compile_core_graph
+from simpleclaw.graph_runtime.checkpoint import InterruptRequestV1
 from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks, RouteContinuityV1
 from simpleclaw.graph_runtime.routing import (
     GeneralRoute,
@@ -145,6 +146,132 @@ async def test_react_escalation_preserves_control_state() -> None:
     assert continuity.attempted_signatures == ("attempt-1",)
     assert continuity.remaining_tokens == 800
     assert continuity.cancellation_token == "cancel-1"
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_never_dispatches_deep_research() -> None:
+    visits = []
+    graph = compile_core_graph(
+        _callbacks(
+            recipe_match=RecipeMatchOutcome.NO_MATCH,
+            solver_outcome=SolverOutcome.BUDGET_EXHAUSTED,
+            visits=visits,
+        )
+    )
+    state = {
+        **_initial_state(),
+        "remaining_graph_steps": 0,
+        "remaining_asset_calls": 0,
+        "remaining_llm_calls": 0,
+        "remaining_tokens": 0,
+    }
+
+    result = await graph.ainvoke(state)
+
+    assert result["composition_candidate"] == "draft"
+    assert visits.count("react_subgraph") == 1
+    assert visits.count("deep_research_subgraph") == 0
+
+
+def test_route_continuity_defensively_freezes_nested_observations() -> None:
+    source = {"facts": ["original"]}
+    continuity = RouteContinuityV1(
+        observations=(source,),
+        attempted_signatures=(),
+        remaining_graph_steps=1,
+        remaining_asset_calls=1,
+        remaining_llm_calls=1,
+        remaining_tokens=1,
+        deadline_at=datetime.now(UTC) + timedelta(minutes=1),
+        cancellation_token="cancel-1",
+    )
+
+    source["facts"].append("mutated-source")
+    accessed = continuity.observations
+    accessed[0]["facts"].append("mutated-accessor")
+
+    assert continuity.observations == ({"facts": ["original"]},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "recipe_result,expected_general_calls",
+    [
+        (RecipeResultOutcome.NEEDS_INPUT, 0),
+        (RecipeResultOutcome.UNKNOWN_EFFECT, 0),
+        (RecipeResultOutcome.SECURITY_DENIED, 0),
+    ],
+)
+async def test_recipe_input_and_unsafe_results_never_dispatch_general_solver(
+    recipe_result, expected_general_calls
+) -> None:
+    visits = []
+    callbacks = _callbacks(
+        recipe_match=RecipeMatchOutcome.APPLICABLE,
+        recipe_result=recipe_result,
+        visits=visits,
+    )
+    if recipe_result is RecipeResultOutcome.NEEDS_INPUT:
+        request = InterruptRequestV1(
+            interrupt_id="recipe-input",
+            kind="clarification",
+            question="추가 입력",
+            allow_free_text=True,
+            resume_node="recipe",
+            checkpoint_thread_id="turn:recipe-input",
+            checkpoint_version=1,
+            contract_version="1",
+            contract_schema_hash="contract",
+            catalog_fingerprint="catalog",
+        )
+        callbacks = replace(
+            callbacks,
+            execute_existing_recipe=lambda _state: {
+                "interrupt_request": request
+            },
+        )
+
+    graph = compile_core_graph(callbacks)
+    result = await graph.ainvoke(_initial_state())
+
+    assert visits.count("select_general_route") == expected_general_calls
+    assert visits.count("react_subgraph") == 0
+    assert visits.count("deep_research_subgraph") == 0
+    if recipe_result is RecipeResultOutcome.NEEDS_INPUT:
+        assert result["__interrupt__"]
+    else:
+        assert result["composition_candidate"] == "draft"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,outcome",
+    [
+        (GeneralRoute.SIMPLE_CONVERSATION, SolverOutcome.RESOLVED),
+        (GeneralRoute.REACT, SolverOutcome.RESOLVED),
+        (GeneralRoute.REACT, SolverOutcome.FAILED),
+        (GeneralRoute.REACT, SolverOutcome.PROVIDER_OUTAGE),
+        (GeneralRoute.REACT, SolverOutcome.SECURITY_DENIED),
+    ],
+)
+async def test_simple_and_react_terminal_matrix_compiles_to_one_artifact(
+    route, outcome
+) -> None:
+    visits = []
+    graph = compile_core_graph(
+        _callbacks(
+            recipe_match=RecipeMatchOutcome.NO_MATCH,
+            general_route=route,
+            solver_outcome=outcome,
+            visits=visits,
+        )
+    )
+
+    result = await graph.ainvoke(_initial_state())
+
+    assert result["composition_candidate"] == "draft"
+    assert visits.count("compose_candidate") == 1
+    assert visits.count("deep_research_subgraph") == 0
 
 
 @pytest.mark.asyncio

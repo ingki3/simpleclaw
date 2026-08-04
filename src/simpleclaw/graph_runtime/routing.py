@@ -98,7 +98,7 @@ REACT_RESULT_EDGES = MappingProxyType(
         SolverOutcome.NEEDS_INPUT: "request_user_input",
         SolverOutcome.UNRESOLVED: "deep_research_subgraph",
         SolverOutcome.COMPLEXITY_INCREASED: "deep_research_subgraph",
-        SolverOutcome.BUDGET_EXHAUSTED: "deep_research_subgraph",
+        SolverOutcome.BUDGET_EXHAUSTED: "compose_candidate",
         SolverOutcome.FAILED: "compose_candidate",
         SolverOutcome.PROVIDER_OUTAGE: "compose_candidate",
         SolverOutcome.TIMED_OUT: "compose_candidate",

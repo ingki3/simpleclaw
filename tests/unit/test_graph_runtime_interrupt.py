@@ -6,6 +6,7 @@ import pytest
 
 from simpleclaw.graph_runtime.checkpoint import (
     CheckpointContractError,
+    ChoiceV1,
     InterruptRequestV1,
     UserDecisionV1,
     validate_resume,
@@ -19,6 +20,7 @@ def _request(kind: str = "clarification") -> InterruptRequestV1:
         "interrupt_id": "interrupt-1",
         "kind": kind,
         "question": "계속할까요?",
+        "allow_free_text": True,
         "resume_node": "react",
         "checkpoint_thread_id": "turn:1",
         "checkpoint_version": 3,
@@ -99,3 +101,38 @@ def test_expired_interrupt_fails_closed() -> None:
     request = _request()
     with pytest.raises(CheckpointContractError, match="expired"):
         validate_resume(request, _decision(request), now=NOW + timedelta(hours=1))
+
+
+def test_clarification_rejects_forged_choice() -> None:
+    request = _request().model_copy(
+        update={
+            "choices": (ChoiceV1(choice_id="allowed", label="허용"),),
+            "allow_free_text": False,
+        }
+    )
+
+    with pytest.raises(CheckpointContractError, match="choice is not allowed"):
+        validate_resume(
+            request,
+            _decision(request, text=None, choice_id="forged"),
+            now=NOW,
+        )
+
+
+def test_clarification_distinguishes_choice_from_free_text() -> None:
+    request = _request().model_copy(
+        update={
+            "choices": (ChoiceV1(choice_id="allowed", label="허용"),),
+            "allow_free_text": False,
+        }
+    )
+
+    with pytest.raises(CheckpointContractError, match="does not allow free text"):
+        validate_resume(request, _decision(request), now=NOW)
+
+    control = validate_resume(
+        request,
+        _decision(request, text=None, choice_id="allowed"),
+        now=NOW,
+    )
+    assert control.answer == "allowed"

@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TypedDict
 
 from langgraph.types import interrupt
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .checkpoint import (
     InterruptRequestV1,
@@ -50,6 +51,19 @@ class RouteContinuityV1(BaseModel):
     remaining_tokens: int = Field(ge=0)
     deadline_at: datetime
     cancellation_token: str = Field(min_length=1)
+
+    @field_validator("observations", mode="before")
+    @classmethod
+    def snapshot_observations(cls, value: Any) -> Any:
+        """caller-owned 중첩 observation과 snapshot 저장소를 분리한다."""
+        return deepcopy(value)
+
+    def __getattribute__(self, name: str) -> Any:
+        """frozen 모델의 중첩 observation accessor도 방어 복사로 반환한다."""
+        value = super().__getattribute__(name)
+        if name == "observations":
+            return deepcopy(value)
+        return value
 
 
 class CoreGraphState(TypedDict, total=False):
@@ -162,7 +176,7 @@ def preserve_react_handoff(state: Mapping[str, Any]) -> NodeUpdate:
     """ReAct escalation의 관찰·시도·budget/deadline/cancel identity를 동결한다."""
     return {
         "route_continuity": RouteContinuityV1(
-            observations=tuple(state.get("observations", ())),
+            observations=deepcopy(tuple(state.get("observations", ()))),
             attempted_signatures=tuple(state.get("attempted_signatures", ())),
             remaining_graph_steps=state["remaining_graph_steps"],
             remaining_asset_calls=state["remaining_asset_calls"],
