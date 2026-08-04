@@ -4,24 +4,470 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import math
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
-from .adapters.delivery import DeliveryAdapter
+from .adapters.delivery import DeliveryAdapter, NullDeliveryAdapter
+from .checkpoint import resolve_checkpoint_path
 from .composition import FinalCompositionRuntime
-from .contracts import DeliveryIntentV1, FinalArtifactV1, NormalizedAssetResultV1
+from .contracts import (
+    AssetBindingRefV1,
+    AssetDefinitionSnapshotV1,
+    AssetInvocationV1,
+    AssetRefV1,
+    ContractRefV1,
+    DeliveryIntentV1,
+    FinalArtifactV1,
+    NormalizedAssetResultV1,
+)
+from .contracts_registry import RegistryAssetEntryV1
 from .events import DeliveryReceiptV1
 from .idempotency import (
     IdempotencyInvariantError,
     UniquePayloadLedger,
     persistence_id,
 )
-from .status import DeliveryStatus, TerminalOutcome
+from .status import (
+    AssetResultStatus,
+    DeliveryStatus,
+    EffectStatus,
+    InvocationStatus,
+    TerminalOutcome,
+)
+
+ShadowStopCondition = Literal[
+    "completed",
+    "budget_exhausted",
+    "deadline",
+    "cancelled",
+    "failed",
+    "blocked",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowBudgetUsageV1:
+    """Shadow 한 run의 유한 budget과 실제 사용량/중단 이유다."""
+
+    max_graph_steps: int
+    max_asset_calls: int
+    max_llm_calls: int
+    max_tokens: int
+    max_seconds: float
+    max_parallel_invocations: int
+    graph_steps: int
+    asset_calls: int
+    llm_calls: int
+    tokens: int
+    elapsed_seconds: float
+    parallel_peak: int
+    stop_condition: ShadowStopCondition
+
+    def __post_init__(self) -> None:
+        limits = (
+            self.max_graph_steps,
+            self.max_asset_calls,
+            self.max_llm_calls,
+            self.max_tokens,
+            self.max_seconds,
+            self.max_parallel_invocations,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or value <= 0
+            for value in limits
+        ):
+            raise ValueError("all shadow budget limits must be finite and positive")
+        usage = (
+            self.graph_steps,
+            self.asset_calls,
+            self.llm_calls,
+            self.tokens,
+            self.elapsed_seconds,
+            self.parallel_peak,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or value < 0
+            for value in usage
+        ):
+            raise ValueError("shadow budget usage must be finite and non-negative")
+        if not self.stop_condition:
+            raise ValueError("shadow stop condition is required")
+
+    @property
+    def exhausted(self) -> bool:
+        return self.stop_condition in {"budget_exhausted", "deadline"} or any(
+            (
+                self.graph_steps >= self.max_graph_steps,
+                self.asset_calls >= self.max_asset_calls,
+                self.llm_calls >= self.max_llm_calls,
+                self.tokens >= self.max_tokens,
+                self.elapsed_seconds >= self.max_seconds,
+                self.parallel_peak >= self.max_parallel_invocations,
+            )
+        )
+
+    def as_dict(self) -> dict[str, int | float | str | bool]:
+        return {
+            "max_graph_steps": self.max_graph_steps,
+            "max_asset_calls": self.max_asset_calls,
+            "max_llm_calls": self.max_llm_calls,
+            "max_tokens": self.max_tokens,
+            "max_seconds": self.max_seconds,
+            "max_parallel_invocations": self.max_parallel_invocations,
+            "graph_steps": self.graph_steps,
+            "asset_calls": self.asset_calls,
+            "llm_calls": self.llm_calls,
+            "tokens": self.tokens,
+            "elapsed_seconds": self.elapsed_seconds,
+            "parallel_peak": self.parallel_peak,
+            "stop_condition": self.stop_condition,
+            "exhausted": self.exhausted,
+        }
+
+
+class ShadowNoSendConfigurationError(ValueError):
+    """Shadow facade가 live adapter를 보유할 수 있는 설정을 거부한다."""
+
+
+class LangGraphV4RolloutFacade:
+    """Legacy primary와 격리 V4 shadow/canary 판정을 연결하는 rollout facade다."""
+
+    def __init__(
+        self,
+        *,
+        architecture: str,
+        mode: str,
+        shadow_no_send: bool,
+        budget: ShadowBudgetUsageV1,
+        checkpoint_path: str | Path,
+        daemon_db_path: str | Path | None = None,
+        conversations_db_path: str | Path | None = None,
+    ) -> None:
+        if architecture != "langgraph_v4":
+            raise ShadowNoSendConfigurationError(
+                "rollout facade requires langgraph_v4 architecture"
+            )
+        if mode not in {"shadow", "canary"}:
+            raise ShadowNoSendConfigurationError(
+                "rollout facade supports only shadow or canary mode"
+            )
+        if not shadow_no_send:
+            raise ShadowNoSendConfigurationError(
+                "shadow/canary rollout requires shadow_no_send"
+            )
+        self.architecture = architecture
+        self.mode = mode
+        self.shadow_no_send = shadow_no_send
+        self.budget = budget
+        self.checkpoint_path = resolve_checkpoint_path(
+            checkpoint_path,
+            daemon_db_path=daemon_db_path,
+            conversations_db_path=conversations_db_path,
+        )
+
+    def shadow_delivery_runtime(self, journal: DeliveryJournal) -> DeliveryRuntime:
+        """Live callback을 받을 수 없는 NullDeliveryAdapter runtime만 만든다."""
+        return DeliveryRuntime(
+            journal=journal,
+            adapters={
+                "telegram": NullDeliveryAdapter(),
+                "cron": NullDeliveryAdapter(),
+                "internal": NullDeliveryAdapter(),
+            },
+        )
+
+    def compare(
+        self,
+        legacy: LegacyRunTelemetryV1,
+        shadow: ShadowRunTelemetryV1,
+        *,
+        side_effect_counts: ShadowSideEffectCountsV1,
+    ) -> ShadowComparisonTelemetryV1:
+        """고정 no-send 설정 아래 per-run rollback telemetry를 만든다."""
+        return compare_shadow_run(
+            legacy,
+            shadow,
+            side_effect_counts=side_effect_counts,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowSideEffectCountsV1:
+    """Shadow에서 반드시 0이어야 하는 live callback 호출 수다."""
+
+    telegram_send: int = 0
+    conversation_write: int = 0
+    notifier: int = 0
+
+    def __post_init__(self) -> None:
+        values = (self.telegram_send, self.conversation_write, self.notifier)
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values):
+            raise ValueError("side-effect counters must be non-negative integers")
+
+    @property
+    def total(self) -> int:
+        return self.telegram_send + self.conversation_write + self.notifier
+
+    def as_dict(self) -> dict[str, int]:
+        return {
+            "telegram_send": self.telegram_send,
+            "conversation_write": self.conversation_write,
+            "notifier": self.notifier,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyRunTelemetryV1:
+    """비교에 필요한 legacy facade의 원문 없는 최소 관측값이다."""
+
+    selected_route: str
+    terminal_outcome: TerminalOutcome
+    model_calls: int
+
+    def __post_init__(self) -> None:
+        if not self.selected_route:
+            raise ValueError("legacy selected route is required")
+        if isinstance(self.model_calls, bool) or self.model_calls < 0:
+            raise ValueError("legacy model_calls must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowRunTelemetryV1:
+    """Contract identity와 rollout 판정만 담는 V4 allowlisted telemetry다."""
+
+    run_id: str
+    request_id: str
+    checkpoint_thread_id: str
+    plan_id: str
+    plan_revision: int
+    catalog_fingerprint: str
+    invocation_id: str
+    definition_fingerprint: str
+    contract_owner_ref: AssetRefV1
+    input_contract_ref: ContractRefV1
+    input_schema_hash: str
+    payload_hash: str
+    binding_ref: AssetBindingRefV1
+    output_contract_ref: ContractRefV1
+    output_schema_hash: str
+    selected_route: str
+    invocation_status: InvocationStatus
+    asset_result_status: AssetResultStatus
+    effect_status: EffectStatus
+    terminal_outcome: TerminalOutcome
+    delivery_status: DeliveryStatus
+    budget_usage: ShadowBudgetUsageV1
+    model_call_attribution: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        identifiers = (
+            self.run_id,
+            self.request_id,
+            self.checkpoint_thread_id,
+            self.plan_id,
+            self.catalog_fingerprint,
+            self.invocation_id,
+            self.definition_fingerprint,
+            self.payload_hash,
+            self.selected_route,
+        )
+        if any(not value for value in identifiers):
+            raise ValueError("shadow telemetry identifiers must be non-empty")
+        if isinstance(self.plan_revision, bool) or self.plan_revision <= 0:
+            raise ValueError("plan_revision must be positive")
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in self.model_call_attribution.values()
+        ):
+            raise ValueError("model call attribution must use non-negative integers")
+
+    @classmethod
+    def from_contract_run(
+        cls,
+        *,
+        run_id: str,
+        request_id: str,
+        checkpoint_thread_id: str,
+        plan_id: str,
+        plan_revision: int,
+        catalog_fingerprint: str,
+        entry: RegistryAssetEntryV1,
+        invocation: AssetInvocationV1,
+        selected_route: str,
+        invocation_status: InvocationStatus,
+        result: NormalizedAssetResultV1,
+        effect_status: EffectStatus,
+        terminal_outcome: TerminalOutcome,
+        delivery_status: DeliveryStatus,
+        budget_usage: ShadowBudgetUsageV1,
+        model_call_attribution: Mapping[str, int],
+    ) -> ShadowRunTelemetryV1:
+        """Registry→invocation→result identity가 정확할 때만 telemetry를 만든다."""
+        snapshot = entry.snapshot
+        binding_ref = snapshot.declared_binding
+        canonical_hash = hashlib.sha256(
+            invocation.payload_json.encode("utf-8")
+        ).hexdigest()
+        continuity = (
+            invocation.asset_ref == snapshot.asset_ref,
+            invocation.definition_fingerprint == snapshot.definition_fingerprint,
+            invocation.input_contract == entry.input_descriptor.ref,
+            invocation.output_contract == entry.output_descriptor.ref,
+            binding_ref is not None,
+            invocation.payload_hash == canonical_hash,
+            result.invocation_id == invocation.invocation_id,
+            result.output_contract == invocation.output_contract,
+        )
+        if not all(continuity):
+            raise ValueError("shadow contract continuity mismatch")
+        assert binding_ref is not None
+        return cls(
+            run_id=run_id,
+            request_id=request_id,
+            checkpoint_thread_id=checkpoint_thread_id,
+            plan_id=plan_id,
+            plan_revision=plan_revision,
+            catalog_fingerprint=catalog_fingerprint,
+            invocation_id=invocation.invocation_id,
+            definition_fingerprint=invocation.definition_fingerprint,
+            contract_owner_ref=invocation.asset_ref,
+            input_contract_ref=invocation.input_contract,
+            input_schema_hash=invocation.input_contract.schema_hash,
+            payload_hash=invocation.payload_hash,
+            binding_ref=binding_ref,
+            output_contract_ref=invocation.output_contract,
+            output_schema_hash=invocation.output_contract.schema_hash,
+            selected_route=selected_route,
+            invocation_status=invocation_status,
+            asset_result_status=result.status,
+            effect_status=effect_status,
+            terminal_outcome=terminal_outcome,
+            delivery_status=delivery_status,
+            budget_usage=budget_usage,
+            model_call_attribution=dict(model_call_attribution),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        """원문·payload 없이 명시적 allowlist만 직렬화한다."""
+        return {
+            "run_id": self.run_id,
+            "request_id": self.request_id,
+            "checkpoint_thread_id": self.checkpoint_thread_id,
+            "plan_id": self.plan_id,
+            "plan_revision": self.plan_revision,
+            "catalog_fingerprint": self.catalog_fingerprint,
+            "invocation_id": self.invocation_id,
+            "definition_fingerprint": self.definition_fingerprint,
+            "contract_owner_ref": self.contract_owner_ref.model_dump(mode="json"),
+            "input_contract_ref": self.input_contract_ref.model_dump(mode="json"),
+            "input_schema_hash": self.input_schema_hash,
+            "payload_hash": self.payload_hash,
+            "binding_ref": self.binding_ref.model_dump(mode="json"),
+            "output_contract_ref": self.output_contract_ref.model_dump(mode="json"),
+            "output_schema_hash": self.output_schema_hash,
+            "selected_route": self.selected_route,
+            "invocation_status": self.invocation_status.value,
+            "asset_result_status": self.asset_result_status.value,
+            "effect_status": self.effect_status.value,
+            "terminal_outcome": self.terminal_outcome.value,
+            "delivery_status": self.delivery_status.value,
+            "budget_usage": self.budget_usage.as_dict(),
+            "model_call_attribution": dict(self.model_call_attribution),
+            "stop_condition": self.budget_usage.stop_condition,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ShadowComparisonTelemetryV1:
+    legacy: LegacyRunTelemetryV1
+    shadow: ShadowRunTelemetryV1
+    side_effect_counts: ShadowSideEffectCountsV1
+    route_matches: bool
+    outcome_matches: bool
+    rollback_required: bool
+    rollback_reasons: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "legacy": {
+                "selected_route": self.legacy.selected_route,
+                "terminal_outcome": self.legacy.terminal_outcome.value,
+                "model_calls": self.legacy.model_calls,
+            },
+            "shadow": self.shadow.as_dict(),
+            "side_effect_counts": self.side_effect_counts.as_dict(),
+            "route_matches": self.route_matches,
+            "outcome_matches": self.outcome_matches,
+            "rollback_required": self.rollback_required,
+            "rollback_reason": ",".join(self.rollback_reasons) or None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CanaryGateDecisionV1:
+    eligible: bool
+    rollback_required: bool
+    reasons: tuple[str, ...]
+
+
+def compare_shadow_run(
+    legacy: LegacyRunTelemetryV1,
+    shadow: ShadowRunTelemetryV1,
+    *,
+    side_effect_counts: ShadowSideEffectCountsV1,
+) -> ShadowComparisonTelemetryV1:
+    """Legacy primary와 V4 shadow를 비교하고 per-run rollback signal을 만든다."""
+    route_matches = legacy.selected_route == shadow.selected_route
+    outcome_matches = legacy.terminal_outcome is shadow.terminal_outcome
+    reasons: list[str] = []
+    if not route_matches:
+        reasons.append("route_mismatch")
+    if not outcome_matches:
+        reasons.append("terminal_outcome_mismatch")
+    if shadow.delivery_status is not DeliveryStatus.SHADOWED:
+        reasons.append("no_send_delivery_violation")
+    if side_effect_counts.total:
+        reasons.append("external_side_effect")
+    return ShadowComparisonTelemetryV1(
+        legacy=legacy,
+        shadow=shadow,
+        side_effect_counts=side_effect_counts,
+        route_matches=route_matches,
+        outcome_matches=outcome_matches,
+        rollback_required=bool(reasons),
+        rollback_reasons=tuple(reasons),
+    )
+
+
+def evaluate_read_only_canary(
+    comparison: ShadowComparisonTelemetryV1,
+    assets: list[AssetDefinitionSnapshotV1]
+    | tuple[AssetDefinitionSnapshotV1, ...],
+) -> CanaryGateDecisionV1:
+    """Shadow pass와 read-only snapshot만 canary 후보로 허용한다."""
+    reasons = list(comparison.rollback_reasons)
+    if not assets:
+        reasons.append("no_assets")
+    if any(not asset.read_only or asset.side_effects for asset in assets):
+        reasons.append("asset_not_read_only")
+    unique_reasons = tuple(dict.fromkeys(reasons))
+    return CanaryGateDecisionV1(
+        eligible=not unique_reasons,
+        rollback_required=bool(unique_reasons),
+        reasons=unique_reasons,
+    )
 
 
 def _content_hash(content: str) -> str:

@@ -204,7 +204,37 @@ _LANGGRAPH_V4_DEFAULTS: dict = {
         "mode": "no_send",
         "max_attempts": 1,
     },
+    "shadow_no_send": True,
 }
+
+_LANGGRAPH_V4_TELEMETRY_FIELDS = (
+    "run_id",
+    "request_id",
+    "checkpoint_thread_id",
+    "plan_id",
+    "plan_revision",
+    "catalog_fingerprint",
+    "invocation_id",
+    "definition_fingerprint",
+    "contract_owner_ref",
+    "input_contract_ref",
+    "input_schema_hash",
+    "payload_hash",
+    "binding_ref",
+    "output_contract_ref",
+    "output_schema_hash",
+    "selected_route",
+    "invocation_status",
+    "asset_result_status",
+    "effect_status",
+    "terminal_outcome",
+    "delivery_status",
+    "budget_usage",
+    "model_call_attribution",
+    "stop_condition",
+    "rollback_required",
+    "rollback_reason",
+)
 
 # BIZ-453 — reasoning.effort 허용값. 밖의 값은 기본(medium)으로 정규화한다.
 _REASONING_EFFORTS = {"low", "medium", "high"}
@@ -398,9 +428,15 @@ def _agent_with_defaults(agent: dict) -> dict:
     ).strip().lower()
     if delivery_mode not in {"no_send", "live"}:
         delivery_mode = delivery_defaults["mode"]
+    shadow_no_send = bool(
+        langgraph_v4.get(
+            "shadow_no_send", _LANGGRAPH_V4_DEFAULTS["shadow_no_send"]
+        )
+    )
     # Shadow는 관찰 전용이다. 잘못된 live 설정도 외부 전송으로 승격하지 않는다.
     if unified_mode is UnifiedTurnPlannerMode.SHADOW:
         delivery_mode = "no_send"
+        shadow_no_send = True
     complex_escalation = unified_turn_planner.get("complex_escalation", {})
     if not isinstance(complex_escalation, dict):
         complex_escalation = {}
@@ -747,6 +783,11 @@ def _agent_with_defaults(agent: dict) -> dict:
                                 minimum=1,
                             ),
                         },
+                        # Shadow에서는 false 입력도 강제로 true가 된다. canary/primary
+                        # 활성화 여부와 무관하게 현재 이슈의 기본은 no-send다.
+                        "shadow_no_send": shadow_no_send,
+                        # payload key/value와 원문은 허용하지 않는 고정 allowlist다.
+                        "telemetry_fields": _LANGGRAPH_V4_TELEMETRY_FIELDS,
                     }
                 }
                 if architecture == "langgraph_v4"
