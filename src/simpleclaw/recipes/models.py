@@ -127,8 +127,12 @@ class RecipeDefinition:
         """여러 step binding을 Recipe-owned 단일 immutable identity로 합성한다."""
         if not self.step_bindings:
             return None
-        owner_type = self.step_bindings[0].owner_type
-        owner_name = self.step_bindings[0].owner_name
+        expected_owner = ("recipe", self.name)
+        if any(
+            (item.owner_type, item.owner_name) != expected_owner
+            for item in self.step_bindings
+        ):
+            raise ValueError(f"all step binding owners must be recipe:{self.name}")
         binding_json = json.dumps(
             {"step_bindings": [asdict(item) for item in self.step_bindings]},
             ensure_ascii=False,
@@ -137,8 +141,8 @@ class RecipeDefinition:
         )
         return OwnedBindingMetadata(
             binding_id="step_bindings",
-            owner_type=owner_type,
-            owner_name=owner_name,
+            owner_type=expected_owner[0],
+            owner_name=expected_owner[1],
             binding_json=binding_json,
             binding_hash=hashlib.sha256(binding_json.encode("utf-8")).hexdigest(),
         )

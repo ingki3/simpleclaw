@@ -51,6 +51,8 @@ _VALID_STEP_KEYS = frozenset(
 def _parse_step_bindings(
     value: object,
     source: Path,
+    *,
+    recipe_name: str,
 ) -> tuple[OwnedBindingMetadata, ...]:
     """Recipe-owned step binding 목록을 선언 순서 그대로 엄격히 파싱한다."""
     if value is None:
@@ -69,6 +71,11 @@ def _parse_step_bindings(
         if binding is None:  # pragma: no cover - list 원소는 None도 오류 처리됨
             raise RecipeParseError(
                 f"step_bindings[{index}] must not be null in {source}"
+            )
+        if (binding.owner_type, binding.owner_name) != ("recipe", recipe_name):
+            raise RecipeParseError(
+                f"step_bindings[{index}].owner_ref must be recipe:{recipe_name} "
+                f"in {source}"
             )
         bindings.append(binding)
     if len({item.binding_id for item in bindings}) != len(bindings):
@@ -327,7 +334,11 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
             data.get("output_contract"),
             source=f"{recipe_path}:output_contract",
         )
-        step_bindings = _parse_step_bindings(data.get("step_bindings"), recipe_path)
+        step_bindings = _parse_step_bindings(
+            data.get("step_bindings"),
+            recipe_path,
+            recipe_name=name,
+        )
         require_complete_contract_metadata(
             input_contract=input_contract,
             output_contract=output_contract,

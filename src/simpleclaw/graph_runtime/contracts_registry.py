@@ -208,11 +208,14 @@ def _retry_policy(definition: ContractAssetDefinition) -> RetryPolicyV1:
 
 def _entry(definition: ContractAssetDefinition) -> RegistryAssetEntryV1 | None:
     """완전한 opt-in V4 definition 하나를 registry 항목으로 변환한다."""
-    metadata = (
-        definition.input_contract,
-        definition.output_contract,
-        definition.contract_binding,
-    )
+    try:
+        metadata = (
+            definition.input_contract,
+            definition.output_contract,
+            definition.contract_binding,
+        )
+    except ValueError as exc:
+        raise ContractRegistryError("definition.owner_mismatch") from exc
     if not any(item is not None for item in metadata):
         return None
     if not all(item is not None for item in metadata):
@@ -228,6 +231,7 @@ def _entry(definition: ContractAssetDefinition) -> RegistryAssetEntryV1 | None:
             contract.schema_hash
         ):
             raise ContractRegistryError("definition.schema_hash_mismatch")
+        _validate_schema_definition(contract.json_schema)
     if hashlib.sha256(binding_metadata.binding_json.encode("utf-8")).hexdigest() != (
         binding_metadata.binding_hash
     ):
@@ -321,11 +325,8 @@ def build_contract_registry(
     )
 
 
-def _validate_schema(schema: object, value: object, *, path: str) -> None:
-    """Core 분기 없이 bounded JSON Schema subset을 재귀 검증한다."""
-    if not isinstance(schema, dict):
-        raise ContractRegistryError("schema.invalid")
-    supported = {
+_SUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {
         "$id",
         "$schema",
         "title",
@@ -352,14 +353,108 @@ def _validate_schema(schema: object, value: object, *, path: str) -> None:
         "anyOf",
         "oneOf",
     }
-    if set(schema) - supported:
+)
+_SUPPORTED_SCHEMA_TYPES = frozenset(
+    {"object", "array", "string", "boolean", "integer", "number", "null"}
+)
+
+
+def _validate_schema_definition(schema: object) -> None:
+    """지원하는 JSON Schema subset의 shape를 payload와 무관하게 검증한다."""
+    if not isinstance(schema, dict):
+        raise ContractRegistryError("schema.invalid")
+    if set(schema) - _SUPPORTED_SCHEMA_KEYWORDS:
         raise ContractRegistryError("schema.unsupported_keyword")
+
+    for keyword in ("$id", "$schema", "title", "description"):
+        if keyword in schema and not isinstance(schema[keyword], str):
+            raise ContractRegistryError("schema.invalid")
+    if "examples" in schema and not isinstance(schema["examples"], list):
+        raise ContractRegistryError("schema.invalid")
+
+    expected = schema.get("type")
+    if expected is not None:
+        types = [expected] if isinstance(expected, str) else expected
+        if (
+            not isinstance(types, list)
+            or not types
+            or not all(item in _SUPPORTED_SCHEMA_TYPES for item in types)
+        ):
+            raise ContractRegistryError("schema.invalid")
+
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict) or any(
+            not isinstance(key, str) for key in properties
+        ):
+            raise ContractRegistryError("schema.invalid")
+        for child in properties.values():
+            _validate_schema_definition(child)
+
+    required = schema.get("required")
+    if required is not None and (
+        not isinstance(required, list)
+        or any(not isinstance(item, str) for item in required)
+    ):
+        raise ContractRegistryError("schema.invalid")
+
+    if "additionalProperties" in schema:
+        additional = schema["additionalProperties"]
+        if not isinstance(additional, bool | dict):
+            raise ContractRegistryError("schema.invalid")
+        if isinstance(additional, dict):
+            _validate_schema_definition(additional)
+
+    if "items" in schema:
+        _validate_schema_definition(schema["items"])
+
+    for keyword in ("minItems", "maxItems", "minLength", "maxLength"):
+        if keyword in schema and (
+            not isinstance(schema[keyword], int)
+            or isinstance(schema[keyword], bool)
+            or schema[keyword] < 0
+        ):
+            raise ContractRegistryError("schema.invalid")
+
+    if "pattern" in schema:
+        if not isinstance(schema["pattern"], str):
+            raise ContractRegistryError("schema.invalid")
+        try:
+            re.compile(schema["pattern"])
+        except re.error as exc:
+            raise ContractRegistryError("schema.invalid") from exc
+
+    for keyword in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+        if keyword in schema and (
+            not isinstance(schema[keyword], int | float)
+            or isinstance(schema[keyword], bool)
+        ):
+            raise ContractRegistryError("schema.invalid")
+
+    if "enum" in schema and (
+        not isinstance(schema["enum"], list) or not schema["enum"]
+    ):
+        raise ContractRegistryError("schema.invalid")
+
     for keyword in ("allOf", "anyOf", "oneOf"):
         if keyword not in schema:
             continue
         variants = schema[keyword]
         if not isinstance(variants, list) or not variants:
             raise ContractRegistryError("schema.invalid")
+        for variant in variants:
+            _validate_schema_definition(variant)
+
+
+def _validate_schema(schema: object, value: object, *, path: str) -> None:
+    """Core 분기 없이 bounded JSON Schema subset을 재귀 검증한다."""
+    _validate_schema_definition(schema)
+    assert isinstance(schema, dict)
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        if keyword not in schema:
+            continue
+        variants = schema[keyword]
+        assert isinstance(variants, list)
         matches = 0
         for variant in variants:
             try:

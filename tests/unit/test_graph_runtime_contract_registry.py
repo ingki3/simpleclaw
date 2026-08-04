@@ -17,21 +17,28 @@ from simpleclaw.graph_runtime.contracts_registry import (
     ContractRegistryError,
     build_contract_registry,
 )
+from simpleclaw.recipes.models import RecipeDefinition
 from simpleclaw.skills.models import SkillDefinition
 
 
-def _contract(name: str, *, owner: str = "fixture-skill"):
+def _contract(
+    name: str,
+    *,
+    owner: str = "fixture-skill",
+    owner_type: str = "skill",
+    additional_properties: object = False,
+):
     schema = {
         "type": "object",
         "properties": {name: {"type": "string", "minLength": 1}},
         "required": [name],
-        "additionalProperties": False,
+        "additionalProperties": additional_properties,
     }
     value = parse_owned_contract_metadata(
         {
             "contract_id": f"fixture.{name}",
             "version": "1",
-            "owner_ref": {"type": "skill", "name": owner},
+            "owner_ref": {"type": owner_type, "name": owner},
             "json_schema": schema,
         },
         source=name,
@@ -40,11 +47,16 @@ def _contract(name: str, *, owner: str = "fixture-skill"):
     return value
 
 
-def _binding(*, owner: str = "fixture-skill"):
+def _binding(
+    *,
+    owner: str = "fixture-skill",
+    owner_type: str = "skill",
+    binding_id: str = "argv.v1",
+):
     value = parse_owned_binding_metadata(
         {
-            "binding_id": "argv.v1",
-            "owner_ref": {"type": "skill", "name": owner},
+            "binding_id": binding_id,
+            "owner_ref": {"type": owner_type, "name": owner},
             "binding": {"strategy": "named", "order": ["nebula_key"]},
         },
         source="argument_binding",
@@ -105,6 +117,55 @@ def test_duplicate_asset_owner_and_metadata_hash_conflicts_are_rejected():
     )
     with pytest.raises(ContractRegistryError, match="schema_hash_mismatch"):
         build_contract_registry([bad_hash])
+
+
+def test_malformed_additional_properties_is_rejected_before_candidate_build():
+    malformed = replace(
+        _skill(),
+        input_contract=_contract(
+            "nebula_key",
+            additional_properties="false",
+        ),
+    )
+
+    with pytest.raises(ContractRegistryError, match="schema.invalid"):
+        build_contract_registry([malformed])
+
+
+def test_second_recipe_step_binding_owner_mismatch_is_rejected_by_registry():
+    recipe = RecipeDefinition(
+        name="fixture-recipe",
+        capability=CapabilityMetadata(
+            declared=True,
+            read_only=True,
+            side_effects=False,
+        ),
+        input_contract=_contract(
+            "task_input",
+            owner="fixture-recipe",
+            owner_type="recipe",
+        ),
+        output_contract=_contract(
+            "task_output",
+            owner="fixture-recipe",
+            owner_type="recipe",
+        ),
+        step_bindings=(
+            _binding(
+                owner="fixture-recipe",
+                owner_type="recipe",
+                binding_id="step-one.v1",
+            ),
+            _binding(
+                owner="other-owner",
+                owner_type="recipe",
+                binding_id="step-two.v1",
+            ),
+        ),
+    )
+
+    with pytest.raises(ContractRegistryError, match="definition.owner_mismatch"):
+        build_contract_registry([recipe])
 
 
 def test_definition_and_binding_drift_produce_no_dispatch_candidate():
