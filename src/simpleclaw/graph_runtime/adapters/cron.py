@@ -103,13 +103,19 @@ class CronIngressAdapter:
             TerminalOutcome.COMPLETED,
             TerminalOutcome.PARTIAL,
         }
-        scheduler_may_notify = result.delivery_status in {
-            DeliveryStatus.NOT_READY,
-            DeliveryStatus.READY,
+        scheduler_may_notify = result.delivery_status is DeliveryStatus.READY
+        effect_is_safe = result.effect_status in {
+            EffectStatus.NONE,
+            EffectStatus.VERIFIED,
         }
-        # empty output, shadow/no-send, 이미 graph가 보낸 결과, 불명 delivery는
-        # 모두 scheduler notifier에서 fail-closed로 억제한다.
-        notify = resolved and scheduler_may_notify and bool(result.content.strip())
+        # delivery 준비 전/완료 후 상태와 안전성이 증명되지 않은 effect는
+        # scheduler notifier에서 fail-closed로 억제한다.
+        notify = (
+            resolved
+            and scheduler_may_notify
+            and effect_is_safe
+            and bool(result.content.strip())
+        )
         return CronActionResult(
             text=result.content,
             success=resolved,

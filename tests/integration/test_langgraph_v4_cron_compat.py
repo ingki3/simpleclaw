@@ -153,6 +153,7 @@ async def test_v4_solver_result_is_never_retried_by_scheduler(
 @pytest.mark.parametrize(
     "delivery_status",
     [
+        DeliveryStatus.NOT_READY,
         DeliveryStatus.SUPPRESSED,
         DeliveryStatus.SHADOWED,
         DeliveryStatus.FAILED_BEFORE_SEND,
@@ -188,6 +189,35 @@ async def test_non_ready_graph_delivery_never_calls_live_notifier(
     execution = await scheduler.execute_job(job.name)
 
     # resolution과 delivery는 별도 축이므로 graph 해결 성공은 유지한다.
+    assert execution.status is ExecutionStatus.SUCCESS
+    assert notifications == []
+    store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effect_status", [EffectStatus.UNKNOWN, EffectStatus.PARTIAL])
+async def test_unproven_graph_effect_never_calls_live_notifier(
+    tmp_path, effect_status
+) -> None:
+    facade = FakeCronFacade(
+        CronGraphResultV1(
+            content="완료 결과",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            delivery_status=DeliveryStatus.READY,
+            effect_status=effect_status,
+        )
+    )
+    notifications = []
+
+    async def notify(job_name, text):
+        notifications.append((job_name, text))
+
+    scheduler, store = _scheduler(tmp_path, facade, notify)
+    job = _job()
+    store.save_job(job)
+
+    execution = await scheduler.execute_job(job.name)
+
     assert execution.status is ExecutionStatus.SUCCESS
     assert notifications == []
     store.close()
