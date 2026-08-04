@@ -1,17 +1,20 @@
-"""Strict, domain-neutral data contracts for the LangGraph V4 runtime."""
+"""LangGraph V4 런타임의 엄격한 도메인 중립 데이터 계약을 정의한다."""
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     JsonValue,
-    field_validator,
+    PlainSerializer,
+    WithJsonSchema,
     model_validator,
 )
 
@@ -22,7 +25,7 @@ PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 def _validate_json_value(value: Any, *, path: str = "payload") -> None:
-    """Reject Python-only values while leaving JSON object keys fully opaque."""
+    """업무 키를 해석하지 않고 Python 전용 값을 fail-closed로 거부한다."""
     if value is None or isinstance(value, str | bool):
         return
     if isinstance(value, int) and not isinstance(value, bool):
@@ -44,36 +47,85 @@ def _validate_json_value(value: Any, *, path: str = "payload") -> None:
     raise ValueError(f"{path} contains a non-JSON value: {type(value).__name__}")
 
 
-class ContractModel(BaseModel):
-    """Common policy: immutable envelopes and fail-closed unknown fields."""
+def _canonicalize_json_object(value: Any) -> str:
+    """중첩 변경이 원본 계약에 전파되지 않도록 JSON 객체를 문자열로 고정한다."""
+    if not isinstance(value, dict):
+        raise ValueError("canonical JSON payload must be an object")
+    _validate_json_value(value)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+def _restore_json_object(value: str) -> dict[str, JsonValue]:
+    """내부 canonical 문자열에서 호출자 전용 방어적 복사본을 복원한다."""
+    restored = json.loads(value)
+    if not isinstance(restored, dict):  # pragma: no cover - 생성 validator의 불변식
+        raise TypeError("canonical JSON payload must decode to an object")
+    return restored
+
+
+CanonicalJsonObject = Annotated[
+    str,
+    BeforeValidator(_canonicalize_json_object),
+    PlainSerializer(_restore_json_object, return_type=dict[str, JsonValue]),
+    WithJsonSchema({"type": "object", "additionalProperties": True}),
+]
+
+
+class ContractModel(BaseModel):
+    """모든 envelope에 불변성과 미지 필드 거부 정책을 공통 적용한다."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        validate_by_alias=True,
+        validate_by_name=True,
+        serialize_by_alias=True,
+    )
 
 
 class AssetRefV1(ContractModel):
+    """자산 종류와 이름으로 구성한 도메인 중립 참조다."""
+
     type: NonEmptyStr
     name: NonEmptyStr
 
 
 class AssetBindingRefV1(ContractModel):
+    """소유 자산에 귀속된 실행 binding의 고정 참조다."""
+
     owner_ref: AssetRefV1
     binding_id: NonEmptyStr
     binding_hash: NonEmptyStr
 
 
 class AttachmentRefV1(ContractModel):
+    """요청에 포함된 첨부 파일의 최소 참조 정보다."""
+
     attachment_id: NonEmptyStr
     media_type: NonEmptyStr
     filename: NonEmptyStr | None = None
 
 
 class CronSourceV1(ContractModel):
+    """cron 요청의 작업과 실행 출처를 식별한다."""
+
     job_id: NonEmptyStr
     run_id: NonEmptyStr
 
 
 class RequestEnvelopeV1(ContractModel):
-    schema: Literal["request.v1"] = "request.v1"
+    """외부 요청을 graph에 전달하는 불변 envelope다."""
+
+    schema_version: Literal["request.v1"] = Field(
+        default="request.v1", alias="schema"
+    )
     request_id: NonEmptyStr
     source: Literal["telegram", "cron", "internal"]
     session_key: NonEmptyStr
@@ -86,6 +138,7 @@ class RequestEnvelopeV1(ContractModel):
 
     @model_validator(mode="after")
     def validate_source_metadata(self) -> RequestEnvelopeV1:
+        """cron 메타데이터와 deadline을 출처·수신 시각에 맞게 제한한다."""
         if (self.source == "cron") != (self.cron is not None):
             raise ValueError("cron metadata must be present only for cron requests")
         if self.deadline_at is not None and self.deadline_at <= self.received_at:
@@ -94,6 +147,8 @@ class RequestEnvelopeV1(ContractModel):
 
 
 class ContractRefV1(ContractModel):
+    """owner와 schema hash를 함께 고정하는 계약 참조다."""
+
     contract_id: NonEmptyStr
     version: NonEmptyStr
     owner_ref: AssetRefV1
@@ -101,18 +156,20 @@ class ContractRefV1(ContractModel):
 
 
 class ContractDescriptorV1(ContractModel):
+    """계약 참조와 변경 불가능한 canonical JSON Schema를 결합한다."""
+
     ref: ContractRefV1
-    json_schema: dict[str, JsonValue]
+    json_schema_json: CanonicalJsonObject = Field(alias="json_schema")
     binding_ref: AssetBindingRefV1 | None = None
 
-    @field_validator("json_schema")
-    @classmethod
-    def validate_json_schema(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        _validate_json_value(value, path="json_schema")
-        return value
+    @property
+    def json_schema(self) -> dict[str, JsonValue]:
+        """호출자의 중첩 변경이 계약 원본에 닿지 않는 schema 복사본을 반환한다."""
+        return _restore_json_object(self.json_schema_json)
 
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
+        """binding과 contract가 서로 다른 owner를 가리키는 상태를 차단한다."""
         if (
             self.binding_ref is not None
             and self.binding_ref.owner_ref != self.ref.owner_ref
@@ -122,18 +179,23 @@ class ContractDescriptorV1(ContractModel):
 
 
 class RetryPolicyV1(ContractModel):
+    """멱등성이 입증된 호출만 재시도하도록 제한하는 정책이다."""
+
     max_attempts: PositiveInt = 1
     idempotent: bool = False
     retry_timeouts: bool = False
 
     @model_validator(mode="after")
     def validate_retry_safety(self) -> RetryPolicyV1:
+        """비멱등 작업의 복수 시도로 side effect가 중복되지 않게 한다."""
         if self.max_attempts > 1 and not self.idempotent:
             raise ValueError("multiple attempts require an idempotent policy")
         return self
 
 
 class AssetDefinitionSnapshotV1(ContractModel):
+    """계획 시점의 자산 정의와 안전 속성을 원자적으로 고정한다."""
+
     asset_ref: AssetRefV1
     definition_id: NonEmptyStr
     definition_fingerprint: NonEmptyStr
@@ -149,6 +211,7 @@ class AssetDefinitionSnapshotV1(ContractModel):
 
     @model_validator(mode="after")
     def validate_ownership(self) -> AssetDefinitionSnapshotV1:
+        """계약·binding owner와 side-effect 선언의 모순을 거부한다."""
         for ref in (self.input_contract, self.output_contract):
             if ref is not None and ref.owner_ref != self.asset_ref:
                 raise ValueError("contract owner must match the snapshot asset")
@@ -165,6 +228,8 @@ class AssetDefinitionSnapshotV1(ContractModel):
 
 
 class ExecutionBudgetV1(ContractModel):
+    """graph 실행의 모든 소비 축에 유한한 상한을 둔다."""
+
     max_graph_steps: PositiveInt
     max_asset_calls: PositiveInt
     max_llm_calls: PositiveInt
@@ -174,25 +239,29 @@ class ExecutionBudgetV1(ContractModel):
 
 
 class AssetInvocationV1(ContractModel):
-    schema: Literal["asset_invocation.v1"] = "asset_invocation.v1"
+    """검증된 자산 호출 입력과 hash continuity를 보존하는 envelope다."""
+
+    schema_version: Literal["asset_invocation.v1"] = Field(
+        default="asset_invocation.v1", alias="schema"
+    )
     invocation_id: NonEmptyStr
     asset_ref: AssetRefV1
     definition_fingerprint: NonEmptyStr
     input_contract: ContractRefV1
-    payload: dict[str, JsonValue]
+    payload_json: CanonicalJsonObject = Field(alias="payload")
     payload_hash: NonEmptyStr
     output_contract: ContractRefV1
     depends_on: tuple[NonEmptyStr, ...] = ()
     fallback_refs: tuple[AssetRefV1, ...] = ()
 
-    @field_validator("payload")
-    @classmethod
-    def validate_payload(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        _validate_json_value(value)
-        return value
+    @property
+    def payload(self) -> dict[str, JsonValue]:
+        """내부 canonical payload와 hash를 보호하는 방어적 복사본을 반환한다."""
+        return _restore_json_object(self.payload_json)
 
     @model_validator(mode="after")
     def validate_contract_owners(self) -> AssetInvocationV1:
+        """입출력 계약 owner와 invocation dependency의 모순을 차단한다."""
         if self.input_contract.owner_ref != self.asset_ref:
             raise ValueError("input contract owner must match invocation asset")
         if self.output_contract.owner_ref != self.asset_ref:
@@ -205,7 +274,11 @@ class AssetInvocationV1(ContractModel):
 
 
 class ExecutionPlanV1(ContractModel):
-    schema: Literal["execution_plan.v1"] = "execution_plan.v1"
+    """자산 호출 DAG와 실행 budget을 묶은 계획 envelope다."""
+
+    schema_version: Literal["execution_plan.v1"] = Field(
+        default="execution_plan.v1", alias="schema"
+    )
     plan_id: NonEmptyStr
     revision: PositiveInt
     request_id: NonEmptyStr
@@ -216,6 +289,7 @@ class ExecutionPlanV1(ContractModel):
 
     @model_validator(mode="after")
     def validate_dependency_dag(self) -> ExecutionPlanV1:
+        """알 수 없는 dependency와 순환이 dispatch 단계로 넘어가지 않게 한다."""
         ids = [invocation.invocation_id for invocation in self.invocations]
         if len(ids) != len(set(ids)):
             raise ValueError("invocation_id values must be unique")
@@ -227,6 +301,7 @@ class ExecutionPlanV1(ContractModel):
         visited: set[str] = set()
 
         def visit(node: str) -> None:
+            """깊이 우선 탐색으로 현재 경로에 재진입하는 순환을 검출한다."""
             if node in visiting:
                 raise ValueError("invocation dependencies must form a DAG")
             if node in visited:
@@ -243,23 +318,30 @@ class ExecutionPlanV1(ContractModel):
 
 
 class NormalizedAssetResultV1(ContractModel):
-    schema: Literal["asset_result.v1"] = "asset_result.v1"
+    """자산 결과 payload와 검증된 hash를 함께 운반하는 envelope다."""
+
+    schema_version: Literal["asset_result.v1"] = Field(
+        default="asset_result.v1", alias="schema"
+    )
     invocation_id: NonEmptyStr
     output_contract: ContractRefV1
     status: AssetResultStatus
-    payload: dict[str, JsonValue]
+    payload_json: CanonicalJsonObject = Field(alias="payload")
     payload_hash: NonEmptyStr
     effect_status: EffectStatus = EffectStatus.NONE
 
-    @field_validator("payload")
-    @classmethod
-    def validate_payload(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
-        _validate_json_value(value)
-        return value
+    @property
+    def payload(self) -> dict[str, JsonValue]:
+        """결과 원본과 hash를 보호하는 payload 방어적 복사본을 반환한다."""
+        return _restore_json_object(self.payload_json)
 
 
 class DraftArtifactV1(ContractModel):
-    schema: Literal["draft_artifact.v1"] = "draft_artifact.v1"
+    """최종 확정 전 응답 본문과 outcome을 보존한다."""
+
+    schema_version: Literal["draft_artifact.v1"] = Field(
+        default="draft_artifact.v1", alias="schema"
+    )
     artifact_id: NonEmptyStr
     request_id: NonEmptyStr
     content: NonEmptyStr
@@ -267,7 +349,11 @@ class DraftArtifactV1(ContractModel):
 
 
 class FinalArtifactV1(ContractModel):
-    schema: Literal["final_artifact.v1"] = "final_artifact.v1"
+    """전송 가능한 최종 본문과 content hash를 고정한다."""
+
+    schema_version: Literal["final_artifact.v1"] = Field(
+        default="final_artifact.v1", alias="schema"
+    )
     artifact_id: NonEmptyStr
     request_id: NonEmptyStr
     content: NonEmptyStr
@@ -276,7 +362,11 @@ class FinalArtifactV1(ContractModel):
 
 
 class DeliveryIntentV1(ContractModel):
-    schema: Literal["delivery_intent.v1"] = "delivery_intent.v1"
+    """최종 artifact의 채널 전송 의도와 초기 상태를 표현한다."""
+
+    schema_version: Literal["delivery_intent.v1"] = Field(
+        default="delivery_intent.v1", alias="schema"
+    )
     delivery_id: NonEmptyStr
     artifact_id: NonEmptyStr
     channel: Literal["telegram", "cron", "internal"]
@@ -286,6 +376,7 @@ class DeliveryIntentV1(ContractModel):
 
     @model_validator(mode="after")
     def validate_initial_status(self) -> DeliveryIntentV1:
+        """아직 실행하지 않은 intent가 완료·실패 상태로 시작하지 않게 한다."""
         if self.status not in {DeliveryStatus.READY, DeliveryStatus.SHADOWED}:
             raise ValueError("delivery intent must start ready or shadowed")
         return self

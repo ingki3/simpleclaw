@@ -1,7 +1,7 @@
-"""Generic lifecycle and outcome vocabulary for the V4 graph runtime.
+"""V4 graph 런타임의 공통 lifecycle과 outcome 어휘를 정의한다.
 
-These enums intentionally describe flow and side-effect state only. Asset-owned
-payload meanings belong to the asset contract and must not be added here.
+이 enum들은 흐름과 side effect 상태만 표현한다. 자산이 소유한 payload 의미는
+자산 계약에만 속하므로 이 모듈에 추가하지 않는다.
 """
 
 from __future__ import annotations

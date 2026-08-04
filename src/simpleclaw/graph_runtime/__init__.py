@@ -1,4 +1,4 @@
-"""Domain-neutral contracts for the LangGraph V4 runtime."""
+"""LangGraph V4 런타임의 도메인 중립 계약과 상태 어휘를 공개한다."""
 
 from .contracts import (
     AssetBindingRefV1,
