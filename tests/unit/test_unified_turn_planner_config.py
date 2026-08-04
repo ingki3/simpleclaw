@@ -184,3 +184,83 @@ agent:
 
     assert result["mode"] == "canary"
     assert result["sample_rate"] == 0.05
+
+
+def test_langgraph_v4_requires_all_finite_budget_axes_and_keeps_architecture(
+    tmp_path,
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """\
+agent:
+  unified_turn_planner:
+    architecture: langgraph_v4
+    mode: shadow
+    langgraph_v4:
+      budget:
+        max_graph_steps: 40
+        max_asset_calls: 12
+        max_llm_calls: 8
+        max_tokens: 16000
+        max_seconds: 180
+        max_parallel_invocations: 3
+      checkpoint:
+        path: ~/.simpleclaw-agent/default/test-graph.sqlite3
+        terminal_ttl_days: 7
+        max_rows: 2000
+      delivery:
+        mode: live
+        max_attempts: 2
+""",
+        encoding="utf-8",
+    )
+
+    result = load_agent_config(config)["unified_turn_planner"]
+
+    assert result["architecture"] == "langgraph_v4"
+    assert result["langgraph_v4"] == {
+        "budget": {
+            "max_graph_steps": 40,
+            "max_asset_calls": 12,
+            "max_llm_calls": 8,
+            "max_tokens": 16000,
+            "max_seconds": 180,
+            "max_parallel_invocations": 3,
+        },
+        "budget_valid": True,
+        "checkpoint": {
+            "path": "~/.simpleclaw-agent/default/test-graph.sqlite3",
+            "terminal_ttl_days": 7,
+            "max_rows": 2000,
+        },
+        "delivery": {"mode": "no_send", "max_attempts": 2},
+    }
+
+
+def test_langgraph_v4_invalid_budget_does_not_silently_fallback_to_legacy(
+    tmp_path,
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        """\
+agent:
+  unified_turn_planner:
+    architecture: langgraph_v4
+    langgraph_v4:
+      budget:
+        max_graph_steps: 20
+        max_asset_calls: 0
+        max_llm_calls: 4
+        max_tokens: 8000
+        max_seconds: .inf
+""",
+        encoding="utf-8",
+    )
+
+    result = load_agent_config(config)["unified_turn_planner"]
+
+    assert result["architecture"] == "langgraph_v4"
+    assert result["langgraph_v4"]["budget_valid"] is False
+    assert result["langgraph_v4"]["budget"]["max_asset_calls"] is None
+    assert result["langgraph_v4"]["budget"]["max_seconds"] is None
+    assert result["langgraph_v4"]["budget"]["max_parallel_invocations"] is None
