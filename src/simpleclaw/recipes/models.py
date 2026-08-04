@@ -14,10 +14,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.capability import (
+    CapabilityMetadata,
+    OwnedBindingMetadata,
+    OwnedContractMetadata,
+)
 
 
 class StepType(Enum):
@@ -107,6 +113,76 @@ class RecipeDefinition:
     settings: RecipeSettings = field(default_factory=RecipeSettings)  # 실행 설정
     # BIZ-425 — capability 선언. 미선언 시 보수 기본값이라 자동 실행 후보 제외.
     capability: CapabilityMetadata = field(default_factory=CapabilityMetadata)
+    input_contract: OwnedContractMetadata | None = None
+    output_contract: OwnedContractMetadata | None = None
+    step_bindings: tuple[OwnedBindingMetadata, ...] = ()
+
+    @property
+    def contract_asset_type(self) -> str:
+        """Contract Registry가 concrete Recipe import 없이 사용할 asset 종류다."""
+        return "recipe"
+
+    @property
+    def contract_binding(self) -> OwnedBindingMetadata | None:
+        """여러 step binding을 Recipe-owned 단일 immutable identity로 합성한다."""
+        if not self.step_bindings:
+            return None
+        expected_owner = ("recipe", self.name)
+        if any(
+            (item.owner_type, item.owner_name) != expected_owner
+            for item in self.step_bindings
+        ):
+            raise ValueError(f"all step binding owners must be recipe:{self.name}")
+        binding_json = json.dumps(
+            {"step_bindings": [asdict(item) for item in self.step_bindings]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return OwnedBindingMetadata(
+            binding_id="step_bindings",
+            owner_type=expected_owner[0],
+            owner_name=expected_owner[1],
+            binding_json=binding_json,
+            binding_hash=hashlib.sha256(binding_json.encode("utf-8")).hexdigest(),
+        )
+
+    @property
+    def definition_fingerprint(self) -> str:
+        """실행·안전·V4 contract 전체의 현재 canonical fingerprint를 계산한다."""
+        payload = {
+            "name": self.name,
+            "description": self.description,
+            "skills": list(self.skills),
+            "parameters": [asdict(item) for item in self.parameters],
+            "steps": [
+                {
+                    **asdict(item),
+                    "step_type": item.step_type.value,
+                    "on_error": item.on_error.value if item.on_error else None,
+                }
+                for item in self.steps
+            ],
+            "instructions": self.instructions,
+            "recipe_dir": self.recipe_dir,
+            "on_error": self.on_error.value,
+            "settings": asdict(self.settings),
+            "capability": asdict(self.capability),
+            "input_contract": (
+                asdict(self.input_contract) if self.input_contract is not None else None
+            ),
+            "output_contract": (
+                asdict(self.output_contract) if self.output_contract is not None else None
+            ),
+            "step_bindings": [asdict(item) for item in self.step_bindings],
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass

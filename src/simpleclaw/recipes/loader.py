@@ -20,7 +20,13 @@ from pathlib import Path
 
 import yaml
 
-from simpleclaw.capability import parse_capability_metadata
+from simpleclaw.capability import (
+    OwnedBindingMetadata,
+    parse_capability_metadata,
+    parse_owned_binding_metadata,
+    parse_owned_contract_metadata,
+    require_complete_contract_metadata,
+)
 from simpleclaw.recipes.models import (
     DEFAULT_STEP_TIMEOUT,
     OnErrorPolicy,
@@ -40,6 +46,41 @@ logger = logging.getLogger(__name__)
 _VALID_STEP_KEYS = frozenset(
     {"type", "name", "content", "on_error", "rollback"}
 )
+
+
+def _parse_step_bindings(
+    value: object,
+    source: Path,
+    *,
+    recipe_name: str,
+) -> tuple[OwnedBindingMetadata, ...]:
+    """Recipe-owned step binding 목록을 선언 순서 그대로 엄격히 파싱한다."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise RecipeParseError(f"'step_bindings' must be a list in {source}")
+    bindings: list[OwnedBindingMetadata] = []
+    for index, raw in enumerate(value):
+        try:
+            binding = parse_owned_binding_metadata(
+                raw,
+                source=f"{source}:step_bindings[{index}]",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RecipeParseError(str(exc)) from exc
+        if binding is None:  # pragma: no cover - list 원소는 None도 오류 처리됨
+            raise RecipeParseError(
+                f"step_bindings[{index}] must not be null in {source}"
+            )
+        if (binding.owner_type, binding.owner_name) != ("recipe", recipe_name):
+            raise RecipeParseError(
+                f"step_bindings[{index}].owner_ref must be recipe:{recipe_name} "
+                f"in {source}"
+            )
+        bindings.append(binding)
+    if len({item.binding_id for item in bindings}) != len(bindings):
+        raise RecipeParseError(f"step binding ids must be unique in {source}")
+    return tuple(bindings)
 
 
 def _parse_skills(value: object, source: Path) -> tuple[str, ...]:
@@ -284,6 +325,29 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         _parse_on_error(data.get("on_error"), recipe_path) or OnErrorPolicy.ABORT
     )
 
+    try:
+        input_contract = parse_owned_contract_metadata(
+            data.get("input_contract"),
+            source=f"{recipe_path}:input_contract",
+        )
+        output_contract = parse_owned_contract_metadata(
+            data.get("output_contract"),
+            source=f"{recipe_path}:output_contract",
+        )
+        step_bindings = _parse_step_bindings(
+            data.get("step_bindings"),
+            recipe_path,
+            recipe_name=name,
+        )
+        require_complete_contract_metadata(
+            input_contract=input_contract,
+            output_contract=output_contract,
+            binding=step_bindings[0] if step_bindings else None,
+            source=str(recipe_path),
+        )
+    except (TypeError, ValueError) as exc:
+        raise RecipeParseError(str(exc)) from exc
+
     return RecipeDefinition(
         name=name,
         description=data.get("description", ""),
@@ -297,4 +361,7 @@ def load_recipe(recipe_path: str | Path) -> RecipeDefinition:
         capability=parse_capability_metadata(
             data.get("capability"), source=str(recipe_path)
         ),
+        input_contract=input_contract,
+        output_contract=output_contract,
+        step_bindings=step_bindings,
     )
