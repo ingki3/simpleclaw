@@ -50,7 +50,7 @@ def _validate_json_value(value: Any, *, path: str = "payload") -> None:
 def _canonicalize_json_object(value: Any) -> str:
     """중첩 변경이 원본 계약에 전파되지 않도록 JSON 객체를 문자열로 고정한다."""
     if not isinstance(value, dict):
-        raise ValueError("canonical JSON payload must be an object")
+        raise TypeError("canonical JSON payload must be an object")
     _validate_json_value(value)
     return json.dumps(
         value,

@@ -127,8 +127,10 @@ def test_contract_module_imports_with_warnings_as_errors() -> None:
             "-W",
             "error",
             "-c",
-            "import sys; sys.path.insert(0, 'src'); "
-            "import simpleclaw.graph_runtime.contracts",
+            (
+                "import sys; sys.path.insert(0, 'src'); "
+                "import simpleclaw.graph_runtime.contracts"
+            ),
         ],
         check=False,
         capture_output=True,
