@@ -1,4 +1,4 @@
-"""Exact SkillDefinition dispatch through Skill-owned argument binding."""
+"""Skill 소유 argument binding으로 정확한 SkillDefinition을 dispatch한다."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ SkillExecutor = Callable[
 
 
 class GenericSkillAdapter:
-    """Validate a typed invocation and call one exact discovered Skill."""
+    """typed invocation을 검증하고 discovery된 정확한 Skill 하나만 호출한다."""
 
     def __init__(
         self,
@@ -32,6 +32,7 @@ class GenericSkillAdapter:
         definition: SkillDefinition,
         executor: SkillExecutor | None = None,
     ) -> None:
+        """registry snapshot과 exact definition을 고정해 drift를 탐지한다."""
         self._registry = registry
         self._definition = definition
         self._executor = executor
@@ -44,6 +45,7 @@ class GenericSkillAdapter:
         dispatch_started: bool = False,
         authorized: bool = False,
     ) -> AdapterResponse:
+        """검증·멱등성 gate를 통과한 invocation만 외부 executor에 전달한다."""
         entry, error = self._candidate(invocation)
         if error is not None:
             return _failure(invocation, error)
@@ -110,9 +112,8 @@ class GenericSkillAdapter:
                 raw_result = await execute_skill(self._definition, argv)
             else:
                 raw_result = await self._executor(self._definition, argv)
-        # The injected executor is an external boundary. Unknown provider/runtime
-        # failures must become a fail-closed adapter response, never escape to a
-        # graph fallback path.
+        # 주입된 executor는 외부 경계이므로 알 수 없는 provider/runtime 실패도
+        # graph fallback으로 새지 않게 fail-closed 응답으로 정규화한다.
         except Exception:  # noqa: BLE001
             return _failure(
                 invocation,
@@ -124,6 +125,13 @@ class GenericSkillAdapter:
             output = _result_payload(raw_result)
             normalized = self._registry.validate_canonical(
                 entry.output_descriptor, output
+            )
+        except RuntimeError:
+            return _failure(
+                invocation,
+                "executor.failed",
+                dispatched=True,
+                effect_status=_failed_effect(entry.snapshot.side_effects),
             )
         except ContractRegistryError as exc:
             return _failure(
@@ -163,6 +171,7 @@ class GenericSkillAdapter:
         )
 
     def _candidate(self, invocation: AssetInvocationV1):
+        """invocation identity가 registry의 exact Skill과 일치할 때만 후보를 반환한다."""
         entry = self._registry.asset(invocation.asset_ref)
         if entry is None or invocation.asset_ref.type != "skill":
             return None, "definition.not_found"
@@ -188,6 +197,7 @@ def _bind_arguments(
     definition: SkillDefinition,
     payload: Mapping[str, Any],
 ) -> list[str]:
+    """Skill 소유 binding 선언만 사용해 opaque payload를 argv로 변환한다."""
     metadata = definition.argument_binding
     if metadata is None:
         raise ValueError("missing argument binding")
@@ -213,12 +223,14 @@ def _bind_arguments(
 
 
 def _argv_value(value: Any) -> str:
+    """문자열 외 값은 결정적 JSON으로 직렬화해 argv identity를 보존한다."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _result_payload(raw_result: Mapping[str, Any] | SkillResult) -> Mapping[str, Any]:
+    """성공한 executor 결과만 output contract 검증용 mapping으로 변환한다."""
     if isinstance(raw_result, Mapping):
         return raw_result
     if not raw_result.success:
@@ -230,6 +242,7 @@ def _result_payload(raw_result: Mapping[str, Any] | SkillResult) -> Mapping[str,
 
 
 def _failed_effect(side_effects: bool) -> EffectStatus:
+    """부수효과 executor 실패 시 실제 반영 여부를 보수적으로 UNKNOWN 처리한다."""
     return EffectStatus.UNKNOWN if side_effects else EffectStatus.NONE
 
 
@@ -240,6 +253,7 @@ def _failure(
     dispatched: bool = False,
     effect_status: EffectStatus = EffectStatus.NONE,
 ) -> AdapterResponse:
+    """실패 위치와 effect 불확실성을 graph가 재해석하지 않도록 정규화한다."""
     return AdapterResponse(
         invocation_id=invocation.invocation_id,
         status=(

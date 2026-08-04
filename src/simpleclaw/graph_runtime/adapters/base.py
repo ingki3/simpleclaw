@@ -1,7 +1,7 @@
-"""Generic adapter protocol and normalized dispatch response.
+"""공통 adapter protocol과 정규화된 dispatch 응답을 정의한다.
 
-This module deliberately owns only lifecycle, immutable contract identities and
-opaque JSON payloads. Concrete Recipe/Skill adapters own their binding formats.
+이 모듈은 lifecycle, 불변 contract identity, opaque JSON payload만 소유한다.
+구체적인 binding 형식은 Recipe와 Skill adapter가 각각 소유한다.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ..status import AssetResultStatus, EffectStatus
 
 @dataclass(frozen=True)
 class BoundSkillPayload:
-    """One Recipe-owned deterministic mapping to a target Skill payload."""
+    """Recipe가 소유한 결정적 mapping으로 만든 단일 Skill payload."""
 
     binding_id: str
     target_skill: str
@@ -36,18 +36,18 @@ class BoundSkillPayload:
 
     @property
     def payload(self) -> dict[str, JsonValue]:
-        """Return a defensive copy of the canonical child payload."""
+        """호출자가 canonical 원본을 변경하지 못하도록 자식 payload 복사본을 반환한다."""
         import json
 
         value = json.loads(self.payload_json)
-        if not isinstance(value, dict):  # pragma: no cover - constructor invariant
+        if not isinstance(value, dict):  # pragma: no cover - 생성자 불변식
             raise TypeError("bound payload must decode to an object")
         return value
 
 
 @dataclass(frozen=True)
 class AdapterResponse:
-    """Dispatch result that can represent pre-executor fail-closed outcomes."""
+    """executor 호출 전 fail-closed 결과까지 표현하는 dispatch 응답."""
 
     invocation_id: str
     status: AssetResultStatus
@@ -60,7 +60,7 @@ class AdapterResponse:
 
 
 class GenericAssetAdapter(Protocol):
-    """Common async surface consumed by graph dispatch nodes."""
+    """graph dispatch node가 자산 종류와 무관하게 사용하는 비동기 표면."""
 
     async def dispatch(
         self,

@@ -10,8 +10,8 @@ from simpleclaw.capability import (
 from simpleclaw.graph_runtime.adapters.recipe import GenericRecipeAdapter
 from simpleclaw.graph_runtime.contracts import AssetInvocationV1
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
-from simpleclaw.graph_runtime.status import AssetResultStatus
-from simpleclaw.recipes.models import RecipeDefinition
+from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
+from simpleclaw.recipes.models import RecipeDefinition, RecipeResult
 from simpleclaw.skills.models import SkillDefinition
 
 
@@ -148,3 +148,38 @@ async def test_missing_mapping_source_fails_before_recipe_executor() -> None:
     assert response.status is AssetResultStatus.FAILED
     assert response.error_code is not None
     assert response.error_code.startswith("payload.required")
+
+
+@pytest.mark.asyncio
+async def test_failed_recipe_result_is_fail_closed_without_redispatch() -> None:
+    recipe = _recipe()
+    recipe.capability = CapabilityMetadata(
+        declared=True,
+        read_only=False,
+        side_effects=True,
+        requires_confirmation=True,
+    )
+    registry, invocation = _invocation(recipe)
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return RecipeResult(recipe_name=recipe.name, success=False, error="failed")
+
+    adapter = GenericRecipeAdapter(registry, recipe, executor)
+    failed = await adapter.dispatch(invocation, authorized=True)
+    blocked = await adapter.dispatch(
+        invocation,
+        authorized=True,
+        dispatch_started=True,
+    )
+
+    assert calls == 1
+    assert failed.status is AssetResultStatus.BLOCKED
+    assert failed.effect_status is EffectStatus.UNKNOWN
+    assert failed.dispatched is True
+    assert failed.error_code == "executor.failed"
+    assert blocked.status is AssetResultStatus.BLOCKED
+    assert blocked.dispatched is False
+    assert blocked.error_code == "effect.redispatch_blocked"

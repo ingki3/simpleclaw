@@ -1,4 +1,4 @@
-"""Domain-neutral invocation signatures and external-effect redispatch guard."""
+"""도메인 중립 invocation signature와 외부 effect redispatch guard를 정의한다."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .status import EffectStatus
 
 
 class ActionReceiptLike(Protocol):
-    """Structural subset shared with the append-only graph action receipt."""
+    """append-only graph action receipt와 공유하는 structural subset."""
 
     invocation_id: str
     idempotency_key: str
@@ -21,6 +21,8 @@ class ActionReceiptLike(Protocol):
 
 
 class RedispatchDecision(str, Enum):
+    """receipt와 dispatch 상태로 결정한 재호출 허용 여부."""
+
     DISPATCH = "dispatch"
     REUSE_RECEIPT = "reuse_receipt"
     BLOCK_UNKNOWN = "block_unknown"
@@ -29,6 +31,8 @@ class RedispatchDecision(str, Enum):
 
 @dataclass(frozen=True)
 class RedispatchGuardResult:
+    """외부 호출 전에 확정한 멱등성 key와 effect 상태."""
+
     decision: RedispatchDecision
     idempotency_key: str
     effect_status: EffectStatus
@@ -39,7 +43,7 @@ def invocation_signature(
     invocation: AssetInvocationV1,
     binding_ref: AssetBindingRefV1,
 ) -> str:
-    """Hash every immutable dispatch identity without inspecting payload keys."""
+    """payload key를 읽지 않고 모든 불변 dispatch identity를 hash한다."""
     canonical = json.dumps(
         {
             "invocation_id": invocation.invocation_id,
@@ -64,7 +68,7 @@ def guard_redispatch(
     receipts: tuple[object, ...] = (),
     dispatch_started: bool = False,
 ) -> RedispatchGuardResult:
-    """Return a fail-closed decision before any external executor is called."""
+    """외부 executor 호출 전에 fail-closed 재호출 결정을 반환한다."""
     key = invocation_signature(invocation, binding_ref)
     matching = tuple(
         receipt

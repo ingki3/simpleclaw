@@ -16,7 +16,7 @@ from simpleclaw.graph_runtime.contracts import AssetInvocationV1
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.graph_runtime.idempotency import invocation_signature
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
-from simpleclaw.skills.models import SkillDefinition
+from simpleclaw.skills.models import SkillDefinition, SkillResult
 
 
 def _contract(name: str):
@@ -187,3 +187,39 @@ async def test_side_effect_requires_explicit_authorization() -> None:
     assert calls == 0
     assert response.effect_status is EffectStatus.CONFIRMATION_REQUIRED
     assert response.error_code == "effect.authorization_required"
+
+
+@pytest.mark.asyncio
+async def test_failed_skill_result_is_fail_closed_without_redispatch() -> None:
+    skill = _definition()
+    skill.capability = CapabilityMetadata(
+        declared=True,
+        read_only=False,
+        side_effects=True,
+        requires_confirmation=True,
+    )
+    registry = build_contract_registry([skill])
+    invocation = _invocation(skill, {"nebula_key": "value"})
+    calls = 0
+
+    async def executor(_definition, _argv):
+        nonlocal calls
+        calls += 1
+        return SkillResult(success=False, exit_code=1, error="failed")
+
+    adapter = GenericSkillAdapter(registry, skill, executor)
+    failed = await adapter.dispatch(invocation, authorized=True)
+    blocked = await adapter.dispatch(
+        invocation,
+        authorized=True,
+        dispatch_started=True,
+    )
+
+    assert calls == 1
+    assert failed.status is AssetResultStatus.BLOCKED
+    assert failed.effect_status is EffectStatus.UNKNOWN
+    assert failed.dispatched is True
+    assert failed.error_code == "executor.failed"
+    assert blocked.status is AssetResultStatus.BLOCKED
+    assert blocked.dispatched is False
+    assert blocked.error_code == "effect.redispatch_blocked"

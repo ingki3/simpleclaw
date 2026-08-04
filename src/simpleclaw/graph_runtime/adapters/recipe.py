@@ -1,4 +1,4 @@
-"""Exact RecipeDefinition dispatch through Recipe-owned deterministic mapping."""
+"""Recipe 소유의 결정적 mapping으로 정확한 RecipeDefinition을 dispatch한다."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ RecipeExecutor = Callable[
 
 
 class GenericRecipeAdapter:
-    """Validate one exact Recipe and expose only its declared step mappings."""
+    """정확한 Recipe 하나를 검증하고 선언된 step mapping만 노출한다."""
 
     def __init__(
         self,
@@ -29,6 +29,7 @@ class GenericRecipeAdapter:
         definition: RecipeDefinition,
         executor: RecipeExecutor | None = None,
     ) -> None:
+        """registry snapshot과 exact definition을 고정해 drift를 탐지한다."""
         self._registry = registry
         self._definition = definition
         self._executor = executor
@@ -41,6 +42,7 @@ class GenericRecipeAdapter:
         dispatch_started: bool = False,
         authorized: bool = False,
     ) -> AdapterResponse:
+        """검증·멱등성 gate를 통과한 invocation만 외부 executor에 전달한다."""
         entry, error = self._candidate(invocation)
         if error is not None:
             return _failure(invocation, error)
@@ -114,9 +116,8 @@ class GenericRecipeAdapter:
                 )
             else:
                 raw_result = await self._executor(self._definition, bound_steps)
-        # The injected executor is an external boundary. Unknown provider/runtime
-        # failures must become a fail-closed adapter response, never escape to a
-        # graph fallback path.
+        # 주입된 executor는 외부 경계이므로 알 수 없는 provider/runtime 실패도
+        # graph fallback으로 새지 않게 fail-closed 응답으로 정규화한다.
         except Exception:  # noqa: BLE001
             return _failure(
                 invocation,
@@ -131,6 +132,17 @@ class GenericRecipeAdapter:
         try:
             output = _result_payload(raw_result)
             normalized = self._registry.validate_canonical(entry.output_descriptor, output)
+        except RuntimeError:
+            return _failure(
+                invocation,
+                "executor.failed",
+                dispatched=True,
+                effect_status=(
+                    EffectStatus.UNKNOWN
+                    if entry.snapshot.side_effects
+                    else EffectStatus.NONE
+                ),
+            )
         except ContractRegistryError as exc:
             return _failure(
                 invocation,
@@ -178,7 +190,7 @@ class GenericRecipeAdapter:
         source_payload_hash: str,
         source_payload_json: str,
     ) -> tuple[BoundSkillPayload, ...]:
-        """Apply declared source-to-target maps without semantic reinterpretation."""
+        """의미를 재해석하지 않고 선언된 source-to-target mapping만 적용한다."""
         bound: list[BoundSkillPayload] = []
         for metadata in self._definition.step_bindings:
             binding = metadata.binding
@@ -221,6 +233,7 @@ class GenericRecipeAdapter:
         return tuple(bound)
 
     def _candidate(self, invocation: AssetInvocationV1):
+        """invocation identity가 registry의 exact Recipe와 일치할 때만 후보를 반환한다."""
         entry = self._registry.asset(invocation.asset_ref)
         if entry is None or invocation.asset_ref.type != "recipe":
             return None, "definition.not_found"
@@ -243,6 +256,7 @@ class GenericRecipeAdapter:
 
 
 def _result_payload(raw_result: Mapping[str, Any] | RecipeResult) -> Mapping[str, Any]:
+    """성공한 executor 결과만 output contract 검증용 mapping으로 변환한다."""
     if isinstance(raw_result, Mapping):
         return raw_result
     if not raw_result.success:
@@ -256,6 +270,7 @@ def _result_payload(raw_result: Mapping[str, Any] | RecipeResult) -> Mapping[str
 
 
 def _variable_value(value: Any) -> str:
+    """문자열 외 값은 결정적 JSON으로 직렬화해 Recipe 변수 identity를 보존한다."""
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -268,6 +283,7 @@ def _failure(
     dispatched: bool = False,
     effect_status: EffectStatus = EffectStatus.NONE,
 ) -> AdapterResponse:
+    """실패 위치와 effect 불확실성을 graph가 재해석하지 않도록 정규화한다."""
     return AdapterResponse(
         invocation_id=invocation.invocation_id,
         status=(
