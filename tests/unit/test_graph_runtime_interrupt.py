@@ -11,7 +11,6 @@ from simpleclaw.graph_runtime.checkpoint import (
     validate_resume,
 )
 
-
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
 
 

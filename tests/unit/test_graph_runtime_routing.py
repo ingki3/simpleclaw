@@ -6,8 +6,8 @@ from simpleclaw.graph_runtime.builder import validate_core_graph_tables
 from simpleclaw.graph_runtime.routing import (
     CORE_TRANSITION_TABLES,
     DEEP_RESEARCH_RESULT_EDGES,
-    GeneralRoute,
     REACT_RESULT_EDGES,
+    GeneralRoute,
     RecipeMatchOutcome,
     RecipeResultOutcome,
     SolverOutcome,
