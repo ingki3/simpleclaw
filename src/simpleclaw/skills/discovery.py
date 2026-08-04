@@ -19,7 +19,15 @@ from pathlib import Path
 
 import yaml
 
-from simpleclaw.capability import CapabilityMetadata, parse_capability_metadata
+from simpleclaw.capability import (
+    CapabilityMetadata,
+    OwnedBindingMetadata,
+    OwnedContractMetadata,
+    parse_capability_metadata,
+    parse_owned_binding_metadata,
+    parse_owned_contract_metadata,
+    require_complete_contract_metadata,
+)
 from simpleclaw.skills.models import RetryPolicy, SkillDefinition, SkillScope
 
 logger = logging.getLogger(__name__)
@@ -115,6 +123,9 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
     retry_policy: RetryPolicy | None = None
     # BIZ-425 — capability 미선언 스킬은 보수 기본값(자동 실행 후보 제외).
     capability = CapabilityMetadata()
+    input_contract: OwnedContractMetadata | None = None
+    output_contract: OwnedContractMetadata | None = None
+    argument_binding: OwnedBindingMetadata | None = None
 
     # YAML frontmatter를 먼저 시도 (---\n...\n---)
     fm_match = re.match(r"^---\s*\n(.+?)\n---\s*\n", content, re.DOTALL)
@@ -128,6 +139,27 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
                 capability = parse_capability_metadata(
                     fm.get("capability"), source=str(skill_md)
                 )
+                input_contract = parse_owned_contract_metadata(
+                    fm.get("input_contract"),
+                    source=f"{skill_md}:input_contract",
+                )
+                output_contract = parse_owned_contract_metadata(
+                    fm.get("output_contract"),
+                    source=f"{skill_md}:output_contract",
+                )
+                argument_binding = parse_owned_binding_metadata(
+                    fm.get("argument_binding"),
+                    source=f"{skill_md}:argument_binding",
+                )
+                require_complete_contract_metadata(
+                    input_contract=input_contract,
+                    output_contract=output_contract,
+                    binding=argument_binding,
+                    source=str(skill_md),
+                )
+        except ValueError as exc:
+            logger.warning("Invalid V4 contract metadata in %s: %s", skill_md, exc)
+            return None
         except yaml.YAMLError:
             pass
 
@@ -190,6 +222,9 @@ def _parse_skill_md(skill_md: Path, scope: SkillScope) -> SkillDefinition | None
         commands=commands,
         retry_policy=retry_policy,
         capability=capability,
+        input_contract=input_contract,
+        output_contract=output_contract,
+        argument_binding=argument_binding,
     )
 
 

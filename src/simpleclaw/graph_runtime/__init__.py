@@ -18,6 +18,13 @@ from .contracts import (
     RequestEnvelopeV1,
     RetryPolicyV1,
 )
+from .contracts_registry import (
+    CanonicalPayload,
+    ContractRegistryError,
+    ContractRegistrySnapshotV1,
+    RegistryAssetEntryV1,
+    build_contract_registry,
+)
 from .status import (
     AssetResultStatus,
     DeliveryStatus,
@@ -35,8 +42,11 @@ __all__ = [
     "AssetRefV1",
     "AssetResultStatus",
     "AttachmentRefV1",
+    "CanonicalPayload",
     "ContractDescriptorV1",
     "ContractRefV1",
+    "ContractRegistryError",
+    "ContractRegistrySnapshotV1",
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryStatus",
@@ -50,6 +60,8 @@ __all__ = [
     "NormalizedAssetResultV1",
     "PlanStatus",
     "RequestEnvelopeV1",
+    "RegistryAssetEntryV1",
     "RetryPolicyV1",
     "TerminalOutcome",
+    "build_contract_registry",
 ]
