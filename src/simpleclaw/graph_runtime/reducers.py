@@ -20,10 +20,10 @@ from .state import (
     DeliveryStateV1,
     RouteStateV1,
     RuntimeSnapshotV1,
-    append_unique_delivery_receipt as append_unique_delivery_receipt,
-    append_unique_event as append_unique_event,
-    append_unique_receipt as append_unique_receipt,
-    append_unique_route_transition as append_unique_route_transition,
+    append_unique_delivery_receipt,
+    append_unique_event,
+    append_unique_receipt,
+    append_unique_route_transition,
 )
 from .status import (
     EffectStatus,
@@ -32,6 +32,15 @@ from .status import (
     require_legal_transition,
     select_terminal_outcome,
 )
+
+__all__ = [
+    "ReducerInvariantError",
+    "append_unique_delivery_receipt",
+    "append_unique_event",
+    "append_unique_receipt",
+    "append_unique_route_transition",
+    "reduce_state",
+]
 
 
 class ReducerInvariantError(ValueError):

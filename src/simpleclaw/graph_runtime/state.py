@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import Annotated, TypeVar, TypedDict
+from typing import Annotated, TypedDict, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
