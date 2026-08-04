@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from collections.abc import Callable, Iterable, Sequence
+from typing import Annotated, TypeVar, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .contracts import RequestEnvelopeV1
+from .contracts import ExecutionBudgetV1, RequestEnvelopeV1
 from .events import ActionReceiptV1, DeliveryReceiptV1, GraphEventV1, RouteTransitionV1
 from .status import (
     DeliveryStatus,
@@ -36,10 +37,32 @@ class CheckpointStateV1(SnapshotModel):
 
 
 class BudgetStateV1(SnapshotModel):
+    max_graph_steps: int = Field(default=0, ge=0)
+    max_asset_calls: int = Field(default=0, ge=0)
+    max_llm_calls: int = Field(default=0, ge=0)
+    max_tokens: int = Field(default=0, ge=0)
     graph_steps: int = Field(default=0, ge=0)
     asset_calls: int = Field(default=0, ge=0)
     llm_calls: int = Field(default=0, ge=0)
     tokens: int = Field(default=0, ge=0)
+    remaining_graph_steps: int = Field(default=0, ge=0)
+    remaining_asset_calls: int = Field(default=0, ge=0)
+    remaining_llm_calls: int = Field(default=0, ge=0)
+    remaining_tokens: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def require_conserved_totals(self) -> BudgetStateV1:
+        axes = (
+            (self.max_graph_steps, self.graph_steps, self.remaining_graph_steps),
+            (self.max_asset_calls, self.asset_calls, self.remaining_asset_calls),
+            (self.max_llm_calls, self.llm_calls, self.remaining_llm_calls),
+            (self.max_tokens, self.tokens, self.remaining_tokens),
+        )
+        if any(limit != consumed + remaining for limit, consumed, remaining in axes):
+            raise ValueError(
+                "budget max must equal consumed plus remaining on every axis"
+            )
+        return self
 
 
 class ArtifactStateV1(SnapshotModel):
@@ -68,20 +91,77 @@ class RuntimeSnapshotV1(SnapshotModel):
     processed_ledger_fingerprints: tuple[tuple[str, str], ...] = ()
 
 
-def new_runtime_snapshot(request_id: str, *, initial_route: str | None = None) -> RuntimeSnapshotV1:
+def new_runtime_snapshot(
+    request_id: str,
+    *,
+    initial_route: str | None = None,
+    execution_budget: ExecutionBudgetV1 | None = None,
+) -> RuntimeSnapshotV1:
     route = RouteStateV1(initial_route=initial_route, active_route=initial_route)
-    return RuntimeSnapshotV1(request=RequestStateV1(request_id=request_id), route=route)
+    budget = BudgetStateV1()
+    if execution_budget is not None:
+        budget = BudgetStateV1(
+            max_graph_steps=execution_budget.max_graph_steps,
+            max_asset_calls=execution_budget.max_asset_calls,
+            max_llm_calls=execution_budget.max_llm_calls,
+            max_tokens=execution_budget.max_tokens,
+            remaining_graph_steps=execution_budget.max_graph_steps,
+            remaining_asset_calls=execution_budget.max_asset_calls,
+            remaining_llm_calls=execution_budget.max_llm_calls,
+            remaining_tokens=execution_budget.max_tokens,
+        )
+    return RuntimeSnapshotV1(
+        request=RequestStateV1(request_id=request_id), route=route, budget=budget
+    )
 
 
-def _append_only(left: tuple, right: tuple) -> tuple:
-    """LangGraph annotation용 연결 함수; 의미적 중복 검증은 reduce_state가 한다."""
-    return left + right
+_LedgerT = TypeVar("_LedgerT")
+
+
+def _append_unique(
+    current: Sequence[_LedgerT],
+    incoming: Iterable[_LedgerT],
+    *,
+    identity: Callable[[_LedgerT], str],
+) -> tuple[_LedgerT, ...]:
+    """LangGraph channel 경계에서 canonical identity 충돌을 거부한다."""
+    merged = list(current)
+    by_identity = {identity(item): item for item in current}
+    for item in incoming:
+        key = identity(item)
+        existing = by_identity.get(key)
+        if existing is None:
+            by_identity[key] = item
+            merged.append(item)
+        elif existing != item:
+            raise ValueError(f"conflicting append-only ledger identity: {key}")
+    return tuple(merged)
+
+
+def append_unique_event(current, incoming):
+    return _append_unique(current, incoming, identity=lambda item: item.event_id)
+
+
+def append_unique_route_transition(current, incoming):
+    return _append_unique(current, incoming, identity=lambda item: item.transition_id)
+
+
+def append_unique_receipt(current, incoming):
+    return _append_unique(current, incoming, identity=lambda item: item.idempotency_key)
+
+
+def append_unique_delivery_receipt(current, incoming):
+    return _append_unique(current, incoming, identity=lambda item: item.receipt_id)
 
 
 class RuntimeGraphState(TypedDict):
     envelope: RequestEnvelopeV1
-    events: Annotated[tuple[GraphEventV1, ...], _append_only]
-    route_transitions: Annotated[tuple[RouteTransitionV1, ...], _append_only]
-    action_receipts: Annotated[tuple[ActionReceiptV1, ...], _append_only]
-    delivery_receipts: Annotated[tuple[DeliveryReceiptV1, ...], _append_only]
+    events: Annotated[tuple[GraphEventV1, ...], append_unique_event]
+    route_transitions: Annotated[
+        tuple[RouteTransitionV1, ...], append_unique_route_transition
+    ]
+    action_receipts: Annotated[tuple[ActionReceiptV1, ...], append_unique_receipt]
+    delivery_receipts: Annotated[
+        tuple[DeliveryReceiptV1, ...], append_unique_delivery_receipt
+    ]
     snapshot: RuntimeSnapshotV1

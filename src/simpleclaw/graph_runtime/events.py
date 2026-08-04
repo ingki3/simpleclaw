@@ -30,6 +30,7 @@ class GraphEventKind(str, Enum):
     CHECKPOINT_ADVANCED = "checkpoint_advanced"
     ARTIFACT_RECORDED = "artifact_recorded"
     DELIVERY_STATUS_CHANGED = "delivery_status_changed"
+    EFFECT_STATUS_CHANGED = "effect_status_changed"
 
 
 class BudgetDeltaV1(LedgerModel):
@@ -58,6 +59,7 @@ class GraphEventV1(LedgerModel):
     plan_status: PlanStatus | None = None
     terminal_outcome: TerminalOutcome | None = None
     delivery_status: DeliveryStatus | None = None
+    effect_status: EffectStatus | None = None
     budget_delta: BudgetDeltaV1 | None = None
     checkpoint_version: int | None = Field(default=None, ge=0)
     artifact_id: str | None = None
@@ -74,6 +76,7 @@ class GraphEventV1(LedgerModel):
             GraphEventKind.CHECKPOINT_ADVANCED: self.checkpoint_version,
             GraphEventKind.ARTIFACT_RECORDED: self.artifact_id,
             GraphEventKind.DELIVERY_STATUS_CHANGED: self.delivery_status,
+            GraphEventKind.EFFECT_STATUS_CHANGED: self.effect_status,
         }
         if self.kind in required and required[self.kind] is None:
             raise ValueError(f"{self.kind.value} requires its matching payload")

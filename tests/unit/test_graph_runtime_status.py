@@ -12,6 +12,7 @@ from simpleclaw.graph_runtime.status import (
 
 def test_legal_and_illegal_transitions_fail_closed() -> None:
     require_legal_transition(LifecycleStatus.NEW, LifecycleStatus.ACTIVE)
+    require_legal_transition(EffectStatus.NONE, EffectStatus.NOT_AUTHORIZED)
 
     try:
         require_legal_transition(LifecycleStatus.NEW, LifecycleStatus.TERMINAL)

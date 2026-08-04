@@ -176,7 +176,7 @@ INVOCATION_STATUS_TRANSITIONS = _frozen_edges(
 
 EFFECT_STATUS_TRANSITIONS = _frozen_edges(
     {
-        EffectStatus.NONE: frozenset(),
+        EffectStatus.NONE: frozenset({EffectStatus.NOT_AUTHORIZED}),
         EffectStatus.NOT_AUTHORIZED: frozenset(
             {EffectStatus.CONFIRMATION_REQUIRED}
         ),
