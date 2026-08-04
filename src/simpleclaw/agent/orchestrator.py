@@ -266,16 +266,6 @@ def _deterministic_rollout_sample(
     return bucket / float(1 << 64) < bounded_rate
 
 
-def _langgraph_v4_route_for_plan(plan: UnifiedTurnPlan) -> str:
-    """Primary plan의 asset/mode를 V4의 고정 3-way route로 투영한다."""
-    primary = plan.capability.primary_asset
-    if primary is not None and primary.asset_type == "recipe":
-        return "recipe"
-    if plan.execution.mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM:
-        return "deep_research"
-    return "react"
-
-
 def _canary_read_only_eligible(
     plan: UnifiedTurnPlan,
     catalog: PlannerCatalog,
@@ -1328,19 +1318,23 @@ class AgentOrchestrator:
                 )
                 response_text = tool_loop_result.text
 
-                if turn.plan is not None:
+                if (
+                    turn.plan is not None
+                    and tool_loop_result.selected_route is not None
+                ):
                     self._schedule_unified_turn_planner_shadow(
                         text,
                         recent_rows=recent_rows,
                         plan=turn.plan,
                         legacy=LegacyRunTelemetryV1(
-                            selected_route=_langgraph_v4_route_for_plan(turn.plan),
+                            selected_route=tool_loop_result.selected_route,
                             terminal_outcome=(
                                 TerminalOutcome.COMPLETED
                                 if tool_loop_result.success
                                 else TerminalOutcome.FAILED
                             ),
-                            model_calls=0,
+                            model_calls=tool_loop_result.model_calls,
+                            tokens=tool_loop_result.tokens,
                         ),
                         request_id=turn.turn_id,
                         session_key=turn.session_key,
@@ -1400,12 +1394,13 @@ class AgentOrchestrator:
                 ),
             ),
         )
+        usage_router = PlannerUsageCaptureRouter(self._router)
         try:
             plan = await plan_turn_with_llm(
                 text,
                 candidates=candidates,
                 catalog=catalog,
-                router=self._router,
+                router=usage_router,
                 max_tokens=int(config.get("max_tokens", 2048)),
                 reasoning=config.get("reasoning"),
                 examples_prompt_name=str(
@@ -1529,9 +1524,20 @@ class AgentOrchestrator:
             execution_mode=effective_plan.execution.mode.value,
             gate_status=gate_result.status.value,
         )
+        primary_route: str | None = None
+        primary_model_calls = 0
+
+        def record_primary_execution(route: str, model_calls: int) -> None:
+            nonlocal primary_route, primary_model_calls
+            if primary_route is not None and primary_route != route:
+                raise RuntimeError("primary execution route changed within one turn")
+            primary_route = route
+            primary_model_calls += model_calls
 
         async def run_planned_tool_loop(
             state: TurnExecutionState,
+            *,
+            route: str = "react",
         ) -> TurnExecutionState:
             """검증된 immutable plan을 같은 ToolLoopState에 고정한다."""
             callback_plan = state.plan
@@ -1552,6 +1558,7 @@ class AgentOrchestrator:
                 ),
                 turn=state,
             )
+            record_primary_execution(route, result.iterations)
             state.transition(TurnPhase.FINALIZING)
             state.set_final_text(result.text)
             state.transition(TurnPhase.COMPLETED)
@@ -1567,8 +1574,12 @@ class AgentOrchestrator:
 
         async def run_planned_fact_check(
             state: TurnExecutionState,
+            *,
+            route: str = "react",
         ) -> TurnExecutionState:
             """Typed source request를 먼저 실행하고 검증된 근거만 조합한다."""
+
+            fact_model_calls = 0
 
             async def lookup(
                 request: RealtimeLookupRequest,
@@ -1611,6 +1622,7 @@ class AgentOrchestrator:
             async def compose(
                 verified_state: TurnExecutionState,
             ) -> str:
+                nonlocal fact_model_calls
                 if verified_state.plan is None:
                     raise ValueError("fact composition requires plan")
                 result = await self._run_tool_loop_result(
@@ -1627,32 +1639,52 @@ class AgentOrchestrator:
                     ),
                     turn=verified_state,
                 )
+                fact_model_calls += result.iterations
                 return result.text
 
             evidence_max_attempts = int(
                 config.get("evidence_max_attempts", 2)
             )
-            return await FactCheckController(
+            completed = await FactCheckController(
                 lookup=tuple(lookup for _ in range(evidence_max_attempts)),
                 compose=compose,
                 max_attempts=evidence_max_attempts,
             ).run(state)
+            record_primary_execution(route, fact_model_calls)
+            return completed
 
         async def run_planned_complex_fact(
             state: TurnExecutionState,
         ) -> TurnExecutionState:
             """복합 사실도 동일한 typed retrieval/finalization gate를 사용한다."""
-            return await run_planned_fact_check(state)
+            return await run_planned_fact_check(state, route="deep_research")
 
         async def run_planned_recipe(
             state: TurnExecutionState,
         ) -> TurnExecutionState:
             """선택된 recipe만 노출하고 해당 asset이 근거 수명주기를 소유하게 한다."""
-            return await run_planned_tool_loop(state)
+            return await run_planned_tool_loop(state, route="recipe")
+
+        async def run_planned_react(
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            return await run_planned_tool_loop(state, route="react")
+
+        async def run_planned_react_fact(
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            return await run_planned_fact_check(state, route="react")
+
         factual_handler = (
-            run_planned_fact_check
+            run_planned_react_fact
             if turn.plan is not None and turn.plan.fact_check.required
-            else run_planned_tool_loop
+            else run_planned_react
+        )
+        direct_handler = (
+            run_planned_recipe
+            if effective_plan.capability.primary_asset is not None
+            and effective_plan.capability.primary_asset.asset_type == "recipe"
+            else factual_handler
         )
         architecture = str(config.get("architecture", "legacy_v2"))
         if architecture == "capability_first_v3":
@@ -1965,8 +1997,8 @@ class AgentOrchestrator:
             )
         router = self._build_execution_router(
             ExecutionCallbacks(
-                direct_answer=factual_handler,
-                answer_with_evidence=run_planned_fact_check,
+                direct_answer=direct_handler,
+                answer_with_evidence=run_planned_react_fact,
                 resolve_complex_problem=run_planned_complex_fact,
                 clarify=clarify,
             )
@@ -1975,6 +2007,9 @@ class AgentOrchestrator:
         return ToolLoopResult(
             completed.final_text or _UNIFIED_PLAN_REJECTED_MESSAGE,
             success=completed.phase is TurnPhase.COMPLETED,
+            selected_route=primary_route,
+            model_calls=usage_router.response_count + primary_model_calls,
+            tokens=usage_router.output_tokens,
         )
 
     def _record_unified_rollout_path(
@@ -2340,7 +2375,7 @@ class AgentOrchestrator:
             request_id=request_id,
             session_key=session_key,
             planner_model_calls=legacy.model_calls,
-            planner_tokens=0,
+            planner_tokens=legacy.tokens,
         )
         telemetry = self._unified_turn_planner_config.get("telemetry", {})
         if (

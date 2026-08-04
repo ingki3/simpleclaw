@@ -235,12 +235,15 @@ class LegacyRunTelemetryV1:
     selected_route: str
     terminal_outcome: TerminalOutcome
     model_calls: int
+    tokens: int = 0
 
     def __post_init__(self) -> None:
         if not self.selected_route:
             raise ValueError("legacy selected route is required")
         if isinstance(self.model_calls, bool) or self.model_calls < 0:
             raise ValueError("legacy model_calls must be non-negative")
+        if isinstance(self.tokens, bool) or self.tokens < 0:
+            raise ValueError("legacy tokens must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,6 +408,7 @@ class ShadowComparisonTelemetryV1:
                 "selected_route": self.legacy.selected_route,
                 "terminal_outcome": self.legacy.terminal_outcome.value,
                 "model_calls": self.legacy.model_calls,
+                "tokens": self.legacy.tokens,
             },
             "shadow": self.shadow.as_dict(),
             "side_effect_counts": self.side_effect_counts.as_dict(),

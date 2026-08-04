@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import MethodType
@@ -62,6 +64,8 @@ from simpleclaw.graph_runtime.status import (
     InvocationStatus,
     TerminalOutcome,
 )
+from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
+from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
@@ -165,6 +169,29 @@ def _budget(*, stop_condition: str = "completed") -> ShadowBudgetUsageV1:
         elapsed_seconds=4.5,
         parallel_peak=1,
         stop_condition=stop_condition,
+    )
+
+
+def _budget_with(**changes) -> ShadowBudgetUsageV1:
+    return replace(_budget(), graph_steps=0, asset_calls=0, llm_calls=0, tokens=0,
+                   elapsed_seconds=0, parallel_peak=0, **changes)
+
+
+def _connected_runner(tmp_path, *, budget, recipe_executor):
+    store = ConversationStore(tmp_path / "budget-conversation.db")
+    return ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="shadow",
+            shadow_no_send=True,
+            budget=budget,
+            checkpoint_path=tmp_path / "budget-checkpoint.sqlite3",
+            daemon_db_path=tmp_path / "daemon.db",
+            conversations_db_path=tmp_path / "budget-conversation.db",
+        ),
+        definitions=_definitions(),
+        conversation_store=store,
+        recipe_executor=recipe_executor,
     )
 
 
@@ -498,6 +525,207 @@ def test_canary_gate_rejects_budget_and_stop_condition_cross_product() -> None:
         "stop_condition_not_completed",
         "budget_exhausted",
     }.issubset(comparison.rollback_reasons)
+
+
+@pytest.mark.asyncio
+async def test_connected_shadow_deadline_cancels_slow_executor_before_completion(
+    tmp_path,
+) -> None:
+    calls = {"started": 0, "completed": 0}
+
+    async def slow_executor(_definition, _bound_steps):
+        calls["started"] += 1
+        await asyncio.sleep(0.2)
+        calls["completed"] += 1
+        return {"fixture_result": "too-late"}
+
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(max_seconds=0.01),
+        recipe_executor=slow_executor,
+    )
+    started = time.perf_counter()
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=0,
+        ),
+        request_id="deadline-stop",
+        session_key="budget-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert time.perf_counter() - started < 0.15
+    assert calls == {"started": 1, "completed": 0}
+    assert result.telemetry.budget_usage.stop_condition == "deadline"
+    assert result.telemetry.terminal_outcome is TerminalOutcome.TIMED_OUT
+    assert result.telemetry.invocation_status is InvocationStatus.TIMED_OUT
+    assert result.comparison.rollback_required is True
+    assert result.canary.eligible is False
+
+
+@pytest.mark.parametrize(
+    ("budget_change", "planner_calls", "planner_tokens", "expected_asset_calls"),
+    [
+        ({"max_graph_steps": 1}, 0, 0, 0),
+        ({"max_asset_calls": 1}, 0, 0, 1),
+        ({"max_llm_calls": 1}, 1, 0, 0),
+        ({"max_tokens": 1}, 0, 1, 0),
+        ({"max_parallel_invocations": 1}, 0, 0, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_connected_shadow_reserves_each_budget_axis_before_next_work(
+    tmp_path,
+    budget_change,
+    planner_calls,
+    planner_tokens,
+    expected_asset_calls,
+) -> None:
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "bounded"}
+
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(**budget_change),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=planner_calls,
+            tokens=planner_tokens,
+        ),
+        request_id=f"axis-{next(iter(budget_change))}",
+        session_key="budget-session",
+        planner_model_calls=planner_calls,
+        planner_tokens=planner_tokens,
+    )
+
+    usage = result.telemetry.budget_usage
+    assert calls == expected_asset_calls
+    assert usage.asset_calls == expected_asset_calls
+    assert usage.stop_condition == "budget_exhausted"
+    assert usage.exhausted is True
+    assert result.telemetry.terminal_outcome is TerminalOutcome.BLOCKED
+    assert result.comparison.rollback_required is True
+    assert result.canary.eligible is False
+
+
+@pytest.mark.asyncio
+async def test_connected_shadow_reserves_llm_call_and_token_cap_before_provider(
+    tmp_path,
+) -> None:
+    provider_calls = []
+
+    class Provider:
+        async def send(self, *_args, max_tokens=None, **_kwargs):
+            provider_calls.append(max_tokens)
+            return LLMResponse(
+                text="bounded",
+                usage={"input_tokens": 10, "output_tokens": 2},
+            )
+
+    router = LLMRouter(
+        backends={
+            "fixture": LLMBackend(
+                name="fixture",
+                backend_type=BackendType.API,
+                model="fixture-model",
+            )
+        },
+        providers={"fixture": Provider()},
+        default_backend="fixture",
+    )
+
+    async def executor(_definition, _bound_steps):
+        await router.send(LLMRequest(user_message="one", max_tokens=100))
+        # max_llm_calls=1이므로 두 번째 provider 호출은 reserve gate에서 차단된다.
+        await router.send(LLMRequest(user_message="two", max_tokens=100))
+        return {"fixture_result": "unreachable"}
+
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(max_llm_calls=1, max_tokens=4),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=0,
+        ),
+        request_id="llm-reserve",
+        session_key="budget-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert provider_calls == [4]
+    assert result.telemetry.budget_usage.llm_calls == 1
+    assert result.telemetry.budget_usage.tokens == 2
+    assert result.telemetry.budget_usage.stop_condition == "budget_exhausted"
+    assert result.comparison.rollback_required is True
+
+
+@pytest.mark.asyncio
+async def test_connected_production_boundary_detects_primary_shadow_route_mismatch(
+    tmp_path,
+) -> None:
+    async def executor(_definition, _bound_steps):
+        return {"fixture_result": "bounded"}
+
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        # Primary execution callback이 실제로 react를 수행했다는 독립 evidence다.
+        # Shadow plan projection은 recipe이므로 production comparison이 drift를 잡아야 한다.
+        legacy=LegacyRunTelemetryV1(
+            selected_route="react",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=2,
+            tokens=20,
+        ),
+        request_id="connected-route-mismatch",
+        session_key="budget-session",
+        planner_model_calls=2,
+        planner_tokens=20,
+    )
+
+    assert result.telemetry.selected_route == "recipe"
+    assert result.comparison.route_matches is False
+    assert "route_mismatch" in result.comparison.rollback_reasons
+    assert result.canary.eligible is False
 
 
 @pytest.mark.asyncio

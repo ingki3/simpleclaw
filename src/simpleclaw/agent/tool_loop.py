@@ -218,6 +218,9 @@ class ToolLoopResult:
     iterations: int = 0
     success: bool = True
     failure_kind: str | None = None
+    selected_route: str | None = None
+    model_calls: int = 0
+    tokens: int = 0
 
 
 

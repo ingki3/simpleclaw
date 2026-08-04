@@ -15,6 +15,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
@@ -41,6 +42,7 @@ from simpleclaw.llm.usage import (
     sanitize_usage_dimension,
 )
 from simpleclaw.logging.trace_context import get_trace_id
+from simpleclaw.runtime_budget import reserve_runtime_llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +164,9 @@ class LLMRouter:
         미룬다. provider 예외는 validator와 무관하게 이 경계에서 항상 기록한다.
         """
         provider = self._providers[backend_name]
+        reservation = reserve_runtime_llm_call(request.max_tokens)
+        if reservation is not None:
+            request = replace(request, max_tokens=reservation.max_tokens)
 
         # BIZ-453 — reasoning hint 는 설정된 요청에만 kwargs 로 전달한다.
         # 미설정 요청의 호출 시그니처를 기존과 동일하게 유지해, reasoning
@@ -171,6 +176,7 @@ class LLMRouter:
             extra_kwargs["reasoning"] = request.reasoning
 
         started = time.monotonic()
+        response: LLMResponse | None = None
         try:
             if on_text_delta is not None:
                 logger.info(
@@ -225,6 +231,14 @@ class LLMRouter:
                 type(exc).__name__,
             )
             raise
+        finally:
+            if reservation is not None and response is None:
+                reservation.complete(None)
+        assert response is not None
+        if reservation is not None:
+            reservation.complete(
+                response.usage if isinstance(response.usage, dict) else None
+            )
         if record_response:
             status = "empty" if _response_is_empty_final(response) else "success"
             self._record_usage_event(
