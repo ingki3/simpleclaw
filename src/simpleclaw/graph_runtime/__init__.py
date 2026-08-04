@@ -25,6 +25,15 @@ from .contracts_registry import (
     RegistryAssetEntryV1,
     build_contract_registry,
 )
+from .builder import build_core_graph, compile_core_graph
+from .checkpoint import (
+    CheckpointContractError,
+    ChoiceV1,
+    InterruptRequestV1,
+    ResumeControlV1,
+    UserDecisionV1,
+    validate_resume,
+)
 from .events import (
     ActionReceiptV1,
     BudgetDeltaV1,
@@ -34,6 +43,15 @@ from .events import (
     RouteTransitionV1,
 )
 from .reducers import ReducerInvariantError, reduce_state
+from .nodes import CoreGraphState, CoreNodeCallbacks, RouteContinuityV1
+from .routing import (
+    CORE_TRANSITION_TABLES,
+    GeneralRoute,
+    RecipeMatchOutcome,
+    RecipeResultOutcome,
+    RoutingInvariantError,
+    SolverOutcome,
+)
 from .state import RuntimeGraphState, RuntimeSnapshotV1, new_runtime_snapshot
 from .status import (
     AssetResultStatus,
@@ -54,11 +72,16 @@ __all__ = [
     "AssetResultStatus",
     "AttachmentRefV1",
     "BudgetDeltaV1",
+    "CORE_TRANSITION_TABLES",
     "CanonicalPayload",
+    "CheckpointContractError",
+    "ChoiceV1",
     "ContractDescriptorV1",
     "ContractRefV1",
     "ContractRegistryError",
     "ContractRegistrySnapshotV1",
+    "CoreGraphState",
+    "CoreNodeCallbacks",
     "CronSourceV1",
     "DeliveryIntentV1",
     "DeliveryReceiptV1",
@@ -70,19 +93,31 @@ __all__ = [
     "FinalArtifactV1",
     "GraphEventKind",
     "GraphEventV1",
+    "GeneralRoute",
     "InvocationStatus",
+    "InterruptRequestV1",
     "LifecycleStatus",
     "NormalizedAssetResultV1",
     "PlanStatus",
     "ReducerInvariantError",
+    "RecipeMatchOutcome",
+    "RecipeResultOutcome",
     "RegistryAssetEntryV1",
     "RequestEnvelopeV1",
+    "ResumeControlV1",
     "RetryPolicyV1",
     "RouteTransitionV1",
+    "RouteContinuityV1",
+    "RoutingInvariantError",
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
+    "SolverOutcome",
     "TerminalOutcome",
+    "UserDecisionV1",
+    "build_core_graph",
     "build_contract_registry",
+    "compile_core_graph",
     "new_runtime_snapshot",
     "reduce_state",
+    "validate_resume",
 ]
