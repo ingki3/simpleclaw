@@ -72,6 +72,10 @@ def _control_flow_expressions(node: ast.AST) -> tuple[ast.AST, ...]:
     """분기 여부를 결정하는 expression만 반환한다."""
     if isinstance(node, (ast.If, ast.IfExp, ast.While)):
         return (node.test,)
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return (node.iter,)
+    if isinstance(node, ast.Match):
+        return (node.subject,)
     if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
         return tuple(condition for generator in node.generators for condition in generator.ifs)
     if isinstance(node, ast.match_case) and node.guard is not None:
@@ -147,6 +151,31 @@ def test_architecture_guard_kills_payload_key_branch_mutation() -> None:
     }
     assert _architecture_violations(mutated) == [
         "nodes.py:2:payload-key-branch:comet_token"
+    ]
+
+
+def test_architecture_guard_kills_payload_key_loop_and_match_mutations() -> None:
+    """Payload key가 반복 iterable이나 match subject를 결정해도 탐지한다."""
+    mutated = {
+        "loops.py": (
+            "def dispatch(payload):\n"
+            "    for item in payload['comet_token']:\n"
+            "        pass\n"
+            "async def async_dispatch(payload):\n"
+            "    async for item in payload.get('aurora_token'):\n"
+            "        pass\n"
+        ),
+        "match.py": (
+            "def dispatch(payload):\n"
+            "    match payload['meteor_token']:\n"
+            "        case _:\n"
+            "            pass\n"
+        ),
+    }
+    assert _architecture_violations(mutated) == [
+        "loops.py:2:payload-key-branch:comet_token",
+        "loops.py:5:payload-key-branch:aurora_token",
+        "match.py:2:payload-key-branch:meteor_token",
     ]
 
 
