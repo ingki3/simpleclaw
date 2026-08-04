@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-571](mention://issue/e39cf4ad-70c1-4877-83b1-86826ee1b822): Domain-neutral Recipe/Skill contract extension fixture 추가** — 임의 key의 repo fixture를 temp discovery 경로에 추가·교체·삭제하고 Recipe→Skill binding, canonical payload continuity, identity drift dispatch 0, Core domain-neutral AST 경계를 검증한다. (진행: 2026-08-05)
+
 - [>] **[BIZ-562](mention://issue/7806f941-2690-4d72-944f-1ca1e2c46b13): LangGraph V4 domain-neutral runtime 도입** — 계약·ledger·Recipe-first core·adapter·final composition/delivery/persistence의 code/offline 자식 구현을 순차 검증 중이다. BIZ-570 완료 뒤 [BIZ-572](mention://issue/44a03491-e8c7-4352-875d-72a1bcaf723e)가 shadow/no-send observability와 canary gate를, [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c)가 release·controlled live activation·rollback을 소유한다. 따라서 부모 완료와 live 전환은 BIZ-573 검증 전까지 진행 중으로 유지한다. (진행: 2026-08-05)
 
 - [x] **[BIZ-570](mention://issue/70b6423f-88b6-4731-81d4-877e078a2fb2): Final composition, response guard, delivery journal과 persistence 구현** — Recipe-first production graph의 `compose_candidate → final_composition → prepare_delivery → commit_delivery → persist_delivery_outcome → END` 경로에 startup/channel/memory callbacks를 주입하고, sender receipt에 external identity가 없으면 `UNKNOWN` terminal로 fail-closed하며 automatic resend와 ConversationStore write를 차단했다. SQLite delivery journal, delivery outcome별 persistence, guard 전 artifact/intent 부재와 guard 실패 뒤 asset redispatch 0을 connected graph 회귀로 검증했다. fresh CI 3종과 독립 Stage D 재검토를 통과한 [PR #605](https://github.com/ingki3/simpleclaw/pull/605)를 `dev`에 squash merge(SHA `3a7b5bea3a258f4db3d6de45a82954fb369e8dd7`)해 본 이슈의 code/offline 범위를 완료했다. live sender/config/restart는 수행하지 않았으며 shadow/no-send는 BIZ-572, release·live activation·rollback은 BIZ-573이 소유한다. (완료: 2026-08-05)
