@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -27,7 +28,7 @@ def _validate_json_value(value: Any, *, path: str = "payload") -> None:
     if isinstance(value, int) and not isinstance(value, bool):
         return
     if isinstance(value, float):
-        if value != value or value in {float("inf"), float("-inf")}:
+        if not math.isfinite(value):
             raise ValueError(f"{path} contains a non-finite number")
         return
     if isinstance(value, list):
@@ -37,7 +38,7 @@ def _validate_json_value(value: Any, *, path: str = "payload") -> None:
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
-                raise ValueError(f"{path} contains a non-string object key")
+                raise TypeError(f"{path} contains a non-string object key")
             _validate_json_value(item, path=f"{path}.{key}")
         return
     raise ValueError(f"{path} contains a non-JSON value: {type(value).__name__}")
@@ -112,9 +113,11 @@ class ContractDescriptorV1(ContractModel):
 
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
-        if self.binding_ref is not None:
-            if self.binding_ref.owner_ref != self.ref.owner_ref:
-                raise ValueError("binding owner must match the contract owner")
+        if (
+            self.binding_ref is not None
+            and self.binding_ref.owner_ref != self.ref.owner_ref
+        ):
+            raise ValueError("binding owner must match the contract owner")
         return self
 
 
@@ -149,9 +152,11 @@ class AssetDefinitionSnapshotV1(ContractModel):
         for ref in (self.input_contract, self.output_contract):
             if ref is not None and ref.owner_ref != self.asset_ref:
                 raise ValueError("contract owner must match the snapshot asset")
-        if self.declared_binding is not None:
-            if self.declared_binding.owner_ref != self.asset_ref:
-                raise ValueError("binding owner must match the snapshot asset")
+        if (
+            self.declared_binding is not None
+            and self.declared_binding.owner_ref != self.asset_ref
+        ):
+            raise ValueError("binding owner must match the snapshot asset")
         if self.read_only and self.side_effects:
             raise ValueError("a read-only asset cannot declare side effects")
         if self.side_effects and not self.requires_confirmation:
