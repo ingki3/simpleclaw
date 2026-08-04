@@ -7,14 +7,12 @@ discovery-built registry에서 읽고 isolated checkpoint/delivery journal만 �
 응답 원문과 payload는 출력하지 않으며 allowlisted identity/hash와 pass/fail만 남긴다.
 """
 
-# 직접 실행 시 이 worktree의 ``src``를 먼저 올린 뒤 project module을 import한다.
-# ruff: noqa: E402
-
 from __future__ import annotations
 
 import argparse
 import asyncio
 import hashlib
+import importlib
 import json
 import sys
 import tempfile
@@ -23,21 +21,32 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
-from simpleclaw.graph_runtime.contracts import DeliveryIntentV1
-from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
-from simpleclaw.graph_runtime.runtime import (
-    LangGraphV4RolloutFacade,
-    LegacyRunTelemetryV1,
-    SQLiteDeliveryJournal,
-    ShadowBudgetUsageV1,
-    ShadowSideEffectCountsV1,
-)
-from simpleclaw.graph_runtime.status import DeliveryStatus, TerminalOutcome
-from simpleclaw.llm.models import LLMRequest
-from simpleclaw.llm.router import create_router
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills.discovery import discover_skills
+# 직접 실행에서도 현재 worktree의 package를 사용한다. import 문을 bootstrap 뒤에
+# 두지 않고 동적으로 resolve해 E402/I001 규칙과 installed-package shadowing을 피한다.
+_checkpoint = importlib.import_module("simpleclaw.graph_runtime.checkpoint")
+_contracts = importlib.import_module("simpleclaw.graph_runtime.contracts")
+_registry = importlib.import_module("simpleclaw.graph_runtime.contracts_registry")
+_runtime = importlib.import_module("simpleclaw.graph_runtime.runtime")
+_status = importlib.import_module("simpleclaw.graph_runtime.status")
+_llm_models = importlib.import_module("simpleclaw.llm.models")
+_llm_router = importlib.import_module("simpleclaw.llm.router")
+_recipe_loader = importlib.import_module("simpleclaw.recipes.loader")
+_skill_discovery = importlib.import_module("simpleclaw.skills.discovery")
+
+resolve_checkpoint_path = _checkpoint.resolve_checkpoint_path
+DeliveryIntentV1 = _contracts.DeliveryIntentV1
+build_contract_registry = _registry.build_contract_registry
+LangGraphV4RolloutFacade = _runtime.LangGraphV4RolloutFacade
+LegacyRunTelemetryV1 = _runtime.LegacyRunTelemetryV1
+SQLiteDeliveryJournal = _runtime.SQLiteDeliveryJournal
+ShadowBudgetUsageV1 = _runtime.ShadowBudgetUsageV1
+ShadowSideEffectCountsV1 = _runtime.ShadowSideEffectCountsV1
+DeliveryStatus = _status.DeliveryStatus
+TerminalOutcome = _status.TerminalOutcome
+LLMRequest = _llm_models.LLMRequest
+create_router = _llm_router.create_router
+discover_recipes = _recipe_loader.discover_recipes
+discover_skills = _skill_discovery.discover_skills
 
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
 ROUTES = ("recipe", "react", "deep_research")
