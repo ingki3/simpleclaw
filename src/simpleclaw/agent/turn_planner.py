@@ -310,6 +310,11 @@ def _normalize_redundant_full_skill_scope(
         for asset in catalog.assets
         if asset.runtime_visible
     }
+    runtime_tools = {
+        asset.name: asset
+        for asset in runtime_assets.values()
+        if asset.asset_type == "native_tool"
+    }
     try:
         supporting = tuple(
             _raw_asset_identity(item, allow_none=False)
@@ -358,6 +363,33 @@ def _normalize_redundant_full_skill_scope(
     allowed_tools = execution.get("allowed_tools")
     if not isinstance(allowed_tools, list) or any(
         not isinstance(name, str) for name in allowed_tools
+    ):
+        return raw_data
+    adapter = runtime_tools.get("execute_skill")
+    removable_tool_names = {
+        identity[1]
+        for identity in supporting
+        if identity is not None and identity[0] == "native_tool"
+    }
+    selected_tools = tuple(runtime_tools.get(name) for name in allowed_tools)
+    if (
+        adapter is None
+        or not adapter.declared
+        or not adapter.read_only
+        or adapter.side_effects
+        or adapter.requires_confirmation
+        or any(
+            asset is None
+            or not asset.declared
+            or not asset.read_only
+            or asset.side_effects
+            or asset.requires_confirmation
+            for asset in selected_tools
+        )
+        or any(
+            name != "execute_skill" and name not in removable_tool_names
+            for name in allowed_tools
+        )
     ):
         return raw_data
     normalized = dict(raw_data)
@@ -513,6 +545,29 @@ def validate_turn_plan_boundaries(
         raise PlanBoundaryViolation("unknown_or_internal_asset")
     if any(tool_name not in runtime_tools for tool_name in allowed_tools):
         raise PlanBoundaryViolation("unknown_or_internal_tool")
+
+    primary_asset = (
+        runtime_assets.get(primary) if primary is not None else None
+    )
+    if (
+        plan.capability.coverage.value == "full_coverage"
+        and primary_asset is not None
+        and primary_asset.asset_type == "skill"
+    ):
+        scoped_tool_names = {
+            name
+            for asset_type, name in allowed_assets
+            if asset_type == "native_tool"
+        }
+        scoped_tool_names.add("execute_skill")
+        if any(
+            tool_name not in scoped_tool_names
+            and runtime_tools[tool_name].read_only
+            and not runtime_tools[tool_name].side_effects
+            and not runtime_tools[tool_name].requires_confirmation
+            for tool_name in allowed_tools
+        ):
+            raise PlanBoundaryViolation("unrelated_full_skill_tool")
 
     confirmation_assets = [
         *(runtime_assets[identity] for identity in referenced_assets),

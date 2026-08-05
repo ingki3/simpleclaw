@@ -634,6 +634,166 @@ async def test_full_skill_primary_narrows_redundant_read_only_supporting_scope()
     assert plan.execution.allowed_tools == ("execute_skill",)
 
 
+def _full_skill_scope_asset(
+    asset_type: str,
+    name: str,
+    *,
+    coverage: str = "partial_coverage",
+    read_only: bool = True,
+    side_effects: bool = False,
+    requires_confirmation: bool = False,
+    runtime_visible: bool = True,
+) -> PlannerAsset:
+    """full Skill 정규화 경계용 compact catalog asset을 만든다."""
+    is_skill = asset_type == "skill"
+    return PlannerAsset(
+        asset_type=asset_type,
+        name=name,
+        description=name,
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=read_only,
+        side_effects=side_effects,
+        freshness_sensitive=False,
+        direct_answer=is_skill,
+        requires_confirmation=requires_confirmation,
+        output_contract="asset_result.v1" if is_skill else None,
+        declared=True,
+        runtime_visible=runtime_visible,
+        coverage=coverage,
+        input_contract="query.v1" if is_skill else None,
+    )
+
+
+def _full_skill_scope_data(*, allowed_tools: list[str]) -> dict[str, object]:
+    """full Skill + supporting collector provider 응답을 만든다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {"asset_type": "skill", "asset_name": "news-skill"},
+        "supporting_assets": [
+            {"asset_type": "native_tool", "asset_name": "web_search"}
+        ],
+        "fallback_modes": [],
+        "reason": "news skill owns the whole request",
+    }
+    data["execution"] = {
+        "mode": "resolve_complex_problem",
+        "allowed_tools": allowed_tools,
+        "requires_confirmation": False,
+        "complexity_signals": ["ordered_capability_composition"],
+        "reason": "compose selected scope",
+    }
+    return data
+
+
+def _full_skill_scope_catalog(
+    *extra_tools: PlannerAsset,
+) -> PlannerCatalog:
+    """full Skill, adapter, collector와 선택적 경계 tool catalog를 만든다."""
+    return PlannerCatalog(
+        assets=(
+            _full_skill_scope_asset(
+                "skill", "news-skill", coverage="full_coverage"
+            ),
+            _full_skill_scope_asset("native_tool", "web_search"),
+            _full_skill_scope_asset("native_tool", "execute_skill"),
+            *extra_tools,
+        ),
+        fingerprint="full-skill-scope-catalog",
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "side_effects", "requires_confirmation"),
+    (
+        ("delete_calendar_event", True, True),
+        ("send_calendar_invite", False, True),
+    ),
+)
+@pytest.mark.asyncio
+async def test_full_skill_normalization_preserves_confirmation_tool(
+    tool_name: str,
+    side_effects: bool,
+    requires_confirmation: bool,
+) -> None:
+    """mutation/confirmation tool은 삭제하지 않고 confirmation 경계로 보낸다."""
+    selected_tool = _full_skill_scope_asset(
+        "native_tool",
+        tool_name,
+        read_only=not side_effects,
+        side_effects=side_effects,
+        requires_confirmation=requires_confirmation,
+    )
+    data = _full_skill_scope_data(
+        allowed_tools=["execute_skill", "web_search", tool_name]
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "뉴스를 확인해줘",
+        candidates=_candidates(),
+        catalog=_full_skill_scope_catalog(selected_tool),
+        router=router,
+    )
+
+    assert plan.capability.supporting_assets[0].name == "web_search"
+    assert plan.execution.allowed_tools == ("execute_skill", "web_search", tool_name)
+    assert tool_name in plan.execution.allowed_tools
+    assert plan.execution.requires_confirmation is True
+
+
+@pytest.mark.asyncio
+async def test_full_skill_normalization_rejects_unrelated_read_only_tool() -> None:
+    """관련 없는 read-only tool은 safe adapter scope로 세탁하지 않는다."""
+    unrelated = _full_skill_scope_asset("native_tool", "read_private_mail")
+    data = _full_skill_scope_data(
+        allowed_tools=["execute_skill", "web_search", unrelated.name]
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "뉴스를 확인해줘",
+            candidates=_candidates(),
+            catalog=_full_skill_scope_catalog(unrelated),
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unrelated_full_skill_tool"
+
+
+@pytest.mark.asyncio
+async def test_full_skill_normalization_rejects_unknown_tool() -> None:
+    """unknown/internal tool은 adapter 단일 scope로 덮어쓰지 않는다."""
+    data = _full_skill_scope_data(
+        allowed_tools=["execute_skill", "web_search", "internal_operator_tool"]
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "뉴스를 확인해줘",
+            candidates=_candidates(),
+            catalog=_full_skill_scope_catalog(),
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_tool"
+
+
 @pytest.mark.asyncio
 async def test_first_supporting_full_skill_is_promoted_to_stable_primary() -> None:
     """partial/none으로 오표기된 첫 full Skill은 단일 primary로 복원한다."""
