@@ -99,10 +99,12 @@ class PlannerUsageCaptureRouter(LLMRouter):
 
     def __init__(self, wrapped: LLMRouter) -> None:
         self._wrapped = wrapped
+        self.response_count = 0
         self.input_tokens = 0
         self.output_tokens = 0
 
     def _capture(self, response: LLMResponse) -> None:
+        self.response_count += 1
         usage = response.usage if isinstance(response.usage, Mapping) else {}
         self.input_tokens += _nonnegative_int(usage.get("input_tokens"))
         self.output_tokens += _nonnegative_int(usage.get("output_tokens"))

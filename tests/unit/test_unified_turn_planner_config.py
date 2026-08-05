@@ -211,6 +211,7 @@ agent:
       delivery:
         mode: live
         max_attempts: 2
+      shadow_no_send: false
 """,
         encoding="utf-8",
     )
@@ -234,6 +235,35 @@ agent:
             "max_rows": 2000,
         },
         "delivery": {"mode": "no_send", "max_attempts": 2},
+        "shadow_no_send": True,
+        "telemetry_fields": (
+            "run_id",
+            "request_id",
+            "checkpoint_thread_id",
+            "plan_id",
+            "plan_revision",
+            "catalog_fingerprint",
+            "invocation_id",
+            "definition_fingerprint",
+            "contract_owner_ref",
+            "input_contract_ref",
+            "input_schema_hash",
+            "payload_hash",
+            "binding_ref",
+            "output_contract_ref",
+            "output_schema_hash",
+            "selected_route",
+            "invocation_status",
+            "asset_result_status",
+            "effect_status",
+            "terminal_outcome",
+            "delivery_status",
+            "budget_usage",
+            "model_call_attribution",
+            "stop_condition",
+            "rollback_required",
+            "rollback_reason",
+        ),
     }
 
 

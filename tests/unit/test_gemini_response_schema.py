@@ -1,13 +1,15 @@
 """BIZ-454 — Gemini response_schema provider 전용 sanitizer 테스트.
 
-live smoke 에서 `TURN_ANALYSIS_RESPONSE_SCHEMA` 의 ``additionalProperties`` 가
-SDK payload 의 ``additional_properties`` 로 변환되어 Gemini API 가
-``400 INVALID_ARGUMENT`` 를 반환한 사고의 재발 방지 회귀를 고정한다.
+live smoke 에서 strict response schema의 ``additionalProperties``와
+UnifiedTurnPlan schema의 ``maxItems``가 Gemini API의
+``400 INVALID_ARGUMENT``를 유발한 사고의 재발 방지 회귀를 고정한다.
 
 검증 계약:
-  - Gemini 로 나가는 schema 에서 root/nested ``additionalProperties`` 만 제거.
+  - Gemini 로 나가는 schema 에서 root/nested ``additionalProperties``와
+    ``maxItems`` 제거.
   - 원본 schema dict 는 불변 (OpenAI-compatible 경로가 계속 사용).
-  - ``propertyOrdering``/``required``/``enum``/``items`` 등 지원 필드 보존.
+  - ``propertyOrdering``/``required``/``enum``/``items``/``minimum`` 등
+    지원 필드 보존.
   - structured output + reasoning hint 동시 전달 가능 (off / medium 모두).
 실제 Gemini API 는 호출하지 않는다.
 """
@@ -20,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from simpleclaw.agent.turn_analysis import TURN_ANALYSIS_RESPONSE_SCHEMA
+from simpleclaw.agent.turn_plan import UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
 from simpleclaw.llm.profiles import get_provider_profile
 from simpleclaw.llm.providers.gemini import GeminiProvider
 
@@ -99,10 +102,11 @@ def _build_provider() -> tuple[GeminiProvider, _FakeModels]:
 
 
 class TestSanitizeResponseSchema:
-    def test_removes_root_and_nested_additional_properties(self):
+    def test_removes_unsupported_schema_keys(self):
         sanitized = get_provider_profile("gemini").adapt_schema(_NESTED_SCHEMA)
 
         assert not _contains_key(sanitized, "additionalProperties")
+        assert not _contains_key(sanitized, "maxItems")
 
     def test_preserves_supported_schema_fields(self):
         sanitized = get_provider_profile("gemini").adapt_schema(_NESTED_SCHEMA)
@@ -115,7 +119,6 @@ class TestSanitizeResponseSchema:
             "type": "integer",
             "minimum": 0,
         }
-        assert sanitized["properties"]["options"]["maxItems"] == 4
         assert sanitized["properties"]["options"]["items"]["properties"] == {
             "label": {"type": "string"}
         }
@@ -152,6 +155,20 @@ class TestSanitizeResponseSchema:
         assert TURN_ANALYSIS_RESPONSE_SCHEMA == before
         assert TURN_ANALYSIS_RESPONSE_SCHEMA["additionalProperties"] is False
 
+    def test_unified_turn_plan_schema_becomes_gemini_compatible(self):
+        """BIZ-572 live 사고 입력의 maxItems를 wire schema에서만 제거한다."""
+        before = copy.deepcopy(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA)
+
+        sanitized = get_provider_profile("gemini").adapt_schema(
+            UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+        )
+
+        assert not _contains_key(sanitized, "additionalProperties")
+        assert not _contains_key(sanitized, "maxItems")
+        assert _contains_key(before, "maxItems")
+        assert sanitized["propertyOrdering"] == before["propertyOrdering"]
+        assert UNIFIED_TURN_PLAN_RESPONSE_SCHEMA == before
+
 
 class TestGeminiSendSanitizedSchema:
     @pytest.mark.asyncio
@@ -169,6 +186,7 @@ class TestGeminiSendSanitizedSchema:
         config = fake_models.calls[0]["config"]
         assert config.response_mime_type == "application/json"
         assert not _contains_key(config.response_schema, "additionalProperties")
+        assert not _contains_key(config.response_schema, "maxItems")
         assert (
             config.response_schema["propertyOrdering"]
             == TURN_ANALYSIS_RESPONSE_SCHEMA["propertyOrdering"]

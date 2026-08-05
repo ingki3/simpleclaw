@@ -5,6 +5,9 @@ capability:
   read_only: true
   side_effects: false
   requires_confirmation: false
+  coverage: full_coverage
+  input_contract: query.v1
+  output_contract: asset_result.v1
 input_contract:
   contract_id: skill.contract-fixture-step.input
   version: "1"

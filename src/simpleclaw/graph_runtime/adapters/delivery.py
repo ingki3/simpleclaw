@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..contracts import DeliveryIntentV1
+from ..side_effect_monitor import record_shadow_side_effect
 from ..status import DeliveryStatus
 
 SenderCallback = Callable[
@@ -75,7 +76,12 @@ class CallbackDeliveryAdapter:
 
 
 class TelegramDeliveryAdapter(CallbackDeliveryAdapter):
-    pass
+    async def send(
+        self, intent: DeliveryIntentV1, content: str
+    ) -> AdapterDeliveryResult:
+        """실제 Telegram callback 진입을 shadow task-local counter에 기록한다."""
+        record_shadow_side_effect("telegram_send")
+        return await super().send(intent, content)
 
 
 class CronDeliveryAdapter(CallbackDeliveryAdapter):
@@ -84,6 +90,7 @@ class CronDeliveryAdapter(CallbackDeliveryAdapter):
     ) -> AdapterDeliveryResult:
         if not content.strip() or content.lstrip().startswith("[NO_NOTIFY]"):
             return AdapterDeliveryResult(DeliveryStatus.SUPPRESSED)
+        record_shadow_side_effect("notifier")
         return await super().send(intent, content)
 
 

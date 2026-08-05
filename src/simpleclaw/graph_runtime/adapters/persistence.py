@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
+from ..side_effect_monitor import record_shadow_side_effect
+
 
 class ConversationStorePersistenceAdapter:
     """PersistenceRuntime writer signature를 기존 ConversationStore에 연결한다."""
@@ -19,6 +21,7 @@ class ConversationStorePersistenceAdapter:
         payload_hash: str,
         content: str,
     ) -> None:
+        record_shadow_side_effect("conversation_write")
         self._store.save_outbound_once(
             ConversationMessage(
                 role=MessageRole.ASSISTANT,
