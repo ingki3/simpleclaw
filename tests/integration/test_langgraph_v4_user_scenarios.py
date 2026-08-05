@@ -1,0 +1,381 @@
+"""BIZ-578 32개 fixed-gold planner→PlanGate replay 통합 회귀."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from simpleclaw.agent.planner_catalog import (
+    PlannerAsset,
+    PlannerCatalog,
+    build_planner_catalog,
+)
+from simpleclaw.agent.resolution_types import (
+    CapabilityCoverage,
+    ComplexitySignal,
+    ExecutionMode,
+)
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
+)
+from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
+    ConnectedContractProbe,
+    ScenarioCase,
+    ScenarioEvaluator,
+    SideEffectCounts,
+    load_scenarios,
+)
+from simpleclaw.langgraph_v4_shadow_validation import _definitions
+
+ROOT = Path(__file__).parents[2]
+FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
+
+
+class _UnusedRouter:
+    async def send(self, _request):  # pragma: no cover - replay planner owns output
+        raise AssertionError("mock replay must not call a provider")
+
+
+def _asset_type(name: str) -> str:
+    if name in {"krstock", "usstock", "sports-live"}:
+        return "recipe"
+    if name == "cron":
+        return "native_tool"
+    return "skill"
+
+
+def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
+    names = sorted({name for case in cases for name in case.expected.acceptable_assets})
+    assets = []
+    for name in names:
+        mutation = name == "cron"
+        assets.append(
+            PlannerAsset(
+                asset_type=_asset_type(name),
+                name=name,
+                description="fixed gold replay asset",
+                domains=(),
+                intents=(),
+                read_only=not mutation,
+                side_effects=mutation,
+                freshness_sensitive=False,
+                direct_answer=True,
+                requires_confirmation=mutation,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+                coverage="full_coverage",
+                input_contract="query.v1",
+            )
+        )
+    return PlannerCatalog(tuple(assets), "scenario-catalog-v1")
+
+
+def _selected_asset(case: ScenarioCase) -> str | None:
+    if not case.expected.acceptable_assets:
+        return None
+    if case.expected.side_effect_policy == "confirmation_before_dispatch":
+        return "cron"
+    if case.expected.v4_route == "deep_research":
+        return next(
+            (
+                name
+                for name in reversed(case.expected.acceptable_assets)
+                if _asset_type(name) != "recipe"
+            ),
+            case.expected.acceptable_assets[-1],
+        )
+    return case.expected.acceptable_assets[0]
+
+
+def _gold_plan(case: ScenarioCase, catalog: PlannerCatalog) -> UnifiedTurnPlan:
+    asset_name = _selected_asset(case)
+    asset = (
+        None if asset_name is None else AssetRef(_asset_type(asset_name), asset_name)
+    )
+    relation = ContextRelation(case.expected.context_relations[0])
+    mode = ExecutionMode(case.expected.execution_modes[0])
+    fact_required = case.expected.fact_required
+    confirmation = case.expected.side_effect_policy == "confirmation_before_dispatch"
+    standalone = " ".join((*case.expected.required_terms, case.current))
+    return UnifiedTurnPlan(
+        original_text=case.current,
+        context=ContextSelection(
+            relation=relation,
+            use_prior_context=bool(case.expected.selected_turn_ids),
+            selected_turn_ids=case.expected.selected_turn_ids,
+            standalone_question=standalone,
+        ),
+        clarification=ClarificationPlan(
+            required=case.expected.clarification_required,
+            question="진행 전에 확인이 필요합니다. 계속할까요?"
+            if case.expected.clarification_required
+            else "",
+        ),
+        domains=(case.category,) if fact_required else (),
+        intents=("current_result",) if fact_required else (),
+        fact_check=FactCheckPlan(
+            required=fact_required,
+            owner=EvidenceOwner.ASSET if fact_required else EvidenceOwner.NONE,
+            domain=case.category if fact_required else "none",
+            entities=(),
+            search_query=standalone if fact_required else "",
+            intents=("current_result",) if fact_required else (),
+            reference_date="2026-08-05" if fact_required else "",
+            required_claims=("current result",) if fact_required else (),
+            freshness_required=fact_required,
+        ),
+        execution=ExecutionPlan(
+            mode=mode,
+            primary_asset=asset,
+            allowed_assets=() if asset is None else (asset,),
+            requires_confirmation=confirmation,
+            complexity_signals=(
+                (ComplexitySignal.BRANCHING_PLAN,)
+                if mode is ExecutionMode.RESOLVE_COMPLEX_PROBLEM
+                else ()
+            ),
+        ),
+        capability=CapabilityPlan(
+            coverage=(
+                CapabilityCoverage.NO_MATCH
+                if asset is None
+                else CapabilityCoverage.FULL
+            ),
+            primary_asset=asset,
+            supporting_assets=() if asset is None else (asset,),
+        ),
+        confidence=1,
+        decision_summary="fixed gold replay",
+        catalog_fingerprint=catalog.fingerprint,
+    )
+
+
+@pytest.mark.asyncio
+async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> None:
+    cases = load_scenarios(FIXTURE)
+    catalog = _catalog(cases)
+    by_key = {
+        (case.current, tuple(turn.id for turn in case.history)): case for case in cases
+    }
+    connected: list[str] = []
+    planned: list[str] = []
+
+    async def planner(text, *, candidates, catalog, **_kwargs):
+        key = (text, tuple(item.turn_id for item in candidates.candidates))
+        case = by_key[key]
+        planned.append(case.id)
+        return _gold_plan(case, catalog)
+
+    async def connected_executor(case, _plan, assets):
+        assert all(asset.read_only is True for asset in assets)
+        assert all(asset.side_effects is False for asset in assets)
+        connected.append(case.id)
+        return "completed", SideEffectCounts()
+
+    evaluator = ScenarioEvaluator(
+        catalog=catalog,
+        router=_UnusedRouter(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+        connected_executor_kind="synthetic_contract",
+        ingress_recipe_names=("krstock", "usstock"),
+    )
+    report = await evaluator.evaluate(cases, repeat_critical=3)
+
+    assert report["summary"]["runs"] == 39
+    assert report["summary"]["unique_cases"] == 25
+    assert report["summary"]["total_runs"] == 46
+    assert report["summary"]["total_inventory_cases"] == 32
+    assert report["summary"]["not_scored_cases"] == 7
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert report["summary"]["critical_stability_rate"] == 1
+    assert report["side_effect_counts"] == {
+        "telegram_send": 0,
+        "cron_notifier": 0,
+        "conversation_write": 0,
+    }
+    assert report["decision"] == "go", (
+        report["summary"],
+        [
+            (row["case_id"], row["failed_checks"], row["error_codes"])
+            for row in report["cases"]
+            if row["critical"] and row["scored"] and not row["passed"]
+        ],
+    )
+    assert report["not_scored_inventory"] == {
+        "attachment_scope_gap": 1,
+        "ingress_bypass": 4,
+        "operator_scope_gap": 2,
+    }
+    assert report["connected_executor_kinds"] == ["synthetic_contract"]
+    assert all(
+        case_id not in planned
+        for case_id in ("fq-02", "fq-03", "fq-04", "fq-23", "fq-27", "fq-28", "fq-29")
+    )
+    ingress = {
+        row["case_id"]: row
+        for row in report["cases"]
+        if row["evaluation_scope"] == "ingress_bypass"
+    }
+    assert ingress["fq-03"]["actual_route"] == "recipe_command_bypass"
+    assert ingress["fq-04"]["actual_route"] == "recipe_command_bypass"
+    assert all(row["planner_called"] is False for row in ingress.values())
+    assert all(row["passed"] is None for row in ingress.values())
+    assert "fq-25" not in connected
+    assert all(
+        row["connected_stop"] != "completed"
+        for row in report["cases"]
+        if row["case_id"] in {"fq-23", "fq-28", "fq-29"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_mutation_case_interrupts_before_dispatch() -> None:
+    case = load_scenarios(FIXTURE)[24]
+    catalog = _catalog((case,))
+    dispatched = False
+
+    async def planner(_text, **_kwargs):
+        return _gold_plan(case, catalog)
+
+    async def connected_executor(_case, _plan, _assets):
+        nonlocal dispatched
+        dispatched = True
+        return "completed", SideEffectCounts()
+
+    report = await ScenarioEvaluator(
+        catalog=catalog,
+        router=_UnusedRouter(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+    ).evaluate((case,))
+
+    assert dispatched is False
+    assert report["cases"][0]["actual_route"] == "interrupt"
+    assert report["cases"][0]["gate_status"] == "confirmation_required"
+
+
+@pytest.mark.asyncio
+async def test_contract_complete_asset_enters_connected_v4_graph(
+    tmp_path: Path,
+) -> None:
+    definitions = _definitions()
+    catalog = build_planner_catalog(
+        skills=tuple(
+            item for item in definitions if item.contract_asset_type == "skill"
+        ),
+        recipes=tuple(
+            item for item in definitions if item.contract_asset_type == "recipe"
+        ),
+        native_specs=(),
+    )
+    ref = AssetRef("skill", "contract-fixture-step")
+    plan = UnifiedTurnPlan(
+        original_text="connected fixture",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="connected-value",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("fixture",),
+        intents=("verify",),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="fixture",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            primary_asset=ref,
+            allowed_assets=(ref,),
+        ),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.PARTIAL,
+            primary_asset=ref,
+            supporting_assets=(ref,),
+        ),
+        confidence=1,
+        decision_summary="connected fixture",
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    case = load_scenarios(FIXTURE)[9]
+    asset = next(item for item in catalog.assets if item.name == ref.name)
+    probe = ConnectedContractProbe(definitions=definitions, directory=tmp_path)
+    try:
+        stop, counts = await probe(case, plan, (asset,))
+    finally:
+        probe.close()
+
+    assert stop == "completed", probe.last_rollback_reasons
+    assert counts == SideEffectCounts()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_supporting_asset_blocks_connected_dispatch() -> None:
+    case = load_scenarios(FIXTURE)[9]
+    base_catalog = _catalog((case,))
+    bad = PlannerAsset(
+        asset_type="skill",
+        name="bad-support",
+        description="incomplete supporting asset",
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=True,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+        coverage="full_coverage",
+        input_contract="query.v1",
+    )
+    catalog = PlannerCatalog((*base_catalog.assets, bad), base_catalog.fingerprint)
+    bad_ref = AssetRef("skill", bad.name)
+    dispatched = False
+
+    async def planner(_text, **_kwargs):
+        plan = _gold_plan(case, catalog)
+        return replace(
+            plan,
+            capability=replace(
+                plan.capability,
+                supporting_assets=(*plan.capability.supporting_assets, bad_ref),
+            ),
+        )
+
+    async def connected_executor(_case, _plan, _assets):
+        nonlocal dispatched
+        dispatched = True
+        return "completed", SideEffectCounts()
+
+    report = await ScenarioEvaluator(
+        catalog=catalog,
+        router=_UnusedRouter(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+    ).evaluate((case,), repeat_critical=1)
+
+    assert dispatched is False
+    assert report["decision"] == "hold"
+    assert report["cases"][0]["contract_status"] == "contract_coverage_gap"
+    assert report["contract_gaps"] == {"bad-support": 1}
