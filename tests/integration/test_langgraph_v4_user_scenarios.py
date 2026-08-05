@@ -518,6 +518,13 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
         if row["case_id"] in {"fq-23", "fq-28", "fq-29"}
     )
     by_case = {row["case_id"]: row for row in report["cases"]}
+    for case_id in ("fq-12", "fq-21"):
+        repeated = [row for row in report["cases"] if row["case_id"] == case_id]
+        assert len(repeated) == 3
+        assert {row["repeat_index"] for row in repeated} == {1, 2, 3}
+        assert {row["actual_route"] for row in repeated} == {"deep_research"}
+        assert len({tuple(row["asset_names"]) for row in repeated}) == 1
+        assert all(row["passed"] is True for row in repeated)
     for case_id in ("fq-22", "fq-25", "fq-30", "fq-31", "fq-32"):
         assert by_case[case_id]["passed"] is True
     assert by_case["fq-23"]["passed"] is None

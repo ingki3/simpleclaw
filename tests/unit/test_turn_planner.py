@@ -26,7 +26,8 @@ from simpleclaw.agent.turn_planner import (
     build_turn_planner_user_prompt,
     plan_turn_with_llm,
 )
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.models import LLMResponse, LLMRoute
+from simpleclaw.llm.router import LLMRouter
 
 
 def _response_payload() -> str:
@@ -704,6 +705,109 @@ def _full_skill_scope_catalog(
     )
 
 
+@pytest.mark.asyncio
+async def test_native_collectors_remove_unselected_skill_adapter() -> None:
+    """exact read-only native scope는 미선택 Skill adapter 없이 안정화한다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "partial_coverage",
+        "primary_asset": {"asset_type": "none", "asset_name": "__none__"},
+        "supporting_assets": [
+            {"asset_type": "native_tool", "asset_name": "web_search"},
+            {"asset_type": "native_tool", "asset_name": "web_fetch"},
+        ],
+        "fallback_modes": [],
+        "reason": "two exact native collectors",
+    }
+    data["execution"] = {
+        "mode": "resolve_complex_problem",
+        "allowed_tools": ["execute_skill", "web_search", "web_fetch"],
+        "requires_confirmation": False,
+        "complexity_signals": ["ordered_capability_composition"],
+        "reason": "compose evidence",
+    }
+    catalog = PlannerCatalog(
+        assets=(
+            _full_skill_scope_asset("native_tool", "execute_skill"),
+            _full_skill_scope_asset("native_tool", "web_search"),
+            _full_skill_scope_asset("native_tool", "web_fetch"),
+        ),
+        fingerprint="native-collector-catalog",
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "여러 출처로 검증해줘",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+    )
+
+    assert tuple(asset.name for asset in plan.capability.supporting_assets) == (
+        "web_search",
+        "web_fetch",
+    )
+    assert plan.execution.allowed_tools == ("web_search", "web_fetch")
+
+
+@pytest.mark.asyncio
+async def test_native_collector_adapter_normalization_preserves_mutation_scope() -> None:
+    """mutation/confirmation native scope에서는 adapter를 임의 제거하지 않는다."""
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "partial_coverage",
+        "primary_asset": {"asset_type": "none", "asset_name": "__none__"},
+        "supporting_assets": [
+            {"asset_type": "native_tool", "asset_name": "send_calendar_invite"}
+        ],
+        "fallback_modes": [],
+        "reason": "mutation scope",
+    }
+    data["execution"] = {
+        "mode": "direct_answer",
+        "allowed_tools": ["execute_skill", "send_calendar_invite"],
+        "requires_confirmation": False,
+        "complexity_signals": [],
+        "reason": "confirm before dispatch",
+    }
+    mutation = _full_skill_scope_asset(
+        "native_tool",
+        "send_calendar_invite",
+        read_only=False,
+        side_effects=True,
+        requires_confirmation=True,
+    )
+    catalog = PlannerCatalog(
+        assets=(
+            _full_skill_scope_asset("native_tool", "execute_skill"),
+            mutation,
+        ),
+        fingerprint="mutation-native-catalog",
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "초대장을 보내줘",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+    )
+
+    assert plan.execution.allowed_tools == (
+        "execute_skill",
+        "send_calendar_invite",
+    )
+    assert plan.execution.requires_confirmation is True
+
+
 @pytest.mark.parametrize(
     ("tool_name", "side_effects", "requires_confirmation"),
     (
@@ -887,6 +991,69 @@ async def test_first_supporting_full_skill_is_promoted_to_stable_primary() -> No
     assert plan.execution.allowed_tools == ("execute_skill",)
 
 
+@pytest.mark.asyncio
+async def test_partial_labeled_full_skill_primary_is_stabilized() -> None:
+    """partial 오표기된 exact full Skill primary도 단일 scope로 복원한다."""
+    data = _full_skill_scope_data(
+        allowed_tools=["execute_skill", "web_search"]
+    )
+    data["capability"]["coverage"] = "partial_coverage"
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "발표와 영향을 여러 출처로 검증해줘",
+        candidates=_candidates(),
+        catalog=_full_skill_scope_catalog(),
+        router=router,
+    )
+
+    assert plan.capability.coverage.value == "full_coverage"
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "news-skill"
+    assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ("execute_skill",)
+
+
+@pytest.mark.asyncio
+async def test_partial_skill_primary_moves_to_stable_supporting_order() -> None:
+    """contract-partial Skill primary는 identity를 보존해 supporting 선두로 이동한다."""
+    data = _full_skill_scope_data(
+        allowed_tools=["execute_skill", "web_search"]
+    )
+    data["capability"]["coverage"] = "partial_coverage"
+    catalog = PlannerCatalog(
+        assets=(
+            _full_skill_scope_asset("skill", "news-skill"),
+            _full_skill_scope_asset("native_tool", "web_search"),
+            _full_skill_scope_asset("native_tool", "execute_skill"),
+        ),
+        fingerprint="partial-skill-catalog",
+    )
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "발표와 영향을 여러 출처로 검증해줘",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is None
+    assert tuple(asset.name for asset in plan.capability.supporting_assets) == (
+        "news-skill",
+        "web_search",
+    )
+    assert plan.execution.allowed_tools == ("execute_skill", "web_search")
+
+
 @pytest.mark.parametrize(
     "allowed_tools",
     ([], ["execute_skill"], ["naver-sports-skill"]),
@@ -1028,6 +1195,92 @@ async def test_unknown_capability_primary_is_rejected() -> None:
         )
 
     assert exc_info.value.boundary_code == "unknown_or_internal_asset"
+
+
+@pytest.mark.asyncio
+async def test_unknown_asset_type_name_pair_repairs_with_declared_catalog() -> None:
+    """첫 invalid pair는 exact declared catalog 문맥으로 같은 route에서 복구한다."""
+    invalid = _response_data()
+    invalid["execution"]["primary_asset"] = {
+        "asset_type": "native_tool",
+        "asset_name": "realtime-lookup-skill",
+    }
+    invalid["execution"]["allowed_assets"] = [
+        {
+            "asset_type": "native_tool",
+            "asset_name": "realtime-lookup-skill",
+        }
+    ]
+    provider = AsyncMock()
+    provider.send = AsyncMock(
+        side_effect=[
+            LLMResponse(text=json.dumps(invalid, ensure_ascii=False)),
+            LLMResponse(text=_response_payload()),
+        ]
+    )
+    router = LLMRouter(
+        backends={},
+        providers={"primary": provider},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary")},
+    )
+
+    plan = await plan_turn_with_llm(
+        "오늘 있었던 발표야. 체크해봐",
+        candidates=_candidates(),
+        catalog=_catalog(),
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.asset_type == "skill"
+    assert plan.capability.primary_asset.name == "realtime-lookup-skill"
+    assert provider.send.await_count == 2
+    retry_payload = json.loads(provider.send.await_args_list[1].args[1])
+    repair = retry_payload["validation_repair"]
+    assert repair["reason"] == "unknown_or_internal_asset"
+    assert repair["allowed_asset_identities"] == [
+        {"asset_type": "native_tool", "asset_name": "execute_skill"},
+        {"asset_type": "skill", "asset_name": "realtime-lookup-skill"},
+    ]
+    assert repair["allowed_tool_names"] == ["execute_skill"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_repair_rejects_repeated_unknown_asset() -> None:
+    """repair 뒤에도 catalog 밖 identity를 반복하면 두 호출로 fail-closed한다."""
+    invalid = _response_data()
+    invalid["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {
+            "asset_type": "skill",
+            "asset_name": "internal-research-skill",
+        },
+        "supporting_assets": [],
+        "fallback_modes": [],
+        "reason": "invalid internal identity",
+    }
+    provider = AsyncMock()
+    provider.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(invalid, ensure_ascii=False))
+    )
+    router = LLMRouter(
+        backends={},
+        providers={"primary": provider},
+        default_backend="primary",
+        routes={"turn_analysis": LLMRoute("turn_analysis", "primary")},
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "여러 출처로 조사해줘",
+            candidates=_candidates(),
+            catalog=_catalog(),
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_asset"
+    assert provider.send.await_count == 2
 
 
 @pytest.mark.asyncio

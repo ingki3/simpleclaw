@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 11
+version: 12
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -62,6 +62,14 @@ system_prompt: |-
   Always use exact names from the capability catalog; never rewrite an identity.
   Choose capability.primary_asset and capability.supporting_assets using exact names
   from the immutable capability catalog.
+  Treat each catalog asset as an exact (type, name) identity, not as a name that may
+  be paired with another type. On a validation retry, obey validation_repair as a
+  closed enum: regenerate the complete plan using only its exact declared identities.
+  Keep the same best-fit primary first and the same distinct supporting order whenever
+  the request and catalog are unchanged, including multi-source Deep Research.
+  Include execute_skill only when an exact Skill identity is selected as primary or
+  supporting. Native collectors execute through their own exact tool names and never
+  require the Skill adapter.
   - When no primary asset is needed, emit exactly
     {"asset_type":"none","asset_name":"__none__"} for capability.primary_asset.
   - Never put the none sentinel in capability.supporting_assets.
