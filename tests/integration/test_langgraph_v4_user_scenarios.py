@@ -222,7 +222,7 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
     assert report["connected_executor_kinds"] == ["synthetic_contract"]
     assert all(
         case_id not in planned
-        for case_id in {"fq-02", "fq-03", "fq-04", "fq-23", "fq-27", "fq-28", "fq-29"}
+        for case_id in ("fq-02", "fq-03", "fq-04", "fq-23", "fq-27", "fq-28", "fq-29")
     )
     ingress = {
         row["case_id"]: row
