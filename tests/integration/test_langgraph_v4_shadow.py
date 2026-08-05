@@ -64,6 +64,9 @@ from simpleclaw.graph_runtime.status import (
     InvocationStatus,
     TerminalOutcome,
 )
+from simpleclaw.langgraph_v4_shadow_validation import (
+    _definitions as _connected_validation_definitions,
+)
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
@@ -97,6 +100,40 @@ def _definitions():
         item
         for item in (*recipes, *skills)
         if item.name in {"contract-fixture-workflow", "contract-fixture-step"}
+    )
+
+
+def test_connected_validation_discovers_planner_visible_contract_fixtures() -> None:
+    """live harness가 repo 밖을 보며 빈 catalog를 만드는 회귀를 차단한다."""
+    definitions = _connected_validation_definitions()
+    identities = {
+        (item.contract_asset_type, item.name) for item in definitions
+    }
+
+    assert identities == {
+        ("recipe", "contract-fixture-workflow"),
+        ("skill", "contract-fixture-step"),
+    }
+    catalog = build_planner_catalog(
+        skills=tuple(
+            item for item in definitions if item.contract_asset_type == "skill"
+        ),
+        recipes=tuple(
+            item for item in definitions if item.contract_asset_type == "recipe"
+        ),
+        native_specs=(),
+    )
+    fixture_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.name in {"contract-fixture-workflow", "contract-fixture-step"}
+    }
+    assert set(fixture_assets) == identities
+    assert all(asset.coverage == "full_coverage" for asset in fixture_assets.values())
+    assert all(asset.input_contract == "query.v1" for asset in fixture_assets.values())
+    assert all(
+        asset.output_contract == "asset_result.v1"
+        for asset in fixture_assets.values()
     )
 
 

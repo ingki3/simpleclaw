@@ -13,12 +13,21 @@ _REASONING_EFFORT_BUDGET_TOKENS = {"low": 256, "medium": 512, "high": 1024}
 class GeminiProfile(ProviderProfile):
     """Gemini native schema dialect and thinking-policy adapter."""
 
+    _UNSUPPORTED_SCHEMA_KEYS = frozenset({"additionalProperties", "maxItems"})
+
     def sanitize_response_schema(self, schema: object) -> object:
+        """Gemini native API가 거부하는 schema 키를 복사본에서 제거한다.
+
+        배열 길이 제한은 provider-neutral 원본 schema와 runtime parser clamp에
+        유지한다. Gemini 3 Flash Preview는 전체 UnifiedTurnPlan schema의
+        ``maxItems``를 ``INVALID_ARGUMENT``로 거부하므로 wire schema에서만
+        제외한다.
+        """
         if isinstance(schema, dict):
             return {
                 key: self.sanitize_response_schema(value)
                 for key, value in schema.items()
-                if key != "additionalProperties"
+                if key not in self._UNSUPPORTED_SCHEMA_KEYS
             }
         if isinstance(schema, list):
             return [self.sanitize_response_schema(item) for item in schema]

@@ -11,6 +11,7 @@ from pathlib import Path
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4RolloutFacade,
@@ -24,7 +25,7 @@ from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
-REPO_ROOT = Path(__file__).parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
 
 
@@ -34,11 +35,16 @@ class _ExplicitBackendRouter:
     def __init__(self, router, backend_name: str) -> None:
         self._router = router
         self._backend_name = backend_name
+        self.last_backend_name = ""
+        self.last_model = ""
 
     async def send(self, request):
-        return await self._router.send(
+        response = await self._router.send(
             replace(request, route_name=None, backend_name=self._backend_name)
         )
+        self.last_backend_name = str(getattr(response, "backend_name", "") or "")
+        self.last_model = str(getattr(response, "model", "") or "")
+        return response
 
 
 def _definitions():
@@ -50,6 +56,18 @@ def _definitions():
     )
     return tuple(
         item for item in (*recipes, *skills) if item.name in FIXTURE_NAMES
+    )
+
+
+def _planner_native_specs():
+    """PlanGate factual-route 계약에 필요한 production web collector만 노출한다."""
+    return tuple(
+        spec
+        for spec in build_native_tool_registry(
+            scopes=(ToolScope.RUNTIME,),
+            operator_gate=False,
+        )
+        if spec.definition.name == "web_search"
     )
 
 
@@ -74,7 +92,7 @@ async def _run(args: argparse.Namespace) -> int:
     catalog = build_planner_catalog(
         skills=tuple(item for item in definitions if item.contract_asset_type == "skill"),
         recipes=tuple(item for item in definitions if item.contract_asset_type == "recipe"),
-        native_specs=(),
+        native_specs=_planner_native_specs(),
     )
     router = create_router(args.config)
     planner_router = (
@@ -82,17 +100,28 @@ async def _run(args: argparse.Namespace) -> int:
     )
     cases = (
         (
-            "Use the exact recipe contract-fixture-workflow for this bounded request.",
+            (
+                "Use the exact full-coverage recipe contract-fixture-workflow, which "
+                "owns all evidence, to verify the current contract validation status. "
+                "Use direct_answer as the fallback execution mode."
+            ),
             "recipe",
         ),
         (
-            "Use the exact skill contract-fixture-step with answer_with_evidence mode.",
+            (
+                "Use the exact full-coverage skill contract-fixture-step, which owns "
+                "all evidence, to verify the current contract validation status. Use "
+                "answer_with_evidence as the fallback execution mode."
+            ),
             "react",
         ),
         (
             (
-                "Use the exact skill contract-fixture-step for a complex multi-step "
-                "request with resolve_complex_problem mode."
+                "Use the exact full-coverage skill contract-fixture-step, which owns "
+                "all evidence, to verify and compare the current contract validation "
+                "status. Resolve the explicit dependency graph and conflicting "
+                "validation branches with resolve_complex_problem as the fallback "
+                "execution mode."
             ),
             "deep_research",
         ),
@@ -142,13 +171,20 @@ async def _run(args: argparse.Namespace) -> int:
                     router=planner_router,
                     max_tokens=2048,
                 )
+                if isinstance(planner_router, _ExplicitBackendRouter):
+                    backend = planner_router.last_backend_name or args.backend
+                    model = planner_router.last_model or "unknown"
                 gate = PlanGate().evaluate(
                     plan,
                     candidates=candidates,
                     catalog=catalog,
                 )
                 if gate.status is not GateStatus.PASS or gate.effective_plan is None:
-                    raise RuntimeError("actual planner plan did not pass PlanGate")
+                    codes = ",".join(item.code for item in gate.violations) or "none"
+                    raise RuntimeError(
+                        "actual planner plan did not pass PlanGate "
+                        f"(case={index} status={gate.status.value} codes={codes})"
+                    )
                 result = await runner.run(
                     plan=gate.effective_plan,
                     legacy=LegacyRunTelemetryV1(
