@@ -472,7 +472,13 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
     assert report["summary"]["total_inventory_cases"] == 32
     assert report["summary"]["not_scored_cases"] == 7
     assert report["summary"]["schema_validity_rate"] == 1
+    assert report["summary"]["quality_evaluation_complete"] is True
+    assert report["summary"]["route_mode_context_macro_pass_rate"] == 1
+    assert report["summary"]["critical_pass_rate"] == 1
     assert report["summary"]["critical_stability_rate"] == 1
+    assert report["summary"]["connected_completed_count"] == report["summary"][
+        "connected_required_count"
+    ]
     assert report["side_effect_counts"] == {
         "telegram_send": 0,
         "cron_notifier": 0,
