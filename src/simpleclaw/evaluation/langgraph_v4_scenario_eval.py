@@ -363,6 +363,7 @@ class ConnectedContractProbe:
             conversation_store=self._store,
             recipe_executor=self._recipe_executor,
             skill_executor=self._skill_executor,
+            native_tool_executor=self._native_tool_executor,
         )
         self._sequence = 0
         self.last_rollback_reasons: tuple[str, ...] = ()
@@ -374,6 +375,10 @@ class ConnectedContractProbe:
     @staticmethod
     async def _skill_executor(_definition: Any, _argv: Any) -> dict[str, str]:
         return {"operation_result": "connected"}
+
+    @staticmethod
+    async def _native_tool_executor(_definition: Any, _arguments: Any) -> str:
+        return "connected"
 
     async def __call__(
         self,

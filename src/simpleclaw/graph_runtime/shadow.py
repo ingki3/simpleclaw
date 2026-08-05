@@ -22,6 +22,7 @@ from simpleclaw.graph_runtime.adapters.persistence import (
 from simpleclaw.runtime_budget import bind_runtime_llm_budget
 
 from .adapters.base import AdapterResponse
+from .adapters.native_tool import GenericNativeToolAdapter, NativeToolExecutor
 from .adapters.recipe import GenericRecipeAdapter, RecipeExecutor
 from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
@@ -287,6 +288,7 @@ class ConnectedShadowTurnRunner:
         conversation_store: object,
         recipe_executor: RecipeExecutor | None = None,
         skill_executor: SkillExecutor | None = None,
+        native_tool_executor: NativeToolExecutor | None = None,
     ) -> None:
         self._facade = facade
         self._definitions = tuple(definitions)
@@ -294,6 +296,7 @@ class ConnectedShadowTurnRunner:
         self._conversation_store = conversation_store
         self._recipe_executor = recipe_executor
         self._skill_executor = skill_executor
+        self._native_tool_executor = native_tool_executor
 
     async def run(
         self,
@@ -335,19 +338,24 @@ class ConnectedShadowTurnRunner:
             for item in self._definitions
             if item.contract_asset_type == asset_ref.type and item.name == asset_ref.name
         )
-        adapter = (
-            GenericRecipeAdapter(
+        if asset_ref.type == "recipe":
+            adapter = GenericRecipeAdapter(
                 self._registry,
                 definition,
                 executor=self._recipe_executor,
             )
-            if asset_ref.type == "recipe"
-            else GenericSkillAdapter(
+        elif asset_ref.type == "native_tool":
+            adapter = GenericNativeToolAdapter(
+                self._registry,
+                definition,
+                executor=self._native_tool_executor,
+            )
+        else:
+            adapter = GenericSkillAdapter(
                 self._registry,
                 definition,
                 executor=self._skill_executor,
             )
-        )
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
         budget_controller = _ShadowRunBudget(
