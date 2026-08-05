@@ -55,9 +55,7 @@ def _asset_type(name: str) -> str:
 
 
 def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
-    names = sorted(
-        {name for case in cases for name in case.expected.acceptable_assets}
-    )
+    names = sorted({name for case in cases for name in case.expected.acceptable_assets})
     assets = []
     for name in names:
         mutation = name == "cron"
@@ -102,7 +100,9 @@ def _selected_asset(case: ScenarioCase) -> str | None:
 
 def _gold_plan(case: ScenarioCase, catalog: PlannerCatalog) -> UnifiedTurnPlan:
     asset_name = _selected_asset(case)
-    asset = None if asset_name is None else AssetRef(_asset_type(asset_name), asset_name)
+    asset = (
+        None if asset_name is None else AssetRef(_asset_type(asset_name), asset_name)
+    )
     relation = ContextRelation(case.expected.context_relations[0])
     mode = ExecutionMode(case.expected.execution_modes[0])
     fact_required = case.expected.fact_required
@@ -169,10 +169,13 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
         (case.current, tuple(turn.id for turn in case.history)): case for case in cases
     }
     connected: list[str] = []
+    planned: list[str] = []
 
     async def planner(text, *, candidates, catalog, **_kwargs):
         key = (text, tuple(item.turn_id for item in candidates.candidates))
-        return _gold_plan(by_key[key], catalog)
+        case = by_key[key]
+        planned.append(case.id)
+        return _gold_plan(case, catalog)
 
     async def connected_executor(case, _plan, assets):
         assert all(asset.read_only is True for asset in assets)
@@ -186,11 +189,16 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
         planner=planner,
         execute_read_only_contract_assets=True,
         connected_executor=connected_executor,
+        connected_executor_kind="synthetic_contract",
+        ingress_recipe_names=("krstock", "usstock"),
     )
     report = await evaluator.evaluate(cases, repeat_critical=3)
 
-    assert report["summary"]["runs"] == 50
-    assert report["summary"]["unique_cases"] == 32
+    assert report["summary"]["runs"] == 39
+    assert report["summary"]["unique_cases"] == 25
+    assert report["summary"]["total_runs"] == 46
+    assert report["summary"]["total_inventory_cases"] == 32
+    assert report["summary"]["not_scored_cases"] == 7
     assert report["summary"]["schema_validity_rate"] == 1
     assert report["summary"]["critical_stability_rate"] == 1
     assert report["side_effect_counts"] == {
@@ -203,9 +211,28 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
         [
             (row["case_id"], row["failed_checks"], row["error_codes"])
             for row in report["cases"]
-            if row["critical"] and not row["passed"]
+            if row["critical"] and row["scored"] and not row["passed"]
         ],
     )
+    assert report["not_scored_inventory"] == {
+        "attachment_scope_gap": 1,
+        "ingress_bypass": 4,
+        "operator_scope_gap": 2,
+    }
+    assert report["connected_executor_kinds"] == ["synthetic_contract"]
+    assert all(
+        case_id not in planned
+        for case_id in {"fq-02", "fq-03", "fq-04", "fq-23", "fq-27", "fq-28", "fq-29"}
+    )
+    ingress = {
+        row["case_id"]: row
+        for row in report["cases"]
+        if row["evaluation_scope"] == "ingress_bypass"
+    }
+    assert ingress["fq-03"]["actual_route"] == "recipe_command_bypass"
+    assert ingress["fq-04"]["actual_route"] == "recipe_command_bypass"
+    assert all(row["planner_called"] is False for row in ingress.values())
+    assert all(row["passed"] is None for row in ingress.values())
     assert "fq-25" not in connected
     assert all(
         row["connected_stop"] != "completed"
@@ -242,7 +269,9 @@ async def test_mutation_case_interrupts_before_dispatch() -> None:
 
 
 @pytest.mark.asyncio
-async def test_contract_complete_asset_enters_connected_v4_graph(tmp_path: Path) -> None:
+async def test_contract_complete_asset_enters_connected_v4_graph(
+    tmp_path: Path,
+) -> None:
     definitions = _definitions()
     catalog = build_planner_catalog(
         skills=tuple(

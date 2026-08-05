@@ -32,9 +32,11 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     SideEffectGuard,
     aggregate_results,
     assert_sanitized_report,
+    classify_ingress,
     classify_contract,
     load_scenarios,
     normalize_v4_route,
+    not_scored_result,
     score_plan,
 )
 
@@ -82,7 +84,9 @@ def _plan(
             selected_turn_ids=(),
             standalone_question="안녕",
         ),
-        clarification=ClarificationPlan(required=clarify, question="확인할까요?" if clarify else ""),
+        clarification=ClarificationPlan(
+            required=clarify, question="확인할까요?" if clarify else ""
+        ),
         domains=(),
         intents=(),
         fact_check=FactCheckPlan(
@@ -98,7 +102,9 @@ def _plan(
             allowed_assets=() if asset is None else (asset,),
         ),
         capability=CapabilityPlan(
-            coverage=CapabilityCoverage.NO_MATCH if asset is None else CapabilityCoverage.FULL,
+            coverage=CapabilityCoverage.NO_MATCH
+            if asset is None
+            else CapabilityCoverage.FULL,
             primary_asset=asset,
             supporting_assets=() if asset is None else (asset,),
         ),
@@ -114,6 +120,53 @@ def test_fixture_loads_strict_32_case_gold() -> None:
     assert len(cases) == 32
     assert sum(case.critical for case in cases) == 9
     assert sum(bool(case.history) for case in cases) == 5
+    assert (
+        sum(case.expected.evaluation_scope == "runtime_scored" for case in cases) == 25
+    )
+    assert (
+        sum(case.expected.evaluation_scope != "runtime_scored" for case in cases) == 7
+    )
+
+
+def test_live_recipe_slash_commands_bypass_planner_classification() -> None:
+    recipe_names = ("krstock", "usstock")
+
+    assert classify_ingress("/krstock", recipe_names) == "recipe_command"
+    assert classify_ingress("/usstock market=all", recipe_names) == "recipe_command"
+    assert classify_ingress("/cron list", recipe_names) == "native_command"
+    assert classify_ingress("ordinary question", recipe_names) is None
+
+
+def test_scope_gaps_do_not_enter_runtime_quality_denominator() -> None:
+    cases = load_scenarios(FIXTURE)
+    runtime = score_plan(
+        cases[0],
+        _plan(),
+        PlanGateResult(GateStatus.PASS, _plan()),
+        _catalog(),
+    )
+    operator = not_scored_result(cases[27])
+    attachment = not_scored_result(cases[22])
+    report = aggregate_results(
+        [runtime, operator, attachment],
+        provider_calls=1,
+        provider_call_budget=64,
+        provider_backend="test",
+        provider_model="model",
+        side_effect_counts=SideEffectCounts(),
+        elapsed_seconds=1,
+    )
+
+    assert report["summary"]["total_inventory_cases"] == 3
+    assert report["summary"]["scored_cases"] == 1
+    assert report["summary"]["not_scored_cases"] == 2
+    assert report["summary"]["pass_rate"] == 1
+    assert report["cases"][1]["passed"] is None
+    assert report["cases"][2]["passed"] is None
+    assert report["not_scored_inventory"] == {
+        "attachment_scope_gap": 1,
+        "operator_scope_gap": 1,
+    }
 
 
 def test_fixture_rejects_duplicate_id(tmp_path: Path) -> None:
@@ -140,7 +193,13 @@ def test_fixture_rejects_unknown_route(tmp_path: Path) -> None:
     [
         (_plan(), "simple_conversation"),
         (_plan(asset=AssetRef("recipe", "reader")), "recipe"),
-        (_plan(mode=ExecutionMode.ANSWER_WITH_EVIDENCE, asset=AssetRef("skill", "reader")), "react"),
+        (
+            _plan(
+                mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+                asset=AssetRef("skill", "reader"),
+            ),
+            "react",
+        ),
         (_plan(mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM), "deep_research"),
         (_plan(mode=ExecutionMode.CLARIFY, clarify=True), "interrupt"),
     ],
@@ -167,7 +226,9 @@ def test_aggregate_includes_confusion_and_critical_stability() -> None:
         elapsed_seconds=1,
     )
 
-    assert report["route_confusion"] == {"simple_conversation": {"simple_conversation": 2}}
+    assert report["route_confusion"] == {
+        "simple_conversation": {"simple_conversation": 2}
+    }
     assert report["summary"]["pass_rate"] == 1
 
 
@@ -226,9 +287,7 @@ def test_contract_requires_every_exact_asset_identity_to_be_safe() -> None:
 
     assert incomplete.status == "contract_coverage_gap"
     assert incomplete.asset_name == "ok"
-    assert incomplete.issues == (
-        ContractIssue("skill", "bad", "contract.incomplete"),
-    )
+    assert incomplete.issues == (ContractIssue("skill", "bad", "contract.incomplete"),)
     assert wrong_type.status == "contract_coverage_gap"
     assert wrong_type.issues == (
         ContractIssue("recipe", "ok", "contract.asset_missing"),
@@ -258,9 +317,7 @@ def test_go_fails_closed_for_consistently_wrong_critical_rows() -> None:
             "asset": False,
         },
         contract_status="contract_coverage_gap",
-        contract_issues=(
-            ContractIssue("skill", "bad", "contract.incomplete"),
-        ),
+        contract_issues=(ContractIssue("skill", "bad", "contract.incomplete"),),
         connected_stop="rollback_required",
         connected_required=True,
     )

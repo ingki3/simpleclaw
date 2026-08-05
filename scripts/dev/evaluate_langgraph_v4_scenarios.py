@@ -16,6 +16,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+
 def _runtime_catalog(config_path: Path):
     """현재 config의 production discovery 경로로 planner catalog를 만든다."""
     from simpleclaw.agent.planner_catalog import build_planner_catalog
@@ -32,7 +33,9 @@ def _runtime_catalog(config_path: Path):
     if not isinstance(skills_config, dict):
         skills_config = {}
     local_dir = Path(str(skills_config.get("local_dir", ".agent/skills"))).expanduser()
-    global_dir = Path(str(skills_config.get("global_dir", "~/.agents/skills"))).expanduser()
+    global_dir = Path(
+        str(skills_config.get("global_dir", "~/.agents/skills"))
+    ).expanduser()
     if not local_dir.is_absolute():
         local_dir = Path.cwd() / local_dir
     skills = discover_skills(local_dir, global_dir)
@@ -53,7 +56,7 @@ def _runtime_catalog(config_path: Path):
         recipes=recipes,
         native_specs=native_specs,
     )
-    return catalog, (*recipes, *skills)
+    return catalog, (*recipes, *skills), tuple(recipe.name for recipe in recipes)
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -68,7 +71,7 @@ async def _run(args: argparse.Namespace) -> int:
     if not args.config.is_file():
         raise FileNotFoundError(f"config not found: {args.config}")
     cases = load_scenarios(args.fixture)
-    catalog, definitions = _runtime_catalog(args.config)
+    catalog, definitions, recipe_names = _runtime_catalog(args.config)
     with tempfile.TemporaryDirectory(prefix="simpleclaw-v4-scenarios-") as tmp:
         probe = ConnectedContractProbe(definitions=definitions, directory=tmp)
         try:
@@ -81,6 +84,8 @@ async def _run(args: argparse.Namespace) -> int:
                     args.execute_read_only_contract_assets
                 ),
                 connected_executor=probe,
+                connected_executor_kind="synthetic_contract",
+                ingress_recipe_names=recipe_names,
             )
             report = await evaluator.evaluate(
                 cases,
@@ -107,7 +112,10 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "decision": report["decision"],
                 "provider_calls": report["summary"]["provider_calls"],
-                "runs": report["summary"]["runs"],
+                "total_inventory_cases": report["summary"]["total_inventory_cases"],
+                "scored_cases": report["summary"]["scored_cases"],
+                "not_scored_cases": report["summary"]["not_scored_cases"],
+                "scored_runs": report["summary"]["scored_runs"],
                 "side_effect_counts": counts,
             },
             sort_keys=True,
