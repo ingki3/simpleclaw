@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,7 @@ from simpleclaw.agent.turn_plan import (
 from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.evaluation import langgraph_v4_scenario_eval as scenario_eval
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
+    ConnectedContractProbe,
     ContractIssue,
     ProviderBudgetExceeded,
     ProviderCallBudget,
@@ -115,6 +117,107 @@ def _plan(
         decision_summary="test",
         catalog_fingerprint="catalog-v1",
     )
+
+
+@pytest.mark.asyncio
+async def test_connected_probe_projects_all_assets_in_stable_single_primary_order(
+) -> None:
+    refs = (
+        AssetRef("skill", "zeta"),
+        AssetRef("native_tool", "alpha"),
+        AssetRef("skill", "beta"),
+    )
+    base = _plan()
+    plan = replace(
+        base,
+        execution=replace(base.execution, allowed_assets=refs),
+        capability=replace(base.capability, supporting_assets=refs),
+    )
+    original = plan
+    calls: list[tuple[str, str]] = []
+
+    class FakeRunner:
+        async def run(self, *, plan, **_kwargs):
+            selected = plan.capability.primary_asset
+            assert selected is not None
+            calls.append((selected.asset_type, selected.name))
+            assert plan.capability.supporting_assets == ()
+            assert plan.execution.primary_asset == selected
+            assert plan.execution.allowed_assets == (selected,)
+            rollback = selected.name == "zeta"
+            stop = "budget_exhausted" if selected.name == "alpha" else "completed"
+            return SimpleNamespace(
+                side_effect_counts=SimpleNamespace(
+                    telegram_send=1 if selected.name == "beta" else 0,
+                    notifier=1 if selected.name == "zeta" else 0,
+                    conversation_write=0,
+                ),
+                telemetry=SimpleNamespace(
+                    budget_usage=SimpleNamespace(stop_condition=stop)
+                ),
+                comparison=SimpleNamespace(
+                    rollback_required=rollback,
+                    rollback_reasons=("zeta.rollback",) if rollback else (),
+                ),
+            )
+
+    probe = ConnectedContractProbe.__new__(ConnectedContractProbe)
+    probe._runner = FakeRunner()
+    probe._store = SimpleNamespace(get_recent=lambda: ())
+    probe._sequence = 0
+    probe.last_rollback_reasons = ()
+    case = load_scenarios(FIXTURE)[9]
+    assets = tuple(
+        _asset(ref.name, asset_type=ref.asset_type) for ref in reversed(refs)
+    )
+
+    stop, counts = await probe(case, plan, assets)
+
+    assert calls == [
+        ("native_tool", "alpha"),
+        ("skill", "beta"),
+        ("skill", "zeta"),
+    ]
+    assert stop == "rollback_required"
+    assert probe.last_rollback_reasons == ("zeta.rollback",)
+    assert counts == SideEffectCounts(telegram_send=1, cron_notifier=1)
+    assert plan == original
+
+
+@pytest.mark.asyncio
+async def test_connected_probe_preserves_first_non_completed_stop_without_rollback() -> (
+    None
+):
+    class FakeRunner:
+        async def run(self, *, plan, **_kwargs):
+            selected = plan.capability.primary_asset
+            stop = "failed" if selected and selected.name == "bad" else "completed"
+            return SimpleNamespace(
+                side_effect_counts=SimpleNamespace(
+                    telegram_send=0, notifier=0, conversation_write=0
+                ),
+                telemetry=SimpleNamespace(
+                    budget_usage=SimpleNamespace(stop_condition=stop)
+                ),
+                comparison=SimpleNamespace(
+                    rollback_required=False, rollback_reasons=()
+                ),
+            )
+
+    probe = ConnectedContractProbe.__new__(ConnectedContractProbe)
+    probe._runner = FakeRunner()
+    probe._store = SimpleNamespace(get_recent=lambda: ())
+    probe._sequence = 0
+    probe.last_rollback_reasons = ()
+
+    stop, counts = await probe(
+        load_scenarios(FIXTURE)[9],
+        _plan(),
+        (_asset("ok"), _asset("bad")),
+    )
+
+    assert stop == "failed"
+    assert counts == SideEffectCounts()
 
 
 def test_fixture_loads_strict_32_case_gold() -> None:
