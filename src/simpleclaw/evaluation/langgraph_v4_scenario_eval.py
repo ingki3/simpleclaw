@@ -13,7 +13,7 @@ import re
 import time
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -38,7 +38,7 @@ from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.memory import ConversationStore
 
 SCHEMA_VERSION = "langgraph-v4-user-scenarios.v2"
-REPORT_SCHEMA_VERSION = "langgraph-v4-scenario-eval.v2"
+REPORT_SCHEMA_VERSION = "langgraph-v4-scenario-eval.v3"
 V4_ROUTES = frozenset(
     {
         "simple_conversation",
@@ -277,6 +277,7 @@ class CaseResult:
     not_scored_reason: str | None
     ingress_kind: str
     planner_called: bool
+    failure_phase: str | None
 
     @property
     def scored(self) -> bool:
@@ -317,6 +318,7 @@ class CaseResult:
             "not_scored_reason": self.not_scored_reason,
             "ingress_kind": self.ingress_kind,
             "planner_called": self.planner_called,
+            "failure_phase": self.failure_phase,
         }
 
 
@@ -819,6 +821,7 @@ def score_plan(
         not_scored_reason=None,
         ingress_kind="none",
         planner_called=True,
+        failure_phase=None,
     )
 
 
@@ -865,6 +868,7 @@ def not_scored_result(
         not_scored_reason=case.expected.evaluation_scope,
         ingress_kind=ingress_kind,
         planner_called=False,
+        failure_phase=None,
     )
 
 
@@ -894,6 +898,51 @@ def _failure_result(
         not_scored_reason=None,
         ingress_kind="none",
         planner_called=True,
+        failure_phase="planner_schema",
+    )
+
+
+def _post_planner_failure_result(
+    case: ScenarioCase,
+    repeat_index: int,
+    *,
+    phase: str,
+    code: str,
+    latency_ms: float,
+    input_tokens: int,
+    output_tokens: int,
+    plan: UnifiedTurnPlan,
+    gate: PlanGateResult | None = None,
+    classification: ContractClassification | None = None,
+) -> CaseResult:
+    """유효한 planner 결과와 사용량을 보존한 phase-local 실패 행을 만든다."""
+    assets = selected_assets(plan)
+    return CaseResult(
+        case_id=case.id,
+        category=case.category,
+        critical=case.critical,
+        repeat_index=repeat_index,
+        expected_route=case.expected.v4_route,
+        actual_route=normalize_v4_route(plan),
+        gate_status=gate.status.value if gate is not None else "not_run",
+        assets=assets,
+        checks={"schema": True},
+        error_codes=(code,),
+        latency_ms=max(0.0, float(latency_ms)),
+        input_tokens=max(0, int(input_tokens)),
+        output_tokens=max(0, int(output_tokens)),
+        contract_status=(
+            classification.status if classification is not None else "not_evaluated"
+        ),
+        contract_issues=(classification.issues if classification is not None else ()),
+        connected_stop="not_run",
+        connected_required=False,
+        connected_executor_kind="none",
+        evaluation_scope=case.expected.evaluation_scope,
+        not_scored_reason=None,
+        ingress_kind="none",
+        planner_called=True,
+        failure_phase=phase,
     )
 
 
@@ -925,6 +974,7 @@ def _early_stop_result(
         not_scored_reason=None,
         ingress_kind="none",
         planner_called=False,
+        failure_phase="early_stop",
     )
 
 
@@ -1234,8 +1284,8 @@ class ScenarioEvaluator:
             raise ValueError("repeat-critical must be positive")
         started = time.monotonic()
         rows: list[CaseResult] = []
-        consecutive_failures = 0
-        total_failures = 0
+        consecutive_schema_failures = 0
+        total_schema_failures = 0
         schedule = [(case, 1) for case in cases]
         for repeat_index in range(2, repeat_critical + 1):
             schedule.extend(
@@ -1269,64 +1319,131 @@ class ScenarioEvaluator:
                         max_tokens=2048,
                         reasoning={"enabled": True, "effort": "low"},
                     )
+                except (PlannerUnavailable, ValueError, TypeError):
+                    rows.append(
+                        _failure_result(
+                            case,
+                            repeat_index,
+                            "planner.schema_or_unavailable",
+                            (time.monotonic() - call_started) * 1000,
+                        )
+                    )
+                    consecutive_schema_failures += 1
+                    total_schema_failures += 1
+                    if consecutive_schema_failures >= 3 or total_schema_failures >= 10:
+                        stopped_at = schedule_index + 1
+                        stop_code = (
+                            "evaluation.early_stop.consecutive_schema_failures"
+                            if consecutive_schema_failures >= 3
+                            else "evaluation.early_stop.total_schema_failures"
+                        )
+                        break
+                    continue
+
+                input_tokens = self.router.input_tokens - before_input
+                output_tokens = self.router.output_tokens - before_output
+                consecutive_schema_failures = 0
+                try:
                     gate = PlanGate().evaluate(
                         plan, candidates=context_candidates(case), catalog=self.catalog
                     )
+                except (ValueError, TypeError) as exc:
+                    rows.append(
+                        _post_planner_failure_result(
+                            case,
+                            repeat_index,
+                            phase="plan_gate",
+                            code=_phase_error_code("plan_gate", exc),
+                            latency_ms=(time.monotonic() - call_started) * 1000,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            plan=plan,
+                        )
+                    )
+                    continue
+
+                try:
                     classification = classify_contract(
                         self.catalog,
                         selected_asset_refs(plan),
                     )
-                    connected_stop = "not_run"
-                    if (
-                        self.execute_read_only_contract_assets
-                        and classification.status == "read_only_complete"
-                        and self.connected_executor is not None
-                        and gate.status is GateStatus.PASS
-                        and case.expected.graph_scope
-                        not in {"planner_only", "interrupt_only", "ingress_bypass"}
-                    ):
+                except (ValueError, TypeError) as exc:
+                    rows.append(
+                        _post_planner_failure_result(
+                            case,
+                            repeat_index,
+                            phase="contract_classification",
+                            code=_phase_error_code("contract_classification", exc),
+                            latency_ms=(time.monotonic() - call_started) * 1000,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            plan=plan,
+                            gate=gate,
+                        )
+                    )
+                    continue
+
+                connected_stop = "not_run"
+                connected_error: str | None = None
+                if (
+                    self.execute_read_only_contract_assets
+                    and classification.status == "read_only_complete"
+                    and self.connected_executor is not None
+                    and gate.status is GateStatus.PASS
+                    and case.expected.graph_scope
+                    not in {"planner_only", "interrupt_only", "ingress_bypass"}
+                ):
+                    try:
                         connected_stop, observed = await self.connected_executor(
                             case,
                             plan,
                             classification.assets,
                         )
+                    except (ValueError, TypeError) as exc:
+                        connected_stop = "failed"
+                        connected_error = _phase_error_code("connected_execution", exc)
+                    else:
+                        # SideEffectDetected와 malformed count는 안전 경계이므로
+                        # 일반 connected attribution으로 흡수하지 않고 즉시 중단한다.
                         self.guard.observe(observed)
-                    rows.append(
-                        score_plan(
-                            case,
-                            plan,
-                            gate,
-                            self.catalog,
-                            repeat_index=repeat_index,
-                            latency_ms=(time.monotonic() - call_started) * 1000,
-                            input_tokens=self.router.input_tokens - before_input,
-                            output_tokens=self.router.output_tokens - before_output,
-                            contract_classification=classification,
-                            connected_stop=connected_stop,
-                            connected_executor_kind=self.connected_executor_kind,
-                        )
+
+                try:
+                    row = score_plan(
+                        case,
+                        plan,
+                        gate,
+                        self.catalog,
+                        repeat_index=repeat_index,
+                        latency_ms=(time.monotonic() - call_started) * 1000,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        contract_classification=classification,
+                        connected_stop=connected_stop,
+                        connected_executor_kind=self.connected_executor_kind,
                     )
-                    consecutive_failures = 0
-                except (PlannerUnavailable, ValueError, TypeError):
-                    code = "planner.schema_or_unavailable"
+                except (ValueError, TypeError) as exc:
                     rows.append(
-                        _failure_result(
+                        _post_planner_failure_result(
                             case,
                             repeat_index,
-                            code,
-                            (time.monotonic() - call_started) * 1000,
+                            phase="score",
+                            code=_phase_error_code("score", exc),
+                            latency_ms=(time.monotonic() - call_started) * 1000,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            plan=plan,
+                            gate=gate,
+                            classification=classification,
                         )
                     )
-                    consecutive_failures += 1
-                    total_failures += 1
-                    if consecutive_failures >= 3 or total_failures >= 10:
-                        stopped_at = schedule_index + 1
-                        stop_code = (
-                            "evaluation.early_stop.consecutive_failures"
-                            if consecutive_failures >= 3
-                            else "evaluation.early_stop.total_failures"
-                        )
-                        break
+                    continue
+                if connected_error is not None:
+                    row = replace(
+                        row,
+                        error_codes=(*row.error_codes, connected_error),
+                        failure_phase="connected_execution",
+                    )
+                rows.append(row)
         if stopped_at is not None:
             for case, repeat_index in schedule[stopped_at:]:
                 if case.expected.evaluation_scope != "runtime_scored":
@@ -1361,3 +1478,9 @@ def _non_negative_int(value: Any) -> int:
 
 def _safe_dimension(value: Any) -> str:
     return _SAFE_DIMENSION_RE.sub("_", str(value or ""))[:96]
+
+
+def _phase_error_code(phase: str, exc: Exception) -> str:
+    """예외 메시지를 버리고 allowlisted class만 phase code로 정규화한다."""
+    exception_kind = "type_error" if isinstance(exc, TypeError) else "value_error"
+    return f"{phase}.{exception_kind}"
