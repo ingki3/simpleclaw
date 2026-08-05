@@ -19,6 +19,8 @@ input_contract:
     name: google-news-search-skill
   json_schema:
     type: object
+    examples:
+      - args: '--query "OpenAI" --format json'
     properties:
       args:
         type: string
