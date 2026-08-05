@@ -235,14 +235,13 @@ async def _run(args: argparse.Namespace) -> int:
                 )
                 if result.telemetry.selected_route != route:
                     raise RuntimeError("actual planner route continuity mismatch")
-                if args.mode == "shadow":
-                    if (
-                        result.comparison is None
-                        or result.canary is None
-                        or result.comparison.rollback_required
-                        or not result.canary.eligible
-                    ):
-                        raise RuntimeError("connected shadow rollout gate rejected run")
+                if args.mode == "shadow" and (
+                    result.comparison is None
+                    or result.canary is None
+                    or result.comparison.rollback_required
+                    or not result.canary.eligible
+                ):
+                    raise RuntimeError("connected shadow rollout gate rejected run")
                 if (
                     result.execution.result_source != "langgraph_v4"
                     or result.execution.final_content is None

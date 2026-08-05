@@ -27,6 +27,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.turn_state import TurnExecutionState
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     SenderReceipt,
@@ -79,7 +80,6 @@ from simpleclaw.langgraph_v4_shadow_validation import (
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
-from simpleclaw.agent.turn_state import TurnExecutionState
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 

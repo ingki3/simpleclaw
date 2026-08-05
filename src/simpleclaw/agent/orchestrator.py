@@ -1590,7 +1590,7 @@ class AgentOrchestrator:
                     failure_reason = ",".join(execution.rollback_reasons)
                 elif execution.final_content is None:
                     failure_reason = "typed_final_missing"
-            except Exception as exc:  # noqa: BLE001 - rollout fail-closed boundary
+            except Exception as exc:
                 failure_reason = f"runtime_{type(exc).__name__}"
                 logger.warning(
                     "LangGraph V4 primary isolated (error_type=%s)",
