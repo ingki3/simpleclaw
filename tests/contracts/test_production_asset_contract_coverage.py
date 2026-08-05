@@ -25,8 +25,30 @@ from simpleclaw.skills.discovery import discover_skills
 ROOT = Path(__file__).parents[2]
 PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
 SPORTS_RECIPE_FIXTURES = ROOT / "tests/fixtures/recipes"
-TARGET_SKILLS = {"google-news-search-skill", "kr-stock-skill"}
+READ_ONLY_SKILLS = {
+    "gmail-skill",
+    "google-news-search-skill",
+    "kr-stock-skill",
+    "naver-sports-skill",
+    "us-stock-skill",
+}
+MUTATION_SKILLS = {"google-calendar-skill"}
+TARGET_SKILLS = READ_ONLY_SKILLS | MUTATION_SKILLS
 TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
+DECLARED_EXAMPLES = {
+    "gmail-skill": {
+        "args": 'search --query "category:primary is:unread" --limit 5'
+    },
+    "google-calendar-skill": {
+        "args": "list --calendar-id primary --days 7 --limit 10"
+    },
+    "google-news-search-skill": {"args": "--query OpenAI --format json"},
+    "kr-stock-skill": {"args": "quote-summary --json"},
+    "naver-sports-skill": {
+        "args": "--mode results --category kbo --date 2026-08-02 --limit 10 --json"
+    },
+    "us-stock-skill": {"args": "info --symbol AAPL --json"},
+}
 
 
 def _sports_recipe():
@@ -60,24 +82,58 @@ def _production_definitions():
     return skills, native_specs
 
 
-def test_four_reported_asset_groups_have_complete_owned_contracts() -> None:
+def test_production_read_only_assets_have_complete_owned_contracts() -> None:
     skills, native_specs = _production_definitions()
     catalog = build_planner_catalog(skills=skills, native_specs=native_specs)
     refs = tuple(
         AssetRef(asset.asset_type, asset.name)
         for asset in catalog.assets
-        if asset.name in TARGET_SKILLS | TARGET_NATIVE_TOOLS
+        if asset.name in READ_ONLY_SKILLS | TARGET_NATIVE_TOOLS
     )
 
     classification = classify_contract(catalog, refs)
     registry = build_contract_registry((*skills, *native_specs))
 
     assert classification.status == "read_only_complete", classification.issues
-    assert len(refs) == 4
-    assert len(registry.entries) == 4
-    assert all(entry.snapshot.read_only for entry in registry.entries)
-    assert all(not entry.snapshot.side_effects for entry in registry.entries)
-    assert all(entry.snapshot.declared_binding for entry in registry.entries)
+    assert len(refs) == 7
+    assert len(registry.entries) == 8
+    for ref in refs:
+        entry = registry.asset(AssetRefV1(type=ref.asset_type, name=ref.name))
+        asset = next(
+            item
+            for item in catalog.assets
+            if (item.asset_type, item.name) == (ref.asset_type, ref.name)
+        )
+        assert entry is not None
+        assert entry.snapshot.read_only is True
+        assert entry.snapshot.side_effects is False
+        assert entry.snapshot.declared_binding is not None
+        assert asset.contract_owner == f"{ref.asset_type}:{ref.name}"
+        assert entry.input_descriptor.ref.schema_hash == asset.input_schema_hash
+        assert entry.output_descriptor.ref.schema_hash == asset.output_schema_hash
+        assert asset.binding_identity == (
+            f"{entry.snapshot.declared_binding.binding_id}:"
+            f"{entry.snapshot.declared_binding.binding_hash}"
+        )
+
+
+def test_calendar_mixed_operation_contract_is_confirmation_safe() -> None:
+    skills, _ = _production_definitions()
+    calendar = next(item for item in skills if item.name == "google-calendar-skill")
+    catalog = build_planner_catalog(skills=(calendar,), native_specs=())
+    classification = classify_contract(
+        catalog,
+        (AssetRef("skill", "google-calendar-skill"),),
+    )
+    entry = build_contract_registry((calendar,)).entries[0]
+
+    assert classification.status == "dispatch_denied"
+    assert [item.error_code for item in classification.issues] == [
+        "contract.not_read_only"
+    ]
+    assert entry.snapshot.read_only is False
+    assert entry.snapshot.side_effects is True
+    assert entry.snapshot.requires_confirmation is True
 
 
 def test_native_web_contract_hashes_match_function_calling_schemas() -> None:
@@ -99,11 +155,31 @@ def test_skill_contract_rejects_non_json_cli_invocation() -> None:
     registry = build_contract_registry(skills)
 
     for entry in registry.entries:
+        if entry.snapshot.asset_ref.name not in {
+            "google-news-search-skill",
+            "kr-stock-skill",
+            "us-stock-skill",
+        }:
+            continue
         with pytest.raises(ContractRegistryError, match="payload.schema_mismatch"):
             registry.validate_canonical(
                 entry.input_descriptor,
                 {"args": "market-summary"},
             )
+
+
+def test_declared_skill_examples_validate_against_canonical_schemas() -> None:
+    skills, _ = _production_definitions()
+    registry = build_contract_registry(skills)
+
+    for skill in skills:
+        entry = registry.asset(AssetRefV1(type="skill", name=skill.name))
+        assert entry is not None
+        canonical = registry.validate_canonical(
+            entry.input_descriptor,
+            DECLARED_EXAMPLES[skill.name],
+        )
+        assert canonical.payload == DECLARED_EXAMPLES[skill.name]
 
 
 def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> None:
@@ -153,6 +229,61 @@ def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> Non
     ) == asset.binding_identity
     assert entry.snapshot.read_only is True
     assert entry.snapshot.side_effects is False
+
+
+def test_sports_recipe_delegate_resolves_production_skill_contract() -> None:
+    recipe = _sports_recipe()
+    skills, _ = _production_definitions()
+    target = next(item for item in skills if item.name == "naver-sports-skill")
+    catalog = build_planner_catalog(skills=(target,), recipes=(recipe,), native_specs=())
+    registry = build_contract_registry((recipe, target))
+
+    assert recipe.step_bindings[0].binding["target_skill"] == target.name
+    target_asset = next(item for item in catalog.assets if item.name == target.name)
+    target_entry = registry.asset(AssetRefV1(type="skill", name=target.name))
+    assert target_entry is not None
+    assert target_asset.contract_owner == "skill:naver-sports-skill"
+    assert target_entry.input_descriptor.ref.schema_hash == target_asset.input_schema_hash
+    assert target_entry.output_descriptor.ref.schema_hash == target_asset.output_schema_hash
+    assert registry.validate_canonical(
+        target_entry.input_descriptor,
+        DECLARED_EXAMPLES[target.name],
+    ).payload == DECLARED_EXAMPLES[target.name]
+
+
+@pytest.mark.parametrize("corruption", ("missing_binding", "owner_mismatch"))
+def test_production_skill_invalid_contract_fails_before_dispatch(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    skills, _ = _production_definitions()
+    target = next(item for item in skills if item.name == "naver-sports-skill")
+    if corruption == "missing_binding":
+        definition = replace(target, argument_binding=None)
+        expected_error = "definition.contract_metadata_incomplete"
+    else:
+        assert target.output_contract is not None
+        definition = replace(
+            target,
+            output_contract=replace(target.output_contract, owner_name="other-skill"),
+        )
+        expected_error = "definition.owner_mismatch"
+    dispatch_count = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        return {}
+
+    with pytest.raises(ContractRegistryError, match=expected_error):
+        ConnectedShadowTurnRunner(
+            facade=object(),
+            definitions=(definition,),
+            conversation_store=object(),
+            recipe_executor=executor,
+        )
+
+    assert dispatch_count == 0
 
 
 @pytest.mark.parametrize("corruption", ("missing_binding", "owner_mismatch"))
