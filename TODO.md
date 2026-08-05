@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-578](mention://issue/06b77863-21f0-48f2-aba7-bcbb036bc14e): LangGraph V4 반복질문 시나리오를 평가** — 32-case fixed-gold evaluator와 actual-provider 결과를 구현한 PR #613의 Stage D HOLD를 보완 중이다. merge-blocking 범위는 critical GO gate, 전체 selected asset contract/side-effect fail-closed, evaluator 회귀, Graphify bookkeeping이며 actual routing 품질 후속은 BIZ-579~582가 별도 소유한다. (진행: 2026-08-05)
+- [x] **[BIZ-578](mention://issue/06b77863-21f0-48f2-aba7-bcbb036bc14e): LangGraph V4 반복질문 시나리오를 평가** — PR #613의 32-case fixed-gold/actual-provider evaluator에 critical gold pass, 자산별 exact identity contract 검사, 필수 connected completion과 rollback-free GO gate를 추가해 Stage D HOLD의 merge-blocking 결함을 fail-closed로 보완했다. supporting/allowed asset 누락·불완전·mutation 및 stability 1.0인 오답 critical 회귀를 고정했고 focused `19 passed`, 전체 unit `3411 passed, 3 xfailed`, Ruff를 통과했다. Graphify는 source `51340d3b4b337bc508311e4cf252aa56dd4b7bb9` 기준 14,768 nodes/31,949 edges로 갱신했다. actual routing 품질은 BIZ-579~582가 별도 소유하며 live primary 활성화·재시작·사용자-visible 전송은 수행하지 않았다. (완료: 2026-08-05)
 
 - [x] **[BIZ-577](mention://issue/46f27f8a-65db-47de-9bd3-9338465c4835): Shadow parallel budget를 실제 동시성 슬롯으로 수정** — source `908da37545daa0988aaebc9340ed4d94bf565291`에서 historical `parallel_peak` lifetime exhaustion gate를 제거해 slot 해제 뒤 순차 graph/asset 작업을 허용하고, active slot 점유 중 추가 asset/LLM 시작은 fail-closed로 차단하며 high-water telemetry를 유지했다. 검증 head `708583c288bdf217b31058f0aa8b156b3d28755b`에서 focused·contracts·actual-provider 3-way·fresh CI를 통과해 본 자식의 code/offline remediation 범위를 완료했다. 공유 PR #609 머지와 부모 Stage D 완료 판정은 [BIZ-572](mention://issue/44a03491-e8c7-4352-875d-72a1bcaf723e)가 소유하며 본 완료 표기는 해당 머지 승인이 아니다. (완료: 2026-08-05)
 
