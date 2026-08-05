@@ -23,6 +23,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
+    ContractIssue,
     ProviderBudgetExceeded,
     ProviderCallBudget,
     ScenarioFixtureError,
@@ -192,9 +193,94 @@ def test_contract_gap_and_complete_read_only_are_separate() -> None:
     complete = _asset("ok")
     catalog = _catalog(incomplete, complete)
 
-    assert classify_contract(catalog, ("missing",)).status == "contract_coverage_gap"
-    assert classify_contract(catalog, ("gap",)).error_code == "contract.incomplete"
-    assert classify_contract(catalog, ("ok",)).status == "read_only_complete"
+    assert (
+        classify_contract(catalog, (AssetRef("skill", "missing"),)).status
+        == "contract_coverage_gap"
+    )
+    assert (
+        classify_contract(catalog, (AssetRef("skill", "gap"),)).error_code
+        == "contract.incomplete"
+    )
+    assert (
+        classify_contract(catalog, (AssetRef("skill", "ok"),)).status
+        == "read_only_complete"
+    )
+
+
+def test_contract_requires_every_exact_asset_identity_to_be_safe() -> None:
+    catalog = _catalog(
+        _asset("ok"),
+        _asset("bad", output_contract=None),
+        _asset("mutating", read_only=False, side_effects=True),
+    )
+
+    incomplete = classify_contract(
+        catalog,
+        (AssetRef("skill", "ok"), AssetRef("skill", "bad")),
+    )
+    wrong_type = classify_contract(catalog, (AssetRef("recipe", "ok"),))
+    mutating = classify_contract(
+        catalog,
+        (AssetRef("skill", "ok"), AssetRef("skill", "mutating")),
+    )
+
+    assert incomplete.status == "contract_coverage_gap"
+    assert incomplete.asset_name == "ok"
+    assert incomplete.issues == (
+        ContractIssue("skill", "bad", "contract.incomplete"),
+    )
+    assert wrong_type.status == "contract_coverage_gap"
+    assert wrong_type.issues == (
+        ContractIssue("recipe", "ok", "contract.asset_missing"),
+    )
+    assert mutating.status == "dispatch_denied"
+    assert mutating.issues == (
+        ContractIssue("skill", "mutating", "contract.not_read_only"),
+    )
+
+
+def test_go_fails_closed_for_consistently_wrong_critical_rows() -> None:
+    case = load_scenarios(FIXTURE)[0]
+    row = score_plan(
+        case,
+        _plan(),
+        PlanGateResult(GateStatus.PASS, _plan()),
+        _catalog(),
+    )
+    adversarial = replace(
+        row,
+        critical=True,
+        checks={
+            "route": True,
+            "execution_mode": True,
+            "context_relation": True,
+            "gate": False,
+            "asset": False,
+        },
+        contract_status="contract_coverage_gap",
+        contract_issues=(
+            ContractIssue("skill", "bad", "contract.incomplete"),
+        ),
+        connected_stop="rollback_required",
+        connected_required=True,
+    )
+    report = aggregate_results(
+        [replace(adversarial, repeat_index=index) for index in range(1, 4)],
+        provider_calls=3,
+        provider_call_budget=64,
+        provider_backend="test",
+        provider_model="model",
+        side_effect_counts=SideEffectCounts(),
+        elapsed_seconds=1,
+    )
+
+    assert report["decision"] == "hold"
+    assert report["summary"]["critical_pass_rate"] == 0
+    assert report["summary"]["critical_stability_rate"] == 1
+    assert report["summary"]["route_mode_context_macro_pass_rate"] == 1
+    assert report["summary"]["rollback_required_count"] == 3
+    assert report["summary"]["connected_completed_count"] == 0
+    assert report["contract_gaps"] == {"bad": 3}
 
 
 def test_side_effect_observation_aborts_immediately() -> None:

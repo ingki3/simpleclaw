@@ -26,7 +26,7 @@ from simpleclaw.agent.context_candidates import (
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate, PlanGateResult
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.resolution_types import ExecutionMode
-from simpleclaw.agent.turn_plan import UnifiedTurnPlan
+from simpleclaw.agent.turn_plan import AssetRef, UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import PlannerUnavailable, plan_turn_with_llm
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4RolloutFacade,
@@ -212,10 +212,33 @@ class _TrackingRouter:
 
 
 @dataclass(frozen=True)
+class ContractIssue:
+    asset_type: str
+    asset_name: str
+    error_code: str
+
+    def to_report(self) -> dict[str, str]:
+        return {
+            "asset_type": self.asset_type,
+            "asset_name": self.asset_name,
+            "error_code": self.error_code,
+        }
+
+
+@dataclass(frozen=True)
 class ContractClassification:
     status: str
-    asset_name: str
-    error_code: str | None = None
+    assets: tuple[PlannerAsset, ...] = ()
+    issues: tuple[ContractIssue, ...] = ()
+
+    @property
+    def asset_name(self) -> str:
+        """한 자산 caller용 호환 projection. 분류는 항상 전체 identity를 본다."""
+        return self.assets[0].name if self.assets else ""
+
+    @property
+    def error_code(self) -> str | None:
+        return self.issues[0].error_code if self.issues else None
 
 
 @dataclass(frozen=True)
@@ -234,7 +257,9 @@ class CaseResult:
     input_tokens: int
     output_tokens: int
     contract_status: str
+    contract_issues: tuple[ContractIssue, ...]
     connected_stop: str
+    connected_required: bool
     planner_called: bool
 
     @property
@@ -258,13 +283,15 @@ class CaseResult:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "contract_status": self.contract_status,
+            "contract_issues": [item.to_report() for item in self.contract_issues],
             "connected_stop": self.connected_stop,
+            "connected_required": self.connected_required,
             "planner_called": self.planner_called,
         }
 
 
 ConnectedExecutor = Callable[
-    [ScenarioCase, UnifiedTurnPlan, PlannerAsset],
+    [ScenarioCase, UnifiedTurnPlan, tuple[PlannerAsset, ...]],
     Awaitable[tuple[str, SideEffectCounts]],
 ]
 PlannerCallable = Callable[..., Awaitable[UnifiedTurnPlan]]
@@ -322,7 +349,7 @@ class ConnectedContractProbe:
         self,
         case: ScenarioCase,
         plan: UnifiedTurnPlan,
-        _asset: PlannerAsset,
+        _assets: tuple[PlannerAsset, ...],
     ) -> tuple[str, SideEffectCounts]:
         self._sequence += 1
         result = await self._runner.run(
@@ -494,17 +521,25 @@ def context_candidates(case: ScenarioCase) -> ContextCandidateSet:
     return ContextCandidateSet(candidates, sum(len(item.content) for item in candidates), False)
 
 
-def selected_assets(plan: UnifiedTurnPlan) -> tuple[str, ...]:
+def selected_asset_refs(plan: UnifiedTurnPlan) -> tuple[AssetRef, ...]:
+    """Capability와 execution의 primary/supporting/allowed identity 전체를 반환한다."""
     refs = (
         (() if plan.capability.primary_asset is None else (plan.capability.primary_asset,))
         + plan.capability.supporting_assets
+        + (() if plan.execution.primary_asset is None else (plan.execution.primary_asset,))
+        + plan.execution.allowed_assets
     )
-    if not refs:
-        refs = (
-            (() if plan.execution.primary_asset is None else (plan.execution.primary_asset,))
-            + plan.execution.allowed_assets
-        )
-    return tuple(dict.fromkeys(ref.name for ref in refs))
+    return tuple(
+        {
+            (ref.asset_type, ref.name): ref
+            for ref in refs
+        }.values()
+    )
+
+
+def selected_assets(plan: UnifiedTurnPlan) -> tuple[str, ...]:
+    """Sanitized report용 name projection. Contract 판정에는 사용하지 않는다."""
+    return tuple(dict.fromkeys(ref.name for ref in selected_asset_refs(plan)))
 
 
 def normalize_v4_route(plan: UnifiedTurnPlan | None, *, command_bypass: bool = False) -> str:
@@ -527,27 +562,51 @@ def normalize_v4_route(plan: UnifiedTurnPlan | None, *, command_bypass: bool = F
     return "simple_conversation"
 
 
-def classify_contract(catalog: PlannerCatalog, asset_names: Sequence[str]) -> ContractClassification:
-    if not asset_names:
-        return ContractClassification("not_applicable", "")
-    by_name = {asset.name: asset for asset in catalog.assets}
-    asset = next((by_name[name] for name in asset_names if name in by_name), None)
-    if asset is None:
-        return ContractClassification("contract_coverage_gap", asset_names[0], "contract.asset_missing")
-    complete = all(
-        (
-            asset.declared,
-            asset.runtime_visible,
-            asset.coverage == "full_coverage",
-            bool(asset.input_contract_ref or asset.input_contract),
-            bool(asset.output_contract_ref or asset.output_contract),
+def classify_contract(
+    catalog: PlannerCatalog,
+    asset_refs: Sequence[AssetRef],
+) -> ContractClassification:
+    """선택된 모든 exact identity가 complete read-only일 때만 실행을 허용한다."""
+    if not asset_refs:
+        return ContractClassification("not_applicable")
+    by_identity = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+    }
+    assets: list[PlannerAsset] = []
+    issues: list[ContractIssue] = []
+    for ref in asset_refs:
+        asset = by_identity.get((ref.asset_type, ref.name))
+        if asset is None:
+            issues.append(
+                ContractIssue(ref.asset_type, ref.name, "contract.asset_missing")
+            )
+            continue
+        assets.append(asset)
+        complete = all(
+            (
+                asset.declared,
+                asset.runtime_visible,
+                asset.coverage == "full_coverage",
+                bool(asset.input_contract_ref or asset.input_contract),
+                bool(asset.output_contract_ref or asset.output_contract),
+            )
         )
-    )
-    if not complete:
-        return ContractClassification("contract_coverage_gap", asset.name, "contract.incomplete")
-    if not asset.read_only or asset.side_effects or asset.requires_confirmation:
-        return ContractClassification("dispatch_denied", asset.name, "contract.not_read_only")
-    return ContractClassification("read_only_complete", asset.name)
+        if not complete:
+            issues.append(
+                ContractIssue(asset.asset_type, asset.name, "contract.incomplete")
+            )
+        elif not asset.read_only or asset.side_effects or asset.requires_confirmation:
+            issues.append(
+                ContractIssue(asset.asset_type, asset.name, "contract.not_read_only")
+            )
+    if any(item.error_code != "contract.not_read_only" for item in issues):
+        status = "contract_coverage_gap"
+    elif issues:
+        status = "dispatch_denied"
+    else:
+        status = "read_only_complete"
+    return ContractClassification(status, tuple(assets), tuple(issues))
 
 
 def _desired_gate(case: ScenarioCase) -> frozenset[str]:
@@ -568,10 +627,11 @@ def score_plan(
     latency_ms: float = 0,
     input_tokens: int = 0,
     output_tokens: int = 0,
-    contract_status: str | None = None,
+    contract_classification: ContractClassification | None = None,
     connected_stop: str = "not_run",
 ) -> CaseResult:
     route = normalize_v4_route(plan)
+    asset_refs = selected_asset_refs(plan)
     assets = selected_assets(plan)
     standalone = plan.context.standalone_question.casefold()
     selected = tuple(plan.context.selected_turn_ids)
@@ -590,7 +650,16 @@ def score_plan(
             and route != "interrupt"
         ),
     }
-    classification = classify_contract(catalog, assets)
+    classification = contract_classification or classify_contract(
+        catalog,
+        asset_refs,
+    )
+    connected_required = (
+        classification.status == "read_only_complete"
+        and gate.status is GateStatus.PASS
+        and case.expected.graph_scope
+        not in {"planner_only", "interrupt_only", "ingress_bypass"}
+    )
     errors = (
         ()
         if gate.status.value in _desired_gate(case)
@@ -610,8 +679,10 @@ def score_plan(
         latency_ms=max(0.0, float(latency_ms)),
         input_tokens=max(0, int(input_tokens)),
         output_tokens=max(0, int(output_tokens)),
-        contract_status=contract_status or classification.status,
+        contract_status=classification.status,
+        contract_issues=classification.issues,
         connected_stop=connected_stop,
+        connected_required=connected_required,
         planner_called=True,
     )
 
@@ -634,7 +705,8 @@ def command_bypass_result(case: ScenarioCase, *, repeat_index: int = 1) -> CaseR
         repeat_index=repeat_index, expected_route=case.expected.v4_route,
         actual_route="command_bypass", gate_status="bypass", assets=(),
         checks=checks, error_codes=(), latency_ms=0, input_tokens=0,
-        output_tokens=0, contract_status="not_applicable", connected_stop="bypass",
+        output_tokens=0, contract_status="not_applicable", contract_issues=(),
+        connected_stop="bypass", connected_required=False,
         planner_called=False,
     )
 
@@ -646,7 +718,8 @@ def _failure_result(case: ScenarioCase, repeat_index: int, code: str, latency_ms
         actual_route="planner_error", gate_status="not_run", assets=(),
         checks={"schema": False}, error_codes=(code,), latency_ms=latency_ms,
         input_tokens=0, output_tokens=0, contract_status="not_evaluated",
-        connected_stop="not_run", planner_called=True,
+        contract_issues=(), connected_stop="not_run", connected_required=False,
+        planner_called=True,
     )
 
 
@@ -680,10 +753,27 @@ def aggregate_results(
         for case_id in critical_ids
     }
     contract_gaps = Counter(
-        row.assets[0] if row.assets else "unselected"
+        issue.asset_name
         for row in rows
-        if row.contract_status == "contract_coverage_gap"
+        for issue in row.contract_issues
+        if issue.error_code != "contract.not_read_only"
     )
+    contract_denials = Counter(
+        issue.asset_name
+        for row in rows
+        for issue in row.contract_issues
+        if issue.error_code == "contract.not_read_only"
+    )
+    contract_gap_count = sum(
+        issue.error_code != "contract.not_read_only"
+        for row in rows
+        for issue in row.contract_issues
+    )
+    connected_required = [row for row in rows if row.connected_required]
+    connected_completed = [
+        row for row in connected_required if row.connected_stop == "completed"
+    ]
+    rollback_count = sum(row.connected_stop == "rollback_required" for row in rows)
     route_mode_context = [
         row.checks.get("route", False)
         and row.checks.get("execution_mode", False)
@@ -701,6 +791,10 @@ def aggregate_results(
             "route_mode_context_macro_pass_rate": sum(route_mode_context) / len(route_mode_context) if route_mode_context else 0.0,
             "critical_pass_rate": sum(row.passed for row in rows if row.critical) / sum(row.critical for row in rows) if any(row.critical for row in rows) else None,
             "critical_stability_rate": sum(stable.values()) / len(stable) if stable else None,
+            "contract_gap_count": contract_gap_count,
+            "connected_required_count": len(connected_required),
+            "connected_completed_count": len(connected_completed),
+            "rollback_required_count": rollback_count,
             "latency_ms": {
                 "average": sum(row.latency_ms for row in rows) / len(rows) if rows else 0.0,
                 "maximum": max((row.latency_ms for row in rows), default=0.0),
@@ -718,6 +812,7 @@ def aggregate_results(
         "route_confusion": {expected: dict(sorted(actual.items())) for expected, actual in sorted(confusion.items())},
         "critical_stability": stable,
         "contract_gaps": dict(sorted(contract_gaps.items())),
+        "contract_denials": dict(sorted(contract_denials.items())),
         "side_effect_counts": {
             "telegram_send": side_effect_counts.telegram_send,
             "cron_notifier": side_effect_counts.cron_notifier,
@@ -729,7 +824,12 @@ def aggregate_results(
     if not (
         summary["schema_validity_rate"] == 1.0
         and summary["route_mode_context_macro_pass_rate"] >= 0.9
+        and summary["critical_pass_rate"] == 1.0
         and summary["critical_stability_rate"] == 1.0
+        and summary["contract_gap_count"] == 0
+        and summary["rollback_required_count"] == 0
+        and summary["connected_completed_count"]
+        == summary["connected_required_count"]
         and side_effect_counts.total == 0
     ):
         report["decision"] = "hold"
@@ -765,6 +865,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- 실행: {summary['runs']}회 / {summary['unique_cases']}개 case",
         f"- route+mode+context macro pass: {summary['route_mode_context_macro_pass_rate']:.1%}",
         f"- critical pass / stability: {summary['critical_pass_rate']:.1%} / {summary['critical_stability_rate']:.1%}",
+        f"- contract gaps: {summary['contract_gap_count']}",
+        f"- connected completion: {summary['connected_completed_count']}/{summary['connected_required_count']}",
+        f"- rollback required: {summary['rollback_required_count']}",
         f"- provider calls: {summary['provider_calls']}/{summary['provider_call_budget']}",
         f"- Telegram / cron / ConversationStore: {counts['telegram_send']}/{counts['cron_notifier']}/{counts['conversation_write']}",
         "",
@@ -845,7 +948,10 @@ class ScenarioEvaluator:
                         reasoning={"enabled": True, "effort": "low"},
                     )
                     gate = PlanGate().evaluate(plan, candidates=context_candidates(case), catalog=self.catalog)
-                    classification = classify_contract(self.catalog, selected_assets(plan))
+                    classification = classify_contract(
+                        self.catalog,
+                        selected_asset_refs(plan),
+                    )
                     connected_stop = "not_run"
                     if (
                         self.execute_read_only_contract_assets
@@ -855,8 +961,11 @@ class ScenarioEvaluator:
                         and case.expected.graph_scope
                         not in {"planner_only", "interrupt_only", "ingress_bypass"}
                     ):
-                        asset = next(item for item in self.catalog.assets if item.name == classification.asset_name)
-                        connected_stop, observed = await self.connected_executor(case, plan, asset)
+                        connected_stop, observed = await self.connected_executor(
+                            case,
+                            plan,
+                            classification.assets,
+                        )
                         self.guard.observe(observed)
                     rows.append(
                         score_plan(
@@ -865,7 +974,7 @@ class ScenarioEvaluator:
                             latency_ms=(time.monotonic() - call_started) * 1000,
                             input_tokens=self.router.input_tokens - before_input,
                             output_tokens=self.router.output_tokens - before_output,
-                            contract_status=classification.status,
+                            contract_classification=classification,
                             connected_stop=connected_stop,
                         )
                     )
