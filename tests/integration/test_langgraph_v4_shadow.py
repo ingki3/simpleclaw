@@ -7,7 +7,7 @@ import hashlib
 import time
 from dataclasses import replace
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -39,12 +39,14 @@ from simpleclaw.graph_runtime.contracts import (
     AssetInvocationV1,
     AssetRefV1,
     DeliveryIntentV1,
+    FinalArtifactV1,
     NormalizedAssetResultV1,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.graph_runtime.runtime import (
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
+    LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     PersistenceRuntime,
@@ -52,6 +54,7 @@ from simpleclaw.graph_runtime.runtime import (
     ShadowNoSendConfigurationError,
     ShadowRunTelemetryV1,
     ShadowSideEffectCountsV1,
+    TargetDispatchTraceV1,
     compare_shadow_run,
     evaluate_read_only_canary,
 )
@@ -59,6 +62,8 @@ from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowTurnRunner,
     _ShadowBudgetStop,
     _ShadowRunBudget,
+    _TargetDispatchGuard,
+    _TargetDispatchInvariantError,
 )
 from simpleclaw.graph_runtime.side_effect_monitor import capture_shadow_side_effects
 from simpleclaw.graph_runtime.status import (
@@ -74,6 +79,7 @@ from simpleclaw.langgraph_v4_shadow_validation import (
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
+from simpleclaw.agent.turn_state import TurnExecutionState
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
@@ -292,6 +298,285 @@ def _connected_runner(tmp_path, *, budget, recipe_executor):
         conversation_store=store,
         recipe_executor=recipe_executor,
     )
+
+
+def test_target_dispatch_guard_blocks_second_attempt_before_execution() -> None:
+    guard = _TargetDispatchGuard(_invocation(_registry()))
+
+    guard.begin()
+    guard.mark_executed()
+    guard.complete(succeeded=True)
+    with pytest.raises(
+        _TargetDispatchInvariantError,
+        match="duplicate_target_dispatch",
+    ):
+        guard.begin()
+
+    trace = guard.snapshot()
+    assert trace.attempted == 2
+    assert trace.executed == 1
+    assert trace.succeeded == 1
+    assert trace.duplicate_blocked == 1
+    assert trace.exactly_once is False
+
+
+@pytest.mark.asyncio
+async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
+    tmp_path,
+) -> None:
+    calls = 0
+    store = ConversationStore(tmp_path / "primary-conversation.db")
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "primary-source"}
+
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "primary-checkpoint.sqlite3",
+        ),
+        definitions=_definitions(),
+        conversation_store=store,
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="primary-result-source",
+        session_key="primary-session",
+        planner_model_calls=1,
+        planner_tokens=10,
+    )
+
+    assert calls == 1
+    assert result.comparison is None
+    assert result.canary is None
+    assert result.execution.result_source == "langgraph_v4"
+    assert result.execution.final_content == '{"fixture_result":"primary-source"}'
+    assert result.execution.provenance.startswith(
+        "langgraph_v4:recipe:contract-fixture-workflow:"
+    )
+    assert result.execution.dispatch_trace.exactly_once is True
+    assert result.execution.side_effect_counts.total == 0
+    assert result.execution.rollback_required is False
+    assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
+    tmp_path,
+) -> None:
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "unreachable"}
+
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(max_graph_steps=1),
+            checkpoint_path=tmp_path / "zero-checkpoint.sqlite3",
+        ),
+        definitions=_definitions(),
+        conversation_store=ConversationStore(tmp_path / "zero-conversation.db"),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="zero-dispatch",
+        session_key="primary-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert calls == 0
+    assert result.execution.dispatch_trace.attempted == 0
+    assert result.execution.dispatch_trace.executed == 0
+    assert result.execution.final_content is None
+    assert result.execution.rollback_required is True
+    assert "target_dispatch_not_exactly_once" in result.execution.rollback_reasons
+
+
+@pytest.mark.asyncio
+async def test_connected_primary_provider_failure_is_typed_before_delivery(
+    tmp_path,
+) -> None:
+    async def executor(_definition, _bound_steps):
+        raise RuntimeError("provider unavailable")
+
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "failure-checkpoint.sqlite3",
+        ),
+        definitions=_definitions(),
+        conversation_store=ConversationStore(tmp_path / "failure-conversation.db"),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="provider-failure",
+        session_key="primary-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.dispatch_trace.executed == 1
+    assert result.execution.dispatch_trace.succeeded == 0
+    assert result.execution.final_content is None
+    assert result.execution.side_effect_counts.total == 0
+    assert result.execution.rollback_required is True
+    assert "invocation_not_succeeded" in result.execution.rollback_reasons
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_primary_response_source_is_v4_receipt(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    definitions = _definitions()
+    recipes = tuple(
+        item for item in definitions if item.contract_asset_type == "recipe"
+    )
+    skills = tuple(
+        item for item in definitions if item.contract_asset_type == "skill"
+    )
+    planned = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    planned = replace(
+        planned,
+        capability=replace(
+            planned.capability,
+            coverage=CapabilityCoverage.FULL,
+        ),
+    )
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        return replace(planned, catalog_fingerprint=catalog.fingerprint)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._unified_turn_planner_config = {
+        "architecture": "langgraph_v4",
+        "mode": "primary",
+        "context_candidate_limit": 8,
+        "context_candidate_max_chars": 6000,
+        "selected_context_max_turns": 3,
+        "selected_context_max_chars": 2400,
+        "max_tokens": 2048,
+        "telemetry": {"enabled": False},
+        "langgraph_v4": {
+            "budget_valid": True,
+            "on_failure": "fail_closed",
+        },
+    }
+    orchestrator._router = object()
+    orchestrator._cron_scheduler = None
+    orchestrator._browser_handoff_config = {"enabled": False}
+    orchestrator._recipes = recipes
+    orchestrator._store = ConversationStore(tmp_path / "orchestrator-primary.db")
+    orchestrator._structured_logger = None
+    orchestrator._exposable_skills = MethodType(lambda self: list(skills), orchestrator)
+    called = 0
+
+    async def execute_v4(self, **kwargs):
+        nonlocal called
+        called += 1
+        request_id = kwargs["request_id"]
+        invocation_id = "orchestrator-v4-invocation"
+        receipt = LangGraphV4ExecutionReceiptV1(
+            mode="primary",
+            request_id=request_id,
+            selected_route="recipe",
+            final_artifact=FinalArtifactV1(
+                artifact_id="v4-artifact",
+                request_id=request_id,
+                content="V4가 만든 최종 응답",
+                outcome=TerminalOutcome.COMPLETED,
+                content_hash="v4-content-hash",
+            ),
+            dispatch_trace=TargetDispatchTraceV1(
+                target_asset_ref=AssetRefV1(
+                    type="recipe",
+                    name="contract-fixture-workflow",
+                ),
+                invocation_id=invocation_id,
+                attempted=1,
+                executed=1,
+                succeeded=1,
+            ),
+            budget_usage=_budget(),
+            side_effect_counts=ShadowSideEffectCountsV1(),
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            rollback_required=False,
+            rollback_reasons=(),
+        )
+        return SimpleNamespace(execution=receipt)
+
+    async def legacy_must_not_run(self, *_args, **_kwargs):
+        raise AssertionError("legacy/tool-loop result was used as V4 primary")
+
+    orchestrator._execute_langgraph_v4_connected = MethodType(
+        execute_v4,
+        orchestrator,
+    )
+    orchestrator._run_tool_loop_result = MethodType(
+        legacy_must_not_run,
+        orchestrator,
+    )
+    turn = TurnExecutionState.create(
+        session_key="orchestrator-primary-session",
+        original_text=planned.original_text,
+    )
+
+    result = await orchestrator._run_unified_turn_planner_primary(
+        planned.original_text,
+        recent_rows=[],
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        operator_tools=False,
+        turn=turn,
+    )
+
+    assert called == 1
+    assert result.text == "V4가 만든 최종 응답"
+    assert result.success is True
+    assert result.selected_route == "recipe"
+    assert turn.final_text == result.text
+    assert turn.phase.value == "completed"
 
 
 @pytest.mark.asyncio
@@ -720,6 +1005,7 @@ async def test_connected_shadow_reserves_each_lifetime_budget_before_next_work(
     usage = result.telemetry.budget_usage
     assert calls == expected_asset_calls
     assert usage.asset_calls == expected_asset_calls
+    assert result.execution.dispatch_trace.executed == expected_asset_calls
     assert usage.stop_condition == "budget_exhausted"
     assert usage.exhausted is True
     assert result.telemetry.terminal_outcome is TerminalOutcome.BLOCKED

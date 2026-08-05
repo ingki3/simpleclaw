@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 
 from .adapters.delivery import DeliveryAdapter, NullDeliveryAdapter
 from .checkpoint import resolve_checkpoint_path
@@ -48,6 +48,12 @@ ShadowStopCondition = Literal[
     "cancelled",
     "failed",
     "blocked",
+]
+
+LangGraphV4ExecutionMode = Literal[
+    "shadow",
+    "read_only_canary",
+    "primary",
 ]
 
 
@@ -142,7 +148,7 @@ class ShadowNoSendConfigurationError(ValueError):
 
 
 class LangGraphV4RolloutFacade:
-    """Legacy primary와 격리 V4 shadow/canary 판정을 연결하는 rollout facade다."""
+    """격리 V4 실행을 typed rollout mode와 no-send graph 경계에 묶는다."""
 
     def __init__(
         self,
@@ -159,16 +165,18 @@ class LangGraphV4RolloutFacade:
             raise ShadowNoSendConfigurationError(
                 "rollout facade requires langgraph_v4 architecture"
             )
-        if mode not in {"shadow", "canary"}:
+        if mode == "canary":
+            mode = "read_only_canary"
+        if mode not in {"shadow", "read_only_canary", "primary"}:
             raise ShadowNoSendConfigurationError(
-                "rollout facade supports only shadow or canary mode"
+                "rollout facade requires shadow, read_only_canary, or primary mode"
             )
         if not shadow_no_send:
             raise ShadowNoSendConfigurationError(
-                "shadow/canary rollout requires shadow_no_send"
+                "connected rollout requires shadow_no_send graph delivery"
             )
         self.architecture = architecture
-        self.mode = mode
+        self.mode = cast(LangGraphV4ExecutionMode, mode)
         self.shadow_no_send = shadow_no_send
         self.budget = budget
         self.checkpoint_path = resolve_checkpoint_path(
@@ -178,7 +186,7 @@ class LangGraphV4RolloutFacade:
         )
 
     def shadow_delivery_runtime(self, journal: DeliveryJournal) -> DeliveryRuntime:
-        """Live callback을 받을 수 없는 NullDeliveryAdapter runtime만 만든다."""
+        """외부 delivery를 소유하지 않는 NullDeliveryAdapter runtime만 만든다."""
         return DeliveryRuntime(
             journal=journal,
             adapters={
@@ -229,6 +237,110 @@ class ShadowSideEffectCountsV1:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetDispatchTraceV1:
+    """선택된 helper의 단일 실행 불변식을 원문 없이 기록한다."""
+
+    target_asset_ref: AssetRefV1
+    invocation_id: str
+    attempted: int
+    executed: int
+    succeeded: int
+    duplicate_blocked: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.invocation_id:
+            raise ValueError("target dispatch invocation_id is required")
+        values = (
+            self.attempted,
+            self.executed,
+            self.succeeded,
+            self.duplicate_blocked,
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in values
+        ):
+            raise ValueError("target dispatch counters must be non-negative integers")
+        if self.executed > self.attempted or self.succeeded > self.executed:
+            raise ValueError("target dispatch counters are inconsistent")
+
+    @property
+    def exactly_once(self) -> bool:
+        return (
+            self.attempted == 1
+            and self.executed == 1
+            and self.succeeded == 1
+            and self.duplicate_blocked == 0
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "target_asset_ref": self.target_asset_ref.model_dump(mode="json"),
+            "invocation_id": self.invocation_id,
+            "attempted": self.attempted,
+            "executed": self.executed,
+            "succeeded": self.succeeded,
+            "duplicate_blocked": self.duplicate_blocked,
+            "exactly_once": self.exactly_once,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LangGraphV4ExecutionReceiptV1:
+    """primary/canary 응답 승격 전에 검증하는 typed graph execution receipt다."""
+
+    mode: LangGraphV4ExecutionMode
+    request_id: str
+    selected_route: str
+    final_artifact: FinalArtifactV1 | None
+    dispatch_trace: TargetDispatchTraceV1
+    budget_usage: ShadowBudgetUsageV1
+    side_effect_counts: ShadowSideEffectCountsV1
+    terminal_outcome: TerminalOutcome
+    rollback_required: bool
+    rollback_reasons: tuple[str, ...]
+    result_source: Literal["langgraph_v4"] = "langgraph_v4"
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"shadow", "read_only_canary", "primary"}:
+            raise ValueError("invalid LangGraph V4 execution receipt mode")
+        if not self.request_id or not self.selected_route:
+            raise ValueError("execution receipt identifiers are required")
+        if self.rollback_required != bool(self.rollback_reasons):
+            raise ValueError("rollback flag and reasons must agree")
+
+    @property
+    def final_content(self) -> str | None:
+        if self.rollback_required or self.final_artifact is None:
+            return None
+        return self.final_artifact.content
+
+    @property
+    def provenance(self) -> str:
+        target = self.dispatch_trace.target_asset_ref
+        return (
+            f"langgraph_v4:{target.type}:{target.name}:"
+            f"{self.dispatch_trace.invocation_id}"
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "mode": self.mode,
+            "request_id": self.request_id,
+            "selected_route": self.selected_route,
+            "result_source": self.result_source,
+            "provenance": self.provenance,
+            "typed_final": self.final_artifact is not None,
+            "dispatch_trace": self.dispatch_trace.as_dict(),
+            "budget_usage": self.budget_usage.as_dict(),
+            "side_effect_counts": self.side_effect_counts.as_dict(),
+            "terminal_outcome": self.terminal_outcome.value,
+            "rollback_required": self.rollback_required,
+            "rollback_reason": ",".join(self.rollback_reasons) or None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class LegacyRunTelemetryV1:
     """비교에 필요한 legacy facade의 원문 없는 최소 관측값이다."""
 
@@ -273,6 +385,7 @@ class ShadowRunTelemetryV1:
     delivery_status: DeliveryStatus
     budget_usage: ShadowBudgetUsageV1
     model_call_attribution: Mapping[str, int]
+    dispatch_trace: TargetDispatchTraceV1
 
     def __post_init__(self) -> None:
         identifiers = (
@@ -316,6 +429,7 @@ class ShadowRunTelemetryV1:
         delivery_status: DeliveryStatus,
         budget_usage: ShadowBudgetUsageV1,
         model_call_attribution: Mapping[str, int],
+        dispatch_trace: TargetDispatchTraceV1 | None = None,
     ) -> ShadowRunTelemetryV1:
         """Registry→invocation→result identity가 정확할 때만 telemetry를 만든다."""
         snapshot = entry.snapshot
@@ -360,6 +474,21 @@ class ShadowRunTelemetryV1:
             delivery_status=delivery_status,
             budget_usage=budget_usage,
             model_call_attribution=dict(model_call_attribution),
+            dispatch_trace=(
+                dispatch_trace
+                if dispatch_trace is not None
+                else TargetDispatchTraceV1(
+                    target_asset_ref=invocation.asset_ref,
+                    invocation_id=invocation.invocation_id,
+                    attempted=1,
+                    executed=1,
+                    succeeded=(
+                        1
+                        if invocation_status is InvocationStatus.SUCCEEDED
+                        else 0
+                    ),
+                )
+            ),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -388,6 +517,7 @@ class ShadowRunTelemetryV1:
             "delivery_status": self.delivery_status.value,
             "budget_usage": self.budget_usage.as_dict(),
             "model_call_attribution": dict(self.model_call_attribution),
+            "dispatch_trace": self.dispatch_trace.as_dict(),
             "stop_condition": self.budget_usage.stop_condition,
         }
 
@@ -454,6 +584,8 @@ def compare_shadow_run(
         reasons.append("stop_condition_not_completed")
     if shadow.budget_usage.exhausted:
         reasons.append("budget_exhausted")
+    if not shadow.dispatch_trace.exactly_once:
+        reasons.append("target_dispatch_not_exactly_once")
     if side_effect_counts.total:
         reasons.append("external_side_effect")
     return ShadowComparisonTelemetryV1(

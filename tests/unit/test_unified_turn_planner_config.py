@@ -167,8 +167,8 @@ agent:
     assert result["telemetry"]["include_raw_text"] is False
 
 
-def test_unified_turn_planner_accepts_canary_mode(tmp_path):
-    """canary는 primary와 구분되는 명시적 rollout mode로 보존한다."""
+def test_unified_turn_planner_normalizes_canary_to_read_only_mode(tmp_path):
+    """legacy canary 표기도 명시적 read-only rollout mode로 정규화한다."""
     config = tmp_path / "config.yaml"
     config.write_text(
         """\
@@ -182,7 +182,7 @@ agent:
 
     result = load_agent_config(config)["unified_turn_planner"]
 
-    assert result["mode"] == "canary"
+    assert result["mode"] == "read_only_canary"
     assert result["sample_rate"] == 0.05
 
 
@@ -235,6 +235,7 @@ agent:
             "max_rows": 2000,
         },
         "delivery": {"mode": "no_send", "max_attempts": 2},
+        "on_failure": "fail_closed",
         "shadow_no_send": True,
         "telemetry_fields": (
             "run_id",
@@ -260,7 +261,11 @@ agent:
             "delivery_status",
             "budget_usage",
             "model_call_attribution",
+            "dispatch_trace",
             "stop_condition",
+            "result_source",
+            "provenance",
+            "typed_final",
             "rollback_required",
             "rollback_reason",
         ),
