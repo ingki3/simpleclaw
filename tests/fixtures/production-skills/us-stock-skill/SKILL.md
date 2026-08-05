@@ -17,6 +17,8 @@ input_contract:
   owner_ref: {type: skill, name: us-stock-skill}
   json_schema:
     type: object
+    examples:
+      - args: info --symbol AAPL --json
     properties:
       args: {type: string, minLength: 1, pattern: '(^|\s)--json(?:\s|$)'}
     required: [args]

@@ -17,6 +17,8 @@ input_contract:
   owner_ref: {type: skill, name: naver-sports-skill}
   json_schema:
     type: object
+    examples:
+      - args: --mode results --category kbo --date 2026-08-02 --limit 10 --json
     properties:
       args: {type: string, minLength: 1}
     required: [args]

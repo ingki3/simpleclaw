@@ -17,6 +17,8 @@ input_contract:
   owner_ref: {type: skill, name: google-calendar-skill}
   json_schema:
     type: object
+    examples:
+      - args: list --calendar-id primary --days 7 --limit 10
     properties:
       args: {type: string, minLength: 1, pattern: '^(?:calendars|list|create|delete)(?:\s|$)'}
     required: [args]

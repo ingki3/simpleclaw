@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import yaml
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
+from simpleclaw.capability import parse_owned_contract_metadata
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import classify_contract
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.contracts_registry import (
@@ -29,26 +31,13 @@ READ_ONLY_SKILLS = {
     "gmail-skill",
     "google-news-search-skill",
     "kr-stock-skill",
+    "naver-shopping-skill",
     "naver-sports-skill",
     "us-stock-skill",
 }
 MUTATION_SKILLS = {"google-calendar-skill"}
 TARGET_SKILLS = READ_ONLY_SKILLS | MUTATION_SKILLS
 TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
-DECLARED_EXAMPLES = {
-    "gmail-skill": {
-        "args": 'search --query "category:primary is:unread" --limit 5'
-    },
-    "google-calendar-skill": {
-        "args": "list --calendar-id primary --days 7 --limit 10"
-    },
-    "google-news-search-skill": {"args": "--query OpenAI --format json"},
-    "kr-stock-skill": {"args": "quote-summary --json"},
-    "naver-sports-skill": {
-        "args": "--mode results --category kbo --date 2026-08-02 --limit 10 --json"
-    },
-    "us-stock-skill": {"args": "info --symbol AAPL --json"},
-}
 
 
 def _sports_recipe():
@@ -82,6 +71,29 @@ def _production_definitions():
     return skills, native_specs
 
 
+def _declared_schema_examples(registry, skill) -> tuple[dict[str, object], ...]:
+    """Registry schema의 모든 example을 엄격히 canonical validation한다."""
+    entry = registry.asset(AssetRefV1(type="skill", name=skill.name))
+    assert entry is not None
+    raw_examples = entry.input_descriptor.json_schema.get("examples")
+    if not isinstance(raw_examples, list) or not raw_examples:
+        raise ContractRegistryError("payload.safe_example_missing")
+
+    canonical = []
+    for example in raw_examples:
+        if not isinstance(example, Mapping):
+            raise ContractRegistryError("payload.declared_example_invalid")
+        try:
+            payload = registry.validate_canonical(
+                entry.input_descriptor,
+                example,
+            ).payload
+        except ContractRegistryError as exc:
+            raise ContractRegistryError("payload.declared_example_invalid") from exc
+        canonical.append(payload)
+    return tuple(canonical)
+
+
 def test_production_read_only_assets_have_complete_owned_contracts() -> None:
     skills, native_specs = _production_definitions()
     catalog = build_planner_catalog(skills=skills, native_specs=native_specs)
@@ -95,8 +107,8 @@ def test_production_read_only_assets_have_complete_owned_contracts() -> None:
     registry = build_contract_registry((*skills, *native_specs))
 
     assert classification.status == "read_only_complete", classification.issues
-    assert len(refs) == 7
-    assert len(registry.entries) == 8
+    assert len(refs) == 8
+    assert len(registry.entries) == 9
     for ref in refs:
         entry = registry.asset(AssetRefV1(type=ref.asset_type, name=ref.name))
         asset = next(
@@ -173,13 +185,41 @@ def test_declared_skill_examples_validate_against_canonical_schemas() -> None:
     registry = build_contract_registry(skills)
 
     for skill in skills:
-        entry = registry.asset(AssetRefV1(type="skill", name=skill.name))
-        assert entry is not None
-        canonical = registry.validate_canonical(
-            entry.input_descriptor,
-            DECLARED_EXAMPLES[skill.name],
-        )
-        assert canonical.payload == DECLARED_EXAMPLES[skill.name]
+        examples = _declared_schema_examples(registry, skill)
+        assert len(examples) == 1
+        assert examples[0]["args"]
+
+
+@pytest.mark.parametrize("corruption", ("missing", "invalid"))
+def test_declared_skill_example_gap_fails_closed(corruption: str) -> None:
+    skills, _ = _production_definitions()
+    target = next(item for item in skills if item.name == "naver-shopping-skill")
+    assert target.input_contract is not None
+    schema = target.input_contract.json_schema
+    if corruption == "missing":
+        schema.pop("examples")
+        expected = "payload.safe_example_missing"
+    else:
+        schema["examples"] = [{"args": "purchase --sku forbidden"}]
+        expected = "payload.declared_example_invalid"
+    metadata = parse_owned_contract_metadata(
+        {
+            "contract_id": target.input_contract.contract_id,
+            "version": target.input_contract.version,
+            "owner_ref": {
+                "type": target.input_contract.owner_type,
+                "name": target.input_contract.owner_name,
+            },
+            "json_schema": schema,
+        },
+        source="corrupt-example",
+    )
+    assert metadata is not None
+    definition = replace(target, input_contract=metadata)
+    registry = build_contract_registry((definition,))
+
+    with pytest.raises(ContractRegistryError, match=expected):
+        _declared_schema_examples(registry, definition)
 
 
 def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> None:
@@ -245,10 +285,21 @@ def test_sports_recipe_delegate_resolves_production_skill_contract() -> None:
     assert target_asset.contract_owner == "skill:naver-sports-skill"
     assert target_entry.input_descriptor.ref.schema_hash == target_asset.input_schema_hash
     assert target_entry.output_descriptor.ref.schema_hash == target_asset.output_schema_hash
+    target_example = _declared_schema_examples(registry, target)[0]
+    recipe_entry = registry.asset(AssetRefV1(type="recipe", name=recipe.name))
+    assert recipe_entry is not None
+    recipe_payload = registry.validate_canonical(
+        recipe_entry.input_descriptor,
+        {"query": target_example["args"]},
+    ).payload
+    mapped_payload = {
+        target_name: recipe_payload[source_name]
+        for source_name, target_name in recipe.step_bindings[0].binding["map"].items()
+    }
     assert registry.validate_canonical(
         target_entry.input_descriptor,
-        DECLARED_EXAMPLES[target.name],
-    ).payload == DECLARED_EXAMPLES[target.name]
+        mapped_payload,
+    ).payload == target_example
 
 
 @pytest.mark.parametrize("corruption", ("missing_binding", "owner_mismatch"))

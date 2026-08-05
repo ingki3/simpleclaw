@@ -17,6 +17,8 @@ input_contract:
   owner_ref: {type: skill, name: gmail-skill}
   json_schema:
     type: object
+    examples:
+      - args: 'search --query "category:primary is:unread" --limit 5'
     properties:
       args: {type: string, minLength: 1, pattern: '^(?:search|read)(?:\s|$)'}
     required: [args]

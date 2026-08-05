@@ -345,16 +345,87 @@ async def test_exact_sports_recipe_completes_connected_read_only_probe(
         for item in catalog.assets
         if (item.asset_type, item.name) == ("recipe", "sports-live")
     )
+    delegate_asset = next(
+        item
+        for item in catalog.assets
+        if (item.asset_type, item.name) == ("skill", "naver-sports-skill")
+    )
+    plan = replace(
+        plan,
+        capability=replace(
+            plan.capability,
+            supporting_assets=(AssetRef("skill", "naver-sports-skill"),),
+        ),
+        execution=replace(
+            plan.execution,
+            allowed_assets=(
+                AssetRef("recipe", "sports-live"),
+                AssetRef("skill", "naver-sports-skill"),
+            ),
+        ),
+    )
     probe = ConnectedContractProbe(
         definitions=(recipe, target_skill),
         directory=tmp_path / f"case-{case_index}",
+    )
+    try:
+        stop, counts = await probe(case, plan, (asset, delegate_asset))
+    finally:
+        probe.close()
+
+    assert gate.status.value == "pass"
+    assert stop == "completed", probe.last_rollback_reasons
+    assert probe.last_rollback_reasons == ()
+    assert counts == SideEffectCounts()
+
+
+@pytest.mark.asyncio
+async def test_fq17_shopping_plan_completes_with_registry_schema_example(
+    tmp_path: Path,
+) -> None:
+    shopping = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
+        if item.name == "naver-shopping-skill"
+    )
+    assert shopping.input_contract is not None
+    examples = shopping.input_contract.json_schema.get("examples")
+    assert isinstance(examples, list) and len(examples) == 1
+    example = examples[0]
+    assert isinstance(example, dict)
+    args = example.get("args")
+    assert isinstance(args, str)
+    catalog = build_planner_catalog(skills=(shopping,), native_specs=())
+    asset = next(item for item in catalog.assets if item.name == shopping.name)
+    ref = AssetRef("skill", shopping.name)
+    case = load_scenarios(FIXTURE)[16]
+    base = _gold_plan(case, catalog)
+    plan = replace(
+        base,
+        context=replace(base.context, standalone_question=args),
+        execution=replace(
+            base.execution,
+            primary_asset=ref,
+            allowed_assets=(ref,),
+        ),
+        capability=replace(
+            base.capability,
+            primary_asset=ref,
+            supporting_assets=(ref,),
+        ),
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    probe = ConnectedContractProbe(
+        definitions=(shopping,),
+        directory=tmp_path / "fq17-shopping",
     )
     try:
         stop, counts = await probe(case, plan, (asset,))
     finally:
         probe.close()
 
-    assert gate.status.value == "pass"
     assert stop == "completed", probe.last_rollback_reasons
     assert probe.last_rollback_reasons == ()
     assert counts == SideEffectCounts()
@@ -631,6 +702,7 @@ async def test_production_read_only_assets_complete_connected_read_only_probe(
         "gmail-skill",
         "google-news-search-skill",
         "kr-stock-skill",
+        "naver-shopping-skill",
         "naver-sports-skill",
         "us-stock-skill",
     }
@@ -657,6 +729,7 @@ async def test_production_read_only_assets_complete_connected_read_only_probe(
             ("skill", "gmail-skill"),
             ("skill", "google-news-search-skill"),
             ("skill", "kr-stock-skill"),
+            ("skill", "naver-shopping-skill"),
             ("skill", "naver-sports-skill"),
             ("skill", "us-stock-skill"),
             ("native_tool", "web_fetch"),
@@ -664,18 +737,26 @@ async def test_production_read_only_assets_complete_connected_read_only_probe(
         ):
             ref = AssetRef(asset_type, name)
             base = _gold_plan(case, catalog)
-            standalone = {
-                "gmail-skill": 'search --query "category:primary is:unread" --limit 5',
-                "google-news-search-skill": '--query "시장 마감" --format json',
-                "kr-stock-skill": "market-summary --json",
-                "naver-sports-skill": (
-                    "--mode results --category kbo --date 2026-08-02 "
-                    "--limit 10 --json"
+            definition = next(
+                (
+                    item
+                    for item in skills
+                    if item.name == name and item.input_contract is not None
                 ),
-                "us-stock-skill": "info --symbol AAPL --json",
-                "web_fetch": "https://example.com/report",
-                "web_search": "시장 마감",
-            }[name]
+                None,
+            )
+            if definition is not None:
+                examples = definition.input_contract.json_schema.get("examples")
+                assert isinstance(examples, list) and len(examples) == 1
+                example = examples[0]
+                assert isinstance(example, dict)
+                standalone = example["args"]
+                assert isinstance(standalone, str)
+            else:
+                standalone = {
+                    "web_fetch": "https://example.com/report",
+                    "web_search": "시장 마감",
+                }[name]
             plan = replace(
                 base,
                 context=replace(base.context, standalone_question=standalone),
