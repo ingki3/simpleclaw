@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import (
     PlannerAsset,
     PlannerCatalog,
@@ -28,6 +31,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.turn_planner import plan_turn_with_llm
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ConnectedContractProbe,
     ScenarioCase,
@@ -36,6 +40,7 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     load_scenarios,
 )
 from simpleclaw.langgraph_v4_shadow_validation import _definitions
+from simpleclaw.llm.models import LLMResponse
 
 ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
@@ -44,6 +49,20 @@ FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
 class _UnusedRouter:
     async def send(self, _request):  # pragma: no cover - replay planner owns output
         raise AssertionError("mock replay must not call a provider")
+
+
+class _ReplayRouter:
+    """structured provider boundary를 통과하는 단일 응답 대역."""
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    async def send(self, request):
+        tool_schema = request.response_schema["properties"]["execution"][
+            "properties"
+        ]["allowed_tools"]
+        assert set(tool_schema["items"]["enum"]) == {"execute_skill"}
+        return LLMResponse(text=json.dumps(self.payload, ensure_ascii=False))
 
 
 def _asset_type(name: str) -> str:
@@ -159,6 +178,103 @@ def _gold_plan(case: ScenarioCase, catalog: PlannerCatalog) -> UnifiedTurnPlan:
         decision_summary="fixed gold replay",
         catalog_fingerprint=catalog.fingerprint,
     )
+
+
+def _structured_recipe_payload(case: ScenarioCase) -> dict[str, object]:
+    """fq-05~07 exact sports recipe를 provider schema payload로 표현한다."""
+    current = case.current
+    return {
+        "context": {
+            "relation": "standalone",
+            "use_prior_context": False,
+            "selected_turn_ids": [],
+            "standalone_question": current,
+            "unresolved_references": [],
+            "ignored_context_reason": "",
+        },
+        "clarification": {
+            "required": False,
+            "question": "",
+            "options": [],
+            "reason": "",
+        },
+        "domains": ["sports"],
+        "intents": ["current_result"],
+        "fact_check": {
+            "required": True,
+            "owner": "asset",
+            "domain": "sports",
+            "intents": ["current_result"],
+            "entities": [],
+            "reference_date": "2026-08-05",
+            "search_query": current,
+            "required_claims": list(case.expected.required_terms),
+            "freshness_required": True,
+            "reason": "current sports result",
+        },
+        "capability": {
+            "coverage": "full_coverage",
+            "primary_asset": {
+                "asset_type": "recipe",
+                "asset_name": "sports-live",
+            },
+            "supporting_assets": [],
+            "fallback_modes": ["answer_with_evidence"],
+            "reason": "exact recipe",
+        },
+        "execution": {
+            "mode": "answer_with_evidence",
+            "allowed_tools": [],
+            "requires_confirmation": False,
+            "complexity_signals": [],
+            "reason": "recipe first",
+        },
+        "confidence": 1,
+        "decision_summary": "sports recipe replay",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_index", (4, 5, 6))
+async def test_corrected_schema_failure_cases_cross_structured_boundary(
+    case_index: int,
+) -> None:
+    """authoritative v2의 fq-05~07은 schema-valid exact recipe plan을 보존한다."""
+    case = load_scenarios(FIXTURE)[case_index]
+    base_catalog = _catalog((case,))
+    catalog = PlannerCatalog(
+        (
+            PlannerAsset(
+                asset_type="native_tool",
+                name="execute_skill",
+                description="exact skill adapter",
+                domains=(),
+                intents=(),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+            *base_catalog.assets,
+        ),
+        base_catalog.fingerprint,
+    )
+    candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+    plan = await plan_turn_with_llm(
+        case.current,
+        candidates=candidates,
+        catalog=catalog,
+        router=_ReplayRouter(_structured_recipe_payload(case)),
+    )
+    gate = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+
+    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
+    assert plan.execution.allowed_tools == ()
+    assert gate.status.value == "pass"
 
 
 @pytest.mark.asyncio
