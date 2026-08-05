@@ -286,6 +286,19 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "Never duplicate capability.primary_asset" in prompt
     assert "chain-of-thought" in prompt
     assert "decision_summary" in prompt
+    assert "Populate every required schema field exactly once" in prompt
+    assert "preserve the complete current_user_message" in prompt
+    assert "full_coverage Recipe must use execution.mode=direct_answer" in prompt
+    assert "current score or result explicit" in prompt
+
+    examples = load_system_prompt(
+        "unified_turn_planner_examples", refresh=True
+    ).field("template")
+    assert "bounded tool-iterative ReAct" in examples
+    assert "multi-source Deep Research" in examples
+    assert "implicit live-game status" in examples
+    assert "context-free acknowledgement" in examples
+    assert "confirmed-before-dispatch mutation" in examples
 
 
 def test_unified_schema_keeps_canonical_modes_and_typed_fact_contract() -> None:

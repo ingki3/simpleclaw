@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 5
+version: 6
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -17,7 +17,11 @@ template: |-
     capability.primary_asset={"asset_type":"recipe","asset_name":"sports-live"}
     and capability.supporting_assets=[]; execution.allowed_tools=[] because the
     recipe owns its delegate; the primary executes before mode
-  - execution.mode=answer_with_evidence is only the unresolved fallback path
+  - execution.mode=direct_answer because no general solver is needed after the exact
+    Recipe; capability.fallback_modes may contain answer_with_evidence, but fallback
+    modes never replace execution.mode while the Recipe covers the whole request
+  - standalone_question preserves the complete request, including 유해란, LPGA,
+    1라운드, and 성적
   - failed, unsupported, or unusable retrieval never means absence
 
   ## Example: official team score
@@ -27,8 +31,35 @@ template: |-
   - fact_check.domain=sports, fact_check.intents=[current_result]
   - entities include team=롯데 and league=KBO
   - reference_date resolves 오늘 to planner_clock.current_date
+  - an informal live-progress request still makes the current 스코어 or result
+    explicit in standalone_question while preserving the user's original wording
   - exact full coverage executes first; empty may transition to
-    execution.mode=answer_with_evidence for schedule/status explanation
+    a separately assessed fallback only after the Recipe attempt; the initial
+    execution.mode remains direct_answer
+
+  ## Example: implicit live-game status
+  User: 홈팀 경기가 지금 어떻게 되고 있어?
+  Decision summary:
+  - standalone_question preserves the request and explicitly asks for the 홈팀의
+    현재 스코어와 경기 상황
+  - this is current_result owned by an applicable full-coverage Recipe, not a
+    general research task
+
+  ## Example: bounded tool-iterative ReAct
+  User: 삼성전자 현재 주가와 오늘 등락률을 확인해줘
+  Decision summary:
+  - no whole-request Recipe is available
+  - execution.mode=answer_with_evidence
+  - select only applicable read-only market collectors from the catalog
+  - complexity_signals=[] because one bounded lookup does not require research
+
+  ## Example: multi-source Deep Research
+  User: 두 회사의 최근 협업 발표를 여러 출처로 검증하고 사업적 영향을 분석해줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem
+  - complexity_signals includes ordered_capability_composition or evidence_conflict
+  - supporting assets contain only applicable catalog identities; provider failure or
+    an empty result is not a reason to choose this mode
 
   ## Example: static explanation
   User: 파이썬 dataclass가 뭐야?
@@ -42,6 +73,20 @@ template: |-
   Decision summary:
   - if more than one bounded context candidate is plausible,
     execution.mode=clarify
+
+  ## Example: context-free acknowledgement
+  User: 그래
+  Decision summary:
+  - relation=standalone, selected_turn_ids=[], use_prior_context=false
+  - clarification.required=true and execution.mode=clarify because no executable
+    referent is present; this is not simple conversation
+
+  ## Example: confirmed-before-dispatch mutation
+  User: 매일 오전 8시에 오늘 일정을 알려주는 알림을 만들어줘
+  Decision summary:
+  - select the exact mutation asset, execution.mode=direct_answer
+  - clarification.required=true and execution.requires_confirmation=true
+  - stop before dispatch; confirmation does not turn the request into research
 
   ## Example: explicit complexity
   User: 두 공식 자료가 충돌하는 이유를 비교하고 계산 규칙까지 적용해줘
