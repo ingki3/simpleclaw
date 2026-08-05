@@ -30,6 +30,7 @@ from .composition import FinalCompositionRuntime
 from .contracts import AssetInvocationV1, AssetRefV1, NormalizedAssetResultV1
 from .contracts_registry import (
     ContractAssetDefinition,
+    ContractRegistryError,
     ContractRegistrySnapshotV1,
     RegistryAssetEntryV1,
     build_contract_registry,
@@ -243,7 +244,7 @@ def _question_payload(
     entry: RegistryAssetEntryV1,
     question: str,
 ) -> dict[str, Any]:
-    """단일 string 입력 계약만 의미 재해석 없이 planner 질문에 결합한다."""
+    """질문을 우선 검증하고 계약이 선언한 안전한 fallback만 사용한다."""
     schema = entry.input_descriptor.json_schema
     properties = schema.get("properties")
     required = schema.get("required")
@@ -255,8 +256,37 @@ def _question_payload(
         for name in required
     ):
         raise ValueError("shadow input contract requires explicit string fields")
-    payload = {name: question for name in required}
-    return registry.validate_canonical(entry.input_descriptor, payload).payload
+
+    candidates: list[Mapping[str, Any]] = [{name: question for name in required}]
+    declared_default = schema.get("default")
+    if isinstance(declared_default, Mapping):
+        candidates.append(declared_default)
+    declared_examples = schema.get("examples")
+    if isinstance(declared_examples, list):
+        candidates.extend(
+            item for item in declared_examples if isinstance(item, Mapping)
+        )
+
+    property_fallback: dict[str, Any] = {}
+    for name in required:
+        field = properties[name]
+        if "default" in field:
+            property_fallback[name] = field["default"]
+            continue
+        examples = field.get("examples")
+        if isinstance(examples, list) and examples:
+            property_fallback[name] = examples[0]
+    if len(property_fallback) == len(required):
+        candidates.append(property_fallback)
+
+    for candidate in candidates:
+        try:
+            return registry.validate_canonical(
+                entry.input_descriptor, candidate
+            ).payload
+        except ContractRegistryError:
+            continue
+    raise ContractRegistryError("payload.safe_example_missing")
 
 
 def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:

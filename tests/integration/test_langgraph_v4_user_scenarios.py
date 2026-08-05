@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.capability import parse_owned_contract_metadata
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ConnectedContractProbe,
     ScenarioCase,
@@ -782,5 +784,173 @@ async def test_production_read_only_assets_complete_connected_read_only_probe(
 
             assert stop == "completed", (name, probe.last_rollback_reasons)
             assert counts == SideEffectCounts()
+    finally:
+        probe.close()
+
+
+@pytest.mark.asyncio
+async def test_supporting_web_assets_complete_as_sequential_connected_probes(
+    tmp_path: Path,
+) -> None:
+    native_specs = tuple(
+        spec
+        for spec in build_native_tool_registry(scopes=(ToolScope.RUNTIME,))
+        if spec.name in {"web_fetch", "web_search"}
+    )
+    catalog = build_planner_catalog(native_specs=native_specs)
+    refs = (
+        AssetRef("native_tool", "web_search"),
+        AssetRef("native_tool", "web_fetch"),
+    )
+    base = _gold_plan(load_scenarios(FIXTURE)[9], catalog)
+    plan = replace(
+        base,
+        context=replace(
+            base.context, standalone_question="https://example.com/report"
+        ),
+        execution=replace(
+            base.execution,
+            primary_asset=None,
+            allowed_assets=refs,
+        ),
+        capability=replace(
+            base.capability,
+            primary_asset=None,
+            supporting_assets=refs,
+        ),
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    probe = ConnectedContractProbe(definitions=native_specs, directory=tmp_path)
+    try:
+        stop, counts = await probe(
+            load_scenarios(FIXTURE)[9], plan, catalog.assets
+        )
+    finally:
+        probe.close()
+
+    assert stop == "completed", probe.last_rollback_reasons
+    assert probe.last_rollback_reasons == ()
+    assert counts == SideEffectCounts()
+
+
+@pytest.mark.asyncio
+async def test_cli_skill_uses_declared_example_when_question_is_not_contract_valid(
+    tmp_path: Path,
+) -> None:
+    skill = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
+        if item.name == "google-news-search-skill"
+    )
+    assert skill.input_contract is not None
+    schema = deepcopy(skill.input_contract.json_schema)
+    schema.pop("examples", None)
+    schema["properties"]["args"]["examples"] = [
+        '--query "시장 마감" --format json'
+    ]
+    skill = replace(
+        skill,
+        input_contract=parse_owned_contract_metadata(
+            {
+                "contract_id": skill.input_contract.contract_id,
+                "version": skill.input_contract.version,
+                "owner_ref": {
+                    "type": skill.input_contract.owner_type,
+                    "name": skill.input_contract.owner_name,
+                },
+                "json_schema": schema,
+            },
+            source="declared CLI example fixture",
+        ),
+    )
+    catalog = build_planner_catalog(skills=(skill,), native_specs=())
+    ref = AssetRef("skill", skill.name)
+    base = _gold_plan(load_scenarios(FIXTURE)[9], catalog)
+    plan = replace(
+        base,
+        context=replace(
+            base.context,
+            standalone_question="오늘 시장 마감 뉴스를 정리해 주세요",
+        ),
+        execution=replace(
+            base.execution, primary_asset=ref, allowed_assets=(ref,)
+        ),
+        capability=replace(
+            base.capability, primary_asset=ref, supporting_assets=()
+        ),
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    probe = ConnectedContractProbe(definitions=(skill,), directory=tmp_path)
+    selected_assets = tuple(
+        item for item in catalog.assets if item.name == skill.name
+    )
+    try:
+        stop, counts = await probe(
+            load_scenarios(FIXTURE)[9], plan, selected_assets
+        )
+    finally:
+        probe.close()
+
+    assert stop == "completed", probe.last_rollback_reasons
+    assert probe.last_rollback_reasons == ()
+    assert counts == SideEffectCounts()
+
+
+@pytest.mark.asyncio
+async def test_cli_skill_without_declared_fallback_fails_closed(
+    tmp_path: Path,
+) -> None:
+    skill = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
+        if item.name == "google-news-search-skill"
+    )
+    assert skill.input_contract is not None
+    schema = json.loads(json.dumps(skill.input_contract.json_schema))
+    schema.pop("default", None)
+    schema.pop("examples", None)
+    for property_schema in schema.get("properties", {}).values():
+        property_schema.pop("default", None)
+        property_schema.pop("examples", None)
+    skill = replace(
+        skill,
+        input_contract=parse_owned_contract_metadata(
+            {
+                "contract_id": skill.input_contract.contract_id,
+                "version": skill.input_contract.version,
+                "owner_ref": {
+                    "type": skill.input_contract.owner_type,
+                    "name": skill.input_contract.owner_name,
+                },
+                "json_schema": schema,
+            },
+            source="missing declared CLI fallback fixture",
+        ),
+    )
+    catalog = build_planner_catalog(skills=(skill,), native_specs=())
+    ref = AssetRef("skill", skill.name)
+    base = _gold_plan(load_scenarios(FIXTURE)[9], catalog)
+    plan = replace(
+        base,
+        context=replace(base.context, standalone_question="자연어 질문"),
+        execution=replace(
+            base.execution, primary_asset=ref, allowed_assets=(ref,)
+        ),
+        capability=replace(
+            base.capability, primary_asset=ref, supporting_assets=()
+        ),
+        catalog_fingerprint=catalog.fingerprint,
+    )
+    probe = ConnectedContractProbe(definitions=(skill,), directory=tmp_path)
+    selected_assets = tuple(
+        item for item in catalog.assets if item.name == skill.name
+    )
+    try:
+        with pytest.raises(ValueError, match="payload.safe_example_missing"):
+            await probe(load_scenarios(FIXTURE)[9], plan, selected_assets)
     finally:
         probe.close()

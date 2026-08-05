@@ -386,37 +386,67 @@ class ConnectedContractProbe:
         self,
         case: ScenarioCase,
         plan: UnifiedTurnPlan,
-        _assets: tuple[PlannerAsset, ...],
+        assets: tuple[PlannerAsset, ...],
     ) -> tuple[str, SideEffectCounts]:
-        self._sequence += 1
-        result = await self._runner.run(
-            plan=plan,
-            legacy=LegacyRunTelemetryV1(
-                selected_route=normalize_v4_route(plan),
-                terminal_outcome=TerminalOutcome.COMPLETED,
-                model_calls=1,
-            ),
-            request_id=f"scenario-{case.id}-{self._sequence}",
-            session_key="langgraph-v4-scenario-eval",
-            planner_model_calls=1,
-            planner_tokens=0,
-        )
-        counts = result.side_effect_counts
-        observed = SideEffectCounts(
-            telegram_send=counts.telegram_send,
-            cron_notifier=counts.notifier,
-            conversation_write=counts.conversation_write,
-        )
+        """승인된 자산 전부를 immutable single-primary plan으로 순차 검증한다."""
+        ordered = sorted(assets, key=lambda item: (item.asset_type, item.name))
+        stops: list[str] = []
+        rollback_reasons: list[str] = []
+        observed = SideEffectCounts()
+        for asset in ordered:
+            ref = AssetRef(asset.asset_type, asset.name)
+            probe_plan = replace(
+                plan,
+                execution=replace(
+                    plan.execution,
+                    primary_asset=ref,
+                    allowed_assets=(ref,),
+                ),
+                capability=replace(
+                    plan.capability,
+                    primary_asset=ref,
+                    supporting_assets=(),
+                ),
+            )
+            self._sequence += 1
+            result = await self._runner.run(
+                plan=probe_plan,
+                legacy=LegacyRunTelemetryV1(
+                    selected_route=normalize_v4_route(probe_plan),
+                    terminal_outcome=TerminalOutcome.COMPLETED,
+                    model_calls=1,
+                ),
+                request_id=f"scenario-{case.id}-{self._sequence}",
+                session_key="langgraph-v4-scenario-eval",
+                planner_model_calls=1,
+                planner_tokens=0,
+            )
+            counts = result.side_effect_counts
+            observed = SideEffectCounts(
+                telegram_send=observed.telegram_send + counts.telegram_send,
+                cron_notifier=observed.cron_notifier + counts.notifier,
+                conversation_write=(
+                    observed.conversation_write + counts.conversation_write
+                ),
+            )
+            stop = result.telemetry.budget_usage.stop_condition
+            if result.comparison.rollback_required:
+                stop = "rollback_required"
+            stops.append(stop)
+            rollback_reasons.extend(result.comparison.rollback_reasons)
+
         if self._store.get_recent():
             observed = SideEffectCounts(
                 telegram_send=observed.telegram_send,
                 cron_notifier=observed.cron_notifier,
                 conversation_write=observed.conversation_write + 1,
             )
-        stop = result.telemetry.budget_usage.stop_condition
-        self.last_rollback_reasons = result.comparison.rollback_reasons
-        if result.comparison.rollback_required:
+        self.last_rollback_reasons = tuple(dict.fromkeys(rollback_reasons))
+        stop = "completed"
+        if "rollback_required" in stops:
             stop = "rollback_required"
+        else:
+            stop = next((item for item in stops if item != "completed"), stop)
         return stop, observed
 
     def close(self) -> None:
