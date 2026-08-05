@@ -33,6 +33,10 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.capability import (
+    parse_owned_binding_metadata,
+    parse_owned_contract_metadata,
+)
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ConnectedContractProbe,
     ScenarioCase,
@@ -42,11 +46,60 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
 )
 from simpleclaw.langgraph_v4_shadow_validation import _definitions
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills.models import SkillDefinition
 
 ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
 PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
+
+
+def _sports_contract_definitions():
+    recipe = next(
+        item
+        for item in discover_recipes(ROOT / "tests/fixtures/recipes")
+        if item.name == "sports-live"
+    )
+    skill = SkillDefinition(
+        name="naver-sports-skill",
+        description="Connected sports contract target",
+        capability=recipe.capability,
+        input_contract=parse_owned_contract_metadata(
+            {
+                "contract_id": "skill.naver-sports-skill.input",
+                "version": "1",
+                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
+                "json_schema": {
+                    "type": "object",
+                    "properties": {
+                        "args": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["args"],
+                    "additionalProperties": False,
+                },
+            },
+            source="synthetic naver sports input",
+        ),
+        output_contract=parse_owned_contract_metadata(
+            {
+                "contract_id": "skill.naver-sports-skill.output",
+                "version": "1",
+                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
+                "json_schema": {"type": "object"},
+            },
+            source="synthetic naver sports output",
+        ),
+        argument_binding=parse_owned_binding_metadata(
+            {
+                "binding_id": "shell-argv.v1",
+                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
+                "binding": {"strategy": "shell", "order": ["args"]},
+            },
+            source="synthetic naver sports binding",
+        ),
+    )
+    return recipe, skill
 
 
 class _UnusedRouter:
@@ -226,7 +279,7 @@ def _structured_recipe_payload(case: ScenarioCase) -> dict[str, object]:
             "reason": "exact recipe",
         },
         "execution": {
-            "mode": "answer_with_evidence",
+            "mode": "direct_answer",
             "allowed_tools": [],
             "requires_confirmation": False,
             "complexity_signals": [],
@@ -278,6 +331,69 @@ async def test_corrected_schema_failure_cases_cross_structured_boundary(
     assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
     assert plan.execution.allowed_tools == ()
     assert gate.status.value == "pass"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_index", (4, 5, 6))
+async def test_exact_sports_recipe_completes_connected_read_only_probe(
+    tmp_path: Path,
+    case_index: int,
+) -> None:
+    """fq-05~07 exact Recipe는 owned contract로 rollback 없이 완료된다."""
+    recipe, target_skill = _sports_contract_definitions()
+    discovered = build_planner_catalog(
+        skills=(target_skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    catalog = PlannerCatalog(
+        (
+            PlannerAsset(
+                asset_type="native_tool",
+                name="execute_skill",
+                description="exact skill adapter",
+                domains=(),
+                intents=(),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=True,
+            ),
+            *discovered.assets,
+        ),
+        discovered.fingerprint,
+    )
+    case = load_scenarios(FIXTURE)[case_index]
+    candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+    plan = await plan_turn_with_llm(
+        case.current,
+        candidates=candidates,
+        catalog=catalog,
+        router=_ReplayRouter(_structured_recipe_payload(case)),
+    )
+    gate = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+    asset = next(
+        item
+        for item in catalog.assets
+        if (item.asset_type, item.name) == ("recipe", "sports-live")
+    )
+    probe = ConnectedContractProbe(
+        definitions=(recipe, target_skill),
+        directory=tmp_path / f"case-{case_index}",
+    )
+    try:
+        stop, counts = await probe(case, plan, (asset,))
+    finally:
+        probe.close()
+
+    assert gate.status.value == "pass"
+    assert stop == "completed", probe.last_rollback_reasons
+    assert probe.last_rollback_reasons == ()
+    assert counts == SideEffectCounts()
 
 
 @pytest.mark.asyncio

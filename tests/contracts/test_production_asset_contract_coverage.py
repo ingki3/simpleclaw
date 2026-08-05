@@ -1,25 +1,42 @@
-"""BIZ-579 production read-only asset의 V4 contract coverage 회귀."""
+"""BIZ-579/BIZ-585 production read-only asset의 V4 contract coverage 회귀."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import classify_contract
+from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.contracts_registry import (
     ContractRegistryError,
     build_contract_registry,
 )
+from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.recipes.loader import discover_recipes, load_recipe
+from simpleclaw.recipes.models import RecipeParseError
 from simpleclaw.skills.discovery import discover_skills
 
 ROOT = Path(__file__).parents[2]
 PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
+SPORTS_RECIPE_FIXTURES = ROOT / "tests/fixtures/recipes"
 TARGET_SKILLS = {"google-news-search-skill", "kr-stock-skill"}
 TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
+
+
+def _sports_recipe():
+    recipes = tuple(
+        item
+        for item in discover_recipes(SPORTS_RECIPE_FIXTURES)
+        if item.name == "sports-live"
+    )
+    assert len(recipes) == 1
+    return recipes[0]
 
 
 def _production_definitions():
@@ -87,3 +104,96 @@ def test_skill_contract_rejects_non_json_cli_invocation() -> None:
                 entry.input_descriptor,
                 {"args": "market-summary"},
             )
+
+
+def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> None:
+    recipe = _sports_recipe()
+    catalog = build_planner_catalog(recipes=(recipe,), native_specs=())
+    ref = AssetRef("recipe", "sports-live")
+    classification = classify_contract(catalog, (ref,))
+    registry = build_contract_registry((recipe,))
+
+    assert classification.status == "read_only_complete", classification.issues
+    assert recipe.capability.input_contract == "query.v1"
+    assert recipe.capability.output_contract == "asset_result.v1"
+    assert recipe.input_contract is not None
+    assert recipe.output_contract is not None
+    assert recipe.contract_binding is not None
+    assert recipe.input_contract.json_schema == {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 1},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    assert recipe.step_bindings[0].binding == {
+        "target_skill": "naver-sports-skill",
+        "map": {"query": "args"},
+    }
+
+    asset = next(item for item in catalog.assets if item.name == "sports-live")
+    entry = registry.asset(AssetRefV1(type="recipe", name="sports-live"))
+    assert entry is not None
+    assert asset.contract_owner == "recipe:sports-live"
+    assert asset.input_contract_ref == "recipe.sports-live.input@1"
+    assert asset.output_contract_ref == "recipe.sports-live.output@1"
+    assert asset.input_schema_hash == recipe.input_contract.schema_hash
+    assert asset.output_schema_hash == recipe.output_contract.schema_hash
+    assert asset.binding_identity == (
+        f"{recipe.contract_binding.binding_id}:"
+        f"{recipe.contract_binding.binding_hash}"
+    )
+    assert entry.input_descriptor.ref.schema_hash == asset.input_schema_hash
+    assert entry.output_descriptor.ref.schema_hash == asset.output_schema_hash
+    assert entry.snapshot.declared_binding is not None
+    assert (
+        f"{entry.snapshot.declared_binding.binding_id}:"
+        f"{entry.snapshot.declared_binding.binding_hash}"
+    ) == asset.binding_identity
+    assert entry.snapshot.read_only is True
+    assert entry.snapshot.side_effects is False
+
+
+@pytest.mark.parametrize("corruption", ("missing_binding", "owner_mismatch"))
+def test_sports_recipe_invalid_contract_fails_before_dispatch(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    raw = yaml.safe_load(
+        (SPORTS_RECIPE_FIXTURES / "sports-live/recipe.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    recipe_path = tmp_path / "sports-live/recipe.yaml"
+    recipe_path.parent.mkdir()
+    if corruption == "missing_binding":
+        raw.pop("step_bindings")
+    else:
+        raw["output_contract"]["owner_ref"]["name"] = "other-recipe"
+    recipe_path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    dispatch_count = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        return {}
+
+    if corruption == "missing_binding":
+        with pytest.raises(RecipeParseError, match="must declare input_contract"):
+            load_recipe(recipe_path)
+        definition = replace(_sports_recipe(), step_bindings=())
+        expected_error = "definition.contract_metadata_incomplete"
+    else:
+        definition = load_recipe(recipe_path)
+        expected_error = "definition.owner_mismatch"
+
+    with pytest.raises(ContractRegistryError, match=expected_error):
+        ConnectedShadowTurnRunner(
+            facade=object(),
+            definitions=(definition,),
+            conversation_store=object(),
+            recipe_executor=executor,
+        )
+
+    assert dispatch_count == 0
