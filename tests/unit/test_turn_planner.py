@@ -201,6 +201,21 @@ def _exact_recipe_catalog() -> PlannerCatalog:
                 coverage="full_coverage",
                 input_contract="query.v1",
             ),
+            PlannerAsset(
+                asset_type="skill",
+                name="naver-sports-skill",
+                description="recipe-owned read-only sports delegate",
+                domains=("sports",),
+                intents=("current_result",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+            ),
         ),
         fingerprint="sports-live-catalog",
     )
@@ -325,7 +340,12 @@ async def test_planner_sends_one_structured_request() -> None:
     request = router.send.await_args.args[0]
     assert request.route_name == "turn_analysis"
     assert request.response_mime_type == "application/json"
-    assert request.response_schema is UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+    assert request.response_schema is not UNIFIED_TURN_PLAN_RESPONSE_SCHEMA
+    allowed_tool_schema = request.response_schema["properties"]["execution"][
+        "properties"
+    ]["allowed_tools"]
+    assert allowed_tool_schema["items"]["enum"] == ["execute_skill"]
+    assert allowed_tool_schema["maxItems"] == 1
     assert request.require_structured_output is True
     assert request.tools is None
 
@@ -455,7 +475,10 @@ async def test_capability_primary_does_not_require_supporting_duplicate() -> Non
     assert plan.capability.supporting_assets == ()
 
 
-@pytest.mark.parametrize("allowed_tools", ([], ["execute_skill"]))
+@pytest.mark.parametrize(
+    "allowed_tools",
+    ([], ["execute_skill"], ["naver-sports-skill"]),
+)
 @pytest.mark.asyncio
 async def test_exact_recipe_safe_top_level_scope_is_narrowed(
     allowed_tools: list[str],
@@ -575,7 +598,6 @@ async def test_unknown_capability_primary_is_rejected() -> None:
     ("skill_runtime_visible", "side_effecting_skill", "boundary_code"),
     [
         (False, False, "unknown_or_internal_asset"),
-        (True, True, "confirmation_required"),
     ],
 )
 async def test_capability_primary_preserves_catalog_trust_boundaries(
@@ -583,7 +605,7 @@ async def test_capability_primary_preserves_catalog_trust_boundaries(
     side_effecting_skill: bool,
     boundary_code: str,
 ) -> None:
-    """독립 primary도 internal/confirmation 경계를 우회하지 못한다."""
+    """독립 primary도 internal asset 경계를 우회하지 못한다."""
     data = _response_data()
     data["capability"] = {
         "coverage": "full_coverage",
@@ -631,13 +653,58 @@ async def test_unknown_allowed_tool_is_rejected() -> None:
         return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
     )
 
-    with pytest.raises(PlannerUnavailable):
+    with pytest.raises(PlannerUnavailable) as exc_info:
         await plan_turn_with_llm(
             "질문",
             candidates=_candidates(),
             catalog=_catalog(),
             router=router,
         )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_tool"
+
+
+@pytest.mark.asyncio
+async def test_runtime_internal_allowed_tool_is_rejected() -> None:
+    """catalog snapshot에만 있는 internal native tool도 합성 허용하지 않는다."""
+    data = _response_data()
+    data["execution"]["allowed_tools"] = ["internal_operator_tool"]
+    base_catalog = _catalog()
+    catalog = PlannerCatalog(
+        assets=(
+            *base_catalog.assets,
+            PlannerAsset(
+                asset_type="native_tool",
+                name="internal_operator_tool",
+                description="operator-only tool",
+                domains=(),
+                intents=(),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=False,
+                requires_confirmation=False,
+                output_contract=None,
+                declared=True,
+                runtime_visible=False,
+            ),
+        ),
+        fingerprint=base_catalog.fingerprint,
+    )
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "질문",
+            candidates=_candidates(),
+            catalog=catalog,
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_tool"
 
 
 @pytest.mark.asyncio
@@ -657,14 +724,15 @@ async def test_runtime_internal_asset_is_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_side_effecting_asset_requires_confirmation() -> None:
-    """side-effect 또는 catalog confirmation gate가 있으면 plan도 확인을 요구해야 한다."""
+    """알려진 side-effect asset의 confirmation 누락은 안전한 방향으로 보정한다."""
     router = AsyncMock()
     router.send = AsyncMock(return_value=LLMResponse(text=_response_payload()))
 
-    with pytest.raises(PlannerUnavailable):
-        await plan_turn_with_llm(
-            "질문",
-            candidates=_candidates(),
-            catalog=_catalog(side_effecting_skill=True),
-            router=router,
-        )
+    plan = await plan_turn_with_llm(
+        "질문",
+        candidates=_candidates(),
+        catalog=_catalog(side_effecting_skill=True),
+        router=router,
+    )
+
+    assert plan.execution.requires_confirmation is True

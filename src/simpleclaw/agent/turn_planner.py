@@ -22,8 +22,8 @@ from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.planner_catalog import PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
-    UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
     UnifiedTurnPlan,
+    build_turn_plan_response_schema,
     decode_turn_plan_payload,
     parse_turn_plan_data,
 )
@@ -232,11 +232,27 @@ def _normalize_redundant_exact_recipe_delegate(
     ):
         return raw_data
     allowed_tools = execution.get("allowed_tools")
-    if allowed_tools not in ([], ["execute_skill"]):
+    if not isinstance(allowed_tools, list):
+        return raw_data
+    redundant_delegates = {"execute_skill"}
+    redundant_delegates.update(
+        asset.name
+        for asset in catalog.assets
+        if asset.runtime_visible
+        and asset.declared
+        and asset.asset_type == "skill"
+        and asset.read_only
+        and not asset.side_effects
+        and not asset.requires_confirmation
+    )
+    if any(
+        not isinstance(name, str) or name not in redundant_delegates
+        for name in allowed_tools
+    ):
         return raw_data
 
     normalized = dict(raw_data)
-    if allowed_tools == ["execute_skill"]:
+    if allowed_tools:
         normalized_execution = dict(execution)
         normalized_execution["allowed_tools"] = []
         normalized["execution"] = normalized_execution
@@ -249,6 +265,62 @@ def _normalize_redundant_exact_recipe_delegate(
         normalized_fact_check = dict(fact_check)
         normalized_fact_check["owner"] = "asset"
         normalized["fact_check"] = normalized_fact_check
+    return normalized
+
+
+def _normalize_catalog_confirmation(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """알려진 catalog scope의 confirmation을 보수적인 방향으로 맞춘다.
+
+    provider가 이미 선택한 모든 asset/tool identity가 runtime-visible일 때만
+    catalog safety metadata를 적용한다. 미등록/internal identity는 그대로 남겨
+    ``validate_turn_plan_boundaries``가 안정적 오류 코드로 거부하게 한다.
+    """
+    execution = raw_data.get("execution")
+    if not isinstance(execution, Mapping):
+        return raw_data
+    try:
+        primary, allowed_assets, allowed_tools, _legacy = _requested_asset_scope(
+            parse_turn_plan_data(raw_data, original_text=""),
+            raw_data,
+        )
+    except (PlanBoundaryViolation, TypeError, ValueError):
+        return raw_data
+
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible
+    }
+    runtime_tools = {
+        asset.name: asset
+        for asset in runtime_assets.values()
+        if asset.asset_type == "native_tool"
+    }
+    referenced = set(allowed_assets)
+    if primary is not None:
+        referenced.add(primary)
+    if (
+        any(identity not in runtime_assets for identity in referenced)
+        or any(name not in runtime_tools for name in allowed_tools)
+    ):
+        return raw_data
+    requires_confirmation = any(
+        asset.side_effects or asset.requires_confirmation
+        for asset in (
+            *(runtime_assets[identity] for identity in referenced),
+            *(runtime_tools[name] for name in allowed_tools),
+        )
+    )
+    if not requires_confirmation or execution.get("requires_confirmation") is True:
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_execution = dict(execution)
+    normalized_execution["requires_confirmation"] = True
+    normalized["execution"] = normalized_execution
     return normalized
 
 
@@ -526,7 +598,13 @@ async def plan_turn_with_llm(
             route_name="turn_analysis",
             max_tokens=max_tokens,
             response_mime_type="application/json",
-            response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
+            response_schema=build_turn_plan_response_schema(
+                allowed_tools=tuple(
+                    asset.name
+                    for asset in catalog.assets
+                    if asset.runtime_visible and asset.asset_type == "native_tool"
+                ),
+            ),
             require_structured_output=True,
             usage_task="turn_planner",
         )
@@ -578,6 +656,7 @@ async def plan_turn_with_llm(
                 data,
                 catalog=catalog,
             )
+            data = _normalize_catalog_confirmation(data, catalog=catalog)
             plan = parse_turn_plan_data(
                 data,
                 original_text=original,
