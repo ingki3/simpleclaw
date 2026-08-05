@@ -13,6 +13,7 @@ from simpleclaw.agent.turn_plan import (
     ContextRelation,
     EvidenceOwner,
     ExecutionMode,
+    build_turn_plan_response_schema,
     parse_turn_plan_data,
     parse_turn_plan_payload,
 )
@@ -120,6 +121,33 @@ def test_schema_is_gemini_compatible_and_strict() -> None:
     ]["primary_asset"]
     assert primary["properties"]["asset_type"]["enum"][0] == "none"
     assert primary["properties"]["asset_name"]["type"] == "string"
+
+
+def test_runtime_tool_schema_uses_only_catalog_names_without_mutating_base() -> None:
+    """요청별 tool enum은 정렬·중복 제거되고 정적 schema는 그대로 유지된다."""
+    narrowed = build_turn_plan_response_schema(
+        allowed_tools=("web_search", "execute_skill", "web_search"),
+        allowed_asset_names=("news-skill", "web_search", "news-skill"),
+    )
+    narrowed_tools = narrowed["properties"]["execution"]["properties"][
+        "allowed_tools"
+    ]
+    base_tools = UNIFIED_TURN_PLAN_RESPONSE_SCHEMA["properties"]["execution"][
+        "properties"
+    ]["allowed_tools"]
+
+    assert narrowed_tools["items"]["enum"] == ["execute_skill", "web_search"]
+    assert narrowed_tools["maxItems"] == 2
+    assert "enum" not in base_tools["items"]
+    capability = narrowed["properties"]["capability"]["properties"]
+    assert capability["primary_asset"]["properties"]["asset_name"]["enum"] == [
+        "__none__",
+        "news-skill",
+        "web_search",
+    ]
+    assert capability["supporting_assets"]["items"]["properties"]["asset_name"][
+        "enum"
+    ] == ["news-skill", "web_search"]
 
 
 def test_parser_converts_no_asset_sentinel_to_none() -> None:

@@ -22,6 +22,7 @@ from simpleclaw.graph_runtime.adapters.persistence import (
 from simpleclaw.runtime_budget import bind_runtime_llm_budget
 
 from .adapters.base import AdapterResponse
+from .adapters.native_tool import GenericNativeToolAdapter, NativeToolExecutor
 from .adapters.recipe import GenericRecipeAdapter, RecipeExecutor
 from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
@@ -29,6 +30,7 @@ from .composition import FinalCompositionRuntime
 from .contracts import AssetInvocationV1, AssetRefV1, NormalizedAssetResultV1
 from .contracts_registry import (
     ContractAssetDefinition,
+    ContractRegistryError,
     ContractRegistrySnapshotV1,
     RegistryAssetEntryV1,
     build_contract_registry,
@@ -242,7 +244,7 @@ def _question_payload(
     entry: RegistryAssetEntryV1,
     question: str,
 ) -> dict[str, Any]:
-    """단일 string 입력 계약만 의미 재해석 없이 planner 질문에 결합한다."""
+    """질문을 우선 검증하고 계약이 선언한 안전한 fallback만 사용한다."""
     schema = entry.input_descriptor.json_schema
     properties = schema.get("properties")
     required = schema.get("required")
@@ -254,8 +256,37 @@ def _question_payload(
         for name in required
     ):
         raise ValueError("shadow input contract requires explicit string fields")
-    payload = {name: question for name in required}
-    return registry.validate_canonical(entry.input_descriptor, payload).payload
+
+    candidates: list[Mapping[str, Any]] = [{name: question for name in required}]
+    declared_default = schema.get("default")
+    if isinstance(declared_default, Mapping):
+        candidates.append(declared_default)
+    declared_examples = schema.get("examples")
+    if isinstance(declared_examples, list):
+        candidates.extend(
+            item for item in declared_examples if isinstance(item, Mapping)
+        )
+
+    property_fallback: dict[str, Any] = {}
+    for name in required:
+        field = properties[name]
+        if "default" in field:
+            property_fallback[name] = field["default"]
+            continue
+        examples = field.get("examples")
+        if isinstance(examples, list) and examples:
+            property_fallback[name] = examples[0]
+    if len(property_fallback) == len(required):
+        candidates.append(property_fallback)
+
+    for candidate in candidates:
+        try:
+            return registry.validate_canonical(
+                entry.input_descriptor, candidate
+            ).payload
+        except ContractRegistryError:
+            continue
+    raise ContractRegistryError("payload.safe_example_missing")
 
 
 def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
@@ -287,6 +318,7 @@ class ConnectedShadowTurnRunner:
         conversation_store: object,
         recipe_executor: RecipeExecutor | None = None,
         skill_executor: SkillExecutor | None = None,
+        native_tool_executor: NativeToolExecutor | None = None,
     ) -> None:
         self._facade = facade
         self._definitions = tuple(definitions)
@@ -294,6 +326,7 @@ class ConnectedShadowTurnRunner:
         self._conversation_store = conversation_store
         self._recipe_executor = recipe_executor
         self._skill_executor = skill_executor
+        self._native_tool_executor = native_tool_executor
 
     async def run(
         self,
@@ -335,19 +368,24 @@ class ConnectedShadowTurnRunner:
             for item in self._definitions
             if item.contract_asset_type == asset_ref.type and item.name == asset_ref.name
         )
-        adapter = (
-            GenericRecipeAdapter(
+        if asset_ref.type == "recipe":
+            adapter = GenericRecipeAdapter(
                 self._registry,
                 definition,
                 executor=self._recipe_executor,
             )
-            if asset_ref.type == "recipe"
-            else GenericSkillAdapter(
+        elif asset_ref.type == "native_tool":
+            adapter = GenericNativeToolAdapter(
+                self._registry,
+                definition,
+                executor=self._native_tool_executor,
+            )
+        else:
+            adapter = GenericSkillAdapter(
                 self._registry,
                 definition,
                 executor=self._skill_executor,
             )
-        )
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
         budget_controller = _ShadowRunBudget(

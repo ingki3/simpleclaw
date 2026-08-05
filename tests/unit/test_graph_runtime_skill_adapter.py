@@ -97,6 +97,39 @@ async def test_exact_definition_binding_and_hash_continuity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shell_binding_matches_execute_skill_args_contract() -> None:
+    skill = _definition()
+    binding = parse_owned_binding_metadata(
+        {
+            "binding_id": "shell-argv.v1",
+            "owner_ref": {"type": "skill", "name": "fixture-skill"},
+            "binding": {"strategy": "shell", "order": ["args"]},
+        },
+        source="binding",
+    )
+    assert binding is not None
+    skill.input_contract = _contract("args")
+    skill.argument_binding = binding
+    registry = build_contract_registry([skill])
+    calls = []
+
+    async def executor(_definition, argv):
+        calls.append(argv)
+        return {"result_token": "ok"}
+
+    invocation = _invocation(
+        skill,
+        {"args": '--query "US market close" --lookback-days 2 --format json'},
+    )
+    response = await GenericSkillAdapter(registry, skill, executor).dispatch(invocation)
+
+    assert calls == [
+        ["--query", "US market close", "--lookback-days", "2", "--format", "json"]
+    ]
+    assert response.status is AssetResultStatus.RESOLVED
+
+
+@pytest.mark.asyncio
 async def test_unknown_key_and_definition_drift_dispatch_zero() -> None:
     skill = _definition()
     registry = build_contract_registry([skill])

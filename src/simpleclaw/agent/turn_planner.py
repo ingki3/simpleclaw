@@ -22,8 +22,8 @@ from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.planner_catalog import PlannerCatalog
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.turn_plan import (
-    UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
     UnifiedTurnPlan,
+    build_turn_plan_response_schema,
     decode_turn_plan_payload,
     parse_turn_plan_data,
 )
@@ -41,6 +41,10 @@ _REPAIR_REQUIRED_FIELDS = (
     "fact_check",
     "execution",
     "confidence",
+)
+
+_CATALOG_BOUNDARY_REPAIR_CODES = frozenset(
+    {"unknown_or_internal_asset", "unknown_or_internal_tool"}
 )
 
 
@@ -232,11 +236,30 @@ def _normalize_redundant_exact_recipe_delegate(
     ):
         return raw_data
     allowed_tools = execution.get("allowed_tools")
-    if allowed_tools not in ([], ["execute_skill"]):
+    if not isinstance(allowed_tools, list):
+        return raw_data
+    safe_skill_names = {
+        asset.name
+        for asset in catalog.assets
+        if asset.runtime_visible
+        and asset.declared
+        and asset.asset_type == "skill"
+        and asset.read_only
+        and not asset.side_effects
+        and not asset.requires_confirmation
+    }
+    redundant_delegates = {
+        "execute_skill",
+        *(set(catalog_asset.delegated_skills) & safe_skill_names),
+    }
+    if any(
+        not isinstance(name, str) or name not in redundant_delegates
+        for name in allowed_tools
+    ):
         return raw_data
 
     normalized = dict(raw_data)
-    if allowed_tools == ["execute_skill"]:
+    if allowed_tools:
         normalized_execution = dict(execution)
         normalized_execution["allowed_tools"] = []
         normalized["execution"] = normalized_execution
@@ -249,6 +272,406 @@ def _normalize_redundant_exact_recipe_delegate(
         normalized_fact_check = dict(fact_check)
         normalized_fact_check["owner"] = "asset"
         normalized["fact_check"] = normalized_fact_check
+    return normalized
+
+
+def _normalize_redundant_full_skill_scope(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """계약상 whole-request를 소유한 read-only Skill의 중복 scope를 제거한다.
+
+    provider가 full-coverage primary Skill과 함께 generic collector나 다른
+    full-coverage Skill을 supporting scope로 반복 선택하면 같은 의미의 요청도
+    asset set이 흔들린다. 또한 full Skill을 첫 supporting asset으로 올바르게
+    선택하고도 coverage를 partial로 표기하는 provider 결과가 있다. Exact
+    declared/read-only Skill과 안전한 supporting identity만 확인된 경우
+    capability를 primary 하나로 좁히고 Skill adapter만 유지한다.
+    미등록·side-effect·confirmation asset은 기존 fail-closed 경계를 보존하기
+    위해 정규화하지 않는다.
+    """
+    capability = raw_data.get("capability")
+    execution = raw_data.get("execution")
+    if not isinstance(capability, Mapping) or not isinstance(execution, Mapping):
+        return raw_data
+    coverage = capability.get("coverage")
+    if coverage not in {"full_coverage", "partial_coverage"}:
+        return raw_data
+    try:
+        primary = _raw_asset_identity(
+            capability.get("primary_asset"),
+            allow_none=True,
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    raw_supporting = capability.get("supporting_assets")
+    if not isinstance(raw_supporting, list) or not raw_supporting:
+        return raw_data
+
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible and asset.declared
+    }
+    runtime_tools = {
+        asset.name: asset
+        for asset in runtime_assets.values()
+        if asset.asset_type == "native_tool"
+    }
+    try:
+        supporting = tuple(
+            _raw_asset_identity(item, allow_none=False)
+            for item in raw_supporting
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    if any(identity is None for identity in supporting):
+        return raw_data
+    supporting_assets = tuple(runtime_assets.get(identity) for identity in supporting)
+    if any(
+        asset is None
+        or not asset.declared
+        or not asset.read_only
+        or asset.side_effects
+        or asset.requires_confirmation
+        for asset in supporting_assets
+    ):
+        return raw_data
+
+    promoted_primary: tuple[str, str] | None = None
+    if coverage == "partial_coverage":
+        if primary is not None and primary[0] == "skill":
+            promoted_primary = primary
+        elif primary is None:
+            first_supporting = supporting[0]
+            first_asset = runtime_assets.get(first_supporting)
+            if first_asset is not None and first_asset.asset_type == "skill":
+                promoted_primary = first_supporting
+    elif coverage != "full_coverage" or primary is None or primary[0] != "skill":
+        return raw_data
+
+    effective_primary = promoted_primary or primary
+    if effective_primary is None:
+        return raw_data
+    primary_asset = runtime_assets.get(effective_primary)
+    if (
+        primary_asset is None
+        or not primary_asset.declared
+        or primary_asset.coverage != "full_coverage"
+        or primary_asset.input_contract != "query.v1"
+        or primary_asset.output_contract != "asset_result.v1"
+        or not primary_asset.read_only
+        or primary_asset.side_effects
+        or primary_asset.requires_confirmation
+    ):
+        return raw_data
+
+    allowed_tools = execution.get("allowed_tools")
+    if not isinstance(allowed_tools, list) or any(
+        not isinstance(name, str) for name in allowed_tools
+    ):
+        return raw_data
+    adapter = runtime_tools.get("execute_skill")
+    removable_tool_names = {
+        identity[1]
+        for identity in supporting
+        if identity is not None and identity[0] == "native_tool"
+    }
+    selected_tools = tuple(runtime_tools.get(name) for name in allowed_tools)
+    if (
+        adapter is None
+        or not adapter.declared
+        or not adapter.read_only
+        or adapter.side_effects
+        or adapter.requires_confirmation
+        or any(
+            asset is None
+            or not asset.declared
+            or not asset.read_only
+            or asset.side_effects
+            or asset.requires_confirmation
+            for asset in selected_tools
+        )
+        or any(
+            name != "execute_skill" and name not in removable_tool_names
+            for name in allowed_tools
+        )
+    ):
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_capability = dict(capability)
+    normalized_capability["coverage"] = "full_coverage"
+    normalized_capability["primary_asset"] = {
+        "asset_type": "skill",
+        "asset_name": primary_asset.name,
+    }
+    normalized_capability["supporting_assets"] = []
+    normalized["capability"] = normalized_capability
+    normalized_execution = dict(execution)
+    normalized_execution["allowed_tools"] = ["execute_skill"]
+    normalized["execution"] = normalized_execution
+    return normalized
+
+
+def _normalize_unselected_skill_adapter(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """native collector-only plan에서 중복 ``execute_skill``만 제거한다.
+
+    Provider가 exact native supporting collectors를 선택하면서 Skill adapter도
+    관성적으로 허용하는 경우가 있다. 선택 scope에 Skill이 없고 모든 identity가
+    runtime-visible·declared·read-only이며 tool allowlist가 그 native scope와 정확히
+    일치할 때만 adapter를 제거한다. mutation, unknown, unrelated tool은 원문을
+    보존해 기존 boundary/PlanGate가 fail-closed하도록 한다.
+    """
+    execution = raw_data.get("execution")
+    if not isinstance(execution, Mapping):
+        return raw_data
+    capability = raw_data.get("capability")
+    capability_native = isinstance(capability, Mapping)
+    try:
+        primary = _raw_asset_identity(
+            (
+                capability.get("primary_asset")
+                if capability_native
+                else execution.get("primary_asset")
+            ),
+            allow_none=True,
+        )
+        raw_supporting = (
+            capability.get("supporting_assets")
+            if capability_native
+            else execution.get("allowed_assets")
+        )
+        if not isinstance(raw_supporting, list):
+            return raw_data
+        supporting = tuple(
+            _raw_asset_identity(item, allow_none=False)
+            for item in raw_supporting
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    selected = tuple(
+        identity for identity in (primary, *supporting) if identity is not None
+    )
+    if not selected or any(asset_type == "skill" for asset_type, _name in selected):
+        return raw_data
+    native_names = {
+        name for asset_type, name in selected if asset_type == "native_tool"
+    }
+    if not native_names:
+        return raw_data
+    allowed_tools = execution.get("allowed_tools")
+    if (
+        not isinstance(allowed_tools, list)
+        or "execute_skill" not in allowed_tools
+        or any(not isinstance(name, str) for name in allowed_tools)
+        or set(allowed_tools) - native_names - {"execute_skill"}
+    ):
+        return raw_data
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible and asset.declared
+    }
+    scoped_assets = tuple(runtime_assets.get(identity) for identity in selected)
+    adapter = runtime_assets.get(("native_tool", "execute_skill"))
+    if (
+        adapter is None
+        or any(
+            asset is None
+            or not asset.read_only
+            or asset.side_effects
+            or asset.requires_confirmation
+            for asset in (*scoped_assets, adapter)
+        )
+    ):
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_execution = dict(execution)
+    normalized_execution["allowed_tools"] = [
+        name for name in allowed_tools if name != "execute_skill"
+    ]
+    normalized["execution"] = normalized_execution
+    return normalized
+
+
+def _normalize_partial_skill_primary(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """partial Skill을 primary에서 deterministic supporting 선두로 이동한다.
+
+    full contract가 아닌 Skill은 독립 primary가 될 수 없지만 Deep Research의
+    supporting collector로는 유효하다. Provider가 partial coverage와 Skill primary를
+    함께 반환한 경우, exact declared read-only scope와 tool allowlist가 모두 맞을
+    때만 identity를 잃지 않고 supporting의 첫 항목으로 이동한다.
+    """
+    capability = raw_data.get("capability")
+    execution = raw_data.get("execution")
+    if (
+        not isinstance(capability, Mapping)
+        or not isinstance(execution, Mapping)
+        or capability.get("coverage") != "partial_coverage"
+    ):
+        return raw_data
+    try:
+        primary = _raw_asset_identity(
+            capability.get("primary_asset"),
+            allow_none=True,
+        )
+        raw_supporting = capability.get("supporting_assets")
+        if not isinstance(raw_supporting, list):
+            return raw_data
+        supporting = tuple(
+            _raw_asset_identity(item, allow_none=False)
+            for item in raw_supporting
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    if primary is None or primary[0] != "skill":
+        return raw_data
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible and asset.declared
+    }
+    selected = (primary, *supporting)
+    selected_assets = tuple(runtime_assets.get(identity) for identity in selected)
+    if any(
+        asset is None
+        or not asset.read_only
+        or asset.side_effects
+        or asset.requires_confirmation
+        for asset in selected_assets
+    ):
+        return raw_data
+    allowed_tools = execution.get("allowed_tools")
+    if not isinstance(allowed_tools, list) or any(
+        not isinstance(name, str) for name in allowed_tools
+    ):
+        return raw_data
+    runtime_tools = {
+        asset.name: asset
+        for asset in runtime_assets.values()
+        if asset.asset_type == "native_tool"
+    }
+    native_names = {
+        name for asset_type, name in selected if asset_type == "native_tool"
+    }
+    if (
+        "execute_skill" not in allowed_tools
+        or set(allowed_tools) - native_names - {"execute_skill"}
+        or any(
+            name not in runtime_tools
+            or not runtime_tools[name].read_only
+            or runtime_tools[name].side_effects
+            or runtime_tools[name].requires_confirmation
+            for name in allowed_tools
+        )
+    ):
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_capability = dict(capability)
+    normalized_capability["primary_asset"] = {
+        "asset_type": "none",
+        "asset_name": "__none__",
+    }
+    ordered = tuple(dict.fromkeys(selected))
+    normalized_capability["supporting_assets"] = [
+        {"asset_type": asset_type, "asset_name": name}
+        for asset_type, name in ordered
+    ]
+    normalized["capability"] = normalized_capability
+    return normalized
+
+
+def _normalize_standalone_question_fidelity(
+    raw_data: Mapping[str, object],
+    *,
+    original_text: str,
+) -> Mapping[str, object]:
+    """독립 요청의 standalone question에 현재 원문을 손실 없이 보존한다.
+
+    provider가 스코어·기준일 같은 실행 단서를 보강하는 것은 유지하되,
+    고유명사나 사용자의 정확한 표현을 동의어로 대체해 downstream claim
+    경계가 흔들리지 않게 한다. 문맥 재구성이 필요한 follow-up은 대상이 아니다.
+    """
+    if not original_text:
+        return raw_data
+    context = raw_data.get("context")
+    if not isinstance(context, Mapping) or context.get("relation") != "standalone":
+        return raw_data
+    standalone = context.get("standalone_question")
+    if not isinstance(standalone, str) or not standalone.strip():
+        return raw_data
+    original = original_text.strip()
+    if not original or original in standalone:
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_context = dict(context)
+    normalized_context["standalone_question"] = f"{original}\n{standalone.strip()}"
+    normalized["context"] = normalized_context
+    return normalized
+
+
+def _normalize_catalog_confirmation(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """알려진 catalog scope의 confirmation을 보수적인 방향으로 맞춘다.
+
+    provider가 이미 선택한 모든 asset/tool identity가 runtime-visible일 때만
+    catalog safety metadata를 적용한다. 미등록/internal identity는 그대로 남겨
+    ``validate_turn_plan_boundaries``가 안정적 오류 코드로 거부하게 한다.
+    """
+    execution = raw_data.get("execution")
+    if not isinstance(execution, Mapping):
+        return raw_data
+    try:
+        primary, allowed_assets, allowed_tools, _legacy = _requested_asset_scope(
+            parse_turn_plan_data(raw_data, original_text=""),
+            raw_data,
+        )
+    except (PlanBoundaryViolation, TypeError, ValueError):
+        return raw_data
+
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible
+    }
+    runtime_tools = {
+        asset.name: asset
+        for asset in runtime_assets.values()
+        if asset.asset_type == "native_tool"
+    }
+    referenced = set(allowed_assets)
+    if primary is not None:
+        referenced.add(primary)
+    if (
+        any(identity not in runtime_assets for identity in referenced)
+        or any(name not in runtime_tools for name in allowed_tools)
+    ):
+        return raw_data
+    requires_confirmation = any(
+        asset.side_effects or asset.requires_confirmation
+        for asset in (
+            *(runtime_assets[identity] for identity in referenced),
+            *(runtime_tools[name] for name in allowed_tools),
+        )
+    )
+    if not requires_confirmation or execution.get("requires_confirmation") is True:
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_execution = dict(execution)
+    normalized_execution["requires_confirmation"] = True
+    normalized["execution"] = normalized_execution
     return normalized
 
 
@@ -278,7 +701,7 @@ def validate_turn_plan_boundaries(
     runtime_assets = {
         (asset.asset_type, asset.name): asset
         for asset in catalog.assets
-        if asset.runtime_visible
+        if asset.runtime_visible and asset.declared
     }
     runtime_tools = {
         asset.name: asset
@@ -305,6 +728,29 @@ def validate_turn_plan_boundaries(
         raise PlanBoundaryViolation("unknown_or_internal_asset")
     if any(tool_name not in runtime_tools for tool_name in allowed_tools):
         raise PlanBoundaryViolation("unknown_or_internal_tool")
+
+    primary_asset = (
+        runtime_assets.get(primary) if primary is not None else None
+    )
+    if (
+        plan.capability.coverage.value == "full_coverage"
+        and primary_asset is not None
+        and primary_asset.asset_type == "skill"
+    ):
+        scoped_tool_names = {
+            name
+            for asset_type, name in allowed_assets
+            if asset_type == "native_tool"
+        }
+        scoped_tool_names.add("execute_skill")
+        if any(
+            tool_name not in scoped_tool_names
+            and runtime_tools[tool_name].read_only
+            and not runtime_tools[tool_name].side_effects
+            and not runtime_tools[tool_name].requires_confirmation
+            for tool_name in allowed_tools
+        ):
+            raise PlanBoundaryViolation("unrelated_full_skill_tool")
 
     confirmation_assets = [
         *(runtime_assets[identity] for identity in referenced_assets),
@@ -346,6 +792,48 @@ def build_turn_planner_user_prompt(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _build_catalog_boundary_retry_prompt(
+    user_message: str,
+    *,
+    catalog: PlannerCatalog,
+    boundary_code: str,
+) -> str:
+    """catalog identity 경계 실패를 exact declared enum으로 한 번 좁힌다.
+
+    잘못 반환된 identity 자체는 재주입하지 않는다. 현재 요청에 이미 고정된
+    catalog snapshot에서 runtime-visible·declared identity만 정렬해 전달하므로
+    provider가 같은 internal/hallucinated 이름을 반복할 유인을 제거한다.
+    """
+    payload = json.loads(user_message)
+    if not isinstance(payload, dict):
+        raise TypeError("planner user message must be a JSON object")
+    allowed_assets = sorted(
+        (asset.asset_type, asset.name)
+        for asset in catalog.assets
+        if asset.runtime_visible and asset.declared
+    )
+    payload["validation_repair"] = {
+        "reason": boundary_code,
+        "instruction": (
+            "Regenerate the complete plan. Use only an exact type/name pair from "
+            "allowed_asset_identities and only a name from allowed_tool_names. "
+            "Do not repeat or repair an identity that is absent from these enums."
+        ),
+        "allowed_asset_identities": [
+            {"asset_type": asset_type, "asset_name": name}
+            for asset_type, name in allowed_assets
+        ],
+        "allowed_tool_names": sorted(
+            asset.name
+            for asset in catalog.assets
+            if asset.runtime_visible
+            and asset.declared
+            and asset.asset_type == "native_tool"
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _repair_truncated_json_object(text: str) -> dict[str, object] | None:
@@ -526,7 +1014,18 @@ async def plan_turn_with_llm(
             route_name="turn_analysis",
             max_tokens=max_tokens,
             response_mime_type="application/json",
-            response_schema=UNIFIED_TURN_PLAN_RESPONSE_SCHEMA,
+            response_schema=build_turn_plan_response_schema(
+                allowed_tools=tuple(
+                    asset.name
+                    for asset in catalog.assets
+                    if asset.runtime_visible and asset.asset_type == "native_tool"
+                ),
+                allowed_asset_names=tuple(
+                    asset.name
+                    for asset in catalog.assets
+                    if asset.runtime_visible and asset.declared
+                ),
+            ),
             require_structured_output=True,
             usage_task="turn_planner",
         )
@@ -574,10 +1073,18 @@ async def plan_turn_with_llm(
             data: Mapping[str, object],
         ) -> UnifiedTurnPlan:
             """raw object를 모델로 조립한 뒤 실제 runtime 경계와 대조한다."""
+            data = _normalize_standalone_question_fidelity(
+                data,
+                original_text=original,
+            )
             data = _normalize_redundant_exact_recipe_delegate(
                 data,
                 catalog=catalog,
             )
+            data = _normalize_redundant_full_skill_scope(data, catalog=catalog)
+            data = _normalize_partial_skill_primary(data, catalog=catalog)
+            data = _normalize_unselected_skill_adapter(data, catalog=catalog)
+            data = _normalize_catalog_confirmation(data, catalog=catalog)
             plan = parse_turn_plan_data(
                 data,
                 original_text=original,
@@ -617,8 +1124,25 @@ async def plan_turn_with_llm(
                 return repaired
             raise
 
-    def _build_output_cap_retry(request, response, exc):
-        """출력 cap일 때만 최소 reasoning의 동일-cap 요청으로 한 번 축소한다."""
+    def _build_validation_retry(request, response, exc):
+        """출력 cap 또는 catalog identity 실패만 한 번 결정적으로 좁힌다."""
+        if (
+            isinstance(exc, PlanBoundaryViolation)
+            and exc.code in _CATALOG_BOUNDARY_REPAIR_CODES
+        ):
+            logger.warning(
+                "Unified turn planner catalog boundary triggered bounded recovery "
+                "(route=turn_analysis retry=true boundary_code=%s)",
+                exc.code,
+            )
+            return replace(
+                request,
+                user_message=_build_catalog_boundary_retry_prompt(
+                    request.user_message,
+                    catalog=catalog,
+                    boundary_code=exc.code,
+                ),
+            )
         finish_reason = getattr(response, "finish_reason", None)
         if not (
             not isinstance(exc, PlanBoundaryViolation)
@@ -642,9 +1166,16 @@ async def plan_turn_with_llm(
             return await router.send_validated(
                 request,
                 _validate_response,
-                validation_retry_request=_build_output_cap_retry,
+                validation_retry_request=_build_validation_retry,
             )
-        return _validate_response(await router.send(request))
+        response = await router.send(request)
+        try:
+            return _validate_response(response)
+        except PlanBoundaryViolation as exc:
+            retry_request = _build_validation_retry(request, response, exc)
+            if retry_request is None:
+                raise
+            return _validate_response(await router.send(retry_request))
     except Exception as exc:  # noqa: BLE001 — raw 없이 명시적 fail-closed로 변환.
         diagnostic["error_type"] = type(exc).__name__
         logger.warning(

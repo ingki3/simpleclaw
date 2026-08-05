@@ -16,10 +16,19 @@ execute_skill 함수 1종을 동적으로 정의한다.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 
+from simpleclaw.capability import (
+    CapabilityMetadata,
+    OwnedBindingMetadata,
+    OwnedContractMetadata,
+    parse_owned_binding_metadata,
+    parse_owned_contract_metadata,
+)
 from simpleclaw.llm.models import ToolDefinition
 from simpleclaw.skills.models import SkillDefinition
 
@@ -49,6 +58,66 @@ class NativeToolSpec:
     risk: ToolRisk = ToolRisk.LOW
     operator_gate_required: bool = False
     aliases: tuple[str, ...] = ()
+    capability: CapabilityMetadata | None = None
+    input_contract: OwnedContractMetadata | None = None
+    output_contract: OwnedContractMetadata | None = None
+    argument_binding: OwnedBindingMetadata | None = None
+
+    @property
+    def name(self) -> str:
+        return self.definition.name
+
+    @property
+    def contract_asset_type(self) -> str:
+        """Contract Registry가 native tool identity를 공통 형식으로 읽게 한다."""
+        return "native_tool"
+
+    @property
+    def contract_binding(self) -> OwnedBindingMetadata | None:
+        return self.argument_binding
+
+    @property
+    def definition_fingerprint(self) -> str:
+        """Function schema와 실행 계약 전체의 deterministic identity다."""
+        payload = {
+            "definition": {
+                "name": self.definition.name,
+                "description": self.definition.description,
+                "parameters": self.definition.parameters,
+            },
+            "scope": self.scope.value,
+            "risk": self.risk.value,
+            "operator_gate_required": self.operator_gate_required,
+            "aliases": list(self.aliases),
+            "capability": (
+                None
+                if self.capability is None
+                else {
+                    "read_only": self.capability.read_only,
+                    "side_effects": self.capability.side_effects,
+                    "requires_confirmation": self.capability.requires_confirmation,
+                    "coverage": self.capability.coverage,
+                    "input_contract": self.capability.input_contract,
+                    "output_contract": self.capability.output_contract,
+                }
+            ),
+            "input_schema_hash": (
+                None if self.input_contract is None else self.input_contract.schema_hash
+            ),
+            "output_schema_hash": (
+                None if self.output_contract is None else self.output_contract.schema_hash
+            ),
+            "binding_hash": (
+                None if self.argument_binding is None else self.argument_binding.binding_hash
+            ),
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 DEFAULT_TOOL_SCOPES = (ToolScope.RUNTIME,)
@@ -1020,10 +1089,71 @@ _MCP_CALL_TOOL = ToolDefinition(
 )
 
 
+def _read_only_web_spec(definition: ToolDefinition) -> NativeToolSpec:
+    """web collector의 Function Calling 표면을 owner-qualified V4 계약으로 만든다."""
+    name = definition.name
+    owner_ref = {"type": "native_tool", "name": name}
+    input_contract = parse_owned_contract_metadata(
+        {
+            "contract_id": f"native_tool.{name}.input",
+            "version": "1",
+            "owner_ref": owner_ref,
+            "json_schema": definition.parameters,
+        },
+        source=f"native_tool:{name}:input_contract",
+    )
+    output_contract = parse_owned_contract_metadata(
+        {
+            "contract_id": f"native_tool.{name}.output",
+            "version": "1",
+            "owner_ref": owner_ref,
+            "json_schema": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                },
+                "required": ["content"],
+                "additionalProperties": False,
+            },
+        },
+        source=f"native_tool:{name}:output_contract",
+    )
+    argument_binding = parse_owned_binding_metadata(
+        {
+            "binding_id": "function-arguments.v1",
+            "owner_ref": owner_ref,
+            "binding": {"strategy": "arguments"},
+        },
+        source=f"native_tool:{name}:argument_binding",
+    )
+    assert input_contract is not None
+    assert output_contract is not None
+    assert argument_binding is not None
+    return NativeToolSpec(
+        definition,
+        capability=CapabilityMetadata(
+            domains=("web",),
+            intents=("fetch" if name == "web_fetch" else "search",),
+            read_only=True,
+            side_effects=False,
+            freshness_sensitive=True,
+            direct_answer=True,
+            requires_confirmation=False,
+            output_contract="asset_result.v1",
+            coverage="full_coverage",
+            input_contract="query.v1",
+            declared=True,
+        ),
+        input_contract=input_contract,
+        output_contract=output_contract,
+        argument_binding=argument_binding,
+    )
+
+
 _NATIVE_TOOL_SPECS: tuple[NativeToolSpec, ...] = (
     NativeToolSpec(_CLI_TOOL, risk=ToolRisk.MEDIUM),
-    NativeToolSpec(_WEB_FETCH_TOOL),
-    NativeToolSpec(_WEB_SEARCH_TOOL),
+    _read_only_web_spec(_WEB_FETCH_TOOL),
+    _read_only_web_spec(_WEB_SEARCH_TOOL),
     NativeToolSpec(_BROWSER_HANDOFF_TOOL, risk=ToolRisk.MEDIUM),
     NativeToolSpec(_FILE_READ_TOOL),
     NativeToolSpec(_FILE_WRITE_TOOL, risk=ToolRisk.MEDIUM),

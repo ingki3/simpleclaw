@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -204,7 +205,7 @@ def _bind_arguments(
     binding = metadata.binding
     strategy = binding.get("strategy")
     order = binding.get("order")
-    if strategy not in {"named", "positional", "json"}:
+    if strategy not in {"named", "positional", "json", "shell"}:
         raise ValueError("unsupported binding strategy")
     if strategy == "json":
         return [json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))]
@@ -212,6 +213,10 @@ def _bind_arguments(
         raise ValueError("binding order must be a string list")
     if set(order) != set(payload):
         raise ValueError("binding order must cover the exact payload")
+    if strategy == "shell":
+        if len(order) != 1 or not isinstance(payload[order[0]], str):
+            raise ValueError("shell binding requires one string field")
+        return shlex.split(payload[order[0]])
     argv: list[str] = []
     for key in order:
         value = _argv_value(payload[key])

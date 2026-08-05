@@ -398,6 +398,10 @@ class PlanGate:
             ContextRelation.STANDALONE,
             ContextRelation.TOPIC_SHIFT,
         }
+        selected_relations = {
+            ContextRelation.SAME_THREAD,
+            ContextRelation.RELATED_REFERENCE,
+        }
         if context.relation in standalone_relations and (
             context.use_prior_context or context.selected_turn_ids
         ):
@@ -414,6 +418,16 @@ class PlanGate:
                     "context.prior_context_without_selection",
                     "context.selected_turn_ids",
                     "Prior context use requires at least one selected turn.",
+                )
+            )
+        if context.relation in selected_relations and (
+            not context.use_prior_context or not context.selected_turn_ids
+        ):
+            violations.append(
+                _violation(
+                    "context.related_context_without_selection",
+                    "context.selected_turn_ids",
+                    "Same-thread and related-reference plans require exact selected turns.",
                 )
             )
         if context.selected_turn_ids and not context.use_prior_context:
@@ -484,6 +498,29 @@ class PlanGate:
                     "execution.clarify_mode_required",
                     "execution.mode",
                     "Unclear context must use clarify execution mode.",
+                )
+            )
+        if (
+            plan.clarification.required
+            and plan.execution.mode is not ExecutionMode.CLARIFY
+            and not plan.execution.requires_confirmation
+        ):
+            violations.append(
+                _violation(
+                    "execution.clarify_mode_required",
+                    "execution.mode",
+                    "Clarification-only plans must use clarify execution mode.",
+                )
+            )
+        if (
+            plan.execution.mode is ExecutionMode.CLARIFY
+            and not plan.clarification.required
+        ):
+            violations.append(
+                _violation(
+                    "clarification.required_for_clarify_mode",
+                    "clarification.required",
+                    "Clarify execution mode requires a user-facing clarification plan.",
                 )
             )
 

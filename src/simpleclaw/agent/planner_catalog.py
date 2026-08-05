@@ -129,6 +129,7 @@ class PlannerAsset:
     input_contract: str | None = None
     fallback_modes: tuple[str, ...] = ()
     retry_statuses: tuple[str, ...] = ()
+    delegated_skills: tuple[str, ...] = ()
     contract_owner: str | None = None
     input_contract_ref: str | None = None
     output_contract_ref: str | None = None
@@ -169,6 +170,13 @@ class PlannerAsset:
                 asset_type=self.asset_type,
                 asset_name=safe_name,
                 field="intent",
+            )
+        for delegated_skill in self.delegated_skills:
+            _validate_catalog_text(
+                delegated_skill,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="delegated_skill",
             )
         if self.output_contract is not None:
             _validate_catalog_text(
@@ -276,6 +284,7 @@ def _asset_from_capability(
     output_schema_hash: str | None = None,
     binding_identity: str | None = None,
     definition_fingerprint: str | None = None,
+    delegated_skills: tuple[str, ...] = (),
 ) -> PlannerAsset:
     """Skill/recipe 공용 CapabilityMetadata를 PlannerAsset으로 변환한다."""
     clean_name = name.strip()
@@ -305,6 +314,7 @@ def _asset_from_capability(
         input_contract=capability.input_contract,
         fallback_modes=capability.fallback_modes,
         retry_statuses=capability.retry_statuses,
+        delegated_skills=_normalized_tuple(delegated_skills),
         declared=capability.declared,
         runtime_visible=runtime_visible,
         contract_owner=contract_owner,
@@ -319,8 +329,11 @@ def _asset_from_capability(
 
 def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
     """기존 native scope/risk metadata를 보수적인 capability로 투영한다."""
-    read_only = spec.risk is ToolRisk.LOW
-    side_effects = not read_only
+    capability = spec.capability
+    read_only = (
+        capability.read_only if capability is not None else spec.risk is ToolRisk.LOW
+    )
+    side_effects = capability.side_effects if capability is not None else not read_only
     clean_name = spec.definition.name.strip()
     _validate_catalog_text(
         clean_name,
@@ -336,20 +349,27 @@ def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
             asset_type="native_tool",
             asset_name=clean_name,
         ),
-        domains=(),
-        intents=(),
+        domains=() if capability is None else capability.domains,
+        intents=() if capability is None else capability.intents,
         read_only=read_only,
         side_effects=side_effects,
-        freshness_sensitive=False,
-        direct_answer=False,
-        requires_confirmation=(
-            spec.operator_gate_required or spec.risk is ToolRisk.HIGH
+        freshness_sensitive=(
+            False if capability is None else capability.freshness_sensitive
         ),
-        output_contract=None,
-        coverage="partial_coverage",
-        input_contract=None,
-        declared=True,
+        direct_answer=False if capability is None else capability.direct_answer,
+        requires_confirmation=(
+            spec.operator_gate_required
+            or spec.risk is ToolRisk.HIGH
+            or (capability.requires_confirmation if capability is not None else False)
+        ),
+        output_contract=None if capability is None else capability.output_contract,
+        coverage=(
+            "partial_coverage" if capability is None else capability.coverage
+        ),
+        input_contract=None if capability is None else capability.input_contract,
+        declared=True if capability is None else capability.declared,
         runtime_visible=spec.scope is ToolScope.RUNTIME,
+        **_contract_catalog_fields(spec),
     )
 
 
@@ -395,6 +415,7 @@ def _snapshot_payload(asset: PlannerAsset) -> dict[str, Any]:
         "input_contract": asset.input_contract,
         "fallback_modes": list(asset.fallback_modes),
         "retry_statuses": list(asset.retry_statuses),
+        "delegated_skills": list(asset.delegated_skills),
         "declared": asset.declared,
         "runtime_visible": asset.runtime_visible,
         "contract_owner": asset.contract_owner,
@@ -436,6 +457,8 @@ def _prompt_payload(asset: PlannerAsset) -> dict[str, Any]:
         payload["fallback_modes"] = list(asset.fallback_modes)
     if asset.retry_statuses:
         payload["retry_statuses"] = list(asset.retry_statuses)
+    if asset.delegated_skills:
+        payload["delegated_skills"] = list(asset.delegated_skills)
     if asset.contract_owner is not None:
         payload["contract_owner"] = asset.contract_owner
         payload["input_contract_ref"] = asset.input_contract_ref
@@ -527,6 +550,7 @@ def build_planner_catalog(
                 description=recipe.description,
                 capability=recipe.capability,
                 runtime_visible=True,
+                delegated_skills=recipe.skills,
                 **_contract_catalog_fields(recipe),
             )
             for recipe in recipes
