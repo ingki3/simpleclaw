@@ -27,6 +27,7 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ProviderBudgetExceeded,
     ProviderCallBudget,
     ScenarioFixtureError,
+    ScenarioEvaluator,
     SideEffectCounts,
     SideEffectDetected,
     SideEffectGuard,
@@ -167,6 +168,32 @@ def test_scope_gaps_do_not_enter_runtime_quality_denominator() -> None:
         "attachment_scope_gap": 1,
         "operator_scope_gap": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_early_stop_preserves_full_inventory_and_schedule() -> None:
+    cases = load_scenarios(FIXTURE)
+
+    async def unavailable_planner(_text, **_kwargs):
+        raise ValueError("synthetic unavailable")
+
+    report = await ScenarioEvaluator(
+        catalog=_catalog(),
+        router=object(),
+        planner=unavailable_planner,
+        ingress_recipe_names=("krstock", "usstock"),
+    ).evaluate(cases, repeat_critical=3)
+
+    assert report["decision"] == "hold"
+    assert report["summary"]["total_inventory_cases"] == 32
+    assert report["summary"]["total_runs"] == 46
+    assert report["summary"]["scored_runs"] == 39
+    assert report["summary"]["evaluated_scored_runs"] == 3
+    assert report["summary"]["unevaluated_scored_runs"] == 36
+    assert report["summary"]["quality_evaluation_complete"] is False
+    assert report["summary"]["not_scored_cases"] == 7
+    assert sum(row["evaluated"] for row in report["cases"]) == 3
+    assert sum(row["passed"] is None for row in report["cases"]) == 43
 
 
 def test_fixture_rejects_duplicate_id(tmp_path: Path) -> None:

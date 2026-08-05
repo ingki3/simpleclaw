@@ -116,6 +116,10 @@ async def _run(args: argparse.Namespace) -> int:
                 "scored_cases": report["summary"]["scored_cases"],
                 "not_scored_cases": report["summary"]["not_scored_cases"],
                 "scored_runs": report["summary"]["scored_runs"],
+                "evaluated_scored_runs": report["summary"]["evaluated_scored_runs"],
+                "quality_evaluation_complete": report["summary"][
+                    "quality_evaluation_complete"
+                ],
                 "side_effect_counts": counts,
             },
             sort_keys=True,

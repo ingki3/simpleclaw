@@ -283,6 +283,10 @@ class CaseResult:
         return self.evaluation_scope == "runtime_scored"
 
     @property
+    def evaluated(self) -> bool:
+        return self.scored and self.planner_called
+
+    @property
     def passed(self) -> bool:
         return not self.error_codes and all(self.checks.values())
 
@@ -293,7 +297,8 @@ class CaseResult:
             "critical": self.critical,
             "repeat_index": self.repeat_index,
             "scored": self.scored,
-            "passed": self.passed if self.scored else None,
+            "evaluated": self.evaluated,
+            "passed": self.passed if self.evaluated else None,
             "expected_route": self.expected_route,
             "actual_route": self.actual_route,
             "gate_status": self.gate_status,
@@ -887,6 +892,37 @@ def _failure_result(
     )
 
 
+def _early_stop_result(
+    case: ScenarioCase,
+    repeat_index: int,
+    code: str,
+) -> CaseResult:
+    return CaseResult(
+        case_id=case.id,
+        category=case.category,
+        critical=case.critical,
+        repeat_index=repeat_index,
+        expected_route=case.expected.v4_route,
+        actual_route="not_evaluated",
+        gate_status="not_run",
+        assets=(),
+        checks={},
+        error_codes=(code,),
+        latency_ms=0,
+        input_tokens=0,
+        output_tokens=0,
+        contract_status="not_evaluated",
+        contract_issues=(),
+        connected_stop="not_run",
+        connected_required=False,
+        connected_executor_kind="none",
+        evaluation_scope=case.expected.evaluation_scope,
+        not_scored_reason=None,
+        ingress_kind="none",
+        planner_called=False,
+    )
+
+
 def aggregate_results(
     results: Sequence[CaseResult],
     *,
@@ -899,31 +935,34 @@ def aggregate_results(
 ) -> dict[str, Any]:
     rows = list(results)
     scored_rows = [row for row in rows if row.scored]
+    evaluated_rows = [row for row in scored_rows if row.evaluated]
     not_scored_rows = [row for row in rows if not row.scored]
     categories: dict[str, dict[str, Any]] = {}
     for category in sorted({row.category for row in rows}):
         inventory = [row for row in rows if row.category == category]
         selected = [row for row in inventory if row.scored]
+        evaluated = [row for row in selected if row.evaluated]
         categories[category] = {
             "inventory_runs": len(inventory),
             "scored_runs": len(selected),
+            "evaluated_runs": len(evaluated),
             "not_scored_runs": len(inventory) - len(selected),
             "pass_rate": (
-                sum(row.passed for row in selected) / len(selected)
-                if selected
+                sum(row.passed for row in evaluated) / len(evaluated)
+                if evaluated
                 else None
             ),
         }
     confusion: dict[str, Counter[str]] = defaultdict(Counter)
-    for row in scored_rows:
+    for row in evaluated_rows:
         confusion[row.expected_route][row.actual_route] += 1
     by_case: dict[str, list[CaseResult]] = defaultdict(list)
     for row in rows:
         by_case[row.case_id].append(row)
     scored_by_case: dict[str, list[CaseResult]] = defaultdict(list)
-    for row in scored_rows:
+    for row in evaluated_rows:
         scored_by_case[row.case_id].append(row)
-    critical_ids = sorted({row.case_id for row in scored_rows if row.critical})
+    critical_ids = sorted({row.case_id for row in evaluated_rows if row.critical})
     stable = {
         case_id: len(
             {
@@ -936,33 +975,33 @@ def aggregate_results(
     }
     contract_gaps = Counter(
         issue.asset_name
-        for row in scored_rows
+        for row in evaluated_rows
         for issue in row.contract_issues
         if issue.error_code != "contract.not_read_only"
     )
     contract_denials = Counter(
         issue.asset_name
-        for row in scored_rows
+        for row in evaluated_rows
         for issue in row.contract_issues
         if issue.error_code == "contract.not_read_only"
     )
     contract_gap_count = sum(
         issue.error_code != "contract.not_read_only"
-        for row in scored_rows
+        for row in evaluated_rows
         for issue in row.contract_issues
     )
-    connected_required = [row for row in scored_rows if row.connected_required]
+    connected_required = [row for row in evaluated_rows if row.connected_required]
     connected_completed = [
         row for row in connected_required if row.connected_stop == "completed"
     ]
     rollback_count = sum(
-        row.connected_stop == "rollback_required" for row in scored_rows
+        row.connected_stop == "rollback_required" for row in evaluated_rows
     )
     route_mode_context = [
         row.checks.get("route", False)
         and row.checks.get("execution_mode", False)
         and row.checks.get("context_relation", False)
-        for row in scored_rows
+        for row in evaluated_rows
     ]
     not_scored_inventory = Counter(
         row.not_scored_reason or "unspecified" for row in not_scored_rows
@@ -973,7 +1012,7 @@ def aggregate_results(
     executor_kinds = sorted(
         {
             row.connected_executor_kind
-            for row in scored_rows
+            for row in evaluated_rows
             if row.connected_executor_kind != "none"
         }
     )
@@ -982,30 +1021,36 @@ def aggregate_results(
         "decision": "go",
         "summary": {
             "runs": len(scored_rows),
-            "unique_cases": len(scored_by_case),
+            "unique_cases": len({row.case_id for row in scored_rows}),
             "total_runs": len(rows),
             "total_inventory_cases": len(by_case),
             "scored_runs": len(scored_rows),
-            "scored_cases": len(scored_by_case),
+            "scored_cases": len({row.case_id for row in scored_rows}),
+            "evaluated_scored_runs": len(evaluated_rows),
+            "evaluated_scored_cases": len(scored_by_case),
+            "unevaluated_scored_runs": len(scored_rows) - len(evaluated_rows),
+            "quality_evaluation_complete": len(scored_rows) == len(evaluated_rows),
             "not_scored_runs": len(not_scored_rows),
             "not_scored_cases": len({row.case_id for row in not_scored_rows}),
             "schema_validity_rate": sum(
                 "schema" not in row.checks or row.checks["schema"]
-                for row in scored_rows
+                for row in evaluated_rows
             )
-            / len(scored_rows)
-            if scored_rows
+            / len(evaluated_rows)
+            if evaluated_rows
             else 0.0,
-            "pass_rate": sum(row.passed for row in scored_rows) / len(scored_rows)
-            if scored_rows
+            "pass_rate": sum(row.passed for row in evaluated_rows) / len(evaluated_rows)
+            if evaluated_rows
             else 0.0,
             "route_mode_context_macro_pass_rate": sum(route_mode_context)
             / len(route_mode_context)
             if route_mode_context
             else 0.0,
-            "critical_pass_rate": sum(row.passed for row in scored_rows if row.critical)
-            / sum(row.critical for row in scored_rows)
-            if any(row.critical for row in scored_rows)
+            "critical_pass_rate": sum(
+                row.passed for row in evaluated_rows if row.critical
+            )
+            / sum(row.critical for row in evaluated_rows)
+            if any(row.critical for row in evaluated_rows)
             else None,
             "critical_stability_rate": sum(stable.values()) / len(stable)
             if stable
@@ -1016,14 +1061,15 @@ def aggregate_results(
             "connected_completed_count": len(connected_completed),
             "rollback_required_count": rollback_count,
             "latency_ms": {
-                "average": sum(row.latency_ms for row in scored_rows) / len(scored_rows)
-                if scored_rows
+                "average": sum(row.latency_ms for row in evaluated_rows)
+                / len(evaluated_rows)
+                if evaluated_rows
                 else 0.0,
-                "maximum": max((row.latency_ms for row in scored_rows), default=0.0),
+                "maximum": max((row.latency_ms for row in evaluated_rows), default=0.0),
             },
             "tokens": {
-                "input_total": sum(row.input_tokens for row in scored_rows),
-                "output_total": sum(row.output_tokens for row in scored_rows),
+                "input_total": sum(row.input_tokens for row in evaluated_rows),
+                "output_total": sum(row.output_tokens for row in evaluated_rows),
             },
             "provider_calls": provider_calls,
             "provider_call_budget": provider_call_budget,
@@ -1053,6 +1099,7 @@ def aggregate_results(
     summary = report["summary"]
     if not (
         summary["schema_validity_rate"] == 1.0
+        and summary["quality_evaluation_complete"] is True
         and summary["route_mode_context_macro_pass_rate"] >= 0.9
         and summary["critical_pass_rate"] == 1.0
         and summary["critical_stability_rate"] == 1.0
@@ -1096,6 +1143,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         f"- 판단: **{str(report['decision']).upper()}**",
         f"- inventory: {summary['total_inventory_cases']}개 case / {summary['total_runs']}개 row",
         f"- runtime scored: {summary['scored_cases']}개 case / {summary['scored_runs']}회",
+        f"- evaluated: {summary['evaluated_scored_cases']}개 case / {summary['evaluated_scored_runs']}회",
+        f"- quality evaluation complete: {str(summary['quality_evaluation_complete']).lower()}",
         f"- not scored: {summary['not_scored_cases']}개 case / {summary['not_scored_runs']}회",
         f"- route+mode+context macro pass: {summary['route_mode_context_macro_pass_rate']:.1%}",
         f"- critical pass / stability: {summary['critical_pass_rate']:.1%} / {summary['critical_stability_rate']:.1%}",
@@ -1108,8 +1157,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         "## Category",
         "",
-        "| category | inventory | scored | not scored | pass |",
-        "|---|---:|---:|---:|---:|",
+        "| category | inventory | scored | evaluated | not scored | pass |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
     for category, values in report["categories"].items():
         pass_rate = (
@@ -1117,7 +1166,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         )
         lines.append(
             f"| {category} | {values['inventory_runs']} | "
-            f"{values['scored_runs']} | {values['not_scored_runs']} | {pass_rate} |"
+            f"{values['scored_runs']} | {values['evaluated_runs']} | "
+            f"{values['not_scored_runs']} | {pass_rate} |"
         )
     lines.extend(["", "## Not-scored inventory", ""])
     for reason, count in report["not_scored_inventory"].items():
@@ -1188,8 +1238,10 @@ class ScenarioEvaluator:
                 for case in cases
                 if case.critical and case.expected.evaluation_scope == "runtime_scored"
             )
+        stopped_at: int | None = None
+        stop_code = ""
         async with asyncio.timeout(self.deadline_seconds):
-            for case, repeat_index in schedule:
+            for schedule_index, (case, repeat_index) in enumerate(schedule):
                 if case.expected.evaluation_scope != "runtime_scored":
                     ingress_kind = (
                         classify_ingress(case.current, self.ingress_recipe_names)
@@ -1263,7 +1315,26 @@ class ScenarioEvaluator:
                     consecutive_failures += 1
                     total_failures += 1
                     if consecutive_failures >= 3 or total_failures >= 10:
+                        stopped_at = schedule_index + 1
+                        stop_code = (
+                            "evaluation.early_stop.consecutive_failures"
+                            if consecutive_failures >= 3
+                            else "evaluation.early_stop.total_failures"
+                        )
                         break
+        if stopped_at is not None:
+            for case, repeat_index in schedule[stopped_at:]:
+                if case.expected.evaluation_scope != "runtime_scored":
+                    ingress_kind = (
+                        classify_ingress(case.current, self.ingress_recipe_names)
+                        if case.expected.evaluation_scope == "ingress_bypass"
+                        else "none"
+                    )
+                    rows.append(
+                        not_scored_result(case, ingress_kind=ingress_kind or "none")
+                    )
+                else:
+                    rows.append(_early_stop_result(case, repeat_index, stop_code))
         return aggregate_results(
             rows,
             provider_calls=self.budget.used,
