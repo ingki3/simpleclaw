@@ -12,12 +12,12 @@ from simpleclaw.agent.planner_catalog import (
     PlannerCatalog,
     build_planner_catalog,
 )
-from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.resolution_types import (
     CapabilityCoverage,
     ComplexitySignal,
     ExecutionMode,
 )
+from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
