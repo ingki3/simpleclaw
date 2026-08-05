@@ -329,8 +329,11 @@ def _asset_from_capability(
 
 def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
     """기존 native scope/risk metadata를 보수적인 capability로 투영한다."""
-    read_only = spec.risk is ToolRisk.LOW
-    side_effects = not read_only
+    capability = spec.capability
+    read_only = (
+        capability.read_only if capability is not None else spec.risk is ToolRisk.LOW
+    )
+    side_effects = capability.side_effects if capability is not None else not read_only
     clean_name = spec.definition.name.strip()
     _validate_catalog_text(
         clean_name,
@@ -346,20 +349,27 @@ def _asset_from_native_spec(spec: NativeToolSpec) -> PlannerAsset:
             asset_type="native_tool",
             asset_name=clean_name,
         ),
-        domains=(),
-        intents=(),
+        domains=() if capability is None else capability.domains,
+        intents=() if capability is None else capability.intents,
         read_only=read_only,
         side_effects=side_effects,
-        freshness_sensitive=False,
-        direct_answer=False,
-        requires_confirmation=(
-            spec.operator_gate_required or spec.risk is ToolRisk.HIGH
+        freshness_sensitive=(
+            False if capability is None else capability.freshness_sensitive
         ),
-        output_contract=None,
-        coverage="partial_coverage",
-        input_contract=None,
-        declared=True,
+        direct_answer=False if capability is None else capability.direct_answer,
+        requires_confirmation=(
+            spec.operator_gate_required
+            or spec.risk is ToolRisk.HIGH
+            or (capability.requires_confirmation if capability is not None else False)
+        ),
+        output_contract=None if capability is None else capability.output_contract,
+        coverage=(
+            "partial_coverage" if capability is None else capability.coverage
+        ),
+        input_contract=None if capability is None else capability.input_contract,
+        declared=True if capability is None else capability.declared,
         runtime_visible=spec.scope is ToolScope.RUNTIME,
+        **_contract_catalog_fields(spec),
     )
 
 

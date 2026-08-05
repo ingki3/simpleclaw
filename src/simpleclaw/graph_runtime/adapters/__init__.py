@@ -17,6 +17,7 @@ from .delivery import (
     SendNotStartedError,
     TelegramDeliveryAdapter,
 )
+from .native_tool import GenericNativeToolAdapter
 from .persistence import ConversationStorePersistenceAdapter
 from .recipe import GenericRecipeAdapter
 from .skill import GenericSkillAdapter
@@ -34,6 +35,7 @@ __all__ = [
     "CronIngressV1",
     "DeliveryAdapter",
     "GenericAssetAdapter",
+    "GenericNativeToolAdapter",
     "GenericRecipeAdapter",
     "GenericSkillAdapter",
     "NullDeliveryAdapter",

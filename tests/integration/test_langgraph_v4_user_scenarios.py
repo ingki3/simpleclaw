@@ -20,6 +20,7 @@ from simpleclaw.agent.resolution_types import (
     ComplexitySignal,
     ExecutionMode,
 )
+from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
@@ -41,9 +42,11 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
 )
 from simpleclaw.langgraph_v4_shadow_validation import _definitions
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.skills.discovery import discover_skills
 
 ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
+PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
 
 
 class _UnusedRouter:
@@ -505,3 +508,70 @@ async def test_incomplete_supporting_asset_blocks_connected_dispatch() -> None:
     assert report["decision"] == "hold"
     assert report["cases"][0]["contract_status"] == "contract_coverage_gap"
     assert report["contract_gaps"] == {"bad-support": 1}
+
+
+@pytest.mark.asyncio
+async def test_reported_production_assets_complete_connected_read_only_probe(
+    tmp_path: Path,
+) -> None:
+    target_skills = {"google-news-search-skill", "kr-stock-skill"}
+    target_native = {"web_fetch", "web_search"}
+    skills = tuple(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
+        if item.name in target_skills
+    )
+    assert {item.name for item in skills} == target_skills
+    native_specs = tuple(
+        spec
+        for spec in build_native_tool_registry(scopes=(ToolScope.RUNTIME,))
+        if spec.name in target_native
+    )
+    definitions = (*skills, *native_specs)
+    catalog = build_planner_catalog(skills=skills, native_specs=native_specs)
+    case = load_scenarios(FIXTURE)[9]
+    probe = ConnectedContractProbe(definitions=definitions, directory=tmp_path)
+    try:
+        for asset_type, name in (
+            ("skill", "google-news-search-skill"),
+            ("skill", "kr-stock-skill"),
+            ("native_tool", "web_fetch"),
+            ("native_tool", "web_search"),
+        ):
+            ref = AssetRef(asset_type, name)
+            base = _gold_plan(case, catalog)
+            standalone = {
+                "google-news-search-skill": '--query "시장 마감" --format json',
+                "kr-stock-skill": "market-summary --json",
+                "web_fetch": "https://example.com/report",
+                "web_search": "시장 마감",
+            }[name]
+            plan = replace(
+                base,
+                context=replace(base.context, standalone_question=standalone),
+                execution=replace(
+                    base.execution,
+                    primary_asset=ref,
+                    allowed_assets=(ref,),
+                ),
+                capability=replace(
+                    base.capability,
+                    primary_asset=ref,
+                    supporting_assets=(ref,),
+                ),
+                catalog_fingerprint=catalog.fingerprint,
+            )
+            asset = next(
+                item
+                for item in catalog.assets
+                if (item.asset_type, item.name) == (asset_type, name)
+            )
+
+            stop, counts = await probe(case, plan, (asset,))
+
+            assert stop == "completed", (name, probe.last_rollback_reasons)
+            assert counts == SideEffectCounts()
+    finally:
+        probe.close()
