@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -844,7 +845,8 @@ async def test_cli_skill_uses_declared_example_when_question_is_not_contract_val
         if item.name == "google-news-search-skill"
     )
     assert skill.input_contract is not None
-    schema = skill.input_contract.json_schema
+    schema = deepcopy(skill.input_contract.json_schema)
+    schema.pop("examples", None)
     schema["properties"]["args"]["examples"] = [
         '--query "시장 마감" --format json'
     ]
