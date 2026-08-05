@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# ruff: noqa: E402
 """Configured provider로 BIZ-578 fixed-gold 시나리오를 평가한다."""
 
 from __future__ import annotations
@@ -17,22 +16,17 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from simpleclaw.agent.planner_catalog import build_planner_catalog
-from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
-from simpleclaw.config import load_recipes_config
-from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
-    ConnectedContractProbe,
-    ScenarioEvaluator,
-    load_scenarios,
-    render_markdown,
-)
-from simpleclaw.llm.router import create_router
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills.discovery import discover_skills
-
-
 def _runtime_catalog(config_path: Path):
     """현재 config의 production discovery 경로로 planner catalog를 만든다."""
+    from simpleclaw.agent.planner_catalog import build_planner_catalog
+    from simpleclaw.agent.tool_schemas import (
+        ToolScope,
+        build_native_tool_registry,
+    )
+    from simpleclaw.config import load_recipes_config
+    from simpleclaw.recipes.loader import discover_recipes
+    from simpleclaw.skills.discovery import discover_skills
+
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     skills_config = raw.get("skills", {}) if isinstance(raw, dict) else {}
     if not isinstance(skills_config, dict):
@@ -63,6 +57,14 @@ def _runtime_catalog(config_path: Path):
 
 
 async def _run(args: argparse.Namespace) -> int:
+    from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
+        ConnectedContractProbe,
+        ScenarioEvaluator,
+        load_scenarios,
+        render_markdown,
+    )
+    from simpleclaw.llm.router import create_router
+
     if not args.config.is_file():
         raise FileNotFoundError(f"config not found: {args.config}")
     cases = load_scenarios(args.fixture)
