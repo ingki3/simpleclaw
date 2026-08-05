@@ -56,7 +56,11 @@ def _runtime_catalog(config_path: Path):
         recipes=recipes,
         native_specs=native_specs,
     )
-    return catalog, (*recipes, *skills), tuple(recipe.name for recipe in recipes)
+    return (
+        catalog,
+        (*recipes, *skills, *native_specs),
+        tuple(recipe.name for recipe in recipes),
+    )
 
 
 async def _run(args: argparse.Namespace) -> int:

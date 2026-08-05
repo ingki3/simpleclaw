@@ -292,9 +292,14 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "This Recipe exception does not apply to a Skill" in prompt
     assert "execution.allowed_tools includes" in prompt
     assert "execute_skill" in prompt
-    assert "fresh evidence must be combined with a user-facing" in prompt
+    assert "fresh evidence must be combined with an open-ended" in prompt
     assert "confirmation question is not missing information" in prompt
     assert "current score or result explicit" in prompt
+    assert "matching Recipe name or description without both contracts" in prompt
+    assert "smallest deterministic set of exact assets" in prompt
+    assert "price lookup plus bounded configuration advice" in prompt
+    assert "Pending confirmation never means capability.coverage=needs_input" in prompt
+    assert "private account state" in prompt
 
     examples = load_system_prompt(
         "unified_turn_planner_examples", refresh=True
@@ -306,6 +311,10 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "implicit live-game status" in examples
     assert "context-free acknowledgement" in examples
     assert "confirmed-before-dispatch mutation" in examples
+    assert "one named product with bounded configuration advice" in examples
+    assert "complex market request with an uncontracted routine Recipe" in examples
+    assert "private account read" in examples
+    assert "link claim follow-up" in examples
 
 
 def test_unified_schema_keeps_canonical_modes_and_typed_fact_contract() -> None:
@@ -509,6 +518,213 @@ async def test_capability_primary_does_not_require_supporting_duplicate() -> Non
     assert plan.capability.primary_asset is not None
     assert plan.capability.primary_asset.name == "realtime-lookup-skill"
     assert plan.capability.supporting_assets == ()
+
+
+@pytest.mark.asyncio
+async def test_standalone_question_preserves_original_terms_and_provider_expansion() -> None:
+    """독립 질문은 원문 표현과 provider의 실행 단서를 함께 보존한다."""
+    data = _response_data()
+    data["context"]["relation"] = "standalone"
+    data["context"]["use_prior_context"] = False
+    data["context"]["selected_turn_ids"] = []
+    data["context"]["standalone_question"] = "오늘 롯데 선발 예정 선수를 확인해줘"
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "오늘 롯데 선발투수 누구지?",
+        candidates=_candidates(),
+        catalog=_catalog(),
+        router=router,
+    )
+
+    assert "오늘 롯데 선발투수 누구지?" in plan.context.standalone_question
+    assert "선발 예정 선수" in plan.context.standalone_question
+
+
+@pytest.mark.asyncio
+async def test_full_skill_primary_narrows_redundant_read_only_supporting_scope() -> None:
+    """declared full Skill은 중복 collector에 따라 asset set이 흔들리지 않는다."""
+    primary = PlannerAsset(
+        asset_type="skill",
+        name="news-skill",
+        description="multi-source news evidence",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+        direct_answer=True,
+        requires_confirmation=False,
+        output_contract="asset_result.v1",
+        declared=True,
+        runtime_visible=True,
+        coverage="full_coverage",
+        input_contract="query.v1",
+    )
+    supporting = PlannerAsset(
+        asset_type="native_tool",
+        name="web_search",
+        description="generic search",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract="asset_result.v1",
+        declared=True,
+        runtime_visible=True,
+        coverage="partial_coverage",
+        input_contract="query.v1",
+    )
+    adapter = PlannerAsset(
+        asset_type="native_tool",
+        name="execute_skill",
+        description="selected Skill adapter",
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+    )
+    catalog = PlannerCatalog((primary, supporting, adapter), "full-skill-catalog")
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "full_coverage",
+        "primary_asset": {"asset_type": "skill", "asset_name": "news-skill"},
+        "supporting_assets": [
+            {"asset_type": "native_tool", "asset_name": "web_search"}
+        ],
+        "fallback_modes": [],
+        "reason": "news skill owns the whole request",
+    }
+    data["execution"] = {
+        "mode": "resolve_complex_problem",
+        "allowed_tools": ["execute_skill", "web_search"],
+        "requires_confirmation": False,
+        "complexity_signals": ["ordered_capability_composition"],
+        "reason": "analyze grounded evidence",
+    }
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "발표와 영향을 여러 출처로 검증해줘",
+        candidates=_candidates(),
+        catalog=catalog,
+        router=router,
+    )
+
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "news-skill"
+    assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ("execute_skill",)
+
+
+@pytest.mark.asyncio
+async def test_first_supporting_full_skill_is_promoted_to_stable_primary() -> None:
+    """partial/none으로 오표기된 첫 full Skill은 단일 primary로 복원한다."""
+    primary = PlannerAsset(
+        asset_type="skill",
+        name="news-skill",
+        description="multi-source news evidence",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+        direct_answer=True,
+        requires_confirmation=False,
+        output_contract="asset_result.v1",
+        declared=True,
+        runtime_visible=True,
+        coverage="full_coverage",
+        input_contract="query.v1",
+    )
+    collector = PlannerAsset(
+        asset_type="native_tool",
+        name="web_search",
+        description="generic search",
+        domains=("news",),
+        intents=("realtime_lookup",),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=True,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract="asset_result.v1",
+        declared=True,
+        runtime_visible=True,
+        coverage="partial_coverage",
+        input_contract="query.v1",
+    )
+    adapter = PlannerAsset(
+        asset_type="native_tool",
+        name="execute_skill",
+        description="selected Skill adapter",
+        domains=(),
+        intents=(),
+        read_only=True,
+        side_effects=False,
+        freshness_sensitive=False,
+        direct_answer=False,
+        requires_confirmation=False,
+        output_contract=None,
+        declared=True,
+        runtime_visible=True,
+    )
+    data = _response_data()
+    data["capability"] = {
+        "coverage": "partial_coverage",
+        "primary_asset": {
+            "asset_type": "none",
+            "asset_name": "__none__",
+        },
+        "supporting_assets": [
+            {"asset_type": "skill", "asset_name": "news-skill"},
+            {"asset_type": "native_tool", "asset_name": "web_search"},
+        ],
+        "fallback_modes": ["answer_with_evidence"],
+        "reason": "news skill and generic collectors can gather evidence",
+    }
+    data["execution"] = {
+        "mode": "resolve_complex_problem",
+        "allowed_tools": ["execute_skill", "web_search"],
+        "requires_confirmation": False,
+        "complexity_signals": ["ordered_capability_composition"],
+        "reason": "analyze grounded evidence",
+    }
+    router = AsyncMock(
+        send=AsyncMock(
+            return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+        )
+    )
+
+    plan = await plan_turn_with_llm(
+        "발표와 영향을 여러 출처로 검증해줘",
+        candidates=_candidates(),
+        catalog=PlannerCatalog((primary, collector, adapter), "full-skill-catalog"),
+        router=router,
+    )
+
+    assert plan.capability.coverage.value == "full_coverage"
+    assert plan.capability.primary_asset is not None
+    assert plan.capability.primary_asset.name == "news-skill"
+    assert plan.capability.supporting_assets == ()
+    assert plan.execution.allowed_tools == ("execute_skill",)
 
 
 @pytest.mark.parametrize(

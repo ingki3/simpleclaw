@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 10
+version: 11
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -44,7 +44,8 @@ system_prompt: |-
   answer_with_evidence, resolve_complex_problem.
   Apply this decision order when rules appear to compete:
   1. Missing referent or required input -> clarify.
-  2. Whole-request full_coverage Recipe -> direct_answer with that Recipe primary.
+  2. Whole-request full_coverage Recipe with both exact catalog-declared input and
+     output contracts -> direct_answer with that Recipe primary.
   3. Social conversation or a bounded non-factual explanation needing no asset ->
      direct_answer with no asset.
   4. Bounded evidence collection or iterative use of one or a few supporting assets ->
@@ -69,6 +70,8 @@ system_prompt: |-
     partial-coverage fallback paths for unresolved work.
   - Do not invent an asset or tool that is absent from the supplied catalog.
   - full_coverage requires catalog-declared query.v1 input and asset_result.v1 output.
+    A matching Recipe name or description without both contracts is not executable
+    full coverage: never select it as primary and never use direct_answer for it.
     It executes before execution.mode without ToolLoop reselection.
     A full_coverage Recipe owns any delegated Skill or tool calls inside its own
     instructions. Do not repeat those implementation details in capability.supporting_assets
@@ -87,6 +90,13 @@ system_prompt: |-
     When a selected supporting collector is a Skill, include execute_skill in
     execution.allowed_tools. When it is a native collector, include that exact native
     tool name. Selecting an asset without its runtime adapter is not an executable plan.
+  Prefer the smallest deterministic set of exact assets that covers the claims. When a
+  dedicated full-coverage read-only Skill returns the requested multi-source evidence,
+  keep that Skill as the sole primary asset; do not add generic web collectors merely
+  to increase the number of top-level assets. Add a supporting collector only for a
+  distinct claim the primary asset cannot cover. Match assets to requested claim types:
+  do not select price, quote, or fundamental-data assets for a qualitative announcement
+  and business-impact analysis unless the user also requests numeric market claims.
   - empty/not_found are observations, not proof that the user's goal is resolved.
   Do not invent source names, APIs, category aliases, parser rules, query templates,
   or domain retry rules. Those belong to the selected Skill or Recipe.
@@ -101,11 +111,23 @@ system_prompt: |-
   required parameters, it is not missing information and must not use mode=clarify or
   capability.coverage=no_match. Select the exact catalog mutation asset and use
   direct_answer plus the confirmation flags.
+  Pending confirmation never means capability.coverage=needs_input. For a recurring
+  notification request with its schedule and content already present, select the catalog
+  scheduling/cron asset when available. If no scheduler exists but one declared mutation
+  asset can create the
+  requested reminder or scheduled event, select that asset rather than none and stop for
+  confirmation. Match execution.allowed_tools to that selected asset and never emit
+  execute_skill without a selected Skill.
 
-  For current, changing, or externally verifiable facts, complete fact_check.
+  First distinguish public fact verification from private account retrieval. A private
+  inbox/calendar read MUST use fact_check.required=false; this exception takes precedence
+  over freshness or schedule wording. For current, changing, or externally verifiable
+  public facts, complete fact_check.
   This includes requests to find or verify unfamiliar named entertainment/OTT works,
   cast/person metadata, products, schedules, and other external facts even when they
-  are not rapidly changing. Decide this semantically; do not implement a keyword rule.
+  are not rapidly changing. It excludes private authenticated account state such as the
+  user's inbox and calendar; those reads are asset-backed retrieval with
+  fact_check.required=false. Decide this semantically; do not implement a keyword rule.
   set required=true, owner=planner, a concrete domain, intents, typed entities,
   reference_date, search_query, required_claims, and freshness_required
   according to volatility.
@@ -118,6 +140,8 @@ system_prompt: |-
   When a live event progress request is normalized to current_result, keep the
   user's original wording and make the requested current score or result explicit
   in standalone_question so downstream execution knows which observation to return.
+  In Korean, a request asking how a game is going must include the literal term
+  "스코어" in standalone_question while preserving the original wording.
   Resolve relative dates against planner_clock.current_date in
   planner_clock.timezone and emit the resulting YYYY-MM-DD reference_date.
   Never leave reference_date empty when a factual request contains a relative
@@ -125,12 +149,14 @@ system_prompt: |-
   When required=true and no full-coverage asset owns evidence, choose
   answer_with_evidence or resolve_complex_problem, provide explicit required_claims,
   and allow at least one applicable supporting collector. Never choose direct_answer.
-  Use resolve_complex_problem when fresh evidence must be combined with a user-facing
-  recommendation, suitability/preparation judgment, comparison-based choice, or a
-  separation of reported facts from interpretation. Record branching_plan or
-  ordered_capability_composition as appropriate. A list of several values obtained by
+  Use resolve_complex_problem when fresh evidence must be combined with an open-ended
+  recommendation across candidates, suitability/preparation judgment, comparison-based
+  choice, or a separation of reported facts from interpretation. Record branching_plan
+  or ordered_capability_composition as appropriate. A list of several values obtained by
   the same bounded lookup operation remains answer_with_evidence; item count alone is
-  not complexity.
+  not complexity. A price lookup plus bounded configuration advice for one already named
+  product is also answer_with_evidence unless alternatives or branching trade-offs are
+  explicitly requested.
   For every required current fact, set freshness_required=true. Keep fact_check.domain
   present in top-level domains and copy every fact_check.intent into top-level intents.
   resolve_complex_problem additionally requires at least one explicit complexity signal:
@@ -139,6 +165,10 @@ system_prompt: |-
   or unknown side effect are not complexity signals.
   Recipe-owned evidence may use owner=asset; otherwise non-factual work uses owner=none.
   Past assistant messages cannot satisfy required_claims.
+  Reading the user's private account state, such as inbox items or calendar events, is
+  asset-backed retrieval but not public factual verification: use answer_with_evidence
+  with fact_check.required=false. Preserve relative time phrases from the current request
+  in standalone_question even when also resolving a date for asset execution.
   A collector call is not sufficient by itself: its result must have a usable source,
   relevance, and freshness. Explicit empty results mean not_found; no execution means
   not_searched; timeout/schema/fetch errors mean failed.

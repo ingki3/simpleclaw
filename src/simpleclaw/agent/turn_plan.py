@@ -476,13 +476,14 @@ UNIFIED_TURN_PLAN_RESPONSE_SCHEMA: dict[str, Any] = _strict_object(
 def build_turn_plan_response_schema(
     *,
     allowed_tools: tuple[str, ...],
+    allowed_asset_names: tuple[str, ...],
 ) -> dict[str, Any]:
-    """현재 runtime catalog의 native tool 이름으로 provider schema를 좁힌다.
+    """현재 runtime catalog의 tool/declared asset 이름으로 schema를 좁힌다.
 
-    정적 schema의 자유 문자열은 provider가 catalog에 없는 tool을 구조적으로
-    유효한 값처럼 반환하게 만든다. 요청별 복사본만 제한하므로 전역 schema와
-    parser 호환성은 유지하고, schema를 무시하는 provider 응답은 기존 runtime
-    boundary가 계속 fail-closed로 거부한다.
+    정적 schema의 자유 문자열은 provider가 catalog에 없거나 contract가 선언되지
+    않은 asset/tool을 구조적으로 유효한 값처럼 반환하게 만든다. 요청별 복사본만
+    제한하므로 전역 schema와 parser 호환성은 유지하고, schema를 무시하는 provider
+    응답은 기존 runtime boundary가 계속 fail-closed로 거부한다.
     """
     schema = deepcopy(UNIFIED_TURN_PLAN_RESPONSE_SCHEMA)
     tool_schema = schema["properties"]["execution"]["properties"][
@@ -492,6 +493,18 @@ def build_turn_plan_response_schema(
     tool_schema["maxItems"] = min(_MAX_ALLOWED_TOOLS, len(names))
     if names:
         tool_schema["items"] = {"type": "string", "enum": names}
+
+    asset_names = sorted(
+        {name.strip() for name in allowed_asset_names if name.strip()}
+    )
+    capability_schema = schema["properties"]["capability"]["properties"]
+    capability_schema["primary_asset"]["properties"]["asset_name"]["enum"] = [
+        "__none__",
+        *asset_names,
+    ]
+    capability_schema["supporting_assets"]["items"]["properties"]["asset_name"][
+        "enum"
+    ] = asset_names
     return schema
 
 

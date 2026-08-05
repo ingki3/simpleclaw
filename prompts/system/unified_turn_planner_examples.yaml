@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 7
+version: 8
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -41,7 +41,7 @@ template: |-
   User: 홈팀 경기가 지금 어떻게 되고 있어?
   Decision summary:
   - standalone_question preserves the request and explicitly asks for the 홈팀의
-    현재 스코어와 경기 상황
+    현재 스코어와 경기 상황; keep the literal word 스코어
   - this is current_result owned by an applicable full-coverage Recipe, not a
     general research task
 
@@ -56,6 +56,14 @@ template: |-
     execute_skill in execution.allowed_tools when a Skill is selected
   - fact_check.owner=planner and freshness_required=true
   - complexity_signals=[] because one bounded lookup does not require research
+
+  ## Example: one named product with bounded configuration advice
+  User: 특정 노트북의 현재 가격과 구매할 만한 구성을 알려줘
+  Decision summary:
+  - execution.mode=answer_with_evidence because one named product needs a bounded
+    current-price lookup and configuration explanation
+  - do not promote this to resolve_complex_problem unless the user requests comparison
+    across alternatives, branching trade-offs, or an open-ended recommendation
 
   ## Example: fresh facts plus practical judgment
   User: 토요일 오전 라운딩이 괜찮을지 날씨와 준비물을 알려줘
@@ -87,6 +95,8 @@ template: |-
   - execution.mode=resolve_complex_problem
   - supporting collectors and ordered_capability_composition are required to keep
     reported facts distinct from interpretation
+  - if one exact full-coverage news Skill already returns multiple relevant sources,
+    keep it as the sole primary and do not add redundant generic web collectors
 
   ## Example: multi-source Deep Research
   User: 두 회사의 최근 협업 발표를 여러 출처로 검증하고 사업적 영향을 분석해줘
@@ -95,6 +105,19 @@ template: |-
   - complexity_signals includes ordered_capability_composition or evidence_conflict
   - supporting assets contain only applicable catalog identities; provider failure or
     an empty result is not a reason to choose this mode
+  - when the requested claims are the announcement and qualitative business impact,
+    select the exact full-coverage news Skill only; do not add price/fundamental Skills
+    or generic web collectors without a distinct requested claim
+
+  ## Example: complex market request with an uncontracted routine Recipe
+  User: 오늘 시장의 지수와 주요 종목, 움직인 원인, 전망과 위험을 분석해줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem because structured current values, causal
+    news evidence, outlook, and risk require ordered composition
+  - a similarly named Recipe without both catalog-declared input and output contracts
+    is not executable full coverage and must not become the primary asset
+  - prefer an exact structured market Skill plus one distinct news collector over
+    redundant generic web collectors
 
   ## Example: static explanation
   User: 파이썬 dataclass가 뭐야?
@@ -119,11 +142,31 @@ template: |-
   ## Example: confirmed-before-dispatch mutation
   User: 매일 오전 8시에 오늘 일정을 알려주는 알림을 만들어줘
   Decision summary:
-  - select the exact mutation asset, execution.mode=direct_answer
+  - select the exact scheduling/cron mutation asset, execution.mode=direct_answer
   - clarification.required=true and execution.requires_confirmation=true
   - do not use execution.mode=clarify because the request itself has no missing input;
     the clarification object carries the confirmation question
+  - capability.coverage is not needs_input and the primary asset is not none
+  - allowed_tools names the selected native scheduler; do not emit execute_skill when
+    no Skill is selected
+  - if the catalog has no scheduler but one declared mutation Skill can create the
+    reminder/scheduled event, select that Skill and allow execute_skill
   - stop before dispatch; confirmation does not turn the request into research
+
+  ## Example: private account read
+  User: 최근 읽지 않은 메일이나 내일 오후 회의 일정을 확인해줘
+  Decision summary:
+  - execution.mode=answer_with_evidence with the exact account Skill
+  - fact_check.required=false because private inbox/calendar state is not public factual
+    verification; asset retrieval is still required
+  - preserve 최근 or 내일 오후 in standalone_question while resolving any execution date
+
+  ## Example: link claim follow-up
+  Context: a user supplied a link and the assistant returned a summary.
+  User: 두 번째 주장만 원문 근거와 다시 대조해줘
+  Decision summary:
+  - relation=related_reference and select both the source-request turn and its response
+  - standalone_question preserves 두 번째 주장 and 원문 근거
 
   ## Example: explicit complexity
   User: 두 공식 자료가 충돌하는 이유를 비교하고 계산 규칙까지 적용해줘

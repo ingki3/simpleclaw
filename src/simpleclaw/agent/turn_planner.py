@@ -271,6 +271,139 @@ def _normalize_redundant_exact_recipe_delegate(
     return normalized
 
 
+def _normalize_redundant_full_skill_scope(
+    raw_data: Mapping[str, object],
+    *,
+    catalog: PlannerCatalog,
+) -> Mapping[str, object]:
+    """계약상 whole-request를 소유한 read-only Skill의 중복 scope를 제거한다.
+
+    provider가 full-coverage primary Skill과 함께 generic collector나 다른
+    full-coverage Skill을 supporting scope로 반복 선택하면 같은 의미의 요청도
+    asset set이 흔들린다. 또한 full Skill을 첫 supporting asset으로 올바르게
+    선택하고도 coverage를 partial로 표기하는 provider 결과가 있다. Exact
+    declared/read-only Skill과 안전한 supporting identity만 확인된 경우
+    capability를 primary 하나로 좁히고 Skill adapter만 유지한다.
+    미등록·side-effect·confirmation asset은 기존 fail-closed 경계를 보존하기
+    위해 정규화하지 않는다.
+    """
+    capability = raw_data.get("capability")
+    execution = raw_data.get("execution")
+    if not isinstance(capability, Mapping) or not isinstance(execution, Mapping):
+        return raw_data
+    coverage = capability.get("coverage")
+    if coverage not in {"full_coverage", "partial_coverage"}:
+        return raw_data
+    try:
+        primary = _raw_asset_identity(
+            capability.get("primary_asset"),
+            allow_none=True,
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    raw_supporting = capability.get("supporting_assets")
+    if not isinstance(raw_supporting, list) or not raw_supporting:
+        return raw_data
+
+    runtime_assets = {
+        (asset.asset_type, asset.name): asset
+        for asset in catalog.assets
+        if asset.runtime_visible
+    }
+    try:
+        supporting = tuple(
+            _raw_asset_identity(item, allow_none=False)
+            for item in raw_supporting
+        )
+    except PlanBoundaryViolation:
+        return raw_data
+    if any(identity is None for identity in supporting):
+        return raw_data
+    supporting_assets = tuple(runtime_assets.get(identity) for identity in supporting)
+    if any(
+        asset is None
+        or not asset.declared
+        or not asset.read_only
+        or asset.side_effects
+        or asset.requires_confirmation
+        for asset in supporting_assets
+    ):
+        return raw_data
+
+    promoted_primary: tuple[str, str] | None = None
+    if coverage == "partial_coverage" and primary is None:
+        first_supporting = supporting[0]
+        first_asset = runtime_assets.get(first_supporting)
+        if first_asset is not None and first_asset.asset_type == "skill":
+            promoted_primary = first_supporting
+    elif coverage != "full_coverage" or primary is None or primary[0] != "skill":
+        return raw_data
+
+    effective_primary = promoted_primary or primary
+    if effective_primary is None:
+        return raw_data
+    primary_asset = runtime_assets.get(effective_primary)
+    if (
+        primary_asset is None
+        or not primary_asset.declared
+        or primary_asset.coverage != "full_coverage"
+        or primary_asset.input_contract != "query.v1"
+        or primary_asset.output_contract != "asset_result.v1"
+        or not primary_asset.read_only
+        or primary_asset.side_effects
+        or primary_asset.requires_confirmation
+    ):
+        return raw_data
+
+    allowed_tools = execution.get("allowed_tools")
+    if not isinstance(allowed_tools, list) or any(
+        not isinstance(name, str) for name in allowed_tools
+    ):
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_capability = dict(capability)
+    normalized_capability["coverage"] = "full_coverage"
+    normalized_capability["primary_asset"] = {
+        "asset_type": "skill",
+        "asset_name": primary_asset.name,
+    }
+    normalized_capability["supporting_assets"] = []
+    normalized["capability"] = normalized_capability
+    normalized_execution = dict(execution)
+    normalized_execution["allowed_tools"] = ["execute_skill"]
+    normalized["execution"] = normalized_execution
+    return normalized
+
+
+def _normalize_standalone_question_fidelity(
+    raw_data: Mapping[str, object],
+    *,
+    original_text: str,
+) -> Mapping[str, object]:
+    """독립 요청의 standalone question에 현재 원문을 손실 없이 보존한다.
+
+    provider가 스코어·기준일 같은 실행 단서를 보강하는 것은 유지하되,
+    고유명사나 사용자의 정확한 표현을 동의어로 대체해 downstream claim
+    경계가 흔들리지 않게 한다. 문맥 재구성이 필요한 follow-up은 대상이 아니다.
+    """
+    if not original_text:
+        return raw_data
+    context = raw_data.get("context")
+    if not isinstance(context, Mapping) or context.get("relation") != "standalone":
+        return raw_data
+    standalone = context.get("standalone_question")
+    if not isinstance(standalone, str) or not standalone.strip():
+        return raw_data
+    original = original_text.strip()
+    if not original or original in standalone:
+        return raw_data
+    normalized = dict(raw_data)
+    normalized_context = dict(context)
+    normalized_context["standalone_question"] = f"{original}\n{standalone.strip()}"
+    normalized["context"] = normalized_context
+    return normalized
+
+
 def _normalize_catalog_confirmation(
     raw_data: Mapping[str, object],
     *,
@@ -607,6 +740,11 @@ async def plan_turn_with_llm(
                     for asset in catalog.assets
                     if asset.runtime_visible and asset.asset_type == "native_tool"
                 ),
+                allowed_asset_names=tuple(
+                    asset.name
+                    for asset in catalog.assets
+                    if asset.runtime_visible and asset.declared
+                ),
             ),
             require_structured_output=True,
             usage_task="turn_planner",
@@ -655,10 +793,15 @@ async def plan_turn_with_llm(
             data: Mapping[str, object],
         ) -> UnifiedTurnPlan:
             """raw object를 모델로 조립한 뒤 실제 runtime 경계와 대조한다."""
+            data = _normalize_standalone_question_fidelity(
+                data,
+                original_text=original,
+            )
             data = _normalize_redundant_exact_recipe_delegate(
                 data,
                 catalog=catalog,
             )
+            data = _normalize_redundant_full_skill_scope(data, catalog=catalog)
             data = _normalize_catalog_confirmation(data, catalog=catalog)
             plan = parse_turn_plan_data(
                 data,
