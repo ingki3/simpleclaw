@@ -241,6 +241,16 @@ async def test_all_32_scenarios_cross_planner_gate_and_no_send_boundaries() -> N
         for row in report["cases"]
         if row["case_id"] in {"fq-23", "fq-28", "fq-29"}
     )
+    by_case = {row["case_id"]: row for row in report["cases"]}
+    for case_id in ("fq-22", "fq-25", "fq-30", "fq-31", "fq-32"):
+        assert by_case[case_id]["passed"] is True
+    assert by_case["fq-23"]["passed"] is None
+    image_case = next(case for case in cases if case.id == "fq-23")
+    assert image_case.expected.context_relations == ("same_thread",)
+    assert image_case.expected.selected_turn_ids == ("m23u",)
+    assert by_case["fq-25"]["gate_status"] == "confirmation_required"
+    assert by_case["fq-31"]["gate_status"] == "clarify"
+    assert by_case["fq-32"]["gate_status"] == "clarify"
 
 
 @pytest.mark.asyncio

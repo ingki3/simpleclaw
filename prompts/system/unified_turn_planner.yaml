@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 7
+version: 8
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -14,6 +14,16 @@ system_prompt: |-
   - standalone or topic_shift: selected_turn_ids must be empty and use_prior_context must be false.
   - same_thread or related_reference: return only the exact candidate IDs needed downstream.
   - unclear or unresolved reference: require clarification and choose execution.mode=clarify.
+  Treat a retry request as same_thread only when bounded context contains the user turn
+  whose task must be retried. Select that original user turn, not an assistant failure
+  acknowledgement, unless the assistant text itself is explicitly being examined.
+  A context-free acknowledgement or retry such as "그래" or "다시 한 번 부탁해"
+  has no executable referent: keep relation=standalone with no selected turns, require
+  clarification, and choose execution.mode=clarify. Do not treat it as casual conversation.
+  For a link claim follow-up, use related_reference and select the exact source-request
+  and response turns needed to identify the referenced claim. For an attachment follow-up,
+  use same_thread and select the exact user turn carrying that attachment; never substitute
+  an assistant acknowledgement for the attachment turn.
   The standalone_question must be executable without any unselected history.
   Preserve every exact title, platform, and distinct person clue selected from context.
   Never merge separate people into one identity. For example, preserve the title
@@ -46,6 +56,12 @@ system_prompt: |-
   Do not invent source names, APIs, category aliases, parser rules, query templates,
   or domain retry rules. Those belong to the selected Skill or Recipe.
   A side-effecting action must set requires_confirmation=true.
+  Creating, changing, or deleting a reminder, schedule, message, or other external state
+  is never simple conversation. Select the exact mutation asset, set
+  requires_confirmation=true and clarification.required=true with a concrete confirmation
+  question, and stop for confirmation before any asset dispatch. Keep the execution mode
+  appropriate for the selected full-coverage asset; confirmation is a pre-dispatch gate,
+  not evidence collection.
 
   For current, changing, or externally verifiable facts, complete fact_check.
   This includes requests to find or verify unfamiliar named entertainment/OTT works,
