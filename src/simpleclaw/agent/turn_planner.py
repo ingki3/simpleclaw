@@ -234,8 +234,7 @@ def _normalize_redundant_exact_recipe_delegate(
     allowed_tools = execution.get("allowed_tools")
     if not isinstance(allowed_tools, list):
         return raw_data
-    redundant_delegates = {"execute_skill"}
-    redundant_delegates.update(
+    safe_skill_names = {
         asset.name
         for asset in catalog.assets
         if asset.runtime_visible
@@ -244,7 +243,11 @@ def _normalize_redundant_exact_recipe_delegate(
         and asset.read_only
         and not asset.side_effects
         and not asset.requires_confirmation
-    )
+    }
+    redundant_delegates = {
+        "execute_skill",
+        *(set(catalog_asset.delegated_skills) & safe_skill_names),
+    }
     if any(
         not isinstance(name, str) or name not in redundant_delegates
         for name in allowed_tools

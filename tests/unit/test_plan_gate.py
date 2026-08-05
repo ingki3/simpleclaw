@@ -244,6 +244,78 @@ def test_valid_clarification_returns_clarify() -> None:
     assert result.violations == ()
 
 
+@pytest.mark.parametrize("text", ("다시 한 번 부탁해", "그래"))
+def test_context_free_retry_and_ack_remain_clarifications(text: str) -> None:
+    plan = replace(
+        _plan(
+            relation=ContextRelation.STANDALONE,
+            clarification_required=True,
+            mode=ExecutionMode.CLARIFY,
+        ),
+        original_text=text,
+    )
+
+    result = PlanGate().evaluate(plan, candidates=_candidates(), catalog=_catalog())
+
+    assert result.status is GateStatus.CLARIFY
+    assert result.effective_plan is plan
+
+
+def test_retry_selects_only_original_user_turn() -> None:
+    plan = _plan(
+        relation=ContextRelation.SAME_THREAD,
+        use_prior_context=True,
+        selected_turn_ids=("msg:1",),
+    )
+
+    result = PlanGate().evaluate(plan, candidates=_candidates(), catalog=_catalog())
+
+    assert result.status is GateStatus.PASS
+    assert result.effective_plan is plan
+
+
+@pytest.mark.parametrize(
+    "relation",
+    (ContextRelation.SAME_THREAD, ContextRelation.RELATED_REFERENCE),
+)
+def test_related_context_requires_exact_selected_turns(
+    relation: ContextRelation,
+) -> None:
+    plan = _plan(relation=relation)
+
+    result = PlanGate().evaluate(plan, candidates=_candidates(), catalog=_catalog())
+
+    assert result.status is GateStatus.REPAIR
+    assert "context.related_context_without_selection" in {
+        item.code for item in result.violations
+    }
+
+
+def test_clarification_cannot_dispatch_as_direct_answer() -> None:
+    plan = _plan(
+        clarification_required=True,
+        mode=ExecutionMode.DIRECT_ANSWER,
+    )
+
+    result = PlanGate().evaluate(plan, candidates=_candidates(), catalog=_catalog())
+
+    assert result.status is GateStatus.REPAIR
+    assert "execution.clarify_mode_required" in {
+        item.code for item in result.violations
+    }
+
+
+def test_clarify_mode_requires_user_facing_clarification() -> None:
+    plan = _plan(mode=ExecutionMode.CLARIFY)
+
+    result = PlanGate().evaluate(plan, candidates=_candidates(), catalog=_catalog())
+
+    assert result.status is GateStatus.REPAIR
+    assert "clarification.required_for_clarify_mode" in {
+        item.code for item in result.violations
+    }
+
+
 @pytest.mark.parametrize(
     ("mode", "fact_required", "owner", "search_query", "code"),
     [
@@ -646,6 +718,34 @@ def test_side_effecting_direct_asset_requires_confirmation() -> None:
     assert [item.code for item in result.violations] == [
         "asset.confirmation_required"
     ]
+    assert result.effective_plan is plan
+
+
+def test_reminder_mutation_stops_for_confirmation_before_dispatch() -> None:
+    ref = AssetRef("native_tool", "cron")
+    plan = _plan(
+        mode=ExecutionMode.DIRECT_ANSWER,
+        primary_asset=ref,
+        allowed_assets=(ref,),
+        clarification_required=True,
+        requires_confirmation=True,
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(
+            _asset(
+                "cron",
+                asset_type="native_tool",
+                read_only=False,
+                side_effects=True,
+                requires_confirmation=True,
+            )
+        ),
+    )
+
+    assert result.status is GateStatus.CONFIRMATION_REQUIRED
     assert result.effective_plan is plan
 
 

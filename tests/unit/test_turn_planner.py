@@ -200,6 +200,7 @@ def _exact_recipe_catalog() -> PlannerCatalog:
                 runtime_visible=True,
                 coverage="full_coverage",
                 input_contract="query.v1",
+                delegated_skills=("naver-sports-skill",),
             ),
             PlannerAsset(
                 asset_type="skill",
@@ -210,6 +211,21 @@ def _exact_recipe_catalog() -> PlannerCatalog:
                 read_only=True,
                 side_effects=False,
                 freshness_sensitive=True,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="asset_result.v1",
+                declared=True,
+                runtime_visible=True,
+            ),
+            PlannerAsset(
+                asset_type="skill",
+                name="read-private-mail",
+                description="unrelated read-only mail skill",
+                domains=("email",),
+                intents=("read",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
                 direct_answer=True,
                 requires_confirmation=False,
                 output_contract="asset_result.v1",
@@ -554,6 +570,31 @@ async def test_exact_recipe_unrelated_top_level_tool_is_not_narrowed() -> None:
     assert {
         violation.code for violation in gate_result.violations
     } >= {"asset.full_coverage_recipe_has_top_level_tools"}
+
+
+@pytest.mark.asyncio
+async def test_exact_recipe_unrelated_read_only_skill_is_not_narrowed() -> None:
+    """unrelated read-only Skill은 Recipe delegate로 세탁하지 않고 거부한다."""
+    data = _exact_recipe_response_data()
+    data["execution"]["allowed_tools"] = ["read-private-mail"]
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(text=json.dumps(data, ensure_ascii=False))
+    )
+
+    candidates = ContextCandidateSet(
+        candidates=(), total_chars=0, truncated=False
+    )
+    catalog = _exact_recipe_catalog()
+    with pytest.raises(PlannerUnavailable) as exc_info:
+        await plan_turn_with_llm(
+            "어제 유해란 LPGA 성적과 순위",
+            candidates=candidates,
+            catalog=catalog,
+            router=router,
+        )
+
+    assert exc_info.value.boundary_code == "unknown_or_internal_tool"
 
 
 @pytest.mark.asyncio
