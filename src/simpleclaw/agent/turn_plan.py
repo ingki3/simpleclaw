@@ -16,8 +16,8 @@ truth로 유지하고, 기존 ``RouteDecision``은 production 전환기 호환 a
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypeVar
