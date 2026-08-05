@@ -19,6 +19,40 @@ capability:
   fallback_modes: [answer_with_evidence]
   retry_statuses: [failed_retryable]
 
+input_contract:
+  contract_id: recipe.sports-live.input
+  version: "1"
+  owner_ref:
+    type: recipe
+    name: sports-live
+  json_schema:
+    type: object
+    properties:
+      query:
+        type: string
+        minLength: 1
+    required: [query]
+    additionalProperties: false
+
+output_contract:
+  contract_id: recipe.sports-live.output
+  version: "1"
+  owner_ref:
+    type: recipe
+    name: sports-live
+  json_schema:
+    type: object
+
+step_bindings:
+  - binding_id: naver-sports-query.v1
+    owner_ref:
+      type: recipe
+      name: sports-live
+    binding:
+      target_skill: naver-sports-skill
+      map:
+        query: args
+
 parameters:
   - name: query
     description: "Capability-first exact 실행의 standalone 자연어 질문"
