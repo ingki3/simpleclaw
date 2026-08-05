@@ -7,7 +7,6 @@ from pathlib import Path
 
 from simpleclaw.agent.tool_schemas import NativeToolSpec
 
-
 SCRIPT = (
     Path(__file__).parents[2] / "scripts" / "dev" / "evaluate_langgraph_v4_scenarios.py"
 )
