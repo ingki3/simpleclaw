@@ -1,0 +1,206 @@
+"""BIZ-578 사용자 시나리오 evaluator 단위 회귀."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+from simpleclaw.agent.plan_gate import GateStatus, PlanGateResult
+from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
+from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
+)
+from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
+    ProviderBudgetExceeded,
+    ProviderCallBudget,
+    ScenarioFixtureError,
+    SideEffectCounts,
+    SideEffectDetected,
+    SideEffectGuard,
+    aggregate_results,
+    assert_sanitized_report,
+    classify_contract,
+    load_scenarios,
+    normalize_v4_route,
+    score_plan,
+)
+
+ROOT = Path(__file__).parents[2]
+FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
+
+
+def _asset(name: str = "reader", **changes) -> PlannerAsset:
+    values = {
+        "asset_type": "skill",
+        "name": name,
+        "description": "read only test asset",
+        "domains": (),
+        "intents": (),
+        "read_only": True,
+        "side_effects": False,
+        "freshness_sensitive": False,
+        "direct_answer": True,
+        "requires_confirmation": False,
+        "output_contract": "asset_result.v1",
+        "declared": True,
+        "runtime_visible": True,
+        "coverage": "full_coverage",
+        "input_contract": "query.v1",
+    }
+    values.update(changes)
+    return PlannerAsset(**values)
+
+
+def _catalog(*assets: PlannerAsset) -> PlannerCatalog:
+    return PlannerCatalog(tuple(assets), "catalog-v1")
+
+
+def _plan(
+    *,
+    mode: ExecutionMode = ExecutionMode.DIRECT_ANSWER,
+    asset: AssetRef | None = None,
+    clarify: bool = False,
+) -> UnifiedTurnPlan:
+    return UnifiedTurnPlan(
+        original_text="question",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="안녕",
+        ),
+        clarification=ClarificationPlan(required=clarify, question="확인할까요?" if clarify else ""),
+        domains=(),
+        intents=(),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="none",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(
+            mode=mode,
+            primary_asset=asset,
+            allowed_assets=() if asset is None else (asset,),
+        ),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.NO_MATCH if asset is None else CapabilityCoverage.FULL,
+            primary_asset=asset,
+            supporting_assets=() if asset is None else (asset,),
+        ),
+        confidence=1,
+        decision_summary="test",
+        catalog_fingerprint="catalog-v1",
+    )
+
+
+def test_fixture_loads_strict_32_case_gold() -> None:
+    cases = load_scenarios(FIXTURE)
+
+    assert len(cases) == 32
+    assert sum(case.critical for case in cases) == 9
+    assert sum(bool(case.history) for case in cases) == 5
+
+
+def test_fixture_rejects_duplicate_id(tmp_path: Path) -> None:
+    first = FIXTURE.read_text(encoding="utf-8").splitlines()[0]
+    path = tmp_path / "duplicate.jsonl"
+    path.write_text(first + "\n" + first + "\n", encoding="utf-8")
+
+    with pytest.raises(ScenarioFixtureError, match="duplicate"):
+        load_scenarios(path, expected_count=None)
+
+
+def test_fixture_rejects_unknown_route(tmp_path: Path) -> None:
+    raw = json.loads(FIXTURE.read_text(encoding="utf-8").splitlines()[0])
+    raw["expected"]["v4_route"] = "magic"
+    path = tmp_path / "invalid.jsonl"
+    path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+
+    with pytest.raises(ScenarioFixtureError, match="unknown route"):
+        load_scenarios(path, expected_count=None)
+
+
+@pytest.mark.parametrize(
+    ("plan", "route"),
+    [
+        (_plan(), "simple_conversation"),
+        (_plan(asset=AssetRef("recipe", "reader")), "recipe"),
+        (_plan(mode=ExecutionMode.ANSWER_WITH_EVIDENCE, asset=AssetRef("skill", "reader")), "react"),
+        (_plan(mode=ExecutionMode.RESOLVE_COMPLEX_PROBLEM), "deep_research"),
+        (_plan(mode=ExecutionMode.CLARIFY, clarify=True), "interrupt"),
+    ],
+)
+def test_route_normalization(plan: UnifiedTurnPlan, route: str) -> None:
+    assert normalize_v4_route(plan) == route
+
+
+def test_aggregate_includes_confusion_and_critical_stability() -> None:
+    case = load_scenarios(FIXTURE)[0]
+    row = score_plan(
+        case,
+        _plan(),
+        PlanGateResult(GateStatus.PASS, _plan()),
+        _catalog(),
+    )
+    report = aggregate_results(
+        [row, replace(row, repeat_index=2)],
+        provider_calls=2,
+        provider_call_budget=64,
+        provider_backend="test",
+        provider_model="model",
+        side_effect_counts=SideEffectCounts(),
+        elapsed_seconds=1,
+    )
+
+    assert report["route_confusion"] == {"simple_conversation": {"simple_conversation": 2}}
+    assert report["summary"]["pass_rate"] == 1
+
+
+def test_provider_budget_fails_before_excess_call() -> None:
+    budget = ProviderCallBudget(1)
+    budget.reserve()
+
+    with pytest.raises(ProviderBudgetExceeded):
+        budget.reserve()
+
+    assert budget.used == 1
+
+
+def test_report_rejects_raw_and_credential_fields() -> None:
+    with pytest.raises(ValueError, match="forbidden report field"):
+        assert_sanitized_report({"standalone_question": "raw"})
+    with pytest.raises(ValueError, match="credential-like"):
+        assert_sanitized_report({"safe": "api_key=abcdefgh"})
+
+
+def test_contract_gap_and_complete_read_only_are_separate() -> None:
+    incomplete = _asset("gap", output_contract=None)
+    complete = _asset("ok")
+    catalog = _catalog(incomplete, complete)
+
+    assert classify_contract(catalog, ("missing",)).status == "contract_coverage_gap"
+    assert classify_contract(catalog, ("gap",)).error_code == "contract.incomplete"
+    assert classify_contract(catalog, ("ok",)).status == "read_only_complete"
+
+
+def test_side_effect_observation_aborts_immediately() -> None:
+    guard = SideEffectGuard()
+
+    with pytest.raises(SideEffectDetected):
+        guard.observe(SideEffectCounts(telegram_send=1))
+
+    assert guard.counts.telegram_send == 1
