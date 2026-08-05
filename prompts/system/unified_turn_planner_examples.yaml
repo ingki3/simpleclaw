@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 6
+version: 7
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -50,8 +50,43 @@ template: |-
   Decision summary:
   - no whole-request Recipe is available
   - execution.mode=answer_with_evidence
-  - select only applicable read-only market collectors from the catalog
+  - a full-coverage Skill may be capability.primary_asset, but unlike an exact Recipe
+    it does not change planner-owned current evidence to direct_answer
+  - select only applicable read-only market collectors from the catalog and include
+    execute_skill in execution.allowed_tools when a Skill is selected
+  - fact_check.owner=planner and freshness_required=true
   - complexity_signals=[] because one bounded lookup does not require research
+
+  ## Example: fresh facts plus practical judgment
+  User: 토요일 오전 라운딩이 괜찮을지 날씨와 준비물을 알려줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem
+  - current weather evidence must be composed with a suitability decision and
+    conditional preparation advice
+  - complexity_signals includes branching_plan or ordered_capability_composition
+
+  ## Example: fresh recommendation with schedule or price
+  User: 요즘 볼 만한 공연을 일정과 함께 추천해줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem
+  - recommendation requires current candidates, schedule evidence, and a comparative
+    choice; this is not a single bounded lookup
+
+  ## Example: contextual recommendation and current price
+  Context: the user previously asked to compare several tablet keyboards.
+  User: 그 후보 중 특정 브랜드 제품을 추천하고 현재 가격도 알아봐줘
+  Decision summary:
+  - select the exact context turns that identify the candidates
+  - execution.mode=resolve_complex_problem because the turn combines a comparative
+    recommendation with a fresh price lookup
+  - complexity_signals includes ordered_capability_composition
+
+  ## Example: facts separated from interpretation
+  User: 오늘 주요 뉴스를 사실과 해석으로 나눠 정리해줘
+  Decision summary:
+  - execution.mode=resolve_complex_problem
+  - supporting collectors and ordered_capability_composition are required to keep
+    reported facts distinct from interpretation
 
   ## Example: multi-source Deep Research
   User: 두 회사의 최근 협업 발표를 여러 출처로 검증하고 사업적 영향을 분석해줘
@@ -86,6 +121,8 @@ template: |-
   Decision summary:
   - select the exact mutation asset, execution.mode=direct_answer
   - clarification.required=true and execution.requires_confirmation=true
+  - do not use execution.mode=clarify because the request itself has no missing input;
+    the clarification object carries the confirmation question
   - stop before dispatch; confirmation does not turn the request into research
 
   ## Example: explicit complexity

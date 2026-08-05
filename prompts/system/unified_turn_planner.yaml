@@ -1,7 +1,7 @@
 # 용도: bounded context와 capability catalog를 한 번에 판단하는 structured planner.
 # 적용 범위: UnifiedTurnPlanner의 domain-neutral base contract.
 name: unified_turn_planner
-version: 9
+version: 10
 description: >-
   Select only relevant conversation turns and produce one strict plan covering
   clarification, fact verification, execution mode, and allowed capabilities.
@@ -54,6 +54,10 @@ system_prompt: |-
      resolve_complex_problem with explicit complexity_signals.
   Confirmation is an interrupt layered on the selected plan and takes precedence over
   dispatch. It does not promote or demote task complexity.
+  A confirmation question is not missing information: keep the task's selected mode
+  (normally direct_answer for a bounded mutation) while setting both
+  clarification.required=true and execution.requires_confirmation=true. Use mode=clarify
+  only when information or a referent needed to form the plan is actually missing.
   Always use exact names from the capability catalog; never rewrite an identity.
   Choose capability.primary_asset and capability.supporting_assets using exact names
   from the immutable capability catalog.
@@ -72,8 +76,17 @@ system_prompt: |-
     A whole-request full_coverage Recipe must use execution.mode=direct_answer even
     when its result contains current facts: the Recipe owns retrieval and evidence,
     while direct_answer means no general ReAct/Deep Research solver is needed.
+    This Recipe exception does not apply to a Skill. A full-coverage read-only Skill
+    selected for a current or externally verifiable fact still uses
+    execution.mode=answer_with_evidence (or resolve_complex_problem when complexity
+    signals apply), fact_check.owner=planner, and execution.allowed_tools includes
+    execute_skill. The Skill may remain capability.primary_asset; full coverage does
+    not turn planner-owned evidence into direct_answer.
   - partial_coverage assets may appear only in supporting_assets and execute inside
     answer_with_evidence or resolve_complex_problem.
+    When a selected supporting collector is a Skill, include execute_skill in
+    execution.allowed_tools. When it is a native collector, include that exact native
+    tool name. Selecting an asset without its runtime adapter is not an executable plan.
   - empty/not_found are observations, not proof that the user's goal is resolved.
   Do not invent source names, APIs, category aliases, parser rules, query templates,
   or domain retry rules. Those belong to the selected Skill or Recipe.
@@ -84,6 +97,10 @@ system_prompt: |-
   question, and stop for confirmation before any asset dispatch. Use direct_answer for
   a bounded mutation request whose exact asset is selected; confirmation is a
   pre-dispatch gate, not evidence collection.
+  When a mutation request already contains the target, action, and schedule or other
+  required parameters, it is not missing information and must not use mode=clarify or
+  capability.coverage=no_match. Select the exact catalog mutation asset and use
+  direct_answer plus the confirmation flags.
 
   For current, changing, or externally verifiable facts, complete fact_check.
   This includes requests to find or verify unfamiliar named entertainment/OTT works,
@@ -108,6 +125,14 @@ system_prompt: |-
   When required=true and no full-coverage asset owns evidence, choose
   answer_with_evidence or resolve_complex_problem, provide explicit required_claims,
   and allow at least one applicable supporting collector. Never choose direct_answer.
+  Use resolve_complex_problem when fresh evidence must be combined with a user-facing
+  recommendation, suitability/preparation judgment, comparison-based choice, or a
+  separation of reported facts from interpretation. Record branching_plan or
+  ordered_capability_composition as appropriate. A list of several values obtained by
+  the same bounded lookup operation remains answer_with_evidence; item count alone is
+  not complexity.
+  For every required current fact, set freshness_required=true. Keep fact_check.domain
+  present in top-level domains and copy every fact_check.intent into top-level intents.
   resolve_complex_problem additionally requires at least one explicit complexity signal:
   dependency_graph, evidence_conflict, calculation_or_rule, branching_plan, or
   ordered_capability_composition. Empty, denied, terminal failure, retry exhaustion,

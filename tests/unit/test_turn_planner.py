@@ -289,6 +289,11 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     assert "Populate every required schema field exactly once" in prompt
     assert "preserve the complete current_user_message" in prompt
     assert "full_coverage Recipe must use execution.mode=direct_answer" in prompt
+    assert "This Recipe exception does not apply to a Skill" in prompt
+    assert "execution.allowed_tools includes" in prompt
+    assert "execute_skill" in prompt
+    assert "fresh evidence must be combined with a user-facing" in prompt
+    assert "confirmation question is not missing information" in prompt
     assert "current score or result explicit" in prompt
 
     examples = load_system_prompt(
@@ -296,6 +301,8 @@ def test_prompt_yaml_contains_required_semantic_guards() -> None:
     ).field("template")
     assert "bounded tool-iterative ReAct" in examples
     assert "multi-source Deep Research" in examples
+    assert "fresh facts plus practical judgment" in examples
+    assert "facts separated from interpretation" in examples
     assert "implicit live-game status" in examples
     assert "context-free acknowledgement" in examples
     assert "confirmed-before-dispatch mutation" in examples
