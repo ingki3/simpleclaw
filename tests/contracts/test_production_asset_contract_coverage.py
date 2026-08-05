@@ -12,12 +12,12 @@ from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import classify_contract
+from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.contracts_registry import (
     ContractRegistryError,
     build_contract_registry,
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
-from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.recipes.loader import discover_recipes, load_recipe
 from simpleclaw.recipes.models import RecipeParseError
 from simpleclaw.skills.discovery import discover_skills
