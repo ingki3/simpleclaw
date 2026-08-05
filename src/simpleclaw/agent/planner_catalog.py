@@ -129,6 +129,7 @@ class PlannerAsset:
     input_contract: str | None = None
     fallback_modes: tuple[str, ...] = ()
     retry_statuses: tuple[str, ...] = ()
+    delegated_skills: tuple[str, ...] = ()
     contract_owner: str | None = None
     input_contract_ref: str | None = None
     output_contract_ref: str | None = None
@@ -169,6 +170,13 @@ class PlannerAsset:
                 asset_type=self.asset_type,
                 asset_name=safe_name,
                 field="intent",
+            )
+        for delegated_skill in self.delegated_skills:
+            _validate_catalog_text(
+                delegated_skill,
+                asset_type=self.asset_type,
+                asset_name=safe_name,
+                field="delegated_skill",
             )
         if self.output_contract is not None:
             _validate_catalog_text(
@@ -276,6 +284,7 @@ def _asset_from_capability(
     output_schema_hash: str | None = None,
     binding_identity: str | None = None,
     definition_fingerprint: str | None = None,
+    delegated_skills: tuple[str, ...] = (),
 ) -> PlannerAsset:
     """Skill/recipe 공용 CapabilityMetadata를 PlannerAsset으로 변환한다."""
     clean_name = name.strip()
@@ -305,6 +314,7 @@ def _asset_from_capability(
         input_contract=capability.input_contract,
         fallback_modes=capability.fallback_modes,
         retry_statuses=capability.retry_statuses,
+        delegated_skills=_normalized_tuple(delegated_skills),
         declared=capability.declared,
         runtime_visible=runtime_visible,
         contract_owner=contract_owner,
@@ -405,6 +415,7 @@ def _snapshot_payload(asset: PlannerAsset) -> dict[str, Any]:
         "input_contract": asset.input_contract,
         "fallback_modes": list(asset.fallback_modes),
         "retry_statuses": list(asset.retry_statuses),
+        "delegated_skills": list(asset.delegated_skills),
         "declared": asset.declared,
         "runtime_visible": asset.runtime_visible,
         "contract_owner": asset.contract_owner,
@@ -446,6 +457,8 @@ def _prompt_payload(asset: PlannerAsset) -> dict[str, Any]:
         payload["fallback_modes"] = list(asset.fallback_modes)
     if asset.retry_statuses:
         payload["retry_statuses"] = list(asset.retry_statuses)
+    if asset.delegated_skills:
+        payload["delegated_skills"] = list(asset.delegated_skills)
     if asset.contract_owner is not None:
         payload["contract_owner"] = asset.contract_owner
         payload["input_contract_ref"] = asset.input_contract_ref
@@ -537,6 +550,7 @@ def build_planner_catalog(
                 description=recipe.description,
                 capability=recipe.capability,
                 runtime_visible=True,
+                delegated_skills=recipe.skills,
                 **_contract_catalog_fields(recipe),
             )
             for recipe in recipes
