@@ -33,10 +33,6 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
-from simpleclaw.capability import (
-    parse_owned_binding_metadata,
-    parse_owned_contract_metadata,
-)
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ConnectedContractProbe,
     ScenarioCase,
@@ -48,7 +44,6 @@ from simpleclaw.langgraph_v4_shadow_validation import _definitions
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
-from simpleclaw.skills.models import SkillDefinition
 
 ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
@@ -61,43 +56,12 @@ def _sports_contract_definitions():
         for item in discover_recipes(ROOT / "tests/fixtures/recipes")
         if item.name == "sports-live"
     )
-    skill = SkillDefinition(
-        name="naver-sports-skill",
-        description="Connected sports contract target",
-        capability=recipe.capability,
-        input_contract=parse_owned_contract_metadata(
-            {
-                "contract_id": "skill.naver-sports-skill.input",
-                "version": "1",
-                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
-                "json_schema": {
-                    "type": "object",
-                    "properties": {
-                        "args": {"type": "string", "minLength": 1},
-                    },
-                    "required": ["args"],
-                    "additionalProperties": False,
-                },
-            },
-            source="synthetic naver sports input",
-        ),
-        output_contract=parse_owned_contract_metadata(
-            {
-                "contract_id": "skill.naver-sports-skill.output",
-                "version": "1",
-                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
-                "json_schema": {"type": "object"},
-            },
-            source="synthetic naver sports output",
-        ),
-        argument_binding=parse_owned_binding_metadata(
-            {
-                "binding_id": "shell-argv.v1",
-                "owner_ref": {"type": "skill", "name": "naver-sports-skill"},
-                "binding": {"strategy": "shell", "order": ["args"]},
-            },
-            source="synthetic naver sports binding",
-        ),
+    skill = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
+        if item.name == "naver-sports-skill"
     )
     return recipe, skill
 
@@ -660,10 +624,16 @@ async def test_connected_contract_failure_is_explicit_hold_not_planner_failure()
 
 
 @pytest.mark.asyncio
-async def test_reported_production_assets_complete_connected_read_only_probe(
+async def test_production_read_only_assets_complete_connected_read_only_probe(
     tmp_path: Path,
 ) -> None:
-    target_skills = {"google-news-search-skill", "kr-stock-skill"}
+    target_skills = {
+        "gmail-skill",
+        "google-news-search-skill",
+        "kr-stock-skill",
+        "naver-sports-skill",
+        "us-stock-skill",
+    }
     target_native = {"web_fetch", "web_search"}
     skills = tuple(
         item
@@ -684,16 +654,25 @@ async def test_reported_production_assets_complete_connected_read_only_probe(
     probe = ConnectedContractProbe(definitions=definitions, directory=tmp_path)
     try:
         for asset_type, name in (
+            ("skill", "gmail-skill"),
             ("skill", "google-news-search-skill"),
             ("skill", "kr-stock-skill"),
+            ("skill", "naver-sports-skill"),
+            ("skill", "us-stock-skill"),
             ("native_tool", "web_fetch"),
             ("native_tool", "web_search"),
         ):
             ref = AssetRef(asset_type, name)
             base = _gold_plan(case, catalog)
             standalone = {
+                "gmail-skill": 'search --query "category:primary is:unread" --limit 5',
                 "google-news-search-skill": '--query "시장 마감" --format json',
                 "kr-stock-skill": "market-summary --json",
+                "naver-sports-skill": (
+                    "--mode results --category kbo --date 2026-08-02 "
+                    "--limit 10 --json"
+                ),
+                "us-stock-skill": "info --symbol AAPL --json",
                 "web_fetch": "https://example.com/report",
                 "web_search": "시장 마감",
             }[name]
