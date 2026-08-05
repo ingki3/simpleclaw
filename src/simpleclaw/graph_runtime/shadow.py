@@ -126,7 +126,6 @@ class _ShadowRunBudget:
                 self.asset_calls >= self._limits.max_asset_calls,
                 self.llm_calls >= self._limits.max_llm_calls,
                 self.tokens >= self._limits.max_tokens,
-                self.parallel_peak >= self._limits.max_parallel_invocations,
             )
         ):
             raise _ShadowBudgetStop("budget_exhausted")

@@ -55,7 +55,11 @@ from simpleclaw.graph_runtime.runtime import (
     compare_shadow_run,
     evaluate_read_only_canary,
 )
-from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.shadow import (
+    ConnectedShadowTurnRunner,
+    _ShadowBudgetStop,
+    _ShadowRunBudget,
+)
 from simpleclaw.graph_runtime.side_effect_monitor import capture_shadow_side_effects
 from simpleclaw.graph_runtime.status import (
     AssetResultStatus,
@@ -212,6 +216,64 @@ def _budget(*, stop_condition: str = "completed") -> ShadowBudgetUsageV1:
 def _budget_with(**changes) -> ShadowBudgetUsageV1:
     return replace(_budget(), graph_steps=0, asset_calls=0, llm_calls=0, tokens=0,
                    elapsed_seconds=0, parallel_peak=0, **changes)
+
+
+def test_parallel_budget_releases_slot_for_sequential_graph_step() -> None:
+    """동시성 1은 첫 호출 종료 후 다음 순차 graph step을 허용해야 한다."""
+    budget = _ShadowRunBudget(
+        _budget_with(max_parallel_invocations=1),
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    budget.reserve_asset_call()
+    budget.release_asset_call()
+    budget.reserve_graph_step()
+
+    assert budget.parallel_active == 0
+    assert budget.parallel_peak == 1
+    assert budget.graph_steps == 1
+
+
+def test_parallel_budget_releases_slot_for_next_sequential_asset_call() -> None:
+    """high-water mark가 limit에 닿아도 slot 해제 후 순차 호출은 가능하다."""
+    budget = _ShadowRunBudget(
+        _budget_with(max_parallel_invocations=1),
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    budget.reserve_asset_call()
+    budget.release_asset_call()
+    budget.reserve_asset_call()
+
+    assert budget.asset_calls == 2
+    assert budget.parallel_active == 1
+    assert budget.parallel_peak == 1
+
+
+@pytest.mark.parametrize("reservation", ["asset", "llm"])
+def test_parallel_budget_rejects_work_while_active_slot_is_occupied(
+    reservation,
+) -> None:
+    """실제 active slot이 limit에 도달한 동안 추가 호출은 시작하지 않는다."""
+    budget = _ShadowRunBudget(
+        _budget_with(max_parallel_invocations=1),
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+    budget.reserve_asset_call()
+
+    with pytest.raises(_ShadowBudgetStop, match="budget_exhausted"):
+        if reservation == "asset":
+            budget.reserve_asset_call()
+        else:
+            budget.reserve_llm_call(max_tokens=100)
+
+    assert budget.asset_calls == 1
+    assert budget.llm_calls == 0
+    assert budget.parallel_active == 1
+    assert budget.parallel_peak == 1
 
 
 def _connected_runner(tmp_path, *, budget, recipe_executor):
@@ -615,11 +677,10 @@ async def test_connected_shadow_deadline_cancels_slow_executor_before_completion
         ({"max_asset_calls": 1}, 0, 0, 1),
         ({"max_llm_calls": 1}, 1, 0, 0),
         ({"max_tokens": 1}, 0, 1, 0),
-        ({"max_parallel_invocations": 1}, 0, 0, 1),
     ],
 )
 @pytest.mark.asyncio
-async def test_connected_shadow_reserves_each_budget_axis_before_next_work(
+async def test_connected_shadow_reserves_each_lifetime_budget_before_next_work(
     tmp_path,
     budget_change,
     planner_calls,
@@ -664,6 +725,47 @@ async def test_connected_shadow_reserves_each_budget_axis_before_next_work(
     assert result.telemetry.terminal_outcome is TerminalOutcome.BLOCKED
     assert result.comparison.rollback_required is True
     assert result.canary.eligible is False
+
+
+@pytest.mark.asyncio
+async def test_connected_shadow_max_parallel_one_completes_sequential_graph(
+    tmp_path,
+) -> None:
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "sequential"}
+
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(max_parallel_invocations=1),
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=LegacyRunTelemetryV1(
+            selected_route="recipe",
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            model_calls=0,
+        ),
+        request_id="parallel-one-sequential",
+        session_key="budget-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    usage = result.telemetry.budget_usage
+    assert calls == 1
+    assert usage.asset_calls == 1
+    assert usage.parallel_peak == 1
+    assert usage.stop_condition == "completed"
+    assert result.telemetry.terminal_outcome is TerminalOutcome.COMPLETED
 
 
 @pytest.mark.asyncio
