@@ -33,6 +33,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.capability import parse_owned_contract_metadata
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ConnectedContractProbe,
     ScenarioCase,
@@ -905,6 +906,28 @@ async def test_cli_skill_without_declared_fallback_fails_closed(
             Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
         )
         if item.name == "google-news-search-skill"
+    )
+    assert skill.input_contract is not None
+    schema = json.loads(json.dumps(skill.input_contract.json_schema))
+    schema.pop("default", None)
+    schema.pop("examples", None)
+    for property_schema in schema.get("properties", {}).values():
+        property_schema.pop("default", None)
+        property_schema.pop("examples", None)
+    skill = replace(
+        skill,
+        input_contract=parse_owned_contract_metadata(
+            {
+                "contract_id": skill.input_contract.contract_id,
+                "version": skill.input_contract.version,
+                "owner_ref": {
+                    "type": skill.input_contract.owner_type,
+                    "name": skill.input_contract.owner_name,
+                },
+                "json_schema": schema,
+            },
+            source="missing declared CLI fallback fixture",
+        ),
     )
     catalog = build_planner_catalog(skills=(skill,), native_specs=())
     ref = AssetRef("skill", skill.name)
