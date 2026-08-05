@@ -16,10 +16,168 @@ metadata 로 표현하기 위한 공용 contract 다. skills/recipes 양쪽 로�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_json(value: object, *, source: str) -> str:
+    """계약 metadata를 순서와 입력 객체 mutation에 무관한 JSON으로 고정한다."""
+    if not isinstance(value, dict):
+        raise TypeError(f"{source} must be a JSON object")
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must contain only JSON values") from exc
+
+
+def _sha256(value: str) -> str:
+    """Canonical metadata identity를 고정 길이 SHA-256으로 만든다."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class OwnedContractMetadata:
+    """Recipe/Skill이 소유하는 versioned JSON Schema 계약 선언."""
+
+    contract_id: str
+    version: str
+    owner_type: str
+    owner_name: str
+    schema_json: str
+    schema_hash: str
+
+    @property
+    def json_schema(self) -> dict[str, Any]:
+        """호출자가 원본 metadata를 바꾸지 못하도록 schema 복사본을 반환한다."""
+        value = json.loads(self.schema_json)
+        if not isinstance(value, dict):  # pragma: no cover - parser 불변식
+            raise TypeError("contract schema must decode to an object")
+        return value
+
+
+@dataclass(frozen=True)
+class OwnedBindingMetadata:
+    """Asset-owned deterministic binding의 opaque identity와 명세."""
+
+    binding_id: str
+    owner_type: str
+    owner_name: str
+    binding_json: str
+    binding_hash: str
+
+    @property
+    def binding(self) -> dict[str, Any]:
+        """Asset adapter만 해석할 수 있는 binding 명세 복사본을 반환한다."""
+        value = json.loads(self.binding_json)
+        if not isinstance(value, dict):  # pragma: no cover - parser 불변식
+            raise TypeError("binding metadata must decode to an object")
+        return value
+
+
+def parse_owned_contract_metadata(
+    raw: object,
+    *,
+    source: str,
+) -> OwnedContractMetadata | None:
+    """Optional owner-qualified contract를 엄격히 파싱하고 hash를 검증한다."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError(f"{source} must be a mapping")
+    allowed = {
+        "contract_id", "version", "owner_ref", "json_schema", "schema_hash"
+    }
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError(f"{source} contains unsupported keys: {unknown}")
+    owner = raw.get("owner_ref")
+    if not isinstance(owner, dict) or set(owner) != {"type", "name"}:
+        raise ValueError(f"{source}.owner_ref must contain exactly type and name")
+    values = {
+        "contract_id": raw.get("contract_id"),
+        "version": raw.get("version"),
+        "owner_type": owner.get("type"),
+        "owner_name": owner.get("name"),
+    }
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        raise ValueError(f"{source} identity fields must be non-empty strings")
+    schema_json = _canonical_json(raw.get("json_schema"), source=f"{source}.json_schema")
+    schema_hash = _sha256(schema_json)
+    declared_hash = raw.get("schema_hash")
+    if declared_hash is not None and declared_hash != schema_hash:
+        raise ValueError(f"{source}.schema_hash does not match json_schema")
+    return OwnedContractMetadata(
+        contract_id=str(values["contract_id"]).strip(),
+        version=str(values["version"]).strip(),
+        owner_type=str(values["owner_type"]).strip(),
+        owner_name=str(values["owner_name"]).strip(),
+        schema_json=schema_json,
+        schema_hash=schema_hash,
+    )
+
+
+def parse_owned_binding_metadata(
+    raw: object,
+    *,
+    source: str,
+) -> OwnedBindingMetadata | None:
+    """Optional deterministic binding을 엄격히 파싱하고 identity hash를 고정한다."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError(f"{source} must be a mapping")
+    allowed = {"binding_id", "owner_ref", "binding", "binding_hash"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError(f"{source} contains unsupported keys: {unknown}")
+    owner = raw.get("owner_ref")
+    if not isinstance(owner, dict) or set(owner) != {"type", "name"}:
+        raise ValueError(f"{source}.owner_ref must contain exactly type and name")
+    values = {
+        "binding_id": raw.get("binding_id"),
+        "owner_type": owner.get("type"),
+        "owner_name": owner.get("name"),
+    }
+    if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+        raise ValueError(f"{source} identity fields must be non-empty strings")
+    binding_json = _canonical_json(raw.get("binding"), source=f"{source}.binding")
+    binding_hash = _sha256(binding_json)
+    declared_hash = raw.get("binding_hash")
+    if declared_hash is not None and declared_hash != binding_hash:
+        raise ValueError(f"{source}.binding_hash does not match binding")
+    return OwnedBindingMetadata(
+        binding_id=str(values["binding_id"]).strip(),
+        owner_type=str(values["owner_type"]).strip(),
+        owner_name=str(values["owner_name"]).strip(),
+        binding_json=binding_json,
+        binding_hash=binding_hash,
+    )
+
+
+def require_complete_contract_metadata(
+    *,
+    input_contract: OwnedContractMetadata | None,
+    output_contract: OwnedContractMetadata | None,
+    binding: OwnedBindingMetadata | None,
+    source: str,
+) -> None:
+    """Typed V4 metadata가 일부만 선언돼 자동 후보로 승격되는 일을 차단한다."""
+    present = tuple(item is not None for item in (input_contract, output_contract, binding))
+    if any(present) and not all(present):
+        raise ValueError(
+            f"{source} must declare input_contract, output_contract, and binding together"
+        )
 
 
 @dataclass(frozen=True)

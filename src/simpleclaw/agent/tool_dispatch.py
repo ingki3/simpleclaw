@@ -83,10 +83,20 @@ async def dispatch_tool_call(
     """ToolGate를 통과한 ToolCall만 기존 핸들러로 전달한다."""
     name = tool_call.name
     args = tool_call.arguments
+    resolved_skill = None
 
     if execution_scope is not None:
+        if name == "execute_skill" and execution_scope.max_tool_calls == 1:
+            skill_name = str(args.get("skill_name") or "").strip()
+            resolved_skill = getattr(orchestrator, "_skills_by_name", {}).get(
+                skill_name
+            )
         try:
-            ToolGate().authorize(tool_call, execution_scope)
+            ToolGate().authorize(
+                tool_call,
+                execution_scope,
+                resolved_skill=resolved_skill,
+            )
         except ToolCallRejected as exc:
             return json.dumps(
                 {
@@ -98,6 +108,11 @@ async def dispatch_tool_call(
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
+        if name == "execute_skill" and resolved_skill is None:
+            skill_name = str(args.get("skill_name") or "").strip()
+            resolved_skill = getattr(orchestrator, "_skills_by_name", {}).get(
+                skill_name
+            )
 
     if name == "execute_skill":
         if execution_scope is None:
@@ -108,7 +123,9 @@ async def dispatch_tool_call(
             if asset_type == "skill"
         )
         return await orchestrator._dispatch_external_skill(
-            args, allowed_skill_names=allowed_skill_names
+            args,
+            allowed_skill_names=allowed_skill_names,
+            resolved_skill=resolved_skill,
         )
     if name == "cli":
         cmd = args.get("command", "")

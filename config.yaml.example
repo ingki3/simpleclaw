@@ -164,8 +164,8 @@ agent:
   # BIZ-523 — ordinary turn의 유일한 semantic controller.
   unified_turn_planner:
     mode: primary
-    # capability_first_v3는 아래 budget 중 하나 이상이 유한할 때만 실행한다.
-    architecture: legacy_v2  # legacy_v2 | capability_first_v3
+    # capability_first_v3는 아래 resolution_budget 중 하나 이상이 유한할 때만 실행한다.
+    architecture: legacy_v2  # legacy_v2 | capability_first_v3 | langgraph_v4
     sample_rate: 0.0          # deprecated rollout 값; ordinary 실행에는 사용하지 않음
     max_tokens: 2048
     # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
@@ -194,6 +194,24 @@ agent:
     telemetry:
       enabled: true
       include_raw_text: false  # true로 설정해도 loader가 false로 fail-closed
+    # LangGraph V4 bounded shadow/no-send 예시. architecture를 langgraph_v4로
+    # 선택할 때만 읽으며, 모든 budget 축이 양의 유한값이어야 valid하다.
+    # 기존 provider/model route와 Telegram 설정은 이 블록에서 복제하지 않는다.
+    langgraph_v4:
+      budget:
+        max_graph_steps: 40
+        max_asset_calls: 12
+        max_llm_calls: 8
+        max_tokens: 16000
+        max_seconds: 180
+        max_parallel_invocations: 3
+      checkpoint:
+        path: "~/.simpleclaw-agent/default/graph-checkpoints.sqlite3"
+        terminal_ttl_days: 30
+        max_rows: 100000
+      delivery:
+        mode: no_send  # shadow에서는 live로 입력해도 no_send로 강제됨
+        max_attempts: 1
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``

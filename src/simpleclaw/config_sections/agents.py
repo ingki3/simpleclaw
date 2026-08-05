@@ -186,6 +186,56 @@ _AGENT_DEFAULTS: dict = {
     },
 }
 
+_LANGGRAPH_V4_DEFAULTS: dict = {
+    "budget": {
+        "max_graph_steps": None,
+        "max_asset_calls": None,
+        "max_llm_calls": None,
+        "max_tokens": None,
+        "max_seconds": None,
+        "max_parallel_invocations": None,
+    },
+    "checkpoint": {
+        "path": "~/.simpleclaw-agent/default/graph-checkpoints.sqlite3",
+        "terminal_ttl_days": 30,
+        "max_rows": 100000,
+    },
+    "delivery": {
+        "mode": "no_send",
+        "max_attempts": 1,
+    },
+    "shadow_no_send": True,
+}
+
+_LANGGRAPH_V4_TELEMETRY_FIELDS = (
+    "run_id",
+    "request_id",
+    "checkpoint_thread_id",
+    "plan_id",
+    "plan_revision",
+    "catalog_fingerprint",
+    "invocation_id",
+    "definition_fingerprint",
+    "contract_owner_ref",
+    "input_contract_ref",
+    "input_schema_hash",
+    "payload_hash",
+    "binding_ref",
+    "output_contract_ref",
+    "output_schema_hash",
+    "selected_route",
+    "invocation_status",
+    "asset_result_status",
+    "effect_status",
+    "terminal_outcome",
+    "delivery_status",
+    "budget_usage",
+    "model_call_attribution",
+    "stop_condition",
+    "rollback_required",
+    "rollback_reason",
+)
+
 # BIZ-453 — reasoning.effort 허용값. 밖의 값은 기본(medium)으로 정규화한다.
 _REASONING_EFFORTS = {"low", "medium", "high"}
 
@@ -336,7 +386,7 @@ def _agent_with_defaults(agent: dict) -> dict:
             unified_defaults["architecture"],
         )
     ).strip().lower()
-    if architecture not in {"legacy_v2", "capability_first_v3"}:
+    if architecture not in {"legacy_v2", "capability_first_v3", "langgraph_v4"}:
         architecture = unified_defaults["architecture"]
     resolution_budget = unified_turn_planner.get("resolution_budget", {})
     if not isinstance(resolution_budget, dict):
@@ -349,6 +399,44 @@ def _agent_with_defaults(agent: dict) -> dict:
         for key in budget_defaults
     }
     budget_valid = any(value is not None for value in normalized_budget.values())
+    langgraph_v4 = unified_turn_planner.get("langgraph_v4", {})
+    if not isinstance(langgraph_v4, dict):
+        langgraph_v4 = {}
+    v4_budget = langgraph_v4.get("budget", {})
+    if not isinstance(v4_budget, dict):
+        v4_budget = {}
+    normalized_v4_budget = {
+        key: _coerce_optional_positive_int(v4_budget.get(key))
+        for key in _LANGGRAPH_V4_DEFAULTS["budget"]
+    }
+    v4_budget_valid = all(value is not None for value in normalized_v4_budget.values())
+
+    v4_checkpoint = langgraph_v4.get("checkpoint", {})
+    if not isinstance(v4_checkpoint, dict):
+        v4_checkpoint = {}
+    checkpoint_defaults = _LANGGRAPH_V4_DEFAULTS["checkpoint"]
+    checkpoint_path = v4_checkpoint.get("path", checkpoint_defaults["path"])
+    if not isinstance(checkpoint_path, str) or not checkpoint_path.strip():
+        checkpoint_path = checkpoint_defaults["path"]
+
+    v4_delivery = langgraph_v4.get("delivery", {})
+    if not isinstance(v4_delivery, dict):
+        v4_delivery = {}
+    delivery_defaults = _LANGGRAPH_V4_DEFAULTS["delivery"]
+    delivery_mode = str(
+        v4_delivery.get("mode", delivery_defaults["mode"])
+    ).strip().lower()
+    if delivery_mode not in {"no_send", "live"}:
+        delivery_mode = delivery_defaults["mode"]
+    shadow_no_send = bool(
+        langgraph_v4.get(
+            "shadow_no_send", _LANGGRAPH_V4_DEFAULTS["shadow_no_send"]
+        )
+    )
+    # Shadow는 관찰 전용이다. 잘못된 live 설정도 외부 전송으로 승격하지 않는다.
+    if unified_mode is UnifiedTurnPlannerMode.SHADOW:
+        delivery_mode = "no_send"
+        shadow_no_send = True
     complex_escalation = unified_turn_planner.get("complex_escalation", {})
     if not isinstance(complex_escalation, dict):
         complex_escalation = {}
@@ -662,6 +750,49 @@ def _agent_with_defaults(agent: dict) -> dict:
                 # 원문 telemetry는 rollout 단계와 무관하게 fail-closed한다.
                 "include_raw_text": False,
             },
+            **(
+                {
+                    "langgraph_v4": {
+                        "budget": normalized_v4_budget,
+                        "budget_valid": v4_budget_valid,
+                        "checkpoint": {
+                            "path": checkpoint_path,
+                            "terminal_ttl_days": _coerce_int_config(
+                                v4_checkpoint.get(
+                                    "terminal_ttl_days",
+                                    checkpoint_defaults["terminal_ttl_days"],
+                                ),
+                                checkpoint_defaults["terminal_ttl_days"],
+                                minimum=1,
+                            ),
+                            "max_rows": _coerce_int_config(
+                                v4_checkpoint.get(
+                                    "max_rows", checkpoint_defaults["max_rows"]
+                                ),
+                                checkpoint_defaults["max_rows"],
+                                minimum=1,
+                            ),
+                        },
+                        "delivery": {
+                            "mode": delivery_mode,
+                            "max_attempts": _coerce_int_config(
+                                v4_delivery.get(
+                                    "max_attempts", delivery_defaults["max_attempts"]
+                                ),
+                                delivery_defaults["max_attempts"],
+                                minimum=1,
+                            ),
+                        },
+                        # Shadow에서는 false 입력도 강제로 true가 된다. canary/primary
+                        # 활성화 여부와 무관하게 현재 이슈의 기본은 no-send다.
+                        "shadow_no_send": shadow_no_send,
+                        # payload key/value와 원문은 허용하지 않는 고정 allowlist다.
+                        "telemetry_fields": _LANGGRAPH_V4_TELEMETRY_FIELDS,
+                    }
+                }
+                if architecture == "langgraph_v4"
+                else {}
+            ),
         },
     }
 
@@ -830,7 +961,7 @@ def _coerce_optional_positive_int(raw: object) -> int | None:
         return None
     try:
         value = int(raw)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     return value if value > 0 else None
 

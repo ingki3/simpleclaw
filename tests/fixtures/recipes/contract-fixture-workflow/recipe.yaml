@@ -1,0 +1,54 @@
+name: contract-fixture-workflow
+description: "Runtime Core가 모르는 임의 key를 Skill 계약으로 변환하는 확장 fixture"
+skills:
+  - contract-fixture-step
+
+capability:
+  read_only: true
+  side_effects: false
+  requires_confirmation: false
+  coverage: full_coverage
+  input_contract: query.v1
+  output_contract: asset_result.v1
+
+input_contract:
+  contract_id: recipe.contract-fixture-workflow.input
+  version: "1"
+  owner_ref:
+    type: recipe
+    name: contract-fixture-workflow
+  json_schema:
+    type: object
+    properties:
+      fixture_key:
+        type: string
+        minLength: 1
+    required:
+      - fixture_key
+    additionalProperties: false
+
+output_contract:
+  contract_id: recipe.contract-fixture-workflow.output
+  version: "1"
+  owner_ref:
+    type: recipe
+    name: contract-fixture-workflow
+  json_schema:
+    type: object
+    properties:
+      fixture_result:
+        type: string
+        minLength: 1
+    required:
+      - fixture_result
+    additionalProperties: false
+
+step_bindings:
+  - binding_id: fixture-step.v1
+    owner_ref:
+      type: recipe
+      name: contract-fixture-workflow
+    binding:
+      target_skill: contract-fixture-step
+      map:
+        fixture_key: operation_value

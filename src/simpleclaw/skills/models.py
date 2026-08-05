@@ -11,10 +11,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.capability import (
+    CapabilityMetadata,
+    OwnedBindingMetadata,
+    OwnedContractMetadata,
+)
 
 
 class SkillScope(Enum):
@@ -88,6 +94,54 @@ class SkillDefinition:
     # BIZ-425 — capability 선언. 미선언 시 보수 기본값(read_only=False,
     # side_effects=True)이라 자동 실행 후보가 되지 않는다.
     capability: CapabilityMetadata = field(default_factory=CapabilityMetadata)
+    # V4 metadata는 전부 선언된 자산만 typed registry 후보가 된다. 기존 capability의
+    # 문자열 계약은 legacy/V3 호환 경로에 남겨 두고 owner-qualified 선언과 섞지 않는다.
+    input_contract: OwnedContractMetadata | None = None
+    output_contract: OwnedContractMetadata | None = None
+    argument_binding: OwnedBindingMetadata | None = None
+
+    @property
+    def contract_asset_type(self) -> str:
+        """Contract Registry가 concrete Skill import 없이 사용할 asset 종류다."""
+        return "skill"
+
+    @property
+    def contract_binding(self) -> OwnedBindingMetadata | None:
+        """Skill-owned argument binding을 registry 공통 표면으로 노출한다."""
+        return self.argument_binding
+
+    @property
+    def definition_fingerprint(self) -> str:
+        """실행·안전·V4 contract 전체의 현재 canonical fingerprint를 계산한다."""
+        payload = {
+            "name": self.name,
+            "description": self.description,
+            "script_path": self.script_path,
+            "trigger": self.trigger,
+            "scope": self.scope.value,
+            "skill_dir": self.skill_dir,
+            "commands": list(self.commands),
+            "retry_policy": (
+                asdict(self.retry_policy) if self.retry_policy is not None else None
+            ),
+            "capability": asdict(self.capability),
+            "input_contract": (
+                asdict(self.input_contract) if self.input_contract is not None else None
+            ),
+            "output_contract": (
+                asdict(self.output_contract) if self.output_contract is not None else None
+            ),
+            "argument_binding": (
+                asdict(self.argument_binding) if self.argument_binding is not None else None
+            ),
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass

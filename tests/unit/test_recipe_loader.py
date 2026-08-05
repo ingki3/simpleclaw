@@ -75,11 +75,45 @@ class TestRecipeLoader:
         with pytest.raises(RecipeParseError, match="only strings"):
             load_recipe(recipe_dir / "recipe.yaml")
 
+    def test_second_step_binding_owner_mismatch_fails_closed(self, tmp_path):
+        recipe_dir = tmp_path / "bad-binding-owner"
+        recipe_dir.mkdir()
+        (recipe_dir / "recipe.yaml").write_text(
+            """name: fixture-recipe
+input_contract: &contract
+  contract_id: fixture.input
+  version: '1'
+  owner_ref: {type: recipe, name: fixture-recipe}
+  json_schema: {type: object}
+output_contract:
+  <<: *contract
+  contract_id: fixture.output
+step_bindings:
+  - binding_id: step-one.v1
+    owner_ref: {type: recipe, name: fixture-recipe}
+    binding: {target_skill: first}
+  - binding_id: step-two.v1
+    owner_ref: {type: recipe, name: other-owner}
+    binding: {target_skill: second}
+""",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(
+            RecipeParseError,
+            match=r"step_bindings\[1\]\.owner_ref must be recipe:fixture-recipe",
+        ):
+            load_recipe(recipe_dir / "recipe.yaml")
+
     def test_discover_recipes(self):
         recipes = discover_recipes(FIXTURES)
-        assert len(recipes) == 3
         names = {r.name for r in recipes}
-        assert "daily-report" in names
+        assert names == {
+            "contract-fixture-workflow",
+            "daily-report",
+            "morning-briefing",
+            "sports-live",
+        }
 
     def test_discover_empty_dir(self, tmp_path):
         result = discover_recipes(tmp_path / "nonexistent")

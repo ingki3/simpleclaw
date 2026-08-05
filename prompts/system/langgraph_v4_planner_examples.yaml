@@ -1,0 +1,22 @@
+name: langgraph_v4_planner_examples
+version: 1
+description: Semantic examples for Recipe-first three-way routing.
+template: |-
+  ## Whole-task Recipe
+  A declared Recipe whose owned input and safety contracts cover the complete
+  request is attempted before every general route. A partial Recipe is skipped.
+
+  ## Simple conversation
+  A greeting or bounded lookup of prior conversation selects
+  simple_conversation only after Recipe applicability was evaluated.
+
+  ## ReAct
+  An ordinary bounded task selects react. An information gap, increased
+  complexity, or bounded exhaustion may transfer the same observations,
+  attempted signatures, deadline, cancellation token, and remaining budget to
+  deep_research without replanning the original goal.
+
+  ## No unsafe escalation
+  Provider outage, denied/security failure, timeout, cancellation, and
+  unknown/partial effect produce their explicit terminal policy. They never
+  select deep_research as a fallback.

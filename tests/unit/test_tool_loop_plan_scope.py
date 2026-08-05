@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -371,6 +372,7 @@ async def test_raw_planner_boundary_executes_exact_skill_from_production_catalog
         "safe-skill",
         "",
         exact=True,
+        resolved_skill=safe_skill,
     )
 
 
@@ -420,6 +422,54 @@ async def test_planned_skill_name_is_exact_not_fuzzy():
     payload = json.loads(result)
     assert payload["error"]["code"] == "skill_not_allowed"
     orchestrator._dispatch_external_skill.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["missing", "replaced"])
+async def test_exact_scope_revalidates_registry_after_scope_creation(
+    primary_config,
+    mutation: str,
+) -> None:
+    orchestrator = AgentOrchestrator(primary_config)
+    safe_skill = _safe_skill("safe-skill")
+    orchestrator._skills = [safe_skill]
+    orchestrator._skills_by_name = {safe_skill.name: safe_skill}
+    state = await orchestrator._prepare_tool_loop_state(
+        "safe skill로 조회해줘",
+        True,
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        forced_skill_names=frozenset({safe_skill.name}),
+        forced_tool_names=frozenset({"execute_skill"}),
+    )
+    dispatch = AsyncMock(return_value="must not run")
+    orchestrator._dispatch_external_skill = dispatch
+    if mutation == "missing":
+        orchestrator._skills_by_name = {}
+    else:
+        orchestrator._skills_by_name = {
+            safe_skill.name: replace(
+                safe_skill,
+                script_path="/tmp/replaced-safe-skill.py",
+            )
+        }
+
+    result = await dispatch_tool_call(
+        orchestrator,
+        ToolCall(
+            id="post-scope-drift",
+            name="execute_skill",
+            arguments={"skill_name": safe_skill.name},
+        ),
+        execution_scope=state.execution_scope,
+    )
+
+    assert json.loads(result)["error"]["code"] in {
+        "skill_definition_missing",
+        "skill_definition_identity_mismatch",
+    }
+    dispatch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

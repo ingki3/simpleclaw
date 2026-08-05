@@ -121,7 +121,11 @@ from simpleclaw.agent.session_state import (
     current_turn_id_var,
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
-from simpleclaw.agent.tool_gate import ToolExecutionScope, TrustedAssetSafety
+from simpleclaw.agent.tool_gate import (
+    ToolExecutionScope,
+    TrustedAssetSafety,
+    skill_definition_fingerprint,
+)
 from simpleclaw.agent.tool_loop import (
     ToolLoopResult,
     ToolLoopRunner,
@@ -163,6 +167,13 @@ from simpleclaw.daemon.drain import (
     DrainController,
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
+from simpleclaw.graph_runtime.runtime import (
+    LangGraphV4RolloutFacade,
+    LegacyRunTelemetryV1,
+    ShadowBudgetUsageV1,
+)
+from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import (
     LLMRequest,
     MultimodalAttachment,
@@ -1307,6 +1318,28 @@ class AgentOrchestrator:
                 )
                 response_text = tool_loop_result.text
 
+                if (
+                    turn.plan is not None
+                    and tool_loop_result.selected_route is not None
+                ):
+                    self._schedule_unified_turn_planner_shadow(
+                        text,
+                        recent_rows=recent_rows,
+                        plan=turn.plan,
+                        legacy=LegacyRunTelemetryV1(
+                            selected_route=tool_loop_result.selected_route,
+                            terminal_outcome=(
+                                TerminalOutcome.COMPLETED
+                                if tool_loop_result.success
+                                else TerminalOutcome.FAILED
+                            ),
+                            model_calls=tool_loop_result.model_calls,
+                            tokens=tool_loop_result.tokens,
+                        ),
+                        request_id=turn.turn_id,
+                        session_key=turn.session_key,
+                    )
+
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
@@ -1361,12 +1394,13 @@ class AgentOrchestrator:
                 ),
             ),
         )
+        usage_router = PlannerUsageCaptureRouter(self._router)
         try:
             plan = await plan_turn_with_llm(
                 text,
                 candidates=candidates,
                 catalog=catalog,
-                router=self._router,
+                router=usage_router,
                 max_tokens=int(config.get("max_tokens", 2048)),
                 reasoning=config.get("reasoning"),
                 examples_prompt_name=str(
@@ -1490,9 +1524,20 @@ class AgentOrchestrator:
             execution_mode=effective_plan.execution.mode.value,
             gate_status=gate_result.status.value,
         )
+        primary_route: str | None = None
+        primary_model_calls = 0
+
+        def record_primary_execution(route: str, model_calls: int) -> None:
+            nonlocal primary_route, primary_model_calls
+            if primary_route is not None and primary_route != route:
+                raise RuntimeError("primary execution route changed within one turn")
+            primary_route = route
+            primary_model_calls += model_calls
 
         async def run_planned_tool_loop(
             state: TurnExecutionState,
+            *,
+            route: str = "react",
         ) -> TurnExecutionState:
             """검증된 immutable plan을 같은 ToolLoopState에 고정한다."""
             callback_plan = state.plan
@@ -1513,6 +1558,7 @@ class AgentOrchestrator:
                 ),
                 turn=state,
             )
+            record_primary_execution(route, result.iterations)
             state.transition(TurnPhase.FINALIZING)
             state.set_final_text(result.text)
             state.transition(TurnPhase.COMPLETED)
@@ -1528,8 +1574,12 @@ class AgentOrchestrator:
 
         async def run_planned_fact_check(
             state: TurnExecutionState,
+            *,
+            route: str = "react",
         ) -> TurnExecutionState:
             """Typed source request를 먼저 실행하고 검증된 근거만 조합한다."""
+
+            fact_model_calls = 0
 
             async def lookup(
                 request: RealtimeLookupRequest,
@@ -1572,6 +1622,7 @@ class AgentOrchestrator:
             async def compose(
                 verified_state: TurnExecutionState,
             ) -> str:
+                nonlocal fact_model_calls
                 if verified_state.plan is None:
                     raise ValueError("fact composition requires plan")
                 result = await self._run_tool_loop_result(
@@ -1588,32 +1639,52 @@ class AgentOrchestrator:
                     ),
                     turn=verified_state,
                 )
+                fact_model_calls += result.iterations
                 return result.text
 
             evidence_max_attempts = int(
                 config.get("evidence_max_attempts", 2)
             )
-            return await FactCheckController(
+            completed = await FactCheckController(
                 lookup=tuple(lookup for _ in range(evidence_max_attempts)),
                 compose=compose,
                 max_attempts=evidence_max_attempts,
             ).run(state)
+            record_primary_execution(route, fact_model_calls)
+            return completed
 
         async def run_planned_complex_fact(
             state: TurnExecutionState,
         ) -> TurnExecutionState:
             """복합 사실도 동일한 typed retrieval/finalization gate를 사용한다."""
-            return await run_planned_fact_check(state)
+            return await run_planned_fact_check(state, route="deep_research")
 
         async def run_planned_recipe(
             state: TurnExecutionState,
         ) -> TurnExecutionState:
             """선택된 recipe만 노출하고 해당 asset이 근거 수명주기를 소유하게 한다."""
-            return await run_planned_tool_loop(state)
+            return await run_planned_tool_loop(state, route="recipe")
+
+        async def run_planned_react(
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            return await run_planned_tool_loop(state, route="react")
+
+        async def run_planned_react_fact(
+            state: TurnExecutionState,
+        ) -> TurnExecutionState:
+            return await run_planned_fact_check(state, route="react")
+
         factual_handler = (
-            run_planned_fact_check
+            run_planned_react_fact
             if turn.plan is not None and turn.plan.fact_check.required
-            else run_planned_tool_loop
+            else run_planned_react
+        )
+        direct_handler = (
+            run_planned_recipe
+            if effective_plan.capability.primary_asset is not None
+            and effective_plan.capability.primary_asset.asset_type == "recipe"
+            else factual_handler
         )
         architecture = str(config.get("architecture", "legacy_v2"))
         if architecture == "capability_first_v3":
@@ -1926,8 +1997,8 @@ class AgentOrchestrator:
             )
         router = self._build_execution_router(
             ExecutionCallbacks(
-                direct_answer=factual_handler,
-                answer_with_evidence=run_planned_fact_check,
+                direct_answer=direct_handler,
+                answer_with_evidence=run_planned_react_fact,
                 resolve_complex_problem=run_planned_complex_fact,
                 clarify=clarify,
             )
@@ -1936,6 +2007,9 @@ class AgentOrchestrator:
         return ToolLoopResult(
             completed.final_text or _UNIFIED_PLAN_REJECTED_MESSAGE,
             success=completed.phase is TurnPhase.COMPLETED,
+            selected_route=primary_route,
+            model_calls=usage_router.response_count + primary_model_calls,
+            tokens=usage_router.output_tokens,
         )
 
     def _record_unified_rollout_path(
@@ -2077,6 +2151,10 @@ class AgentOrchestrator:
         text: str,
         *,
         recent_rows: list[tuple[int, ConversationMessage]] | None = None,
+        plan: UnifiedTurnPlan | None = None,
+        legacy: LegacyRunTelemetryV1 | None = None,
+        request_id: str = "",
+        session_key: str = "",
     ) -> None:
         """설정과 sampling을 통과한 ordinary turn만 background task로 예약한다."""
         config = self._unified_turn_planner_config
@@ -2101,6 +2179,10 @@ class AgentOrchestrator:
                 browser_handoff_available=bool(
                     self._browser_handoff_config.get("enabled", False)
                 ),
+                connected_plan=plan,
+                legacy=legacy,
+                request_id=request_id,
+                session_key=session_key,
             )
         )
         self._background_tasks.add(task)
@@ -2130,9 +2212,25 @@ class AgentOrchestrator:
         recipes: tuple[RecipeDefinition, ...],
         cron_available: bool,
         browser_handoff_available: bool,
+        connected_plan: UnifiedTurnPlan | None = None,
+        legacy: LegacyRunTelemetryV1 | None = None,
+        request_id: str = "",
+        session_key: str = "",
     ) -> None:
         """Planner→PlanGate를 실행하고 redacted telemetry만 남긴다."""
         config = self._unified_turn_planner_config
+        if str(config.get("architecture")) == "langgraph_v4":
+            if connected_plan is None or legacy is None or not request_id:
+                raise ValueError("langgraph_v4 shadow requires connected primary evidence")
+            await self._run_langgraph_v4_connected_shadow(
+                plan=connected_plan,
+                legacy=legacy,
+                request_id=request_id,
+                session_key=session_key,
+                skills=skills,
+                recipes=recipes,
+            )
+            return
         candidate_limit = int(config.get("context_candidate_limit", 8))
         candidates = ContextCandidateSet((), 0, False)
         catalog_fingerprint = ""
@@ -2195,6 +2293,115 @@ class AgentOrchestrator:
                 event,
                 structured_logger=self._structured_logger,
             )
+
+    async def _run_langgraph_v4_connected_shadow(
+        self,
+        *,
+        plan: UnifiedTurnPlan,
+        legacy: LegacyRunTelemetryV1,
+        request_id: str,
+        session_key: str,
+        skills: tuple[SkillDefinition, ...],
+        recipes: tuple[RecipeDefinition, ...],
+    ) -> None:
+        """Primary의 exact plan을 V4 graph와 rollout gate 끝까지 연결한다."""
+        v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
+        if not isinstance(v4, dict):
+            raise TypeError("langgraph_v4 configuration is required")
+        raw_budget = v4.get("budget", {})
+        checkpoint = v4.get("checkpoint", {})
+        if not isinstance(raw_budget, dict) or not isinstance(checkpoint, dict):
+            raise TypeError("langgraph_v4 budget/checkpoint configuration is required")
+        budget = ShadowBudgetUsageV1(
+            max_graph_steps=raw_budget.get("max_graph_steps"),
+            max_asset_calls=raw_budget.get("max_asset_calls"),
+            max_llm_calls=raw_budget.get("max_llm_calls"),
+            max_tokens=raw_budget.get("max_tokens"),
+            max_seconds=raw_budget.get("max_seconds"),
+            max_parallel_invocations=raw_budget.get("max_parallel_invocations"),
+            graph_steps=0,
+            asset_calls=0,
+            llm_calls=0,
+            tokens=0,
+            elapsed_seconds=0,
+            parallel_peak=0,
+            stop_condition="completed",
+        )
+        facade = LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="shadow",
+            shadow_no_send=bool(v4.get("shadow_no_send", False)),
+            budget=budget,
+            checkpoint_path=str(checkpoint.get("path") or ""),
+        )
+
+        async def execute_skill(definition, argv):
+            raw = await self._execute_skill(definition.name, shlex.join(argv))
+            decoded = json.loads(raw)
+            if not isinstance(decoded, dict):
+                raise TypeError("shadow skill output must be a JSON object")
+            return decoded
+
+        async def execute_recipe(definition, bound_steps):
+            if not bound_steps:
+                raise ValueError("shadow recipe requires declared binding")
+            payload = json.loads(bound_steps[0].source_payload_json)
+            if not isinstance(payload, dict):
+                raise TypeError("shadow recipe payload must be an object")
+            raw = await self._execute_exact_recipe_asset(
+                definition.name,
+                {
+                    key: (
+                        value
+                        if isinstance(value, str)
+                        else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    )
+                    for key, value in payload.items()
+                },
+            )
+            if not isinstance(raw, dict):
+                raise TypeError("shadow recipe output must be a JSON object")
+            return raw
+
+        result = await ConnectedShadowTurnRunner(
+            facade=facade,
+            definitions=(*recipes, *skills),
+            conversation_store=self._store,
+            recipe_executor=execute_recipe,
+            skill_executor=execute_skill,
+        ).run(
+            plan=plan,
+            legacy=legacy,
+            request_id=request_id,
+            session_key=session_key,
+            planner_model_calls=legacy.model_calls,
+            planner_tokens=legacy.tokens,
+        )
+        telemetry = self._unified_turn_planner_config.get("telemetry", {})
+        if (
+            self._structured_logger is None
+            or not isinstance(telemetry, dict)
+            or not telemetry.get("enabled", True)
+        ):
+            return
+        allowed = set(v4.get("telemetry_fields", ()))
+        shadow_fields = {
+            key: value
+            for key, value in result.telemetry.as_dict().items()
+            if key in allowed
+        }
+        self._structured_logger.log(
+            action_type="langgraph_v4_shadow_rollout",
+            status=(
+                "failure" if result.comparison.rollback_required else "success"
+            ),
+            trace_id="",
+            **shadow_fields,
+            side_effect_counts=result.side_effect_counts.as_dict(),
+            rollback_required=result.comparison.rollback_required,
+            rollback_reason=",".join(result.comparison.rollback_reasons) or None,
+            canary_eligible=result.canary.eligible,
+        )
 
     async def process_operator_message(
         self,
@@ -3015,24 +3222,31 @@ class AgentOrchestrator:
             active_recipes_prompt = self._format_recipes_for_prompt(active_recipes)
 
         if forced_skill_names is not None:
-            active_skills = [
-                skill for skill in active_skills
+            trusted_by_name = {
+                skill.name: skill
+                for skill in active_skills
                 if skill.name in forced_skill_names
-            ]
+            }
+            execution_by_name = getattr(self, "_skills_by_name", {})
+            active_skills = []
+            for name in sorted(forced_skill_names):
+                trusted = trusted_by_name.get(name)
+                actual = execution_by_name.get(name)
+                if trusted is None or actual is None:
+                    continue
+                if (
+                    trusted is not actual
+                    or skill_definition_fingerprint(trusted)
+                    != skill_definition_fingerprint(actual)
+                ):
+                    raise ValueError(f"forced skill definition drift: {name}")
+                active_skills.append(actual)
             loaded_names = frozenset(skill.name for skill in active_skills)
             if loaded_names != forced_skill_names:
                 missing = ",".join(sorted(forced_skill_names - loaded_names))
                 raise ValueError(f"forced skill scope unavailable: {missing}")
             trusted_asset_safety = tuple(
-                TrustedAssetSafety(
-                    asset_type="skill",
-                    asset_name=skill.name,
-                    declared=skill.capability.declared,
-                    read_only=skill.capability.read_only,
-                    side_effects=skill.capability.side_effects,
-                    requires_confirmation=skill.capability.requires_confirmation,
-                )
-                for skill in active_skills
+                TrustedAssetSafety.from_skill(skill) for skill in active_skills
             )
             unsafe = tuple(
                 item.asset_name
@@ -3414,12 +3628,14 @@ class AgentOrchestrator:
         args: dict,
         *,
         allowed_skill_names: frozenset[str] | None = None,
+        resolved_skill: SkillDefinition | None = None,
     ) -> str:
         """execute_skill 도구 dispatch 를 전용 모듈에 위임한다."""
         return await skill_dispatch.dispatch_external_skill(
             self,
             args,
             allowed_skill_names=allowed_skill_names,
+            resolved_skill=resolved_skill,
         )
 
     # ------------------------------------------------------------------

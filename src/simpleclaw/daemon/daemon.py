@@ -28,6 +28,7 @@ from simpleclaw.daemon.models import DaemonLockError
 from simpleclaw.daemon.scheduler import CronScheduler
 from simpleclaw.daemon.store import DaemonStore
 from simpleclaw.daemon.wait_states import WaitStateManager
+from simpleclaw.graph_runtime.adapters.cron import CronGraphFacade
 from simpleclaw.proactive.event_detector import EventDetector
 from simpleclaw.proactive.store import OpportunityStore
 
@@ -38,7 +39,10 @@ class AgentDaemon:
     """하트비트, 스케줄러, 이벤트 루프를 호스팅하는 영구 백그라운드 데몬."""
 
     def __init__(
-        self, config_path: str | Path, agent_orchestrator=None,
+        self,
+        config_path: str | Path,
+        agent_orchestrator=None,
+        graph_runtime_facade: CronGraphFacade | None = None,
     ) -> None:
         self._config_path = Path(config_path)
         self._config = load_daemon_config(config_path)
@@ -51,6 +55,7 @@ class AgentDaemon:
         self._heartbeat_interval = self._config["heartbeat_interval"]
 
         self._agent = agent_orchestrator
+        self._graph_runtime_facade = graph_runtime_facade
         self._store: DaemonStore | None = None
         self._heartbeat: HeartbeatMonitor | None = None
         self._scheduler: AsyncIOScheduler | None = None
@@ -157,6 +162,7 @@ class AgentDaemon:
                 self._store, self._scheduler,
                 agent_orchestrator=self._agent,
                 event_detector=self._event_detector,
+                graph_runtime_facade=self._graph_runtime_facade,
             )
 
             self._scheduler.add_job(

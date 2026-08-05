@@ -15,7 +15,9 @@ from simpleclaw.agent.tool_schemas import (
     ToolRisk,
     ToolScope,
 )
+from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import ToolCall, ToolDefinition
+from simpleclaw.skills.models import SkillDefinition
 
 
 def _spec(
@@ -44,6 +46,26 @@ def _scope(
         allowed_assets=assets,
         operator_tools=operator_tools,
         allow_cron_mutation=allow_cron_mutation,
+    )
+
+
+def _skill(
+    name: str = "weather",
+    *,
+    read_only: bool = True,
+    side_effects: bool = False,
+    requires_confirmation: bool = False,
+    script_path: str = "/skills/weather.py",
+) -> SkillDefinition:
+    return SkillDefinition(
+        name=name,
+        script_path=script_path,
+        capability=CapabilityMetadata(
+            declared=True,
+            read_only=read_only,
+            side_effects=side_effects,
+            requires_confirmation=requires_confirmation,
+        ),
     )
 
 
@@ -98,19 +120,19 @@ def test_allowlisted_skill_is_authorized() -> None:
     [
         ((), "skill_safety_metadata_missing"),
         (
-            (TrustedAssetSafety("skill", "weather", True, False, False, False),),
+            (TrustedAssetSafety.from_skill(_skill(read_only=False)),),
             "skill_not_safe_for_exact_read_only",
         ),
         (
-            (TrustedAssetSafety("skill", "weather", True, True, True, False),),
+            (TrustedAssetSafety.from_skill(_skill(side_effects=True)),),
             "skill_not_safe_for_exact_read_only",
         ),
         (
-            (TrustedAssetSafety("skill", "weather", True, True, False, True),),
+            (TrustedAssetSafety.from_skill(_skill(requires_confirmation=True)),),
             "skill_not_safe_for_exact_read_only",
         ),
         (
-            (TrustedAssetSafety("skill", "stocks", True, True, False, False),),
+            (TrustedAssetSafety.from_skill(_skill(name="stocks")),),
             "skill_safety_metadata_missing",
         ),
     ],
@@ -143,6 +165,7 @@ def test_exact_skill_scope_requires_matching_trusted_read_only_safety(
 
 
 def test_exact_skill_scope_authorizes_matching_trusted_read_only_safety() -> None:
+    skill = _skill()
     ToolGate(native_specs=[]).authorize(
         ToolCall(
             id="1",
@@ -156,10 +179,73 @@ def test_exact_skill_scope_authorizes_matching_trusted_read_only_safety() -> Non
             allow_cron_mutation=False,
             max_tool_calls=1,
             trusted_asset_safety=(
-                TrustedAssetSafety("skill", "weather", True, True, False, False),
+                TrustedAssetSafety.from_skill(skill),
             ),
         ),
+        resolved_skill=skill,
     )
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected_code"),
+    [
+        (None, "skill_definition_missing"),
+        (_skill(script_path="/skills/replaced.py"), "skill_definition_identity_mismatch"),
+    ],
+    ids=("registry-missing", "same-name-replacement"),
+)
+def test_exact_skill_scope_revalidates_actual_definition(
+    actual: SkillDefinition | None,
+    expected_code: str,
+) -> None:
+    trusted = _skill()
+    scope = ToolExecutionScope(
+        allowed_tools=frozenset({"execute_skill"}),
+        allowed_assets=frozenset({("skill", trusted.name)}),
+        operator_tools=False,
+        allow_cron_mutation=False,
+        max_tool_calls=1,
+        trusted_asset_safety=(TrustedAssetSafety.from_skill(trusted),),
+    )
+
+    with pytest.raises(ToolCallRejected) as exc:
+        ToolGate(native_specs=[]).authorize(
+            ToolCall(
+                id="1",
+                name="execute_skill",
+                arguments={"skill_name": trusted.name},
+            ),
+            scope,
+            resolved_skill=actual,
+        )
+
+    assert exc.value.code == expected_code
+
+
+def test_exact_skill_scope_rejects_definition_mutated_after_snapshot() -> None:
+    trusted = _skill()
+    safety = TrustedAssetSafety.from_skill(trusted)
+    trusted.script_path = "/skills/mutated.py"
+
+    with pytest.raises(ToolCallRejected) as exc:
+        ToolGate(native_specs=[]).authorize(
+            ToolCall(
+                id="1",
+                name="execute_skill",
+                arguments={"skill_name": trusted.name},
+            ),
+            ToolExecutionScope(
+                allowed_tools=frozenset({"execute_skill"}),
+                allowed_assets=frozenset({("skill", trusted.name)}),
+                operator_tools=False,
+                allow_cron_mutation=False,
+                max_tool_calls=1,
+                trusted_asset_safety=(safety,),
+            ),
+            resolved_skill=trusted,
+        )
+
+    assert exc.value.code == "skill_definition_fingerprint_mismatch"
 
 
 def test_operator_tool_requires_operator_scope() -> None:

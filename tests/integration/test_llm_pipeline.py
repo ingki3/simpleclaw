@@ -3,7 +3,12 @@
 
 import pytest
 
-from simpleclaw.llm.models import LLMRequest, LLMResponse
+from simpleclaw.llm.models import (
+    LLMRequest,
+    LLMResponse,
+    SystemBlock,
+    ToolDefinition,
+)
 from simpleclaw.llm.providers.base import LLMProvider
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.persona.assembler import assemble_prompt
@@ -17,7 +22,19 @@ class RecordingProvider(LLMProvider):
         self.last_system_prompt = None
         self.last_user_message = None
 
-    async def send(self, system_prompt: str, user_message: str, messages: list[dict] | None = None) -> LLMResponse:
+    async def send(
+        self,
+        system_prompt: str,
+        user_message: str,
+        messages: list[dict] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        system_blocks: list[SystemBlock] | None = None,
+        max_tokens: int | None = None,
+        response_mime_type: str | None = None,
+        response_schema: dict | type | None = None,
+        require_structured_output: bool = False,
+        reasoning: dict | None = None,
+    ) -> LLMResponse:
         self.last_system_prompt = system_prompt
         self.last_user_message = user_message
         return LLMResponse(
