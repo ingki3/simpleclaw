@@ -16,7 +16,8 @@ from simpleclaw.graph_runtime.contracts_registry import (
 )
 from simpleclaw.skills.discovery import discover_skills
 
-GLOBAL_SKILLS = Path("/Users/simplist/.agents/skills")
+ROOT = Path(__file__).parents[2]
+PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
 TARGET_SKILLS = {"google-news-search-skill", "kr-stock-skill"}
 TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
 
@@ -24,11 +25,16 @@ TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
 def _production_definitions():
     skills = tuple(
         item
-        for item in discover_skills(Path("/__missing_local_skills__"), GLOBAL_SKILLS)
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
+        )
         if item.name in TARGET_SKILLS
     )
-    if {item.name for item in skills} != TARGET_SKILLS:
-        pytest.skip("production global skill metadata is not installed")
+    assert {item.name for item in skills} == TARGET_SKILLS
+    assert all(
+        Path(item.skill_dir).is_relative_to(PRODUCTION_SKILL_FIXTURES)
+        for item in skills
+    )
     native_specs = tuple(
         spec
         for spec in build_native_tool_registry(scopes=(ToolScope.RUNTIME,))

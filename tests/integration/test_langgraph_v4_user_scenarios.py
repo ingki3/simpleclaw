@@ -41,6 +41,7 @@ from simpleclaw.skills.discovery import discover_skills
 
 ROOT = Path(__file__).parents[2]
 FIXTURE = ROOT / "tests/fixtures/langgraph_v4_user_scenarios.jsonl"
+PRODUCTION_SKILL_FIXTURES = ROOT / "tests/fixtures/production-skills"
 
 
 class _UnusedRouter:
@@ -402,12 +403,11 @@ async def test_reported_production_assets_complete_connected_read_only_probe(
     skills = tuple(
         item
         for item in discover_skills(
-            Path("/__missing_local_skills__"), Path("/Users/simplist/.agents/skills")
+            Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
         )
         if item.name in target_skills
     )
-    if {item.name for item in skills} != target_skills:
-        pytest.skip("production global skill metadata is not installed")
+    assert {item.name for item in skills} == target_skills
     native_specs = tuple(
         spec
         for spec in build_native_tool_registry(scopes=(ToolScope.RUNTIME,))
