@@ -19,6 +19,8 @@ input_contract:
     name: kr-stock-skill
   json_schema:
     type: object
+    examples:
+      - args: market-summary --json
     properties:
       args:
         type: string
