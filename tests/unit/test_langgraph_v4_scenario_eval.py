@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from simpleclaw.evaluation import langgraph_v4_scenario_eval as scenario_eval
-
 from simpleclaw.agent.plan_gate import GateStatus, PlanGateResult
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
@@ -25,6 +23,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import PlannerUnavailable
+from simpleclaw.evaluation import langgraph_v4_scenario_eval as scenario_eval
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ContractIssue,
     ProviderBudgetExceeded,
@@ -229,7 +228,9 @@ async def test_connected_value_error_preserves_planner_schema_usage_and_schedule
     class UsageResponse:
         backend_name = "fixture"
         model = "fixture-model"
-        usage = {"input_tokens": 7, "output_tokens": 3}
+
+        def __init__(self) -> None:
+            self.usage = {"input_tokens": 7, "output_tokens": 3}
 
     class UsageRouter:
         async def send(self, _request):
