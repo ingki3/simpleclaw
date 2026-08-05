@@ -61,9 +61,9 @@ class _ReplayRouter:
         self.payload = payload
 
     async def send(self, request):
-        tool_schema = request.response_schema["properties"]["execution"][
-            "properties"
-        ]["allowed_tools"]
+        tool_schema = request.response_schema["properties"]["execution"]["properties"][
+            "allowed_tools"
+        ]
         assert set(tool_schema["items"]["enum"]) == {"execute_skill"}
         return LLMResponse(text=json.dumps(self.payload, ensure_ascii=False))
 
@@ -508,6 +508,39 @@ async def test_incomplete_supporting_asset_blocks_connected_dispatch() -> None:
     assert report["decision"] == "hold"
     assert report["cases"][0]["contract_status"] == "contract_coverage_gap"
     assert report["contract_gaps"] == {"bad-support": 1}
+
+
+@pytest.mark.asyncio
+async def test_connected_contract_failure_is_explicit_hold_not_planner_failure() -> (
+    None
+):
+    case = load_scenarios(FIXTURE)[9]
+    catalog = _catalog((case,))
+
+    async def planner(_text, **_kwargs):
+        return _gold_plan(case, catalog)
+
+    async def connected_executor(_case, _plan, _assets):
+        raise TypeError("connected raw contract detail")
+
+    report = await ScenarioEvaluator(
+        catalog=catalog,
+        router=_UnusedRouter(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+        connected_executor_kind="actual_contract",
+    ).evaluate((case,), repeat_critical=1)
+
+    row = report["cases"][0]
+    assert report["decision"] == "hold"
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert row["actual_route"] == case.expected.v4_route
+    assert row["failure_phase"] == "connected_execution"
+    assert row["error_codes"] == ["connected_execution.type_error"]
+    assert row["connected_stop"] == "failed"
+    assert "planner.schema_or_unavailable" not in row["error_codes"]
+    assert "connected raw contract detail" not in json.dumps(report)
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from simpleclaw.evaluation import langgraph_v4_scenario_eval as scenario_eval
+
 from simpleclaw.agent.plan_gate import GateStatus, PlanGateResult
 from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
@@ -22,6 +24,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     ContractIssue,
     ProviderBudgetExceeded,
@@ -194,6 +197,175 @@ async def test_early_stop_preserves_full_inventory_and_schedule() -> None:
     assert report["summary"]["not_scored_cases"] == 7
     assert sum(row["evaluated"] for row in report["cases"]) == 3
     assert sum(row["passed"] is None for row in report["cases"]) == 43
+
+
+@pytest.mark.asyncio
+async def test_planner_unavailable_is_the_only_schema_failure_phase() -> None:
+    case = load_scenarios(FIXTURE)[0]
+
+    async def unavailable_planner(_text, **_kwargs):
+        raise PlannerUnavailable("raw provider response")
+
+    report = await ScenarioEvaluator(
+        catalog=_catalog(), router=object(), planner=unavailable_planner
+    ).evaluate((case,), repeat_critical=1)
+
+    row = report["cases"][0]
+    assert report["summary"]["schema_validity_rate"] == 0
+    assert row["failure_phase"] == "planner_schema"
+    assert row["error_codes"] == ["planner.schema_or_unavailable"]
+    assert "raw provider response" not in json.dumps(report)
+
+
+@pytest.mark.asyncio
+async def test_connected_value_error_preserves_planner_schema_usage_and_schedule() -> (
+    None
+):
+    case = load_scenarios(FIXTURE)[4]
+    asset = _asset()
+    plan = _plan(asset=AssetRef("skill", asset.name))
+    calls = 0
+
+    class UsageResponse:
+        backend_name = "fixture"
+        model = "fixture-model"
+        usage = {"input_tokens": 7, "output_tokens": 3}
+
+    class UsageRouter:
+        async def send(self, _request):
+            return UsageResponse()
+
+    async def planner(_text, *, router, **_kwargs):
+        await router.send(object())
+        return plan
+
+    async def connected_executor(_case, _plan, _assets):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("credential=must-not-appear")
+        return "completed", SideEffectCounts()
+
+    report = await ScenarioEvaluator(
+        catalog=_catalog(asset),
+        router=UsageRouter(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+        connected_executor_kind="fixture",
+    ).evaluate((case, case, case, case), repeat_critical=1)
+
+    first = report["cases"][0]
+    assert report["decision"] == "hold"
+    assert report["summary"]["evaluated_scored_runs"] == 4
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert report["summary"]["tokens"] == {
+        "input_total": 28,
+        "output_total": 12,
+    }
+    assert first["failure_phase"] == "connected_execution"
+    assert first["error_codes"] == ["connected_execution.value_error"]
+    assert first["connected_stop"] == "failed"
+    assert first["actual_route"] != "planner_error"
+    assert all("credential" not in json.dumps(row) for row in report["cases"])
+
+
+@pytest.mark.asyncio
+async def test_plan_gate_type_error_is_not_planner_schema_failure(monkeypatch) -> None:
+    case = load_scenarios(FIXTURE)[0]
+
+    async def planner(_text, **_kwargs):
+        return _plan()
+
+    def fail_gate(*_args, **_kwargs):
+        raise TypeError("raw gate detail")
+
+    monkeypatch.setattr(scenario_eval.PlanGate, "evaluate", fail_gate)
+    report = await ScenarioEvaluator(
+        catalog=_catalog(), router=object(), planner=planner
+    ).evaluate((case, case, case, case), repeat_critical=1)
+
+    assert report["summary"]["evaluated_scored_runs"] == 4
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert {row["failure_phase"] for row in report["cases"]} == {"plan_gate"}
+    assert {tuple(row["error_codes"]) for row in report["cases"]} == {
+        ("plan_gate.type_error",)
+    }
+
+
+@pytest.mark.asyncio
+async def test_score_value_error_has_separate_sanitized_phase(monkeypatch) -> None:
+    case = load_scenarios(FIXTURE)[0]
+
+    async def planner(_text, **_kwargs):
+        return _plan()
+
+    def fail_score(*_args, **_kwargs):
+        raise ValueError("raw score detail")
+
+    monkeypatch.setattr(scenario_eval, "score_plan", fail_score)
+    report = await ScenarioEvaluator(
+        catalog=_catalog(), router=object(), planner=planner
+    ).evaluate((case,), repeat_critical=1)
+
+    row = report["cases"][0]
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert row["failure_phase"] == "score"
+    assert row["error_codes"] == ["score.value_error"]
+    assert "raw score detail" not in json.dumps(report)
+
+
+@pytest.mark.asyncio
+async def test_contract_classification_error_does_not_advance_schema_stop(
+    monkeypatch,
+) -> None:
+    case = load_scenarios(FIXTURE)[0]
+
+    async def planner(_text, **_kwargs):
+        return _plan()
+
+    def fail_classification(*_args, **_kwargs):
+        raise ValueError("raw contract detail")
+
+    monkeypatch.setattr(scenario_eval, "classify_contract", fail_classification)
+    report = await ScenarioEvaluator(
+        catalog=_catalog(), router=object(), planner=planner
+    ).evaluate((case, case, case, case), repeat_critical=1)
+
+    assert report["summary"]["evaluated_scored_runs"] == 4
+    assert report["summary"]["schema_validity_rate"] == 1
+    assert {row["failure_phase"] for row in report["cases"]} == {
+        "contract_classification"
+    }
+    assert {tuple(row["error_codes"]) for row in report["cases"]} == {
+        ("contract_classification.value_error",)
+    }
+
+
+@pytest.mark.asyncio
+async def test_connected_side_effect_still_aborts_immediately_with_exact_counts() -> (
+    None
+):
+    case = load_scenarios(FIXTURE)[4]
+    asset = _asset()
+
+    async def planner(_text, **_kwargs):
+        return _plan(asset=AssetRef("skill", asset.name))
+
+    async def connected_executor(_case, _plan, _assets):
+        return "completed", SideEffectCounts(cron_notifier=1)
+
+    evaluator = ScenarioEvaluator(
+        catalog=_catalog(asset),
+        router=object(),
+        planner=planner,
+        execute_read_only_contract_assets=True,
+        connected_executor=connected_executor,
+    )
+    with pytest.raises(SideEffectDetected, match="side_effect_detected"):
+        await evaluator.evaluate((case,), repeat_critical=1)
+
+    assert evaluator.guard.counts == SideEffectCounts(cron_notifier=1)
 
 
 def test_fixture_rejects_duplicate_id(tmp_path: Path) -> None:
