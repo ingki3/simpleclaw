@@ -1,5 +1,5 @@
 name: unified_turn_planner_examples
-version: 8
+version: 9
 description: >-
   Versioned semantic examples for Unified TurnPlanner. These examples guide
   the structured LLM decision and are never interpreted as runtime keyword
@@ -108,6 +108,9 @@ template: |-
   - when the requested claims are the announcement and qualitative business impact,
     select the exact full-coverage news Skill only; do not add price/fundamental Skills
     or generic web collectors without a distinct requested claim
+  - bind every selected name to the exact asset_type shown beside that name in the
+    current catalog; on retry, choose only from validation_repair and preserve the
+    same primary/supporting order for the unchanged request and catalog
 
   ## Example: complex market request with an uncontracted routine Recipe
   User: 오늘 시장의 지수와 주요 종목, 움직인 원인, 전망과 위험을 분석해줘
