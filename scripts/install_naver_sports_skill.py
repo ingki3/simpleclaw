@@ -20,7 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--global-dir", type=Path)
     args = parser.parse_args(argv)
     path = install(args.global_dir) if args.global_dir is not None else install()
-    print(f"installed {SKILL_NAME} at {path}")
+    print(
+        f"installed {SKILL_NAME} at {path} "
+        "(source=package:simpleclaw/runtime_assets/skills/"
+        "naver-sports-skill/SKILL.md)"
+    )
     return 0
 
 

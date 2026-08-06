@@ -11,6 +11,7 @@ from scripts.install_naver_sports_skill import (
     CANONICAL_SKILL_MD,
     SKILL_NAME,
     install,
+    main,
 )
 from simpleclaw.skills.discovery import discover_skills
 
@@ -88,6 +89,24 @@ def test_installer_writes_canonical_skill_template_byte_for_byte(tmp_path: Path)
     skill_dir = install(tmp_path / "global")
 
     assert (skill_dir / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+
+
+def test_no_arg_installer_matches_global_discovery_default(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    assert main([]) == 0
+
+    installed = home / ".agents/skills/naver-sports-skill"
+    assert (installed / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+    output = capsys.readouterr().out
+    assert str(installed) in output
+    assert "source=package:simpleclaw/runtime_assets/skills/" in output
 
 
 @pytest.mark.parametrize(

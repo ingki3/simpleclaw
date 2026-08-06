@@ -2,26 +2,29 @@
 
 from __future__ import annotations
 
+from importlib.resources import files
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from simpleclaw.config_sections.agents import (
+    _RECIPES_DEFAULTS,
+    load_recipes_config,
+)
+
 NAVER_SPORTS_SKILL_NAME = "naver-sports-skill"
 SPORTS_LIVE_RECIPE_NAME = "sports-live"
-DEFAULT_GLOBAL_SKILLS_DIR = Path("~/.agents/skills").expanduser()
-DEFAULT_RECIPES_DIR = Path("~/.simpleclaw/recipes").expanduser()
+DEFAULT_GLOBAL_SKILLS_DIR = Path("~/.agents/skills")
+DEFAULT_RECIPES_DIR = Path(_RECIPES_DEFAULTS["dir"])
+DEFAULT_CONFIG_PATH = Path("~/.simpleclaw/config.yaml")
+_RUNTIME_ASSETS = files("simpleclaw").joinpath("runtime_assets")
 CANONICAL_NAVER_SPORTS_SKILL_MD = (
-    REPO_ROOT
-    / "runtime_assets"
-    / "skills"
-    / NAVER_SPORTS_SKILL_NAME
-    / "SKILL.md"
+    _RUNTIME_ASSETS.joinpath(
+        "skills", NAVER_SPORTS_SKILL_NAME, "SKILL.md"
+    )
 )
 CANONICAL_SPORTS_LIVE_RECIPE = (
-    REPO_ROOT
-    / "runtime_assets"
-    / "recipes"
-    / SPORTS_LIVE_RECIPE_NAME
-    / "recipe.yaml"
+    _RUNTIME_ASSETS.joinpath(
+        "recipes", SPORTS_LIVE_RECIPE_NAME, "recipe.yaml"
+    )
 )
 NAVER_SPORTS_WRAPPER = """#!/usr/bin/env python3
 from simpleclaw.skills.naver_sports import main
@@ -32,9 +35,11 @@ if __name__ == "__main__":
 
 
 def install_naver_sports_skill(
-    global_dir: Path = DEFAULT_GLOBAL_SKILLS_DIR,
+    global_dir: Path | None = None,
 ) -> Path:
     """Canonical Naver Sports metadata와 wrapper를 설치한다."""
+    if global_dir is None:
+        global_dir = DEFAULT_GLOBAL_SKILLS_DIR.expanduser()
     skill_dir = global_dir / NAVER_SPORTS_SKILL_NAME
     scripts_dir = skill_dir / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -48,9 +53,14 @@ def install_naver_sports_skill(
 
 
 def install_sports_live_recipe(
-    recipes_dir: Path = DEFAULT_RECIPES_DIR,
+    recipes_dir: Path | None = None,
+    *,
+    config_path: Path = DEFAULT_CONFIG_PATH,
 ) -> Path:
     """Canonical sports-live recipe를 configured ``recipes.dir``에 설치한다."""
+    if recipes_dir is None:
+        configured = load_recipes_config(config_path.expanduser())["dir"]
+        recipes_dir = Path(configured).expanduser()
     recipe_dir = recipes_dir / SPORTS_LIVE_RECIPE_NAME
     recipe_dir.mkdir(parents=True, exist_ok=True)
     (recipe_dir / "recipe.yaml").write_bytes(

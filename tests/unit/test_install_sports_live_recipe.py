@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.install_sports_live_recipe import CANONICAL_RECIPE, install
+from scripts.install_sports_live_recipe import CANONICAL_RECIPE, install, main
+from simpleclaw.config_sections.agents import load_recipes_config
 from simpleclaw.recipes.loader import discover_recipes
 
 
@@ -23,3 +24,57 @@ def test_installer_writes_canonical_recipe_with_owned_binding(tmp_path: Path) ->
     assert recipe.input_contract.owner_name == recipe.name
     assert recipe.output_contract.owner_name == recipe.name
     assert recipe.contract_binding.owner_name == recipe.name
+
+
+def test_no_arg_installer_matches_runtime_default_in_isolated_home(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    assert main([]) == 0
+
+    runtime_dir = Path(
+        load_recipes_config(home / ".simpleclaw/config.yaml")["dir"]
+    ).expanduser()
+    installed = runtime_dir / "sports-live" / "recipe.yaml"
+    assert installed.read_bytes() == CANONICAL_RECIPE.read_bytes()
+    output = capsys.readouterr().out
+    assert str(installed.parent) in output
+    assert "source=package:simpleclaw/runtime_assets/recipes/" in output
+
+
+def test_no_arg_installer_uses_configured_runtime_directory(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    config = home / ".simpleclaw/config.yaml"
+    configured_dir = tmp_path / "custom-recipes"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        f"recipes:\n  dir: {configured_dir}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    assert main([]) == 0
+
+    installed = configured_dir / "sports-live" / "recipe.yaml"
+    assert installed.read_bytes() == CANONICAL_RECIPE.read_bytes()
+    assert str(installed.parent) in capsys.readouterr().out
+
+
+def test_installer_is_idempotent(tmp_path: Path) -> None:
+    recipes_dir = tmp_path / "recipes"
+
+    first = install(recipes_dir)
+    first_bytes = (first / "recipe.yaml").read_bytes()
+    second = install(recipes_dir)
+
+    assert second == first
+    assert (second / "recipe.yaml").read_bytes() == first_bytes

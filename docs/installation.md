@@ -108,17 +108,31 @@ review:
 ### Production sports contract assets
 
 `sports-live`와 `naver-sports-skill`의 owned contract/binding SoT는 각각
-`runtime_assets/recipes/sports-live/recipe.yaml`과
-`runtime_assets/skills/naver-sports-skill/SKILL.md`입니다. fixture나 live 파일을
+`src/simpleclaw/runtime_assets/recipes/sports-live/recipe.yaml`과
+`src/simpleclaw/runtime_assets/skills/naver-sports-skill/SKILL.md`입니다. 두 파일은
+wheel/sdist의 `simpleclaw` package data에도 포함됩니다. fixture나 live 파일을
 직접 편집하지 않고 아래 installer가 이 canonical source를 그대로 배포합니다.
 
 ```bash
-python scripts/install_naver_sports_skill.py --global-dir ~/.agents/skills
-python scripts/install_sports_live_recipe.py --recipes-dir ~/.simpleclaw-agent/default/recipes
+python scripts/install_naver_sports_skill.py
+python scripts/install_sports_live_recipe.py --config ~/.simpleclaw/config.yaml
 ```
 
-운영 recipe 경로가 다르면 `config.yaml`의 `recipes.dir` 값을 두 번째 명령에
-전달합니다. Live 반영은 asset backup 후 drain-aware restart와
+첫 번째 명령은 runtime global skill discovery 기본값 `~/.agents/skills`에
+설치합니다. 두 번째 명령은 `config.yaml`의 `recipes.dir`를 읽으며, 설정 파일이나
+키가 없으면 runtime 기본값 `~/.simpleclaw-agent/default/recipes`를 사용합니다.
+일회성 override가 필요할 때만 `--recipes-dir`를 지정합니다. 각 명령의 출력에서
+실제 destination과 packaged canonical source provenance를 확인할 수 있습니다.
+
+source checkout과 wheel 설치 모두 같은 package resource를 사용합니다. artifact를
+검증하려면 wheel을 만든 뒤 canonical 두 파일이 포함됐는지 확인합니다.
+
+```bash
+python -m pip wheel . --no-deps --wheel-dir /tmp/simpleclaw-wheel
+python -m zipfile -l /tmp/simpleclaw-wheel/simpleclaw-*.whl | grep runtime_assets
+```
+
+Live 반영은 asset backup 후 drain-aware restart와
 `validate_langgraph_v4_no_send.py --incident-kbo` 검증을 거쳐야 하며, installer
 실행만으로 primary를 재활성화하지 않습니다.
 
