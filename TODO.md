@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — 예외 원문과 chained traceback을 stable code/type/hash 진단으로 투영하는 구현을 완료했다. [PR #641](https://github.com/ingki3/simpleclaw/pull/641)은 exact-head 독립 security review PASS 후 repository bookkeeping·Graphify provenance를 보완 중이며, 새 exact head의 fresh CI와 재리뷰 전에는 merge하지 않는다. (진행: 2026-08-06)
+
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
