@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — freshness-sensitive 실시간 조회 자산을 사용하는 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했으며 production freshness 경계는 변경하지 않았다. [PR #645](https://github.com/ingki3/simpleclaw/pull/645)의 fresh CI와 독립 Stage D 재검증 및 `dev` merge가 남아 있다. (진행: 2026-08-06)
-
 - [>] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 fail-closed하도록 구현한 [PR #643](https://github.com/ingki3/simpleclaw/pull/643)은 bookkeeping/provenance 보정 후 새 exact head의 fresh CI 3종과 독립 runtime safety 재리뷰를 기다린다. 리뷰 PASS와 squash merge 전까지 `in_review`/미완료를 유지하며 live config·deploy·restart·primary activation은 수행하지 않는다. (진행: 2026-08-06)
 
 - [>] **[BIZ-614](mention://issue/9a5c9aec-d569-4753-9730-d3dee0f57a05): V4 structured asset identity 로그 누출을 차단** — user-managed recipe/skill name을 original/effective/diagnostic formatter에서 제거하고 closed asset kind와 canonical definition hash로 대체한다. formatter-level 독립 marker 회귀, fail-closed·exactly-once 검증, fresh CI와 exact-head security review가 완료될 때까지 부모 BIZ-610을 재개 상태로 유지한다. (진행: 2026-08-06)
@@ -224,6 +222,8 @@
 ## Done
 
 ### 2026-08-06
+
+- [x] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — production freshness 경계 변경 없이 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했다. fresh CI 3종과 독립 Stage D exact-head 리뷰를 통과한 [PR #645](https://github.com/ingki3/simpleclaw/pull/645)을 `dev`에 squash merge(SHA `74da3d90e50f6def34e852610bfd5d79ec697c50`)했다. deploy·restart·live activation은 수행하지 않았다. (완료: 2026-08-06)
 
 - [x] **[BIZ-600](mention://issue/d70de3cc-6f7f-441a-a8d7-d6cddb6e64b5): LangGraph V4 true primary/canary wiring을 완성** — `off|shadow|read_only_canary|primary` rollout, V4 typed final/provenance, durable exactly-once target dispatch·delivery·persistence와 unsafe effect/invalid mode/post-dispatch fallback의 fail-closed 경계를 구현했다. 원 기능 [PR #634](https://github.com/ingki3/simpleclaw/pull/634)를 `dev`에 squash merge(SHA `130ead41fc157c417f2fd4f86964ac02b70a4552`)한 뒤, 필수 안전 리뷰 finding은 [BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b)의 [PR #636](https://github.com/ingki3/simpleclaw/pull/636)으로 보정해 squash merge(SHA `f230b7b533eedd6cc8468792ab901ef67a4c2fda`)했다. Corrective exact head `36ee712bea4d6b14cf6fd0376771a3349bad7fea`에서 구조·안전성 gate, operator detached focused `219 passed`, hermetic contract `4/4`, Ruff/diff와 CI 3종을 통과했고 external provider 및 Telegram/Cron/ConversationStore 호출은 `0/0/0/0`, rollback false였다. Live config 변경·release·restart·사용자-visible send와 post-restart primary smoke는 별도 후속 [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c)이 단독 소유한다. (완료: 2026-08-06)
 
