@@ -44,7 +44,8 @@ def test_no_arg_installer_matches_runtime_default_in_isolated_home(
     assert installed.read_bytes() == CANONICAL_RECIPE.read_bytes()
     output = capsys.readouterr().out
     assert str(installed.parent) in output
-    assert "source=package:simpleclaw/runtime_assets/recipes/" in output
+    assert "source=" in output
+    assert "manifest_sha256=" in output
 
 
 def test_no_arg_installer_uses_configured_runtime_directory(

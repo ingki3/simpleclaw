@@ -23,19 +23,8 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import TerminalOutcome
-from simpleclaw.llm.models import LLMResponse
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
-from simpleclaw.production_assets import (
-    install_naver_sports_skill,
-    install_sports_live_recipe,
-)
-from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills.discovery import discover_skills
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
-INCIDENT_PROMPT = "Kbo 순위 상위 3팀 알려줘"
 
 
 @dataclass(frozen=True, order=True)
@@ -57,48 +46,6 @@ class ContractSetViolation:
     expected: ContractIdentity | None = None
     actual: ContractIdentity | None = None
     fields: tuple[str, ...] = ()
-
-
-EXPECTED_CONTRACT_SET = frozenset(
-    {
-        ContractIdentity(
-            owner_type="recipe",
-            owner_name="contract-fixture-workflow",
-            contract_id="recipe.contract-fixture-workflow.input",
-            version="1",
-            schema_hash=(
-                "bd7c4ac7d6dddb0980548e9e734dedd82aa919db89a68f5af9337034f420d951"
-            ),
-        ),
-        ContractIdentity(
-            owner_type="recipe",
-            owner_name="contract-fixture-workflow",
-            contract_id="recipe.contract-fixture-workflow.output",
-            version="1",
-            schema_hash=(
-                "80b8777f78ea08e5bede7708a3f84d78c38cc2cfb0dd153347034313589c9eae"
-            ),
-        ),
-        ContractIdentity(
-            owner_type="skill",
-            owner_name="contract-fixture-step",
-            contract_id="skill.contract-fixture-step.input",
-            version="1",
-            schema_hash=(
-                "a742768b209b5455a545f174e2a8b6a9462aebb44a093738e4cb2a30216f62a1"
-            ),
-        ),
-        ContractIdentity(
-            owner_type="skill",
-            owner_name="contract-fixture-step",
-            contract_id="skill.contract-fixture-step.output",
-            version="1",
-            schema_hash=(
-                "e8167acecea2db65606d53fe918fca0eab4d081148b43ec7e7da21849f977f91"
-            ),
-        ),
-    }
-)
 
 
 class _ExplicitBackendRouter:
@@ -142,89 +89,6 @@ class _BoundedPlannerRouter:
             return await self._router.send(request)
 
 
-class _HermeticPlannerRouter:
-    """외부 provider 없이 고정 fixture plan만 반환하는 CI router."""
-
-    async def send(self, request):
-        prompt = json.loads(request.user_message)["current_user_message"]
-        incident = prompt == INCIDENT_PROMPT
-        if incident:
-            asset_type = "none"
-            asset_name = "__none__"
-            mode = "direct_answer"
-            fact_required = True
-            complexity_signals = []
-        elif "contract-fixture-workflow" in prompt:
-            asset_type = "recipe"
-            asset_name = "contract-fixture-workflow"
-            mode = "direct_answer"
-            fact_required = False
-            complexity_signals: list[str] = []
-        else:
-            asset_type = "skill"
-            asset_name = "contract-fixture-step"
-            fact_required = True
-            if "verify and compare" in prompt:
-                mode = "resolve_complex_problem"
-                complexity_signals = ["dependency_graph", "evidence_conflict"]
-            else:
-                mode = "answer_with_evidence"
-                complexity_signals = []
-        asset = {"asset_type": asset_type, "asset_name": asset_name}
-        payload = {
-            "context": {
-                "relation": "standalone",
-                "use_prior_context": False,
-                "selected_turn_ids": [],
-                "standalone_question": prompt,
-                "unresolved_references": [],
-                "ignored_context_reason": "",
-            },
-            "clarification": {
-                "required": False,
-                "question": "",
-                "options": [],
-                "reason": "",
-            },
-            "domains": ["sports" if incident else "fixture"] if fact_required else [],
-            "intents": ["standings" if incident else "verify"] if fact_required else [],
-            "fact_check": {
-                "required": fact_required,
-                "owner": "planner" if incident else ("asset" if fact_required else "none"),
-                "domain": "sports" if incident else ("fixture" if fact_required else "none"),
-                "entities": [],
-                "reference_date": "",
-                "search_query": prompt if fact_required else "",
-                "required_claims": ["standings"] if incident else (
-                    ["contract validation status"] if fact_required else []
-                ),
-                "freshness_required": incident,
-                "reason": "hermetic incident fixture" if incident else "hermetic contract fixture",
-            },
-            "capability": {
-                "coverage": "no_match" if incident else "full_coverage",
-                "primary_asset": asset,
-                "supporting_assets": [],
-                "fallback_modes": [],
-                "reason": "incident asset-zero fixture" if incident else "hermetic exact fixture",
-            },
-            "execution": {
-                "mode": mode,
-                "allowed_tools": [],
-                "requires_confirmation": False,
-                "complexity_signals": complexity_signals,
-                "reason": "hermetic exact fixture",
-            },
-            "confidence": 1.0,
-            "decision_summary": "deterministic hermetic validation plan",
-        }
-        return LLMResponse(
-            text=json.dumps(payload, ensure_ascii=False),
-            backend_name="hermetic",
-            model="fixed-contract-fixture",
-        )
-
-
 class _ForbiddenConversationStore:
     """Hermetic validation에서 persistence 경계 접근을 즉시 실패시킨다."""
 
@@ -253,7 +117,7 @@ def _contract_slot(identity: ContractIdentity) -> tuple[str, ...]:
 def _contract_set_violations(
     actual: set[ContractIdentity] | frozenset[ContractIdentity],
     *,
-    expected: frozenset[ContractIdentity] = EXPECTED_CONTRACT_SET,
+    expected: frozenset[ContractIdentity],
 ) -> tuple[ContractSetViolation, ...]:
     """Exact match를 제거한 뒤 같은 contract/slot drift와 missing/extra를 분류한다."""
     missing = set(expected - actual)
@@ -319,42 +183,6 @@ def _assert_contract_set(violations: tuple[ContractSetViolation, ...]) -> None:
         )
 
 
-def _definitions():
-    """검증 전용 read-only contract fixture만 discovery한다."""
-    recipes = discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
-    skills = discover_skills(
-        REPO_ROOT / "tests/fixtures/skills",
-        REPO_ROOT / "tests/fixtures/global-skills",
-    )
-    return tuple(
-        item for item in (*recipes, *skills) if item.name in FIXTURE_NAMES
-    )
-
-
-def _incident_definitions():
-    """Canonical installer output으로 production owned-contract shape를 만든다."""
-    with tempfile.TemporaryDirectory(prefix="simpleclaw-kbo-assets-") as temp_dir:
-        root = Path(temp_dir)
-        recipes_dir = root / "recipes"
-        global_skills = root / "skills"
-        install_sports_live_recipe(recipes_dir)
-        install_naver_sports_skill(global_skills)
-        recipe = next(
-            item
-            for item in discover_recipes(recipes_dir)
-            if item.name == "sports-live"
-        )
-        skill = next(
-            item
-            for item in discover_skills(
-                Path("/__missing_local_skills__"),
-                global_skills,
-            )
-            if item.name == "naver-sports-skill"
-        )
-        return recipe, skill
-
-
 def _planner_native_specs():
     """PlanGate factual-route 계약에 필요한 production web collector만 노출한다."""
     return tuple(
@@ -375,9 +203,17 @@ async def _skill_executor(_definition, _argv):
     return {"operation_result": "connected"}
 
 
-async def _run(args: argparse.Namespace) -> int:
+async def _run(
+    args: argparse.Namespace,
+    *,
+    definitions=None,
+    cases: tuple[tuple[str, str], ...] | None = None,
+    router_override=None,
+    expected_contract_set: frozenset[ContractIdentity] | None = None,
+    expected_effective_assets: tuple[str | None, ...] | None = None,
+    definitions_label: str = "contract_fixtures",
+) -> int:
     """Actual provider exact plan을 bounded no-send graph에서 실행한다."""
-    incident_kbo = bool(getattr(args, "incident_kbo", False))
     if args.architecture != "langgraph_v4":
         raise ValueError("--architecture must be langgraph_v4")
     if args.repeat <= 0:
@@ -386,16 +222,22 @@ async def _run(args: argparse.Namespace) -> int:
         raise ValueError("--max-provider-calls must be positive")
     if args.deadline_seconds <= 0:
         raise ValueError("--deadline-seconds must be positive")
-    if not args.hermetic and not args.config.is_file():
+    if router_override is None and not args.hermetic and not args.config.is_file():
         raise FileNotFoundError(f"config not found: {args.config}")
 
-    definitions = _incident_definitions() if incident_kbo else _definitions()
+    if definitions is None or cases is None:
+        raise ValueError("definitions and cases must be injected by the caller")
+    definitions = tuple(definitions)
     catalog = build_planner_catalog(
         skills=tuple(item for item in definitions if item.contract_asset_type == "skill"),
         recipes=tuple(item for item in definitions if item.contract_asset_type == "recipe"),
         native_specs=_planner_native_specs(),
     )
-    router = _HermeticPlannerRouter() if args.hermetic else create_router(args.config)
+    router = (
+        router_override
+        if router_override is not None
+        else create_router(args.config)
+    )
     explicit_router = (
         _ExplicitBackendRouter(router, args.backend) if args.backend else router
     )
@@ -403,34 +245,6 @@ async def _run(args: argparse.Namespace) -> int:
         explicit_router,
         max_calls=args.max_provider_calls,
         deadline_seconds=args.deadline_seconds,
-    )
-    cases = ((INCIDENT_PROMPT, "recipe"),) if incident_kbo else (
-        (
-            (
-                "Use the exact full-coverage recipe contract-fixture-workflow, which "
-                "owns all evidence, to verify the current contract validation status. "
-                "Use direct_answer as the fallback execution mode."
-            ),
-            "recipe",
-        ),
-        (
-            (
-                "Use the exact full-coverage skill contract-fixture-step, which owns "
-                "all evidence, to verify the current contract validation status. Use "
-                "answer_with_evidence as the fallback execution mode."
-            ),
-            "react",
-        ),
-        (
-            (
-                "Use the exact full-coverage skill contract-fixture-step, which owns "
-                "all evidence, to verify and compare the current contract validation "
-                "status. Resolve the explicit dependency graph and conflicting "
-                "validation branches with resolve_complex_problem as the fallback "
-                "execution mode."
-            ),
-            "deep_research",
-        ),
     )
     results = []
     attributions: list[dict[str, object]] = []
@@ -498,6 +312,20 @@ async def _run(args: argparse.Namespace) -> int:
                     )
                 original_asset = plan.capability.primary_asset
                 effective_asset = gate.effective_plan.capability.primary_asset
+                effective_identity = (
+                    None
+                    if effective_asset is None
+                    else f"{effective_asset.asset_type}:{effective_asset.name}"
+                )
+                if (
+                    expected_effective_assets is not None
+                    and effective_identity != expected_effective_assets[index]
+                ):
+                    raise RuntimeError(
+                        "effective asset attribution mismatch "
+                        f"(case={index} expected={expected_effective_assets[index]!r} "
+                        f"actual={effective_identity!r})"
+                    )
                 attributions.append(
                     {
                         "original_mode": plan.execution.mode.value,
@@ -507,11 +335,7 @@ async def _run(args: argparse.Namespace) -> int:
                             else f"{original_asset.asset_type}:{original_asset.name}"
                         ),
                         "effective_mode": gate.effective_plan.execution.mode.value,
-                        "effective_asset": (
-                            None
-                            if effective_asset is None
-                            else f"{effective_asset.asset_type}:{effective_asset.name}"
-                        ),
+                        "effective_asset": effective_identity,
                         "gate_status": gate.status.value,
                     }
                 )
@@ -560,9 +384,11 @@ async def _run(args: argparse.Namespace) -> int:
         )
     }
     contract_violations = (
-        () if incident_kbo else _contract_set_violations(contracts)
+        ()
+        if expected_contract_set is None
+        else _contract_set_violations(contracts, expected=expected_contract_set)
     )
-    if not incident_kbo:
+    if expected_contract_set is not None:
         _assert_contract_set(contract_violations)
     counts = tuple(result.side_effect_counts for result in results)
     telegram = sum(item.telegram_send for item in counts)
@@ -578,7 +404,7 @@ async def _run(args: argparse.Namespace) -> int:
     print("ASSET_EXECUTOR=fixture")
     print(
         "ASSET_DEFINITIONS="
-        + ("production_installer_output" if incident_kbo else "contract_fixtures")
+        + definitions_label
     )
     print(f"PLANNER_CALLS={planner_router.calls}/{args.max_provider_calls}")
     print(f"EXTERNAL_PROVIDER_CALLS={0 if args.hermetic else planner_router.calls}")
@@ -588,17 +414,20 @@ async def _run(args: argparse.Namespace) -> int:
     print("RESULT_SOURCE=langgraph_v4")
     print("TARGET_DISPATCH_EXACTLY_ONCE=true")
     print("TYPED_FINAL=PASS")
-    if incident_kbo:
-        print(
-            "INCIDENT_ATTRIBUTION="
-            + json.dumps(
-                attributions,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+    print(
+        "CASE_ATTRIBUTION="
+        + json.dumps(
+            attributions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         )
-    expected_contract_count = len(contracts) if incident_kbo else len(EXPECTED_CONTRACT_SET)
+    )
+    expected_contract_count = (
+        len(contracts)
+        if expected_contract_set is None
+        else len(expected_contract_set)
+    )
     print(f"ASSET_CONTRACT_CONTINUITY={len(contracts)}/{expected_contract_count}")
     print(f"CONTRACT_SET_VIOLATIONS={_violation_json(contract_violations)}")
     print(f"TELEGRAM_SEND_COUNT={telegram}")
@@ -631,14 +460,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=REPO_ROOT / "config.yaml",
+        default=Path("config.yaml"),
     )
     parser.add_argument("--hermetic", action="store_true")
-    parser.add_argument(
-        "--incident-kbo",
-        action="store_true",
-        help="repeat the exact asset-zero KBO corrective regression",
-    )
     parser.set_defaults(
         assert_contract_set=True,
         assert_zero_delivery=True,
@@ -648,5 +472,5 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """CLI entrypoint."""
-    return asyncio.run(_run(_parser().parse_args()))
+    """Reject direct execution because definitions/cases must be injected."""
+    raise RuntimeError("use a scripts/dev validator that injects scenario data")

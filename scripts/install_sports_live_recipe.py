@@ -1,41 +1,56 @@
-"""Install the canonical ``sports-live`` production recipe."""
+"""Compatibility CLI for installing one manifest-declared runtime asset."""
+
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
 from simpleclaw.production_assets import (
-    CANONICAL_SPORTS_LIVE_RECIPE as CANONICAL_RECIPE,
+    ResolvedRuntimeAsset,
+    install_runtime_asset,
+    resolve_runtime_asset,
 )
-from simpleclaw.production_assets import DEFAULT_CONFIG_PATH
-from simpleclaw.production_assets import (
-    SPORTS_LIVE_RECIPE_NAME as RECIPE_NAME,
-)
-from simpleclaw.production_assets import install_sports_live_recipe as install
 
-__all__ = ("CANONICAL_RECIPE", "RECIPE_NAME", "install")
+ASSET_REF = "recipe:sports-live"
+RECIPE_NAME = ASSET_REF.partition(":")[2]
+
+
+def _resolved() -> ResolvedRuntimeAsset:
+    return resolve_runtime_asset(ASSET_REF)
+
+
+CANONICAL_RECIPE = _resolved().root.joinpath("recipe.yaml")
+
+
+def install(
+    recipes_dir: Path | None = None,
+    *,
+    config_path: Path | None = None,
+) -> Path:
+    """Translate legacy arguments and delegate to the generic installer."""
+    path, _ = install_runtime_asset(
+        ASSET_REF,
+        destination_parent=recipes_dir,
+        config_path=config_path,
+    )
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipes-dir", type=Path)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG_PATH,
-        help="recipes.dir를 읽을 config.yaml 경로",
-    )
+    parser.add_argument("--config", type=Path)
     args = parser.parse_args(argv)
-    path = install(args.recipes_dir, config_path=args.config)
-    destination_source = (
-        "--recipes-dir"
-        if args.recipes_dir is not None
-        else f"config:{args.config.expanduser()}"
+    path, resolved = install_runtime_asset(
+        ASSET_REF,
+        destination_parent=args.recipes_dir,
+        config_path=args.config,
     )
     print(
-        f"installed {RECIPE_NAME} at {path} "
-        f"(destination={destination_source}, "
-        "source=package:simpleclaw/runtime_assets/recipes/sports-live/recipe.yaml)"
+        f"installed {resolved.manifest.ref} at {path} "
+        f"(source={resolved.provenance}, "
+        f"manifest_sha256={resolved.manifest.fingerprint})"
     )
     return 0
 

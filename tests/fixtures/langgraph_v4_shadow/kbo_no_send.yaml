@@ -1,0 +1,16 @@
+prompt: Kbo 순위 상위 3팀 알려줘
+route: recipe
+assets:
+  - recipe:sports-live
+  - skill:naver-sports-skill
+planner:
+  domains: [sports]
+  intents: [standings]
+  required_claims: [standings]
+  freshness_required: true
+expected:
+  effective_asset: recipe:sports-live
+  telegram_send: 0
+  notifier: 0
+  persistence: 0
+

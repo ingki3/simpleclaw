@@ -91,8 +91,8 @@ from simpleclaw.graph_runtime.status import (
     InvocationStatus,
     TerminalOutcome,
 )
-from simpleclaw.langgraph_v4_shadow_validation import (
-    _definitions as _connected_validation_definitions,
+from scripts.dev.validate_langgraph_v4_no_send import (
+    definitions as _connected_validation_definitions,
 )
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter

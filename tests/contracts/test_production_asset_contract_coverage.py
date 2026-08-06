@@ -20,15 +20,13 @@ from simpleclaw.graph_runtime.contracts_registry import (
     build_contract_registry,
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
-from simpleclaw.production_assets import (
-    CANONICAL_NAVER_SPORTS_SKILL_MD as CANONICAL_SKILL_MD,
+from scripts.install_naver_sports_skill import (
+    CANONICAL_SKILL_MD,
+    install as install_naver_sports_skill,
 )
-from simpleclaw.production_assets import (
-    CANONICAL_SPORTS_LIVE_RECIPE as CANONICAL_RECIPE,
-)
-from simpleclaw.production_assets import (
-    install_naver_sports_skill,
-    install_sports_live_recipe,
+from scripts.install_sports_live_recipe import (
+    CANONICAL_RECIPE,
+    install as install_sports_live_recipe,
 )
 from simpleclaw.recipes.loader import discover_recipes, load_recipe
 from simpleclaw.recipes.models import RecipeParseError

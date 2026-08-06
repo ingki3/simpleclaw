@@ -105,15 +105,21 @@ review:
     path: "~/.simpleclaw-agent/default/verification_evidence_ledger.jsonl"
 ```
 
-### Production sports contract assets
+### Runtime assets
 
-`sports-live`와 `naver-sports-skill`의 owned contract/binding SoT는 각각
-`src/simpleclaw/runtime_assets/recipes/sports-live/recipe.yaml`과
-`src/simpleclaw/runtime_assets/skills/naver-sports-skill/SKILL.md`입니다. 두 파일은
-wheel/sdist의 `simpleclaw` package data에도 포함됩니다. fixture나 live 파일을
-직접 편집하지 않고 아래 installer가 이 canonical source를 그대로 배포합니다.
+runtime asset의 authoring SoT는 root `runtime_assets/**`입니다. 각 asset-local
+`runtime-asset.yaml`이 identity, destination discovery, 설치 파일, SHA-256,
+executable bit를 data로 선언합니다. generic resolver는 구체적인 업무명 없이
+manifest를 검증한 뒤 전체 디렉터리를 atomic하게 교체합니다. wheel/sdist build는
+같은 tree를 `simpleclaw/runtime_assets/**` package resource로 포함하므로 source
+checkout과 installed distribution이 동일 resolver를 사용합니다.
 
 ```bash
+# Canonical interface
+python scripts/install_runtime_asset.py --asset skill:naver-sports-skill
+python scripts/install_runtime_asset.py --asset recipe:sports-live
+
+# Compatibility wrappers (asset ref만 generic installer에 전달)
 python scripts/install_naver_sports_skill.py
 python scripts/install_sports_live_recipe.py --config ~/.simpleclaw/config.yaml
 ```
@@ -121,20 +127,27 @@ python scripts/install_sports_live_recipe.py --config ~/.simpleclaw/config.yaml
 첫 번째 명령은 runtime global skill discovery 기본값 `~/.agents/skills`에
 설치합니다. 두 번째 명령은 `config.yaml`의 `recipes.dir`를 읽으며, 설정 파일이나
 키가 없으면 runtime 기본값 `~/.simpleclaw-agent/default/recipes`를 사용합니다.
-일회성 override가 필요할 때만 `--recipes-dir`를 지정합니다. 각 명령의 출력에서
-실제 destination과 packaged canonical source provenance를 확인할 수 있습니다.
+일회성 override는 generic CLI의 `--destination`, compatibility recipe CLI의
+`--recipes-dir`로 지정합니다. 각 명령의 출력에서 resolved destination,
+source/package provenance, manifest SHA-256을 확인할 수 있습니다.
 
-source checkout과 wheel 설치 모두 같은 package resource를 사용합니다. artifact를
-검증하려면 wheel을 만든 뒤 canonical 두 파일이 포함됐는지 확인합니다.
+artifact를 검증하려면 wheel을 만든 뒤 manifest와 모든 declared resource가
+포함됐는지 확인합니다.
 
 ```bash
 python -m pip wheel . --no-deps --wheel-dir /tmp/simpleclaw-wheel
 python -m zipfile -l /tmp/simpleclaw-wheel/simpleclaw-*.whl | grep runtime_assets
 ```
 
-Live 반영은 asset backup 후 drain-aware restart와
-`validate_langgraph_v4_no_send.py --incident-kbo` 검증을 거쳐야 하며, installer
-실행만으로 primary를 재활성화하지 않습니다.
+KBO production-artifact no-send 시나리오는 domain-neutral production harness에
+fixture data와 installed definitions를 주입하는 아래 개발 CLI로 검증합니다.
+
+```bash
+python scripts/dev/validate_langgraph_v4_shadow.py --hermetic --mode primary --repeat 3
+```
+
+Live 반영은 asset backup 후 drain-aware restart와 위 검증을 거쳐야 하며,
+installer 실행만으로 primary를 재활성화하지 않습니다.
 
 browser handoff, proactive 제안, drain state, skill/recipe learning queue도 `config.yaml.example`의 `~/.simpleclaw-agent/default` 경로를 유지한다.
 

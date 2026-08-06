@@ -106,7 +106,8 @@ def test_no_arg_installer_matches_global_discovery_default(
     assert (installed / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
     output = capsys.readouterr().out
     assert str(installed) in output
-    assert "source=package:simpleclaw/runtime_assets/skills/" in output
+    assert "source=" in output
+    assert "manifest_sha256=" in output
 
 
 @pytest.mark.parametrize(
