@@ -14,6 +14,7 @@ from simpleclaw.agent.orchestrator import (
 )
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ComplexitySignal
 from simpleclaw.agent.session_state import SessionIdentity
+from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
@@ -28,7 +29,6 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import PlannerUnavailable
-from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
