@@ -364,7 +364,37 @@ def _selected_asset_hash(
     )
     if len(matches) != 1:
         return ""
-    return matches[0].definition_fingerprint or ""
+    fingerprint = matches[0].definition_fingerprint or ""
+    if len(fingerprint) != 64:
+        return ""
+    if any(character not in "0123456789abcdef" for character in fingerprint):
+        return ""
+    return fingerprint
+
+
+def _log_unified_turn_planner_effective(
+    *,
+    request_id: str,
+    original_plan: UnifiedTurnPlan,
+    effective_plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+) -> None:
+    """Gate 전후 plan을 closed/hash provenance만으로 직렬화한다."""
+    logger.info(
+        "Unified TurnPlanner effective plan: request_id=%s "
+        "original_mode=%s original_asset_kind=%s original_asset_hash=%s "
+        "original_assets=%d effective_mode=%s effective_asset_kind=%s "
+        "effective_asset_hash=%s effective_assets=%d",
+        request_id,
+        original_plan.execution.mode.value,
+        _selected_asset_kind(original_plan),
+        _selected_asset_hash(original_plan, catalog),
+        len(original_plan.execution.allowed_assets),
+        effective_plan.execution.mode.value,
+        _selected_asset_kind(effective_plan),
+        _selected_asset_hash(effective_plan, catalog),
+        len(effective_plan.execution.allowed_assets),
+    )
 
 
 def _log_langgraph_v4_primary_isolated(
@@ -1752,20 +1782,11 @@ class AgentOrchestrator:
             )
             turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
-        logger.info(
-            "Unified TurnPlanner effective plan: request_id=%s "
-            "original_mode=%s original_asset_kind=%s original_asset_hash=%s "
-            "original_assets=%d effective_mode=%s effective_asset_kind=%s "
-            "effective_asset_hash=%s effective_assets=%d",
-            turn.turn_id,
-            plan.execution.mode.value,
-            _selected_asset_kind(plan),
-            _selected_asset_hash(plan, catalog),
-            len(plan.execution.allowed_assets),
-            effective_plan.execution.mode.value,
-            _selected_asset_kind(effective_plan),
-            _selected_asset_hash(effective_plan, catalog),
-            len(effective_plan.execution.allowed_assets),
+        _log_unified_turn_planner_effective(
+            request_id=turn.turn_id,
+            original_plan=plan,
+            effective_plan=effective_plan,
+            catalog=catalog,
         )
         architecture = str(config.get("architecture", "legacy_v2"))
         rollout_mode = str(config.get("mode", "primary"))

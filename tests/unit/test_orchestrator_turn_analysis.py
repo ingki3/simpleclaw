@@ -6,6 +6,7 @@ import pytest
 
 from simpleclaw.agent.orchestrator import (
     _log_langgraph_v4_primary_isolated,
+    _log_unified_turn_planner_effective,
     _selected_asset_hash,
     _selected_asset_kind,
 )
@@ -127,6 +128,8 @@ def test_connected_exception_does_not_promote_provider_code() -> None:
     [
         "original_asset",
         "effective_asset",
+        "original_fingerprint",
+        "effective_fingerprint",
         "diagnostic_kind",
         "selected_hash",
         "approved_hash",
@@ -168,8 +171,14 @@ def test_structured_fields_are_closed_or_hashed_before_formatter(
             definition_fingerprint=definition_hash,
         )
         for name, definition_hash in (
-            (original_name, "d" * 64),
-            (effective_name, "f" * 64),
+            (
+                original_name,
+                marker if marker_field == "original_fingerprint" else "d" * 64,
+            ),
+            (
+                effective_name,
+                marker if marker_field == "effective_fingerprint" else "f" * 64,
+            ),
         )
     )
     catalog = PlannerCatalog(assets=assets, fingerprint="e" * 64)
@@ -219,7 +228,73 @@ def test_structured_fields_are_closed_or_hashed_before_formatter(
     assert marker not in formatted
     assert "original_asset_kind=recipe" in formatted
     assert "effective_asset_kind=recipe" in formatted
-    assert f"original_asset_hash={'d' * 64}" in formatted
-    assert f"effective_asset_hash={'f' * 64}" in formatted
+    expected_original_hash = "" if marker_field == "original_fingerprint" else "d" * 64
+    expected_effective_hash = "" if marker_field == "effective_fingerprint" else "f" * 64
+    assert f"original_asset_hash={expected_original_hash} " in formatted
+    assert f"effective_asset_hash={expected_effective_hash} " in formatted
     assert "error_message=message_sha256=" in formatted
-    assert _selected_asset_hash(effective, catalog) == "f" * 64
+    assert _selected_asset_hash(effective, catalog) == expected_effective_hash
+
+
+@pytest.mark.parametrize("invalid_asset", ["original", "effective"])
+def test_effective_plan_info_log_rejects_invalid_catalog_fingerprint(
+    invalid_asset: str,
+    caplog,
+) -> None:
+    marker = "ASCII_FINGERPRINT_MARKER_614"
+    base = _asset_zero_plan()
+    original = replace(
+        base,
+        capability=replace(
+            base.capability,
+            coverage=CapabilityCoverage.FULL,
+            primary_asset=AssetRef("recipe", "original-workflow"),
+        ),
+    )
+    effective = replace(
+        base,
+        capability=replace(
+            base.capability,
+            coverage=CapabilityCoverage.FULL,
+            primary_asset=AssetRef("recipe", "effective-workflow"),
+        ),
+    )
+    catalog = PlannerCatalog(
+        assets=tuple(
+            PlannerAsset(
+                asset_type="recipe",
+                name=name,
+                description="benign catalog fixture",
+                domains=("general",),
+                intents=("lookup",),
+                read_only=True,
+                side_effects=False,
+                freshness_sensitive=False,
+                direct_answer=True,
+                requires_confirmation=False,
+                output_contract="fixture",
+                declared=True,
+                runtime_visible=True,
+                definition_fingerprint=(
+                    marker if invalid_asset == asset else valid_fingerprint
+                ),
+            )
+            for asset, name, valid_fingerprint in (
+                ("original", "original-workflow", "d" * 64),
+                ("effective", "effective-workflow", "f" * 64),
+            )
+        ),
+        fingerprint="e" * 64,
+    )
+
+    with caplog.at_level("INFO", logger="simpleclaw.agent.orchestrator"):
+        _log_unified_turn_planner_effective(
+            request_id="formatter-request",
+            original_plan=original,
+            effective_plan=effective,
+            catalog=catalog,
+        )
+
+    formatted = caplog.text
+    assert marker not in formatted
+    assert f"{invalid_asset}_asset_hash= " in formatted
