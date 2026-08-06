@@ -3,6 +3,7 @@ name: naver-sports-skill
 description: "Retrieve Naver Sports structured live scores, completed results, and standings with typed event states and source provenance."
 capability:
   domains: [sports]
+  intents: [current_result, completed_result, live_score, standings, ranking, leaderboard]
   read_only: true
   side_effects: false
   freshness_sensitive: true
@@ -11,6 +12,8 @@ capability:
   coverage: full_coverage
   input_contract: query.v1
   output_contract: asset_result.v1
+  fallback_modes: [answer_with_evidence]
+  retry_statuses: [failed_retryable]
 input_contract:
   contract_id: skill.naver-sports-skill.input
   version: "1"

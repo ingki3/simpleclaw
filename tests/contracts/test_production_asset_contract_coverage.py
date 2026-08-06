@@ -9,6 +9,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.install_naver_sports_skill import (
+    CANONICAL_SKILL_MD,
+    install as install_naver_sports_skill,
+)
+from scripts.install_sports_live_recipe import (
+    CANONICAL_RECIPE,
+    install as install_sports_live_recipe,
+)
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
@@ -40,29 +48,62 @@ TARGET_SKILLS = READ_ONLY_SKILLS | MUTATION_SKILLS
 TARGET_NATIVE_TOOLS = {"web_fetch", "web_search"}
 
 
-def _sports_recipe():
+def _skill_frontmatter(path: Path) -> Mapping[str, object]:
+    _, frontmatter, _ = path.read_text(encoding="utf-8").split("---", 2)
+    parsed = yaml.safe_load(frontmatter)
+    assert isinstance(parsed, Mapping)
+    return parsed
+
+
+def test_production_installers_match_canonical_and_fixture_contracts(
+    tmp_path: Path,
+) -> None:
+    skill_dir = install_naver_sports_skill(tmp_path / "skills")
+    recipe_dir = install_sports_live_recipe(tmp_path / "recipes")
+    installed_skill = skill_dir / "SKILL.md"
+    installed_recipe = recipe_dir / "recipe.yaml"
+    fixture_skill = (
+        PRODUCTION_SKILL_FIXTURES / "naver-sports-skill" / "SKILL.md"
+    )
+    fixture_recipe = SPORTS_RECIPE_FIXTURES / "sports-live" / "recipe.yaml"
+
+    assert installed_skill.read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+    assert _skill_frontmatter(installed_skill) == _skill_frontmatter(fixture_skill)
+    assert installed_recipe.read_bytes() == CANONICAL_RECIPE.read_bytes()
+    assert installed_recipe.read_bytes() == fixture_recipe.read_bytes()
+
+
+def _sports_recipe(tmp_path: Path):
+    recipes_dir = tmp_path / "installed-recipes"
+    install_sports_live_recipe(recipes_dir)
     recipes = tuple(
         item
-        for item in discover_recipes(SPORTS_RECIPE_FIXTURES)
+        for item in discover_recipes(recipes_dir)
         if item.name == "sports-live"
     )
     assert len(recipes) == 1
     return recipes[0]
 
 
-def _production_definitions():
+def _production_definitions(tmp_path: Path):
+    global_skills = tmp_path / "installed-global-skills"
+    install_naver_sports_skill(global_skills)
     skills = tuple(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"), global_skills
+        )
+        if item.name in TARGET_SKILLS
+    )
+    fixture_skills = tuple(
         item
         for item in discover_skills(
             Path("/__missing_local_skills__"), PRODUCTION_SKILL_FIXTURES
         )
-        if item.name in TARGET_SKILLS
+        if item.name in TARGET_SKILLS - {"naver-sports-skill"}
     )
+    skills = (*skills, *fixture_skills)
     assert {item.name for item in skills} == TARGET_SKILLS
-    assert all(
-        Path(item.skill_dir).is_relative_to(PRODUCTION_SKILL_FIXTURES)
-        for item in skills
-    )
     native_specs = tuple(
         spec
         for spec in build_native_tool_registry(scopes=(ToolScope.RUNTIME,))
@@ -94,8 +135,8 @@ def _declared_schema_examples(registry, skill) -> tuple[dict[str, object], ...]:
     return tuple(canonical)
 
 
-def test_production_read_only_assets_have_complete_owned_contracts() -> None:
-    skills, native_specs = _production_definitions()
+def test_production_read_only_assets_have_complete_owned_contracts(tmp_path: Path) -> None:
+    skills, native_specs = _production_definitions(tmp_path)
     catalog = build_planner_catalog(skills=skills, native_specs=native_specs)
     refs = tuple(
         AssetRef(asset.asset_type, asset.name)
@@ -129,8 +170,8 @@ def test_production_read_only_assets_have_complete_owned_contracts() -> None:
         )
 
 
-def test_calendar_mixed_operation_contract_is_confirmation_safe() -> None:
-    skills, _ = _production_definitions()
+def test_calendar_mixed_operation_contract_is_confirmation_safe(tmp_path: Path) -> None:
+    skills, _ = _production_definitions(tmp_path)
     calendar = next(item for item in skills if item.name == "google-calendar-skill")
     catalog = build_planner_catalog(skills=(calendar,), native_specs=())
     classification = classify_contract(
@@ -148,8 +189,10 @@ def test_calendar_mixed_operation_contract_is_confirmation_safe() -> None:
     assert entry.snapshot.requires_confirmation is True
 
 
-def test_native_web_contract_hashes_match_function_calling_schemas() -> None:
-    _, native_specs = _production_definitions()
+def test_native_web_contract_hashes_match_function_calling_schemas(
+    tmp_path: Path,
+) -> None:
+    _, native_specs = _production_definitions(tmp_path)
 
     for spec in native_specs:
         assert spec.input_contract is not None
@@ -162,8 +205,8 @@ def test_native_web_contract_hashes_match_function_calling_schemas() -> None:
         assert len(spec.argument_binding.binding_hash) == 64
 
 
-def test_skill_contract_rejects_non_json_cli_invocation() -> None:
-    skills, _ = _production_definitions()
+def test_skill_contract_rejects_non_json_cli_invocation(tmp_path: Path) -> None:
+    skills, _ = _production_definitions(tmp_path)
     registry = build_contract_registry(skills)
 
     for entry in registry.entries:
@@ -180,8 +223,10 @@ def test_skill_contract_rejects_non_json_cli_invocation() -> None:
             )
 
 
-def test_declared_skill_examples_validate_against_canonical_schemas() -> None:
-    skills, _ = _production_definitions()
+def test_declared_skill_examples_validate_against_canonical_schemas(
+    tmp_path: Path,
+) -> None:
+    skills, _ = _production_definitions(tmp_path)
     registry = build_contract_registry(skills)
 
     for skill in skills:
@@ -191,8 +236,11 @@ def test_declared_skill_examples_validate_against_canonical_schemas() -> None:
 
 
 @pytest.mark.parametrize("corruption", ("missing", "invalid"))
-def test_declared_skill_example_gap_fails_closed(corruption: str) -> None:
-    skills, _ = _production_definitions()
+def test_declared_skill_example_gap_fails_closed(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    skills, _ = _production_definitions(tmp_path)
     target = next(item for item in skills if item.name == "naver-shopping-skill")
     assert target.input_contract is not None
     schema = target.input_contract.json_schema
@@ -222,8 +270,10 @@ def test_declared_skill_example_gap_fails_closed(corruption: str) -> None:
         _declared_schema_examples(registry, definition)
 
 
-def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> None:
-    recipe = _sports_recipe()
+def test_sports_recipe_contract_identity_is_continuous_across_discovery(
+    tmp_path: Path,
+) -> None:
+    recipe = _sports_recipe(tmp_path)
     catalog = build_planner_catalog(recipes=(recipe,), native_specs=())
     ref = AssetRef("recipe", "sports-live")
     classification = classify_contract(catalog, (ref,))
@@ -271,9 +321,11 @@ def test_sports_recipe_contract_identity_is_continuous_across_discovery() -> Non
     assert entry.snapshot.side_effects is False
 
 
-def test_sports_recipe_delegate_resolves_production_skill_contract() -> None:
-    recipe = _sports_recipe()
-    skills, _ = _production_definitions()
+def test_sports_recipe_delegate_resolves_production_skill_contract(
+    tmp_path: Path,
+) -> None:
+    recipe = _sports_recipe(tmp_path)
+    skills, _ = _production_definitions(tmp_path)
     target = next(item for item in skills if item.name == "naver-sports-skill")
     catalog = build_planner_catalog(skills=(target,), recipes=(recipe,), native_specs=())
     registry = build_contract_registry((recipe, target))
@@ -307,7 +359,7 @@ def test_production_skill_invalid_contract_fails_before_dispatch(
     tmp_path: Path,
     corruption: str,
 ) -> None:
-    skills, _ = _production_definitions()
+    skills, _ = _production_definitions(tmp_path)
     target = next(item for item in skills if item.name == "naver-sports-skill")
     if corruption == "missing_binding":
         definition = replace(target, argument_binding=None)
@@ -364,7 +416,7 @@ def test_sports_recipe_invalid_contract_fails_before_dispatch(
     if corruption == "missing_binding":
         with pytest.raises(RecipeParseError, match="must declare input_contract"):
             load_recipe(recipe_path)
-        definition = replace(_sports_recipe(), step_bindings=())
+        definition = replace(_sports_recipe(tmp_path), step_bindings=())
         expected_error = "definition.contract_metadata_incomplete"
     else:
         definition = load_recipe(recipe_path)

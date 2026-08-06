@@ -102,7 +102,11 @@ from simpleclaw.agent.observation_claims import (
     materialize_validated_claims,
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
+from simpleclaw.agent.planner_catalog import (
+    PlannerCatalog,
+    build_planner_catalog,
+    connected_contract_complete,
+)
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.resolution_controller import ResolutionController
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
@@ -359,17 +363,7 @@ def _v4_connected_contract_eligible(
     if len(matches) != 1:
         return False
     asset = matches[0]
-    return bool(
-        asset.declared
-        and asset.runtime_visible
-        and asset.contract_owner == f"{selected.asset_type}:{selected.name}"
-        and asset.input_contract_ref
-        and asset.output_contract_ref
-        and asset.input_schema_hash
-        and asset.output_schema_hash
-        and asset.binding_identity
-        and asset.definition_fingerprint
-    )
+    return connected_contract_complete(asset)
 
 
 def _allow_v4_legacy_fallback(
@@ -1787,12 +1781,21 @@ class AgentOrchestrator:
                     diagnostic = ConnectedExecutionError(
                         getattr(exc, "connected_phase", "setup"),
                         exc,
+                        selected_asset_identity=_selected_asset_identity(
+                            effective_plan
+                        ),
+                        catalog_fingerprint=catalog.fingerprint,
                     )
-                failure_reason = f"runtime_{diagnostic.error_type}"
+                failure_reason = diagnostic.code
                 logger.exception(
                     "LangGraph V4 primary isolated: request_id=%s "
                     "original_mode=%s effective_mode=%s original_asset=%s "
-                    "effective_asset=%s failure_phase=%s error_type=%s "
+                    "effective_asset=%s failure_phase=%s phase=%s code=%s "
+                    "error_type=%s "
+                    "selected_asset_identity=%s selected_asset_hash=%s "
+                    "catalog_fingerprint=%s registry_fingerprint=%s "
+                    "owned_input_contract_present=%s "
+                    "owned_output_contract_present=%s owned_binding_present=%s "
                     "error_message=%s",
                     turn.turn_id,
                     plan.execution.mode.value,
@@ -1800,7 +1803,17 @@ class AgentOrchestrator:
                     _selected_asset_identity(plan),
                     _selected_asset_identity(effective_plan),
                     diagnostic.phase,
+                    diagnostic.phase,
+                    diagnostic.code,
                     diagnostic.error_type,
+                    diagnostic.selected_asset_identity
+                    or _selected_asset_identity(effective_plan),
+                    diagnostic.selected_asset_hash,
+                    diagnostic.catalog_fingerprint or catalog.fingerprint,
+                    diagnostic.registry_fingerprint,
+                    diagnostic.owned_input_contract_present,
+                    diagnostic.owned_output_contract_present,
+                    diagnostic.owned_binding_present,
                     diagnostic.safe_message,
                     exc_info=(type(diagnostic), diagnostic, exc.__traceback__),
                 )

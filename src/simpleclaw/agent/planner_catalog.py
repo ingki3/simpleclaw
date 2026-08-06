@@ -232,6 +232,21 @@ class PlannerCatalog:
         return _canonical_json([_prompt_payload(asset) for asset in assets])
 
 
+def connected_contract_complete(asset: PlannerAsset) -> bool:
+    """Connected executor가 사용할 owner-qualified identity가 완전한지 판정한다."""
+    return bool(
+        asset.declared
+        and asset.runtime_visible
+        and asset.contract_owner == f"{asset.asset_type}:{asset.name}"
+        and asset.input_contract_ref
+        and asset.output_contract_ref
+        and asset.input_schema_hash
+        and asset.output_schema_hash
+        and asset.binding_identity
+        and asset.definition_fingerprint
+    )
+
+
 def _canonical_json(value: object) -> str:
     """fingerprint와 prompt가 공유하는 deterministic compact JSON."""
     return json.dumps(

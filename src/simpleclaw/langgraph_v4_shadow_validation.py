@@ -26,6 +26,10 @@ from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
+from simpleclaw.production_assets import (
+    install_naver_sports_skill,
+    install_sports_live_recipe,
+)
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
@@ -328,21 +332,27 @@ def _definitions():
 
 
 def _incident_definitions():
-    """KBO incident와 같은 production owned-contract shape만 discovery한다."""
-    recipe = next(
-        item
-        for item in discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
-        if item.name == "sports-live"
-    )
-    skill = next(
-        item
-        for item in discover_skills(
-            Path("/__missing_local_skills__"),
-            REPO_ROOT / "tests/fixtures/production-skills",
+    """Canonical installer output으로 production owned-contract shape를 만든다."""
+    with tempfile.TemporaryDirectory(prefix="simpleclaw-kbo-assets-") as temp_dir:
+        root = Path(temp_dir)
+        recipes_dir = root / "recipes"
+        global_skills = root / "skills"
+        install_sports_live_recipe(recipes_dir)
+        install_naver_sports_skill(global_skills)
+        recipe = next(
+            item
+            for item in discover_recipes(recipes_dir)
+            if item.name == "sports-live"
         )
-        if item.name == "naver-sports-skill"
-    )
-    return recipe, skill
+        skill = next(
+            item
+            for item in discover_skills(
+                Path("/__missing_local_skills__"),
+                global_skills,
+            )
+            if item.name == "naver-sports-skill"
+        )
+        return recipe, skill
 
 
 def _planner_native_specs():
@@ -566,6 +576,10 @@ async def _run(args: argparse.Namespace) -> int:
     provider_kind = "HERMETIC_PLANNER" if args.hermetic else "ACTUAL_PLANNER_PROVIDER"
     print(f"{provider_kind}=PASS backend={backend} model={model}")
     print("ASSET_EXECUTOR=fixture")
+    print(
+        "ASSET_DEFINITIONS="
+        + ("production_installer_output" if incident_kbo else "contract_fixtures")
+    )
     print(f"PLANNER_CALLS={planner_router.calls}/{args.max_provider_calls}")
     print(f"EXTERNAL_PROVIDER_CALLS={0 if args.hermetic else planner_router.calls}")
     print(f"ROLLOUT_MODE={args.mode}")

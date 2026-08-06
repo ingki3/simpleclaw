@@ -13,6 +13,8 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
+from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
@@ -128,17 +130,21 @@ def _definitions():
     )
 
 
-def _production_sports_definitions():
+def _production_sports_definitions(tmp_path: Path):
+    recipes_dir = tmp_path / "production-recipes"
+    global_skills = tmp_path / "production-skills"
+    install_sports_live_recipe(recipes_dir)
+    install_naver_sports_skill(global_skills)
     recipe = next(
         item
-        for item in discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
+        for item in discover_recipes(recipes_dir)
         if item.name == "sports-live"
     )
     skill = next(
         item
         for item in discover_skills(
             Path("/__missing_local_skills__"),
-            REPO_ROOT / "tests/fixtures/production-skills",
+            global_skills,
         )
         if item.name == "naver-sports-skill"
     )
@@ -439,7 +445,7 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
 async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     tmp_path,
 ) -> None:
-    recipe, skill = _production_sports_definitions()
+    recipe, skill = _production_sports_definitions(tmp_path)
     catalog = build_planner_catalog(
         skills=(skill,),
         recipes=(recipe,),
@@ -510,7 +516,7 @@ async def test_kbo_live_stale_contract_fails_before_connected_dispatch(
     tmp_path,
     monkeypatch,
 ) -> None:
-    recipe, _skill = _production_sports_definitions()
+    recipe, _skill = _production_sports_definitions(tmp_path)
     stale_recipe = replace(
         recipe,
         input_contract=None,
@@ -581,7 +587,7 @@ async def test_kbo_live_stale_contract_fails_before_connected_dispatch(
     assert result.success is False
     assert connected_calls == 0
     assert turn.phase.value == "rejected"
-    assert rollout_events[-1]["reason"] == "v4_connected_contract_incomplete"
+    assert rollout_events[-1]["reason"] == "gate_repair"
 
 
 @pytest.mark.asyncio
@@ -1331,7 +1337,17 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     assert "original_asset=recipe:contract-fixture-workflow" in messages
     assert "effective_asset=recipe:contract-fixture-workflow" in messages
     assert "failure_phase=setup" in messages
+    assert "phase=setup" in messages
+    assert "code=connected_setup_failed" in messages
     assert "error_type=RuntimeError" in messages
+    assert (
+        "selected_asset_identity=recipe:contract-fixture-workflow" in messages
+    )
+    assert "catalog_fingerprint=" in messages
+    assert "registry_fingerprint=" in messages
+    assert "owned_input_contract_present=None" in messages
+    assert "owned_output_contract_present=None" in messages
+    assert "owned_binding_present=None" in messages
     assert "error_message=receipt construction failed" in messages
     assert planned.original_text not in messages
 
@@ -1515,8 +1531,15 @@ async def test_connected_registry_failure_preserves_phase_cause_and_redacts_prom
             planner_tokens=10,
         )
 
-    assert captured.value.phase == "registry"
+    assert captured.value.phase == "registry_lookup"
+    assert captured.value.code == "asset_not_registered_read_only"
     assert captured.value.error_type == "ValueError"
+    assert captured.value.selected_asset_identity == "recipe:missing-KBO-원문"
+    assert captured.value.catalog_fingerprint == plan.catalog_fingerprint
+    assert captured.value.registry_fingerprint
+    assert captured.value.owned_input_contract_present is False
+    assert captured.value.owned_output_contract_present is False
+    assert captured.value.owned_binding_present is False
     assert "KBO" not in captured.value.safe_message
     assert isinstance(captured.value.__cause__, ValueError)
 
@@ -1553,7 +1576,10 @@ async def test_connected_dispatch_valueerror_is_typed_and_sanitized(
     )
 
     diagnostic = ",".join(result.execution.rollback_reasons)
-    assert "dispatch:ValueError:provider dispatch failed token=[redacted]" in diagnostic
+    assert (
+        "dispatch:connected_dispatch_failed:ValueError:"
+        "provider dispatch failed token=[redacted]"
+    ) in diagnostic
     assert "top-secret" not in diagnostic
     assert result.execution.final_content is None
     assert result.execution.side_effect_counts.total == 0

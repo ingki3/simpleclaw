@@ -61,12 +61,28 @@ def test_original_and_effective_asset_diagnostic_are_distinct() -> None:
 
 def test_connected_exception_message_redacts_raw_non_ascii_and_credentials() -> None:
     diagnostic = ConnectedExecutionError(
-        "registry",
+        "registry_lookup",
         ValueError("KBO 원문 token=do-not-log"),
+        code="asset_not_registered_read_only",
+        selected_asset_identity="recipe:sports-live",
+        selected_asset_hash="asset-hash",
+        catalog_fingerprint="catalog-hash",
+        registry_fingerprint="registry-hash",
+        owned_input_contract_present=False,
+        owned_output_contract_present=False,
+        owned_binding_present=False,
     )
 
-    assert diagnostic.phase == "registry"
+    assert diagnostic.phase == "registry_lookup"
+    assert diagnostic.code == "asset_not_registered_read_only"
     assert diagnostic.error_type == "ValueError"
+    assert diagnostic.selected_asset_identity == "recipe:sports-live"
+    assert diagnostic.selected_asset_hash == "asset-hash"
+    assert diagnostic.catalog_fingerprint == "catalog-hash"
+    assert diagnostic.registry_fingerprint == "registry-hash"
+    assert diagnostic.owned_input_contract_present is False
+    assert diagnostic.owned_output_contract_present is False
+    assert diagnostic.owned_binding_present is False
     assert "KBO" not in diagnostic.safe_message
     assert "do-not-log" not in diagnostic.safe_message
     assert diagnostic.safe_message.startswith("redacted_non_ascii_message_sha256=")

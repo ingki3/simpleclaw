@@ -38,7 +38,9 @@ def _asset(
     freshness_sensitive: bool = False,
     domains: tuple[str, ...] = (),
     intents: tuple[str, ...] = (),
+    connected_contract: bool = True,
 ) -> PlannerAsset:
+    owner = f"{asset_type}:{name}" if connected_contract else None
     return PlannerAsset(
         asset_type=asset_type,
         name=name,
@@ -55,6 +57,13 @@ def _asset(
         coverage="full_coverage",
         input_contract="query.v1",
         output_contract="asset_result.v1",
+        contract_owner=owner,
+        input_contract_ref=(f"{asset_type}.{name}.input@1" if owner else None),
+        output_contract_ref=(f"{asset_type}.{name}.output@1" if owner else None),
+        input_schema_hash=("i" * 64 if owner else None),
+        output_schema_hash=("o" * 64 if owner else None),
+        binding_identity=("binding:" + "b" * 64 if owner else None),
+        definition_fingerprint=("d" * 64 if owner else None),
     )
 
 
@@ -415,6 +424,49 @@ def test_unscoped_evidence_plan_repairs_unique_typed_exact_asset() -> None:
     assert result.effective_plan.capability.coverage.value == "full_coverage"
     assert result.effective_plan.fact_check.owner is EvidenceOwner.ASSET
     assert result.effective_plan.execution.allowed_tools == ()
+
+
+def test_unscoped_evidence_plan_rejects_shorthand_only_exact_asset() -> None:
+    sports = _asset(
+        "sports-live",
+        asset_type="recipe",
+        freshness_sensitive=True,
+        domains=("sports",),
+        intents=("current_result",),
+        connected_contract=False,
+    )
+    plan = replace(
+        _plan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="bounded sports query",
+            intents=("current_result",),
+        ),
+        domains=("sports",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="bounded sports query",
+            intents=("current_result",),
+            reference_date="2026-08-02",
+            required_claims=("score",),
+            freshness_required=True,
+        ),
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(sports),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.exact_asset_not_unique" in {
+        item.code for item in result.violations
+    }
 
 
 @pytest.mark.parametrize("asset_count", (0, 2))

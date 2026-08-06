@@ -257,6 +257,7 @@ async def test_kbo_incident_mode_repeats_asset_zero_effective_plan_no_send(
     output = capsys.readouterr().out
     assert output.count('"original_asset":null') == 3
     assert output.count('"effective_asset":"recipe:sports-live"') == 3
+    assert "ASSET_DEFINITIONS=production_installer_output" in output
     assert "TARGET_DISPATCH_EXACTLY_ONCE=true" in output
     assert "TYPED_FINAL=PASS" in output
     assert "TELEGRAM_SEND_COUNT=0" in output

@@ -42,6 +42,7 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     SideEffectCounts,
     load_scenarios,
 )
+from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
 from simpleclaw.langgraph_v4_shadow_validation import _definitions
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.loader import discover_recipes
@@ -100,9 +101,10 @@ def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
     assets = []
     for name in names:
         mutation = name == "cron"
+        asset_type = _asset_type(name)
         assets.append(
             PlannerAsset(
-                asset_type=_asset_type(name),
+                asset_type=asset_type,
                 name=name,
                 description="fixed gold replay asset",
                 domains=(),
@@ -117,6 +119,13 @@ def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
                 runtime_visible=True,
                 coverage="full_coverage",
                 input_contract="query.v1",
+                contract_owner=f"{asset_type}:{name}",
+                input_contract_ref=f"{asset_type}.{name}.input@1",
+                output_contract_ref=f"{asset_type}.{name}.output@1",
+                input_schema_hash="i" * 64,
+                output_schema_hash="o" * 64,
+                binding_identity="binding:" + "b" * 64,
+                definition_fingerprint="d" * 64,
             )
         )
     return PlannerCatalog(tuple(assets), "scenario-catalog-v1")
@@ -963,7 +972,9 @@ async def test_cli_skill_without_declared_fallback_fails_closed(
         item for item in catalog.assets if item.name == skill.name
     )
     try:
-        with pytest.raises(ValueError, match="payload.safe_example_missing"):
+        with pytest.raises(ConnectedExecutionError) as captured:
             await probe(load_scenarios(FIXTURE)[9], plan, selected_assets)
+        assert captured.value.phase == "binding"
+        assert captured.value.code == "payload.safe_example_missing"
     finally:
         probe.close()

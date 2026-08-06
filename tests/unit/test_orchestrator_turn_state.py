@@ -33,7 +33,11 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import PlannerUnavailable
-from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.capability import (
+    CapabilityMetadata,
+    parse_owned_binding_metadata,
+    parse_owned_contract_metadata,
+)
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.graph_runtime.status import DeliveryStatus
 from simpleclaw.llm.models import LLMResponse
@@ -428,21 +432,10 @@ async def test_capability_first_exact_lpga_skips_generic_realtime_lookup(
         encoding="utf-8",
     )
     orchestrator = AgentOrchestrator(config_file)
-    skill = SkillDefinition(
-        name="naver-sports-skill",
-        description="typed sports result",
-        capability=CapabilityMetadata(
-            domains=("sports",),
-            intents=("current_result",),
-            read_only=True,
-            side_effects=False,
-            freshness_sensitive=True,
-            direct_answer=True,
-            output_contract="asset_result.v1",
-            coverage="full_coverage",
-            input_contract="query.v1",
-            declared=True,
-        ),
+    skill = _supporting_skill("naver-sports-skill", direct_answer=True)
+    skill = replace(
+        skill,
+        capability=replace(skill.capability, coverage="full_coverage"),
     )
     orchestrator._skills = [skill]
     orchestrator._skills_by_name = {skill.name: skill}
@@ -501,7 +494,45 @@ async def test_capability_first_exact_lpga_skips_generic_realtime_lookup(
     assert called == ["naver-sports-skill"]
 
 
-def _supporting_skill(name: str) -> SkillDefinition:
+def _supporting_skill(
+    name: str,
+    *,
+    direct_answer: bool = False,
+) -> SkillDefinition:
+    input_contract = parse_owned_contract_metadata(
+        {
+            "contract_id": f"skill.{name}.input",
+            "version": "1",
+            "owner_ref": {"type": "skill", "name": name},
+            "json_schema": {
+                "type": "object",
+                "properties": {"args": {"type": "string"}},
+                "required": ["args"],
+                "additionalProperties": False,
+            },
+        },
+        source=f"{name}.input",
+    )
+    output_contract = parse_owned_contract_metadata(
+        {
+            "contract_id": f"skill.{name}.output",
+            "version": "1",
+            "owner_ref": {"type": "skill", "name": name},
+            "json_schema": {"type": "object"},
+        },
+        source=f"{name}.output",
+    )
+    binding = parse_owned_binding_metadata(
+        {
+            "binding_id": "shell-argv.v1",
+            "owner_ref": {"type": "skill", "name": name},
+            "binding": {"strategy": "shell", "order": ["args"]},
+        },
+        source=f"{name}.binding",
+    )
+    assert input_contract is not None
+    assert output_contract is not None
+    assert binding is not None
     return SkillDefinition(
         name=name,
         description=f"typed supporting asset {name}",
@@ -511,12 +542,15 @@ def _supporting_skill(name: str) -> SkillDefinition:
             read_only=True,
             side_effects=False,
             freshness_sensitive=True,
-            direct_answer=False,
+            direct_answer=direct_answer,
             output_contract="asset_result.v1",
             coverage="partial_coverage",
             input_contract="query.v1",
             declared=True,
         ),
+        input_contract=input_contract,
+        output_contract=output_contract,
+        argument_binding=binding,
     )
 
 

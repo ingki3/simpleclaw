@@ -103,7 +103,14 @@ class _TargetDispatchInvariantError(RuntimeError):
     """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
 
 
-ConnectedFailurePhase = Literal["setup", "registry", "binding", "dispatch", "receipt"]
+ConnectedFailurePhase = Literal[
+    "setup",
+    "registry",
+    "registry_lookup",
+    "binding",
+    "dispatch",
+    "receipt",
+]
 
 
 def _sanitized_exception_message(exc: BaseException) -> str:
@@ -126,22 +133,50 @@ def _sanitized_exception_message(exc: BaseException) -> str:
 
 
 class ConnectedExecutionError(RuntimeError):
-    """Connected 경계의 실패 phase와 sanitized cause를 보존한다."""
+    """Connected 경계의 typed provenance와 sanitized cause를 보존한다."""
 
-    def __init__(self, phase: ConnectedFailurePhase, cause: BaseException) -> None:
+    def __init__(
+        self,
+        phase: ConnectedFailurePhase,
+        cause: BaseException,
+        *,
+        code: str | None = None,
+        selected_asset_identity: str = "none",
+        selected_asset_hash: str = "",
+        catalog_fingerprint: str = "",
+        registry_fingerprint: str = "",
+        owned_input_contract_present: bool | None = None,
+        owned_output_contract_present: bool | None = None,
+        owned_binding_present: bool | None = None,
+    ) -> None:
         self.phase = phase
+        self.code = code or getattr(
+            cause,
+            "code",
+            f"connected_{phase}_failed",
+        )
         self.error_type = type(cause).__name__
         self.safe_message = _sanitized_exception_message(cause)
-        super().__init__(f"{phase}:{self.error_type}:{self.safe_message}")
+        self.selected_asset_identity = selected_asset_identity
+        self.selected_asset_hash = selected_asset_hash
+        self.catalog_fingerprint = catalog_fingerprint
+        self.registry_fingerprint = registry_fingerprint
+        self.owned_input_contract_present = owned_input_contract_present
+        self.owned_output_contract_present = owned_output_contract_present
+        self.owned_binding_present = owned_binding_present
+        super().__init__(
+            f"{phase}:{self.code}:{self.error_type}:{self.safe_message}"
+        )
 
 
 def _connected_error(
     phase: ConnectedFailurePhase,
     exc: BaseException,
+    **diagnostic: Any,
 ) -> ConnectedExecutionError:
     if isinstance(exc, ConnectedExecutionError):
         return exc
-    return ConnectedExecutionError(phase, exc)
+    return ConnectedExecutionError(phase, exc, **diagnostic)
 
 
 def _tag_connected_error(
@@ -1065,22 +1100,58 @@ class ConnectedShadowTurnRunner:
         selected = plan.capability.primary_asset
         if selected is None:
             exc = ValueError("connected shadow requires a planner-selected asset")
-            raise _connected_error("registry", exc) from exc
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="asset_identity_missing",
+                catalog_fingerprint=plan.catalog_fingerprint,
+                registry_fingerprint=self._registry.fingerprint,
+            ) from exc
         asset_ref = AssetRefV1(type=selected.asset_type, name=selected.name)
+        definition_matches = tuple(
+            item
+            for item in self._definitions
+            if item.contract_asset_type == asset_ref.type
+            and item.name == asset_ref.name
+        )
+        definition = definition_matches[0] if len(definition_matches) == 1 else None
+        input_present = bool(
+            definition is not None and definition.input_contract is not None
+        )
+        output_present = bool(
+            definition is not None and definition.output_contract is not None
+        )
+        binding_present = bool(
+            definition is not None and definition.contract_binding is not None
+        )
+        definition_fingerprint = (
+            definition.definition_fingerprint if definition is not None else ""
+        )
+        diagnostic = {
+            "selected_asset_identity": f"{asset_ref.type}:{asset_ref.name}",
+            "selected_asset_hash": definition_fingerprint,
+            "catalog_fingerprint": plan.catalog_fingerprint,
+            "registry_fingerprint": self._registry.fingerprint,
+            "owned_input_contract_present": input_present,
+            "owned_output_contract_present": output_present,
+            "owned_binding_present": binding_present,
+        }
         entry = self._registry.asset(asset_ref)
-        if entry is None or not entry.snapshot.read_only or entry.snapshot.side_effects:
+        if (
+            entry is None
+            or not entry.snapshot.read_only
+            or entry.snapshot.side_effects
+        ):
             exc = ValueError("connected shadow asset must be registered read-only")
-            raise _connected_error("registry", exc) from exc
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="asset_not_registered_read_only",
+                **diagnostic,
+            ) from exc
         try:
-            definition_matches = tuple(
-                item
-                for item in self._definitions
-                if item.contract_asset_type == asset_ref.type
-                and item.name == asset_ref.name
-            )
-            if len(definition_matches) != 1:
+            if definition is None:
                 raise ValueError("connected definition identity must resolve exactly once")
-            definition = definition_matches[0]
             if (
                 definition.definition_fingerprint
                 != entry.snapshot.definition_fingerprint
@@ -1097,7 +1168,7 @@ class ConnectedShadowTurnRunner:
                 entry.input_descriptor, payload
             )
         except Exception as exc:
-            raise _connected_error("binding", exc) from exc
+            raise _connected_error("binding", exc, **diagnostic) from exc
         invocation = AssetInvocationV1(
             invocation_id=hashlib.sha256(
                 f"{request_id}:{asset_ref.type}:{asset_ref.name}".encode()
