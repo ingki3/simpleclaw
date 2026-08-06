@@ -1787,7 +1787,10 @@ class AgentOrchestrator:
                         catalog_fingerprint=catalog.fingerprint,
                     )
                 failure_reason = diagnostic.code
-                logger.exception(
+                # ConnectedExecutionError의 cause/traceback에는 provider payload와
+                # 사용자 prompt가 남아 있을 수 있다. Formatter로 exc_info를 넘기지
+                # 않고 allowlisted structured diagnostic만 기록한다.
+                logger.error(
                     "LangGraph V4 primary isolated: request_id=%s "
                     "original_mode=%s effective_mode=%s original_asset=%s "
                     "effective_asset=%s failure_phase=%s phase=%s code=%s "
@@ -1815,7 +1818,6 @@ class AgentOrchestrator:
                     diagnostic.owned_output_contract_present,
                     diagnostic.owned_binding_present,
                     diagnostic.safe_message,
-                    exc_info=(type(diagnostic), diagnostic, exc.__traceback__),
                 )
 
             checkpoint = v4.get("checkpoint", {})

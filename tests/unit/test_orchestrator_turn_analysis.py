@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from simpleclaw.agent.orchestrator import _selected_asset_identity
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
 from simpleclaw.agent.turn_plan import (
@@ -59,10 +61,20 @@ def test_original_and_effective_asset_diagnostic_are_distinct() -> None:
     assert _selected_asset_identity(effective) == "recipe:sports-live"
 
 
-def test_connected_exception_message_redacts_raw_non_ascii_and_credentials() -> None:
+@pytest.mark.parametrize(
+    "raw_message",
+    [
+        "prompt=ASCII_PRIVATE_PROMPT_MARKER_639",
+        '{"api_key":"json-private-key","password":"json-password"}',
+        "authorization=Bearer provider-private-token",
+        "https://provider.example/v1?token=url-private-token",
+        "사용자 비공개 질문",
+    ],
+)
+def test_connected_exception_message_is_digest_only(raw_message: str) -> None:
     diagnostic = ConnectedExecutionError(
         "registry_lookup",
-        ValueError("KBO 원문 token=do-not-log"),
+        ValueError(raw_message),
         code="asset_not_registered_read_only",
         selected_asset_identity="recipe:sports-live",
         selected_asset_hash="asset-hash",
@@ -83,6 +95,23 @@ def test_connected_exception_message_redacts_raw_non_ascii_and_credentials() -> 
     assert diagnostic.owned_input_contract_present is False
     assert diagnostic.owned_output_contract_present is False
     assert diagnostic.owned_binding_present is False
-    assert "KBO" not in diagnostic.safe_message
-    assert "do-not-log" not in diagnostic.safe_message
-    assert diagnostic.safe_message.startswith("redacted_non_ascii_message_sha256=")
+    assert raw_message not in diagnostic.safe_message
+    assert diagnostic.safe_message.startswith("message_sha256=")
+    assert len(diagnostic.safe_message) == len("message_sha256=") + 16
+
+
+def test_connected_exception_does_not_promote_provider_code() -> None:
+    class ProviderError(Exception):
+        code = "ASCII_PRIVATE_PROMPT_MARKER_639"
+
+    cause = ProviderError("private provider payload")
+
+    diagnostic = ConnectedExecutionError(
+        "ASCII_PRIVATE_PROMPT_MARKER_639",  # type: ignore[arg-type]
+        cause,
+    )
+
+    assert diagnostic.phase == "setup"
+    assert diagnostic.code == "connected_setup_failed"
+    assert diagnostic.error_type == "ExternalError"
+    assert "ASCII_PRIVATE_PROMPT_MARKER_639" not in str(diagnostic)
