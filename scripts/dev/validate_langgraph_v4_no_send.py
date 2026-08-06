@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the contract-fixture no-send scenario through the generic harness."""
+"""contract fixture no-send scenario를 generic harness에서 실행한다."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ EXPECTED_CONTRACT_SET = frozenset(
 
 
 def definitions():
-    """Discover the scenario-owned contract fixtures."""
+    """scenario가 소유한 contract fixture만 찾아 반환한다."""
     recipes = discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
     skills = discover_skills(
         REPO_ROOT / "tests/fixtures/skills",
@@ -69,6 +69,7 @@ def definitions():
 
 
 def cases() -> tuple[tuple[str, str], ...]:
+    """검증할 route별 고정 prompt와 기대 경로를 반환한다."""
     return (
         (
             (
@@ -100,9 +101,10 @@ def cases() -> tuple[tuple[str, str], ...]:
 
 
 class HermeticPlannerRouter:
-    """Return deterministic plans for the scenario-owned fixtures."""
+    """scenario fixture에 맞는 plan을 외부 호출 없이 반환한다."""
 
     async def send(self, request):
+        """fixture prompt를 분류해 결정적인 planner 응답을 만든다."""
         prompt = json.loads(request.user_message)["current_user_message"]
         recipe = "contract-fixture-workflow" in prompt
         complex_case = "verify and compare" in prompt
@@ -181,6 +183,7 @@ class HermeticPlannerRouter:
 
 
 async def run(args) -> int:
+    """fixture 정의와 case를 generic no-send harness에 주입한다."""
     return await _run(
         args,
         definitions=definitions(),

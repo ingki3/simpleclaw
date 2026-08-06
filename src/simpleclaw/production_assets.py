@@ -1,4 +1,4 @@
-"""Domain-neutral runtime asset discovery, validation, and installation."""
+"""도메인 중립 runtime asset을 탐색·검증하고 원자적으로 설치한다."""
 
 from __future__ import annotations
 
@@ -21,21 +21,29 @@ _ASSET_PART = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
 
 class AssetResource(Protocol):
-    """Subset shared by pathlib paths and importlib resources."""
+    """파일 경로와 패키지 resource가 공유하는 최소 읽기 계약이다."""
 
     @property
-    def name(self) -> str: ...
+    def name(self) -> str:
+        """resource의 파일 이름을 반환한다."""
+        ...
 
-    def joinpath(self, *descendants: str) -> AssetResource: ...
+    def joinpath(self, *descendants: str) -> AssetResource:
+        """하위 resource를 같은 추상화로 반환한다."""
+        ...
 
-    def is_file(self) -> bool: ...
+    def is_file(self) -> bool:
+        """resource가 읽을 수 있는 일반 파일인지 반환한다."""
+        ...
 
-    def read_bytes(self) -> bytes: ...
+    def read_bytes(self) -> bytes:
+        """resource 내용을 bytes로 읽는다."""
+        ...
 
 
 @dataclass(frozen=True)
 class RuntimeAssetFile:
-    """One verified file copied from an asset-local resource."""
+    """asset 내부에서 검증 후 복사할 파일 하나를 선언한다."""
 
     source: PurePosixPath
     destination: PurePosixPath
@@ -45,7 +53,7 @@ class RuntimeAssetFile:
 
 @dataclass(frozen=True)
 class RuntimeAssetManifest:
-    """Validated data-only installation contract."""
+    """검증을 마친 data-only 설치 계약이다."""
 
     asset_type: str
     name: str
@@ -57,12 +65,13 @@ class RuntimeAssetManifest:
 
     @property
     def ref(self) -> str:
+        """manifest의 안정적인 ``type:name`` 식별자를 반환한다."""
         return f"{self.asset_type}:{self.name}"
 
 
 @dataclass(frozen=True)
 class ResolvedRuntimeAsset:
-    """Manifest plus its source resource and provenance."""
+    """manifest와 검증된 source bytes 및 provenance를 묶는다."""
 
     manifest: RuntimeAssetManifest
     root: AssetResource
@@ -71,6 +80,7 @@ class ResolvedRuntimeAsset:
 
 
 def _safe_relative(value: object, *, field: str) -> PurePosixPath:
+    """manifest 경로를 안전한 POSIX 상대 경로로 제한한다."""
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty relative path")
     path = PurePosixPath(value)
@@ -80,12 +90,14 @@ def _safe_relative(value: object, *, field: str) -> PurePosixPath:
 
 
 def _mapping(value: object, *, field: str) -> dict[str, Any]:
+    """manifest 필드가 mapping인지 확인해 이후 파싱을 단순화한다."""
     if not isinstance(value, dict):
         raise TypeError(f"{field} must be a mapping")
     return value
 
 
 def _load_manifest(resource: AssetResource) -> RuntimeAssetManifest:
+    """resource의 manifest를 읽고 설치 전에 전체 schema를 검증한다."""
     raw_bytes = resource.read_bytes()
     raw = _mapping(yaml.safe_load(raw_bytes), field="manifest")
     if raw.get("schema_version") != 1:
@@ -161,6 +173,7 @@ def _load_manifest(resource: AssetResource) -> RuntimeAssetManifest:
 
 
 def _asset_root() -> tuple[AssetResource, str]:
+    """source checkout을 우선하고 없으면 package resource를 선택한다."""
     if DEFAULT_ASSET_ROOT.is_dir():
         return DEFAULT_ASSET_ROOT, f"source:{DEFAULT_ASSET_ROOT}"
     packaged = files("simpleclaw").joinpath("runtime_assets")
@@ -171,7 +184,7 @@ def _read_regular_asset_file(
     root: AssetResource,
     relative: PurePosixPath,
 ) -> bytes:
-    """Read one contained regular file without following filesystem symlinks."""
+    """symlink를 따르지 않고 asset root 내부의 일반 파일만 읽는다."""
     source = root.joinpath(*relative.parts)
     if isinstance(root, Path) and isinstance(source, Path):
         root_resolved = root.resolve(strict=True)
@@ -202,7 +215,7 @@ def resolve_runtime_asset(
     *,
     assets_root: Path | None = None,
 ) -> ResolvedRuntimeAsset:
-    """Resolve an asset ref or explicit manifest and verify every source digest."""
+    """asset ref 또는 manifest를 해석하고 모든 source digest를 검증한다."""
     if isinstance(asset, Path) or ":" not in str(asset):
         manifest_path = Path(asset).expanduser().resolve()
         resource: AssetResource = manifest_path
@@ -243,6 +256,7 @@ def _configured_parent(
     *,
     config_path: Path | None,
 ) -> Path:
+    """runtime config와 manifest 기본값에서 설치 상위 경로를 결정한다."""
     parent = manifest.default_parent
     selected_config = config_path or manifest.config_path
     if selected_config is None:
@@ -260,18 +274,22 @@ def _configured_parent(
     return Path(raw).expanduser()
 
 
-def _tree_bytes(root: Path) -> dict[str, bytes]:
+def _tree_state(root: Path) -> dict[str, tuple[bytes, int]]:
+    """설치 트리의 파일 bytes와 실행 권한 계약을 함께 읽는다."""
     if not root.is_dir():
         return {}
     return {
-        path.relative_to(root).as_posix(): path.read_bytes()
+        path.relative_to(root).as_posix(): (
+            path.read_bytes(),
+            stat.S_IMODE(path.stat().st_mode),
+        )
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
 
 
 def _remove_owned_tree(root: Path) -> None:
-    """Remove an installer-owned tree without following symlinks."""
+    """installer 소유 트리를 symlink 추적 없이 제거한다."""
     if root.is_symlink() or not root.is_dir():
         root.unlink(missing_ok=True)
         return
@@ -292,7 +310,7 @@ def install_runtime_asset(
     config_path: Path | None = None,
     assets_root: Path | None = None,
 ) -> tuple[Path, ResolvedRuntimeAsset]:
-    """Validate fully, then atomically install an asset-owned directory."""
+    """전체 계약 검증 후 asset 소유 디렉터리를 원자적으로 설치한다."""
     resolved = resolve_runtime_asset(asset, assets_root=assets_root)
     manifest = resolved.manifest
     parent = (
@@ -305,8 +323,14 @@ def install_runtime_asset(
     payload: dict[PurePosixPath, bytes] = {}
     for declared, content in zip(manifest.files, resolved.source_bytes, strict=True):
         payload[declared.destination] = content
-    expected = {path.as_posix(): content for path, content in payload.items()}
-    if _tree_bytes(destination) == expected:
+    expected = {
+        declared.destination.as_posix(): (
+            payload[declared.destination],
+            0o755 if declared.executable else 0o644,
+        )
+        for declared in manifest.files
+    }
+    if _tree_state(destination) == expected:
         return destination, resolved
 
     parent.mkdir(parents=True, exist_ok=True)
@@ -323,13 +347,15 @@ def install_runtime_asset(
         for declared in manifest.files:
             target = staged.joinpath(*declared.destination.parts)
             target.chmod(0o755 if declared.executable else 0o644)
-        if _tree_bytes(staged) != expected:
+        if _tree_state(staged) != expected:
             raise RuntimeError("staged runtime asset verification failed")
         if destination.exists():
             os.replace(destination, backup)
             destination_moved = True
         os.replace(staged, destination)
         replacement_installed = True
+        if _tree_state(destination) != expected:
+            raise RuntimeError("installed runtime asset verification failed")
         if backup.exists():
             shutil.rmtree(backup)
     except BaseException:

@@ -52,12 +52,14 @@ class _ExplicitBackendRouter:
     """Smoke에서 지정한 실제 backend로 production planner request를 전달한다."""
 
     def __init__(self, router, backend_name: str) -> None:
+        """검증 대상 backend를 고정하고 실제 응답 identity를 기록한다."""
         self._router = router
         self._backend_name = backend_name
         self.last_backend_name = ""
         self.last_model = ""
 
     async def send(self, request):
+        """route 선택을 우회해 지정 backend로 planner 요청을 전달한다."""
         response = await self._router.send(
             replace(request, route_name=None, backend_name=self._backend_name)
         )
@@ -70,6 +72,7 @@ class _BoundedPlannerRouter:
     """Actual-provider smoke의 전체 call 수와 wall-clock deadline을 강제한다."""
 
     def __init__(self, router, *, max_calls: int, deadline_seconds: float) -> None:
+        """provider 검증의 호출 수와 전체 deadline을 고정한다."""
         self._router = router
         self._max_calls = max_calls
         self._deadline_seconds = deadline_seconds
@@ -77,6 +80,7 @@ class _BoundedPlannerRouter:
         self.calls = 0
 
     async def send(self, request):
+        """남은 budget 안에서만 planner 요청을 허용한다."""
         if self.calls >= self._max_calls:
             raise RuntimeError("actual-provider call cap exhausted")
         remaining = self._deadline_seconds - (
@@ -93,10 +97,12 @@ class _ForbiddenConversationStore:
     """Hermetic validation에서 persistence 경계 접근을 즉시 실패시킨다."""
 
     def save_outbound_once(self, *_args, **_kwargs):
+        """hermetic 검증 중 persistence 접근을 즉시 실패시킨다."""
         raise AssertionError("hermetic validator must not persist conversations")
 
 
 def _contract_identity(ref: ContractRefV1) -> ContractIdentity:
+    """runtime contract ref를 exact-set 비교용 identity로 정규화한다."""
     return ContractIdentity(
         owner_type=ref.owner_ref.type,
         owner_name=ref.owner_ref.name,
@@ -167,6 +173,7 @@ def _contract_set_violations(
 
 
 def _violation_json(violations: tuple[ContractSetViolation, ...]) -> str:
+    """contract 위반을 안정적인 machine-readable JSON으로 직렬화한다."""
     return json.dumps(
         [asdict(item) for item in violations],
         ensure_ascii=False,
@@ -176,6 +183,7 @@ def _violation_json(violations: tuple[ContractSetViolation, ...]) -> str:
 
 
 def _assert_contract_set(violations: tuple[ContractSetViolation, ...]) -> None:
+    """exact contract set 위반을 구조화된 진단과 함께 거부한다."""
     if violations:
         raise RuntimeError(
             "contract continuity exact-set mismatch "
@@ -196,10 +204,12 @@ def _planner_native_specs():
 
 
 async def _recipe_executor(_definition, _bound_steps):
+    """검증 harness에서 외부 동작 없이 recipe 결과를 반환한다."""
     return {"fixture_result": "connected"}
 
 
 async def _skill_executor(_definition, _argv):
+    """검증 harness에서 외부 동작 없이 skill 결과를 반환한다."""
     return {"operation_result": "connected"}
 
 
@@ -442,6 +452,7 @@ async def _run(
 
 
 def _parser() -> argparse.ArgumentParser:
+    """공통 shadow validator의 bounded 실행 인자를 구성한다."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--architecture", default="langgraph_v4")
     parser.add_argument(
@@ -472,5 +483,5 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Reject direct execution because definitions/cases must be injected."""
+    """정의와 case 주입 없는 직접 실행을 안전하게 거부한다."""
     raise RuntimeError("use a scripts/dev validator that injects scenario data")

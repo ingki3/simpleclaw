@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a data-declared production-asset scenario through the generic harness."""
+"""data로 선언한 production asset scenario를 generic harness에서 실행한다."""
 
 from __future__ import annotations
 
@@ -27,12 +27,14 @@ DEFAULT_SCENARIO = (
 
 
 class _ScenarioRouter:
-    """Return the planner shape declared by the scenario data."""
+    """scenario data가 선언한 planner 응답을 결정적으로 반환한다."""
 
     def __init__(self, scenario: dict[str, object]) -> None:
+        """provider 호출 없이 사용할 scenario payload를 고정한다."""
         self._scenario = scenario
 
     async def send(self, request):
+        """입력 prompt가 fixture와 일치할 때 선언된 plan을 반환한다."""
         prompt = json.loads(request.user_message)["current_user_message"]
         if prompt != self._scenario["prompt"]:
             raise RuntimeError("scenario prompt mismatch")
@@ -92,6 +94,7 @@ class _ScenarioRouter:
 
 
 def _load_scenario(path: Path) -> dict[str, object]:
+    """scenario YAML을 mapping으로 제한해 잘못된 fixture를 조기에 거부한다."""
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise TypeError("scenario must be a mapping")
@@ -99,6 +102,7 @@ def _load_scenario(path: Path) -> dict[str, object]:
 
 
 async def _main() -> int:
+    """격리 경로에 asset을 설치하고 no-send 검증 harness를 실행한다."""
     parser = _parser()
     parser.add_argument("--scenario", type=Path, default=DEFAULT_SCENARIO)
     args = parser.parse_args()

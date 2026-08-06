@@ -1,4 +1,4 @@
-"""Setuptools hooks for packaging repository-authored runtime assets."""
+"""저장소가 관리하는 runtime asset을 package에 포함하는 build hook이다."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from setuptools.command.build_py import build_py
 
 
 class BuildPyWithRuntimeAssets(build_py):
-    """Copy the generic runtime asset tree into the built package."""
+    """generic runtime asset 트리를 build package에 복사한다."""
 
     def run(self) -> None:
+        """기본 Python build 후 검증된 authoring tree를 package에 추가한다."""
         super().run()
         source = Path("runtime_assets")
         if not source.is_dir():
@@ -22,4 +23,3 @@ class BuildPyWithRuntimeAssets(build_py):
 
 
 setup(cmdclass={"build_py": BuildPyWithRuntimeAssets})
-

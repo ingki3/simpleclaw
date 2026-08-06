@@ -110,6 +110,24 @@ def test_no_arg_installer_matches_global_discovery_default(
     assert "manifest_sha256=" in output
 
 
+def test_installer_repairs_skill_bytes_and_executable_mode(tmp_path: Path) -> None:
+    """skill payload와 wrapper 실행 권한 drift를 재설치로 함께 복구한다."""
+    global_dir = tmp_path / "global"
+    skill_dir = install(global_dir)
+    skill_md = skill_dir / "SKILL.md"
+    wrapper = skill_dir / "scripts/naver_sports.py"
+    wrapper_bytes = wrapper.read_bytes()
+
+    skill_md.write_bytes(b"drifted skill\n")
+    wrapper.chmod(0o644)
+    install(global_dir)
+
+    assert skill_md.read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+    assert skill_md.stat().st_mode & 0o777 == 0o644
+    assert wrapper.read_bytes() == wrapper_bytes
+    assert wrapper.stat().st_mode & 0o777 == 0o755
+
+
 @pytest.mark.parametrize(
     "mutation",
     ("undeclared", "write", "side_effect", "confirmation", "identity_mismatch"),

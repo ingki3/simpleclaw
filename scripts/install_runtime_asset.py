@@ -1,4 +1,4 @@
-"""Install a manifest-declared runtime asset."""
+"""manifest가 선언한 runtime asset을 generic installer로 설치한다."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from simpleclaw.production_assets import install_runtime_asset
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint."""
+    """CLI 인자를 generic installer 계약으로 전달한다."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--asset", required=True)
     parser.add_argument("--destination", type=Path)
@@ -30,4 +30,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

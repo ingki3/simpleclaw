@@ -174,7 +174,10 @@ def test_package_traversable_symlink_source_is_rejected(
         resolve_runtime_asset("widget:comet")
 
 
-@pytest.mark.parametrize("fault", ("write", "move_old", "install_new", "cleanup"))
+@pytest.mark.parametrize(
+    "fault",
+    ("write", "staged_mode", "move_old", "install_new", "final_mode", "cleanup"),
+)
 def test_install_fault_restores_destination_without_residue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -186,6 +189,7 @@ def test_install_fault_restores_destination_without_residue(
     (destination / "old.txt").write_text("old", encoding="utf-8")
 
     original_write_bytes = Path.write_bytes
+    original_chmod = Path.chmod
     original_replace = os.replace
 
     if fault == "write":
@@ -195,6 +199,11 @@ def test_install_fault_restores_destination_without_residue(
             return original_write_bytes(path, data)
 
         monkeypatch.setattr(Path, "write_bytes", fail_write)
+    elif fault == "staged_mode":
+        def drift_staged_mode(path: Path, mode: int) -> None:
+            original_chmod(path, 0o755 if mode == 0o644 else 0o644)
+
+        monkeypatch.setattr(Path, "chmod", drift_staged_mode)
     elif fault in {"move_old", "install_new"}:
         def fail_replace(source: os.PathLike[str], target: os.PathLike[str]) -> None:
             source_path = Path(source)
@@ -205,13 +214,27 @@ def test_install_fault_restores_destination_without_residue(
             original_replace(source, target)
 
         monkeypatch.setattr(production_assets.os, "replace", fail_replace)
+    elif fault == "final_mode":
+        def drift_final_mode(
+            source: os.PathLike[str],
+            target: os.PathLike[str],
+        ) -> None:
+            original_replace(source, target)
+            source_path = Path(source)
+            target_path = Path(target)
+            if ".staged-" in source_path.name and target_path == destination:
+                (target_path / "nested/payload.txt").chmod(0o755)
+
+        monkeypatch.setattr(production_assets.os, "replace", drift_final_mode)
     else:
         def fail_backup_cleanup(path: os.PathLike[str]) -> None:
             raise OSError("injected backup cleanup failure")
 
         monkeypatch.setattr(production_assets.shutil, "rmtree", fail_backup_cleanup)
 
-    with pytest.raises(OSError, match="injected"):
+    expected_error = RuntimeError if "mode" in fault else OSError
+    expected_message = "verification" if "mode" in fault else "injected"
+    with pytest.raises(expected_error, match=expected_message):
         install_runtime_asset("widget:comet", assets_root=tmp_path)
 
     assert (destination / "old.txt").read_text(encoding="utf-8") == "old"
