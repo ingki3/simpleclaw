@@ -204,6 +204,7 @@ _LANGGRAPH_V4_DEFAULTS: dict = {
         "mode": "no_send",
         "max_attempts": 1,
     },
+    "on_failure": "fail_closed",
     "shadow_no_send": True,
 }
 
@@ -231,7 +232,11 @@ _LANGGRAPH_V4_TELEMETRY_FIELDS = (
     "delivery_status",
     "budget_usage",
     "model_call_attribution",
+    "dispatch_trace",
     "stop_condition",
+    "result_source",
+    "provenance",
+    "typed_final",
     "rollback_required",
     "rollback_reason",
 )
@@ -245,7 +250,7 @@ class UnifiedTurnPlannerMode(str, Enum):
 
     OFF = "off"
     SHADOW = "shadow"
-    CANARY = "canary"
+    READ_ONLY_CANARY = "read_only_canary"
     PRIMARY = "primary"
 
 
@@ -360,10 +365,14 @@ def _agent_with_defaults(agent: dict) -> dict:
     raw_mode = str(
         unified_turn_planner.get("mode", unified_defaults["mode"])
     ).strip().lower()
+    # 기존 canary 표기는 같은 read-only cohort 의미로만 호환한다.
+    if raw_mode == "canary":
+        raw_mode = UnifiedTurnPlannerMode.READ_ONLY_CANARY.value
     try:
         unified_mode = UnifiedTurnPlannerMode(raw_mode)
     except ValueError:
-        unified_mode = UnifiedTurnPlannerMode.PRIMARY
+        # 오타가 아직 검증되지 않은 primary 경로를 활성화하지 않게 한다.
+        unified_mode = UnifiedTurnPlannerMode.OFF
     unified_reasoning = unified_turn_planner.get("reasoning", {})
     if not isinstance(unified_reasoning, dict):
         unified_reasoning = {}
@@ -426,17 +435,30 @@ def _agent_with_defaults(agent: dict) -> dict:
     delivery_mode = str(
         v4_delivery.get("mode", delivery_defaults["mode"])
     ).strip().lower()
-    if delivery_mode not in {"no_send", "live"}:
+    if delivery_mode not in {"no_send", "deferred", "live"}:
         delivery_mode = delivery_defaults["mode"]
+    if delivery_mode == "live":
+        # V4 graph는 transport를 직접 소유하지 않는다. primary final은 기존
+        # orchestrator의 exactly-once return/store 경계로만 승격한다.
+        delivery_mode = "deferred"
     shadow_no_send = bool(
         langgraph_v4.get(
             "shadow_no_send", _LANGGRAPH_V4_DEFAULTS["shadow_no_send"]
         )
     )
-    # Shadow는 관찰 전용이다. 잘못된 live 설정도 외부 전송으로 승격하지 않는다.
-    if unified_mode is UnifiedTurnPlannerMode.SHADOW:
+    # Shadow/canary는 관찰 전용이다. primary도 graph 내부 delivery callback을
+    # 소유하지 않으므로 모든 connected execution은 no-send adapter만 사용한다.
+    if unified_mode in {
+        UnifiedTurnPlannerMode.SHADOW,
+        UnifiedTurnPlannerMode.READ_ONLY_CANARY,
+    }:
         delivery_mode = "no_send"
-        shadow_no_send = True
+    shadow_no_send = True
+    v4_on_failure = str(
+        langgraph_v4.get("on_failure", _LANGGRAPH_V4_DEFAULTS["on_failure"])
+    ).strip().lower()
+    if v4_on_failure not in {"fail_closed", "legacy"}:
+        v4_on_failure = "fail_closed"
     complex_escalation = unified_turn_planner.get("complex_escalation", {})
     if not isinstance(complex_escalation, dict):
         complex_escalation = {}
@@ -783,8 +805,9 @@ def _agent_with_defaults(agent: dict) -> dict:
                                 minimum=1,
                             ),
                         },
-                        # Shadow에서는 false 입력도 강제로 true가 된다. canary/primary
-                        # 활성화 여부와 무관하게 현재 이슈의 기본은 no-send다.
+                        "on_failure": v4_on_failure,
+                        # V4 graph는 transport/persistence callback을 직접 소유하지
+                        # 않는다. primary final도 기존 orchestrator 경계가 전달한다.
                         "shadow_no_send": shadow_no_send,
                         # payload key/value와 원문은 허용하지 않는 고정 allowlist다.
                         "telemetry_fields": _LANGGRAPH_V4_TELEMETRY_FIELDS,

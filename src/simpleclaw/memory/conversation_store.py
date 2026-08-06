@@ -227,11 +227,29 @@ class ConversationStore:
         session_key: str,
         turn_id: str,
     ) -> tuple[int, int]:
-        """Persist one user/assistant pair and session checkpoint atomically."""
+        """Persist one user/assistant pair and session checkpoint atomically.
+
+        A V4 actual-response ingress may already have persisted the user row before
+        planner/asset execution.  Reuse that row (and an already completed pair on
+        replay) instead of creating duplicate history for the same stable turn.
+        """
         now = datetime.now().astimezone().isoformat()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             ids: list[int] = []
             for message in (user_message, assistant_message):
+                existing = conn.execute(
+                    "SELECT id, content FROM messages WHERE session_key = ? "
+                    "AND turn_id = ? AND role = ? ORDER BY id LIMIT 1",
+                    (session_key, turn_id, message.role.value),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing[1]) != message.content:
+                        raise ValueError(
+                            "turn_id already exists with a different message payload"
+                        )
+                    ids.append(int(existing[0]))
+                    continue
                 cursor = conn.execute(
                     "INSERT INTO messages "
                     "(role, content, timestamp, token_count, channel, "
@@ -260,6 +278,45 @@ class ConversationStore:
                 (session_key, turn_id, now),
             )
         return ids[0], ids[1]
+
+    def save_inbound_once(
+        self,
+        user_message: ConversationMessage,
+        *,
+        session_key: str,
+        request_id: str,
+    ) -> tuple[int, bool]:
+        """Deferred V4 delivery의 user row를 request_id 기준 한 번만 저장한다."""
+        if user_message.role is not MessageRole.USER:
+            raise ValueError("save_inbound_once requires a user message")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT id, content FROM messages WHERE session_key = ? "
+                "AND turn_id = ? AND role = ? ORDER BY id LIMIT 1",
+                (session_key, request_id, MessageRole.USER.value),
+            ).fetchone()
+            if existing is not None:
+                if str(existing[1]) != user_message.content:
+                    raise ValueError(
+                        "request_id already exists with a different inbound payload"
+                    )
+                return int(existing[0]), False
+            cursor = conn.execute(
+                "INSERT INTO messages "
+                "(role, content, timestamp, token_count, channel, session_key, turn_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_message.role.value,
+                    user_message.content,
+                    user_message.timestamp.isoformat(),
+                    user_message.token_count,
+                    user_message.channel,
+                    session_key,
+                    request_id,
+                ),
+            )
+            return int(cursor.lastrowid), True
 
     def save_outbound_once(
         self,
@@ -318,6 +375,27 @@ class ConversationStore:
                 ),
             )
         return message_id, True
+
+    def get_outbound_persistence(
+        self,
+        persistence_id: str,
+        *,
+        payload_hash: str,
+    ) -> int | None:
+        """이미 commit된 outbound marker를 검증해 message id를 반환한다."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload_hash, message_id FROM graph_outbound_persistence "
+                "WHERE persistence_id = ?",
+                (persistence_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        if str(row[0]) != payload_hash:
+            raise ValueError(
+                "persistence_id already exists with a different payload"
+            )
+        return int(row[1])
 
     def get_recent(
         self,

@@ -52,6 +52,7 @@ from simpleclaw.security.sanitize import sanitize_tool_output
 
 if TYPE_CHECKING:
     from simpleclaw.agent.turn_state import TurnExecutionState
+    from simpleclaw.outbound_delivery import PrimaryDeliveryMetadataV1
 
 logger = logging.getLogger("simpleclaw.agent.orchestrator")
 
@@ -221,6 +222,7 @@ class ToolLoopResult:
     selected_route: str | None = None
     model_calls: int = 0
     tokens: int = 0
+    primary_delivery: PrimaryDeliveryMetadataV1 | None = None
 
 
 

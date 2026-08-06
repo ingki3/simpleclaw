@@ -163,10 +163,13 @@ agent:
     fallback_mode: conservative_original  # 실패 시 원문 보존 + 결정적 라우터 fallback
   # BIZ-523 — ordinary turn의 유일한 semantic controller.
   unified_turn_planner:
-    mode: primary
+    # off/shadow는 legacy primary를 보존한다. read_only_canary는 deterministic
+    # user/chat cohort의 exact read-only asset만, primary는 승인된 exact read-only
+    # asset 전체를 V4 typed final source로 사용한다.
+    mode: primary  # off | shadow | read_only_canary | primary
     # capability_first_v3는 아래 resolution_budget 중 하나 이상이 유한할 때만 실행한다.
     architecture: legacy_v2  # legacy_v2 | capability_first_v3 | langgraph_v4
-    sample_rate: 0.0          # deprecated rollout 값; ordinary 실행에는 사용하지 않음
+    sample_rate: 0.0          # shadow sampling/read_only_canary cohort, 0.0..1.0
     max_tokens: 2048
     # strict provider schema 고정값. false로 설정해도 true로 fail-closed 정규화한다.
     structured_output: true
@@ -210,8 +213,14 @@ agent:
         terminal_ttl_days: 30
         max_rows: 100000
       delivery:
-        mode: no_send  # shadow에서는 live로 입력해도 no_send로 강제됨
+        # graph 자체는 외부 callback을 호출하지 않는다. primary final은 기존
+        # orchestrator return/store 경계로만 exactly-once 전달·저장된다.
+        mode: no_send  # no_send | deferred (legacy live 입력은 deferred로 정규화)
         max_attempts: 1
+      # graph/provider/contract/dispatch 불변식 실패 시 기본은 사용자 전송 전 차단.
+      # legacy fallback은 target executor 진입 전 실패에만 허용된다. dispatch가
+      # attempted/executed/ambiguous이면 이 값과 무관하게 fail-closed한다.
+      on_failure: fail_closed  # fail_closed | legacy
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는
 # 레시피가 같은 절대 경로를 보도록 명시적으로 분리한 키. 기본은 ``~/.simpleclaw/recipes``

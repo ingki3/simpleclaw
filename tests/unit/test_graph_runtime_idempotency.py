@@ -14,10 +14,13 @@ from simpleclaw.graph_runtime.idempotency import (
     IdempotencyInvariantError,
     RedispatchDecision,
     UniquePayloadLedger,
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
     delivery_id,
     guard_redispatch,
     invocation_signature,
     persistence_id,
+    validate_canonical_artifact_identity,
 )
 from simpleclaw.graph_runtime.status import EffectStatus
 
@@ -113,6 +116,49 @@ def test_delivery_and_persistence_ids_are_deterministic_and_separate() -> None:
         "session-1", "request-1", "artifact-hash"
     )
     assert first_delivery != first_persistence
+
+
+def test_canonical_artifact_identity_is_deterministic_and_fully_bound() -> None:
+    request_id = "request-1"
+    content = "final answer"
+    artifact_id = canonical_artifact_id(request_id, content)
+    content_hash = canonical_artifact_content_hash(content)
+
+    validate_canonical_artifact_identity(
+        request_id=request_id,
+        content=content,
+        artifact_id=artifact_id,
+        content_hash=content_hash,
+    )
+    assert artifact_id == canonical_artifact_id(request_id, content)
+    assert artifact_id != canonical_artifact_id("stale-request", content)
+    assert artifact_id != canonical_artifact_id(request_id, "stale answer")
+
+
+@pytest.mark.parametrize(
+    ("artifact_id", "content_hash", "error"),
+    [
+        ("arbitrary-artifact", None, "identity mismatch"),
+        (None, "stale-content-hash", "content hash mismatch"),
+    ],
+)
+def test_canonical_artifact_identity_rejects_mismatch(
+    artifact_id: str | None,
+    content_hash: str | None,
+    error: str,
+) -> None:
+    request_id = "request-1"
+    content = "final answer"
+
+    with pytest.raises(IdempotencyInvariantError, match=error):
+        validate_canonical_artifact_identity(
+            request_id=request_id,
+            content=content,
+            artifact_id=artifact_id
+            or canonical_artifact_id(request_id, content),
+            content_hash=content_hash
+            or canonical_artifact_content_hash(content),
+        )
 
 
 def test_unique_payload_ledger_noops_same_payload_and_rejects_conflict() -> None:

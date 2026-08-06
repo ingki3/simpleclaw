@@ -45,6 +45,82 @@ class TestConversationStore:
         assert messages[0].content == "Hello agent"
         assert messages[0].role == MessageRole.USER
 
+    def test_save_inbound_once_deduplicates_stable_request_identity(self, store):
+        message = ConversationMessage(
+            role=MessageRole.USER,
+            content="durable inbound",
+            channel="telegram",
+        )
+
+        first_id, first_created = store.save_inbound_once(
+            message,
+            session_key="telegram-session",
+            request_id="telegram:42:1001",
+        )
+        replay_id, replay_created = store.save_inbound_once(
+            message,
+            session_key="telegram-session",
+            request_id="telegram:42:1001",
+        )
+
+        assert (first_created, replay_created) == (True, False)
+        assert replay_id == first_id
+        assert [
+            (row.role, row.content, row.turn_id)
+            for row in store.get_recent(session_key="telegram-session")
+        ] == [
+            (MessageRole.USER, "durable inbound", "telegram:42:1001")
+        ]
+
+    def test_save_turn_reuses_pre_persisted_inbound_on_replay(self, store):
+        user = ConversationMessage(role=MessageRole.USER, content="request")
+        assistant = ConversationMessage(
+            role=MessageRole.ASSISTANT,
+            content="response",
+        )
+        inbound_id, _ = store.save_inbound_once(
+            user,
+            session_key="telegram-session",
+            request_id="telegram:42:1002",
+        )
+
+        first_ids = store.save_turn(
+            user,
+            assistant,
+            session_key="telegram-session",
+            turn_id="telegram:42:1002",
+        )
+        replay_ids = store.save_turn(
+            user,
+            assistant,
+            session_key="telegram-session",
+            turn_id="telegram:42:1002",
+        )
+
+        assert first_ids == replay_ids
+        assert first_ids[0] == inbound_id
+        assert [
+            (row.role, row.content)
+            for row in store.get_recent(session_key="telegram-session")
+        ] == [
+            (MessageRole.USER, "request"),
+            (MessageRole.ASSISTANT, "response"),
+        ]
+
+    def test_stable_request_identity_rejects_changed_inbound_payload(self, store):
+        store.save_inbound_once(
+            ConversationMessage(role=MessageRole.USER, content="original"),
+            session_key="telegram-session",
+            request_id="telegram:42:1003",
+        )
+
+        with pytest.raises(ValueError, match="different inbound payload"):
+            store.save_inbound_once(
+                ConversationMessage(role=MessageRole.USER, content="changed"),
+                session_key="telegram-session",
+                request_id="telegram:42:1003",
+            )
+
     def test_recent_order(self, store):
         for i in range(5):
             store.add_message(ConversationMessage(

@@ -17,9 +17,17 @@ from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
     ContractRefV1,
     DeliveryIntentV1,
+    FinalArtifactV1,
     NormalizedAssetResultV1,
 )
-from simpleclaw.graph_runtime.nodes import CoreNodeCallbacks
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
+from simpleclaw.graph_runtime.nodes import (
+    CoreNodeCallbacks,
+    prepare_delivery_intent,
+)
 from simpleclaw.graph_runtime.routing import RecipeMatchOutcome, RecipeResultOutcome
 from simpleclaw.graph_runtime.runtime import (
     DeliveryRuntime,
@@ -268,7 +276,33 @@ async def test_guard_failure_uses_safe_renderer_once_without_redispatch() -> Non
 
     assert final is not None
     assert final.content == "안전하게 응답을 제공할 수 없습니다."
+    assert final.artifact_id == canonical_artifact_id(
+        "request-1", final.content
+    )
+    assert final.content_hash == canonical_artifact_content_hash(final.content)
+    assert await runtime.finalize(
+        request_id="request-1",
+        normalized_result=_result(),
+        outcome=TerminalOutcome.COMPLETED,
+    ) == final
     assert calls == {"compose": 1, "guard": 1, "safe": 1, "dispatch": 0}
+
+
+def test_delivery_intent_rejects_noncanonical_final_artifact() -> None:
+    final = FinalArtifactV1(
+        artifact_id="arbitrary-artifact",
+        request_id="request-1",
+        content="hello",
+        outcome=TerminalOutcome.COMPLETED,
+        content_hash=canonical_artifact_content_hash("hello"),
+    )
+
+    with pytest.raises(ValueError, match="identity mismatch"):
+        prepare_delivery_intent(
+            final,
+            channel="telegram",
+            destination_ref="chat-1",
+        )
 
 
 @pytest.mark.asyncio
@@ -295,8 +329,8 @@ async def test_delivered_persistence_crash_recovers_without_resend() -> None:
     intent = DeliveryIntentV1(
         delivery_id="delivery-1",
         request_id="request-1",
-        artifact_id="artifact-1",
-        artifact_hash="artifact-hash",
+        artifact_id=canonical_artifact_id("request-1", "hello"),
+        artifact_hash=canonical_artifact_content_hash("hello"),
         channel="telegram",
         destination_ref="chat-1",
     )
