@@ -4,12 +4,12 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 15177 nodes · 33721 edges · 584 communities (494 shown, 90 thin omitted)
+- 15177 nodes · 33721 edges · 584 communities (493 shown, 91 thin omitted)
 - Extraction: 75% EXTRACTED · 25% INFERRED · 0% AMBIGUOUS · INFERRED: 8545 edges (avg confidence: 0.68)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `ce717899`
+- Built from commit: `1006c20b`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -595,7 +595,7 @@
 ## Import Cycles
 - None detected.
 
-## Communities (584 total, 90 thin omitted)
+## Communities (584 total, 91 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.01
@@ -606,8 +606,8 @@ Cohesion: 0.02
 Nodes (104): AdminAPIMetrics, AdminAPIServer, Admin API 호출 카운터 — 대시보드/알림 데이터 소스., Admin UI 백엔드 REST 서버 — 단일 운영자, 로컬 바인딩 가정.      의존성을 모두 생성자 주입 받아 단위 테스트에서 독립 인스턴, 라우트가 구성된 aiohttp Application을 반환한다.          테스트는 이 앱을 ``aiohttp_client``에 직접 물려, Admin API 앱에 기존 dashboard HTML/API 라우트를 함께 붙인다., 대시보드 라우트가 Admin API 앱에 통합됐는지 반환한다., 허용 origin과 일치하면 CORS 응답 헤더를 부착하는 aiohttp 미들웨어. (+96 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.02
-Nodes (186): assess_realtime_result(), assess_tool_result(), EvidenceFreshness, EvidenceRequirement, EvidenceSourceType, format_evidence_context(), _json_object(), limited_fallback() (+178 more)
+Cohesion: 0.01
+Nodes (158): ClarifyRequest, LLM 이 ``clarify`` 도구로 발생시킨 단일 요청.      채널은 ``question`` 을 메시지 본문으로, ``options``, 대화 이력에 저장할 ``질문 + 번호 옵션`` 텍스트.          다음 turn 의 LLM 컨텍스트에 옵션이 보존되어 사용자가 텍스트로 ", AgentOrchestrator, Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.          disabled/load failure/, drain 게이트를 거쳐 메시지를 처리한다 (BIZ-442).          drain 중이면 새 intake 를 즉시 "점검 중" 응답으로, Unified clarification plan을 기존 pending/button UX로 변환한다., Load a durable clarification without consuming it. (+150 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.02
@@ -618,12 +618,12 @@ Cohesion: 0.03
 Nodes (129): 검색 콜백을 호출해 결과 dict 를 StudyFetchResult 로 정규화한다., skill 스크립트를 호출해 요청 쿼리의 뉴스 항목을 수집한다., CollectorRegistry, PlaceholderCollector, Study source collector 추상화와 fetch 요청/결과 데이터 모델.  설계 의도: - source_planner 가 만든 :c, collector 를 ``collector.name`` 키로 등록(또는 교체)한다., 이름으로 collector 를 조회한다. 미등록이면 placeholder 로 폴백., 요청의 collector 이름으로 구현을 찾아 ``fetch`` 를 위임한다. (+121 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.04
-Nodes (128): 공통 adapter protocol과 정규화된 dispatch 응답을 정의한다.  이 모듈은 lifecycle, 불변 contract ident, Native tool 소유 Function Calling 계약으로 typed invocation을 dispatch한다., Recipe 소유의 결정적 mapping으로 정확한 RecipeDefinition을 dispatch한다., Skill 소유 argument binding으로 정확한 SkillDefinition을 dispatch한다., Legacy primary와 비교할 background shadow 실행만 예약한다., Exact read-only plan을 V4 graph receipt까지 한 번만 실행한다., V4 primary fail-closed receipt와 promotion-zero 계약., test_primary_pre_dispatch_failure_has_typed_reason_and_zero_promotion() (+120 more)
+Cohesion: 0.02
+Nodes (99): 드리밍 파이프라인을 초기화한다.          Args:             conversation_store: 대화 이력 저장소 인스턴스., append_insight_to_user_file(), apply_decay(), apply_insight_meta(), _format_auto_applied_bullets(), _meets_auto_promote(), DreamingPipeline에서 분리한 단계별 service 함수.  이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드, 자동 적용 조건 — confidence/evidence_count 가 **동시에** 임계치 이상.      한쪽만 만족하는 경우(예: 단발 고신 (+91 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.02
-Nodes (97): append_insight_to_user_file(), apply_decay(), apply_insight_meta(), _format_auto_applied_bullets(), _meets_auto_promote(), DreamingPipeline에서 분리한 단계별 service 함수.  이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드, 자동 적용 조건 — confidence/evidence_count 가 **동시에** 임계치 이상.      한쪽만 만족하는 경우(예: 단발 고신, 자동 적용 인사이트들의 ``text`` 를 USER.md 용 bullet 텍스트로 합친다.      각 ``text`` 는 보통 이미 "- " (+89 more)
+Cohesion: 0.04
+Nodes (127): 공통 adapter protocol과 정규화된 dispatch 응답을 정의한다.  이 모듈은 lifecycle, 불변 contract ident, Native tool 소유 Function Calling 계약으로 typed invocation을 dispatch한다., Recipe 소유의 결정적 mapping으로 정확한 RecipeDefinition을 dispatch한다., Skill 소유 argument binding으로 정확한 SkillDefinition을 dispatch한다., Legacy primary와 비교할 background shadow 실행만 예약한다., Exact read-only plan을 V4 graph receipt까지 한 번만 실행한다., V4 primary fail-closed receipt와 promotion-zero 계약., test_primary_pre_dispatch_failure_has_typed_reason_and_zero_promotion() (+119 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.03
@@ -638,12 +638,12 @@ Cohesion: 0.02
 Nodes (91): assign_clusters_for_unprocessed(), 클러스터링되지 않은 메시지를 점진 할당하고 영향받은 클러스터별 멤버를 반환한다.      과정:     1. ``get_unclustered_w, ConversationMessage, 대화 이력의 단일 메시지를 표현하는 데이터 클래스.      Attributes:         role: 메시지 발화자 역할 (user/ass, 대화 로그 SQLite 저장: add → get_recent → get_since., get_recent 반복 조회가 conversations.db FD를 누적하지 않는다., test_get_recent_does_not_leak_sqlite_fds(), TestConversationStore (+83 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.02
-Nodes (85): ClarifyRequest, LLM 이 ``clarify`` 도구로 발생시킨 단일 요청.      채널은 ``question`` 을 메시지 본문으로, ``options``, 대화 이력에 저장할 ``질문 + 번호 옵션`` 텍스트.          다음 turn 의 LLM 컨텍스트에 옵션이 보존되어 사용자가 텍스트로 ", AgentOrchestrator, Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.          disabled/load failure/, drain 게이트를 거쳐 메시지를 처리한다 (BIZ-442).          drain 중이면 새 intake 를 즉시 "점검 중" 응답으로, Unified clarification plan을 기존 pending/button UX로 변환한다., Load a durable clarification without consuming it. (+77 more)
+Cohesion: 0.03
+Nodes (147): EvidenceRequirement, limited_fallback(), One turn's immutable evidence outcome contract., Return a deterministic, claim-limited response for unsatisfied evidence., 한 tool loop에서 planner/controller가 허용한 실행 범위., ToolExecutionScope, _asset_result_schema_required(), _bounded_cap_observation() (+139 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.03
-Nodes (103): AdapterResponse, BoundSkillPayload, Recipe가 소유한 결정적 mapping으로 만든 단일 Skill payload., executor 호출 전 fail-closed 결과까지 표현하는 dispatch 응답., _failure(), GenericNativeToolAdapter, Registry가 검증한 exact native tool 인자 객체만 executor로 전달한다., _failure() (+95 more)
+Nodes (111): AdapterResponse, BoundSkillPayload, Recipe가 소유한 결정적 mapping으로 만든 단일 Skill payload., executor 호출 전 fail-closed 결과까지 표현하는 dispatch 응답., _failure(), GenericNativeToolAdapter, Registry가 검증한 exact native tool 인자 객체만 executor로 전달한다., _failure() (+103 more)
 
 ### Community 12 - "Community 12"
 Cohesion: 0.04
@@ -662,20 +662,20 @@ Cohesion: 0.04
 Nodes (101): _bounded_catalog(), _context_set(), main(), _parser(), _provider_prompt_diagnostic(), compact candidate와 동일한 runtime asset만 immutable snapshot으로 만든다., 실제 planner 조립 prompt가 identifier privacy 경계를 지키는지 검사한다., augment_train_cases() (+93 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.05
-Nodes (61): TelegramDeliveryAdapter, ConversationStorePersistenceAdapter, PersistenceRuntime writer signature를 기존 ConversationStore에 연결한다., Telegram actual send receipt 뒤 delivered assistant만 저장한다., DeliveryContextResolver, DeliveryIntentV1, 최종 artifact의 채널 전송 의도와 초기 상태를 표현한다., 아직 실행하지 않은 intent가 완료·실패 상태로 시작하지 않게 한다. (+53 more)
+Cohesion: 0.06
+Nodes (62): TelegramDeliveryAdapter, ConversationStorePersistenceAdapter, PersistenceRuntime writer signature를 기존 ConversationStore에 연결한다., Telegram actual send receipt 뒤 delivered assistant만 저장한다., DeliveryContextResolver, DeliveryIntentV1, 최종 artifact의 채널 전송 의도와 초기 상태를 표현한다., 아직 실행하지 않은 intent가 완료·실패 상태로 시작하지 않게 한다. (+54 more)
 
 ### Community 17 - "Community 17"
 Cohesion: 0.04
 Nodes (107): plan_turn_with_llm(), 한 structured 요청으로 plan을 만들고 repair→retry 후 fail-closed한다.      Args:         tex, LLMResponse, LLM으로부터 받은 응답 데이터.      tool_calls가 있으면 LLM이 도구 호출을 요청한 것이고,     없으면 text가 최종 응답, LogCaptureFixture, test_goal_command_does_not_dispatch_as_recipe(), test_goal_command_runs_round_and_judge(), test_goal_rounds_disable_cron_mutation() (+99 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.08
-Nodes (92): CronAdapterModel, CronIngressAdapter, CronIngressV1, 기존 Cron job을 V4 ingress와 scheduler 결과 계약으로 변환한다.  Scheduler는 schedule/circuit-br, Graph facade에 전달할 envelope와 optional Recipe 선택 정보다., Cron job identity를 immutable graph ingress로 정규화한다., BaseModel, AttachmentRefV1 (+84 more)
-
-### Community 19 - "Community 19"
 Cohesion: 0.04
 Nodes (85): build_planner_catalog(), 현재 runtime registry 입력에서 immutable Planner catalog를 만든다., AssetRef, catalog에 있는 실행 자산의 type/name 식별자., test_calendar_mixed_operation_contract_is_confirmation_safe(), test_production_read_only_assets_have_complete_owned_contracts(), test_sports_recipe_contract_identity_is_continuous_across_discovery(), classify_contract() (+77 more)
+
+### Community 19 - "Community 19"
+Cohesion: 0.07
+Nodes (91): CronAdapterModel, CronIngressAdapter, CronIngressV1, 기존 Cron job을 V4 ingress와 scheduler 결과 계약으로 변환한다.  Scheduler는 schedule/circuit-br, Graph facade에 전달할 envelope와 optional Recipe 선택 정보다., Cron job identity를 immutable graph ingress로 정규화한다., BaseModel, AttachmentRefV1 (+83 more)
 
 ### Community 20 - "Community 20"
 Cohesion: 0.05
@@ -687,15 +687,15 @@ Nodes (69): Checkbox, CheckboxProps, Code(), CodeProps, IconButton, IconButtonPr
 
 ### Community 22 - "Community 22"
 Cohesion: 0.04
-Nodes (68): DashboardMetrics(), DashboardMetricsProps, DryRunPreviewModalProps, KIND_LABEL, KIND_TONE, RecentActivityCard(), RecentActivityCardProps, RecentAlertsCard() (+60 more)
-
-### Community 23 - "Community 23"
-Cohesion: 0.04
 Nodes (87): web collector의 Function Calling 표면을 owner-qualified V4 계약으로 만든다., 운영자 gate 판단에 쓰는 Native tool 위험도 metadata., _read_only_web_spec(), ToolRisk, _binding(), _contract(), _parse_on_error(), _parse_settings() (+79 more)
 
-### Community 24 - "Community 24"
+### Community 23 - "Community 23"
 Cohesion: 0.03
-Nodes (58): 스크립트 인근 venv python 탐색을 skill_dispatch 에 위임한다., 서브에이전트용 워크스페이스 디렉터리를 생성한다., load_mcp_config(), config.yaml에서 MCP 설정을 로드한다.      Args:         config_path: config.yaml 경로., _declared_schema_examples(), _production_definitions(), BIZ-579/BIZ-585 production read-only asset의 V4 contract coverage 회귀., Registry schema의 모든 example을 엄격히 canonical validation한다. (+50 more)
+Nodes (61): 스크립트 인근 venv python 탐색을 skill_dispatch 에 위임한다., 서브에이전트용 워크스페이스 디렉터리를 생성한다., load_mcp_config(), config.yaml에서 MCP 설정을 로드한다.      Args:         config_path: config.yaml 경로., load_security_config(), Security config loader.  시크릿 볼트/마스터키 경로를 expanduser 가능한 절대 문자열로 정규화한다., config.yaml에서 security 섹션을 로드한다.      BIZ-302 후속 — ``vault_path`` / ``master_key, _declared_schema_examples() (+53 more)
+
+### Community 24 - "Community 24"
+Cohesion: 0.04
+Nodes (62): DashboardMetrics(), DashboardMetricsProps, RecentActivityCard(), RecentActivityCardProps, RecentAlertsCard(), RecentAlertsCardProps, DOMAIN_HREF, SystemStatusRow() (+54 more)
 
 ### Community 25 - "Community 25"
 Cohesion: 0.03
@@ -710,32 +710,32 @@ Cohesion: 0.03
 Nodes (51): CapabilityDecision, capability router 가 고른 단일 자동 실행 후보., declared_claim_bindings(), materialize_validated_claims(), Provider typed claim map을 exact asset evidence로 검증·정규화한다., 모든 item의 출처·시각·freshness가 완전한 provider claim만 반환한다., Recipe envelope가 명시한 claim→provider claim key binding만 추출한다., 검증된 provider claim key에 명시적으로 bind된 claim만 해결한다. (+43 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.03
-Nodes (80): agent-browser composite chain 판별을 command_dispatch 에 위임한다., _make_python_skill(), _MemorySecretBackend, Orchestrator 의 BIZ-166 skill dispatch 정규화 테스트.  검증 범위: - bare skill 이름으로 들어온 명령이, BIZ-410 — 일반 runtime cli는 live recipes.dir 직접 쓰기 우회를 할 수 없다., S1 — config loader→orchestrator map 연결과 parent env 비변경을 고정한다., BIZ-410 — recipes.dir 조회 명령까지 막지는 않는다., `news-search-skill "foo"` → `<venv>/bin/python <script> "foo"` 로 치환. (+72 more)
-
-### Community 29 - "Community 29"
 Cohesion: 0.04
 Nodes (64): DreamingRunRecord, DreamingRunStore, 드리밍 사이클 운영 메트릭 저장소 (BIZ-81).  배경:     BIZ-66 §3-K — "왜 5-03에 dreaming이 갱신되지 않았나", JSONL 기반 드리밍 메트릭 저장소.      한 회차에 보통 ``begin()`` → ``finish()`` 순서로 호출된다. ``begin, 모든 행을 시간 순(오래된 → 최신) 그대로 로드. 손상된 행은 WARN 로그 후 스킵., 모든 행을 atomic rename 으로 다시 쓴다. ``max_records`` 초과 분은 앞에서 잘라낸다., 단일 회차를 추가. 메트릭 기록 실패는 호출자(드리밍 사이클)에 전파하지 않는다., 동일 ``id`` 의 행을 갱신(없으면 새로 추가). 메트릭 실패는 전파하지 않는다. (+56 more)
 
-### Community 30 - "Community 30"
+### Community 29 - "Community 29"
 Cohesion: 0.04
 Nodes (46): ActiveProject, ActiveProjectStore, filter_active(), merge_projects(), normalize_name(), 사용자가 현재 집중 중인 "프로젝트" 엔티티의 식별 · 누적 · 렌더링 (BIZ-74).  배경:     BIZ-66 §1에서 드러난 문제 —, 프로젝트 이름을 비교 가능한 정규형으로 변환한다.      - 양 끝 공백 제거     - 영문 소문자화     - 공백·구두점 제거 (한글·영, 파일에서 모든 프로젝트를 로드한다. 키는 ``normalize_name(name)``.          파일이 없거나 비어 있으면 빈 dict. (+38 more)
 
-### Community 31 - "Community 31"
+### Community 30 - "Community 30"
 Cohesion: 0.06
 Nodes (68): 오케스트레이터의 dispatch/router 상태를 재사용하기 위해 참조를 보관한다., _asset_schema(), BIZ-488 evaluator가 소비하는 compact prediction shape를 반환한다., Gemini/OpenAI 양쪽이 해석할 strict object schema를 만든다., nullable 차이를 피하는 고정 asset object schema를 만든다., _strict_object(), Any, _canonicalize_json_object() (+60 more)
 
-### Community 32 - "Community 32"
+### Community 31 - "Community 31"
 Cohesion: 0.04
 Nodes (68): 드리밍 트리거: 자동 드리밍 파이프라인의 실행 조건 평가기.  드리밍(Dreaming)은 사용자가 비활성 상태일 때 대화 내용을 정리·요약하는, 하트비트 모니터링: 주기적 틱 실행, 더티 상태 감지, HEARTBEAT.md 상태 파일 기록.  데몬이 살아 있음을 외부에 알리고, 내부 상태, 데몬 서브시스템의 SQLite 영속화 계층.  크론 작업, 실행 로그, 대기 상태, 데몬 키-값 상태를 SQLite에 저장하고 조회한다. 테이블, 대기 상태 관리자: 일시 정지된 태스크의 직렬화 및 재개.  외부 조건(API 응답, 사용자 확인 등)을 기다리는 태스크를 직렬화하여 SQLit, datetime, 대화 이력을 SQLite 데이터베이스에 저장하고 조회하는 모듈.  주요 동작 흐름: 1. ConversationStore 인스턴스 생성 시 SQ, apply_interest_signals(), _category_for_hint() (+60 more)
 
-### Community 33 - "Community 33"
+### Community 32 - "Community 32"
 Cohesion: 0.05
 Nodes (47): Connection, Migration, MigrationError, MigrationRunner, 파일 기반 SQLite 스키마 마이그레이션 러너.  주요 동작 흐름: 1. ``MigrationRunner(db_path, migrations_, 러너를 초기화한다.          Args:             db_path: 대상 SQLite DB 파일 경로. 부모 디렉토리가 없으면, 마이그레이션용 SQLite 연결의 transaction 처리와 close를 보장한다., 미적용 마이그레이션을 모두 적용하고, 적용된 버전 리스트를 반환한다.          Raises:             MigrationErr (+39 more)
 
-### Community 34 - "Community 34"
+### Community 33 - "Community 33"
 Cohesion: 0.04
 Nodes (54): load_agent_config(), load_recipes_config(), load_sub_agents_config(), config.yaml에서 서브 에이전트 설정을 로드한다., config.yaml에서 에이전트 오케스트레이터 설정을 로드한다., config.yaml 에서 레시피 디렉터리 설정을 로드한다 (BIZ-202).      파일이 없거나 recipes 키가 없으면 기본 경로, 에이전트 데몬: PID 잠금, 이벤트 루프, 스케줄러를 관리하는 메인 오케스트레이터.  데몬의 생명주기를 관리한다: 1. PID 파일로 단일 인, main() (+46 more)
+
+### Community 34 - "Community 34"
+Cohesion: 0.04
+Nodes (51): ActiveProjectRow(), formatRelative(), BlocklistTable(), BlocklistTableProps, DryRunPreviewModal(), DryRunPreviewModalProps, KIND_LABEL, KIND_TONE (+43 more)
 
 ### Community 35 - "Community 35"
 Cohesion: 0.04
@@ -746,12 +746,12 @@ Cohesion: 0.05
 Nodes (54): gemini_openai_provider(), _provider(), Credential-gated Gemini OpenAI-compatible A/B parity matrix.  The native Gemini, test_image_input_matrix(), test_reasoning_effort_matrix(), test_text_response(), test_tool_round_trip_and_replay_matrix(), test_turn_analysis_json_schema() (+46 more)
 
 ### Community 37 - "Community 37"
-Cohesion: 0.04
-Nodes (42): _is_blocklist_expired(), Dreaming suggestion queue + reject blocklist (BIZ-79).  Dreaming-derived insight, Build a fresh pending suggestion from an ``InsightMeta`` observation., Text to write to USER.md when accepted — edit overrides original., JSONL suggestion sidecar.      Reads load all rows; writes serialize all rows ba, Return the existing pending row for this topic (normalized), if any., Insert a new pending suggestion, or refresh an existing pending row.          Id, Mutate a row's status. Returns the updated row, or None if not found.          T (+34 more)
-
-### Community 38 - "Community 38"
 Cohesion: 0.05
 Nodes (47): _build_ledger(), _error_json(), _handle_complete(), _handle_create_followup_note(), _handle_list(), _handle_mark_late(), handle_review_subagent_ledger(), _handle_start() (+39 more)
+
+### Community 38 - "Community 38"
+Cohesion: 0.06
+Nodes (58): ErrorListener, _errorListeners, FetchAdminInit, getAdminApiBaseUrl(), onAdminApiError(), setAdminApiBaseUrl(), dryRun(), DryRunResult (+50 more)
 
 ### Community 39 - "Community 39"
 Cohesion: 0.04
@@ -762,36 +762,36 @@ Cohesion: 0.05
 Nodes (47): BackupDetailModal(), BackupDetailModalProps, BackupListCard(), BackupListCardProps, BackupListState, formatTimestamp(), ConfirmRestartDialog(), ConfirmRestartDialogProps (+39 more)
 
 ### Community 41 - "Community 41"
+Cohesion: 0.04
+Nodes (41): _is_blocklist_expired(), Dreaming suggestion queue + reject blocklist (BIZ-79).  Dreaming-derived insight, Build a fresh pending suggestion from an ``InsightMeta`` observation., Text to write to USER.md when accepted — edit overrides original., JSONL suggestion sidecar.      Reads load all rows; writes serialize all rows ba, Return the existing pending row for this topic (normalized), if any., Insert a new pending suggestion, or refresh an existing pending row.          Id, Mutate a row's status. Returns the updated row, or None if not found.          T (+33 more)
+
+### Community 42 - "Community 42"
 Cohesion: 0.07
 Nodes (62): _handle_list_dreaming_runs(), ``GET /admin/v1/memory/dreaming/runs?limit=N``.      최근 N건의 사이클 메트릭을 최신순으로 반환. `, _handle_get_insight_sources(), _handle_list_blocklist(), _handle_list_insights(), Admin API insights route handlers., ``InsightMeta`` 를 JSON 응답 dict 로 변환.      Active/Archive 탭에서 InsightCard 가 직접 소비, ``GET /admin/v1/memory/insights``.      Query params:     - ``status``: ``active (+54 more)
 
-### Community 42 - "Community 42"
+### Community 43 - "Community 43"
+Cohesion: 0.05
+Nodes (47): RecipeCard(), RecipeCardProps, RecipesList(), RecipesListProps, RecipesListState, FieldProps, RetryPolicyModal(), RetryPolicyModalProps (+39 more)
+
+### Community 44 - "Community 44"
 Cohesion: 0.04
 Nodes (67): analyze_turn_with_llm(), _build_turn_analysis(), _clamp_float(), _fallback_analysis(), _format_recent_messages(), _int(), parse_turn_analysis_payload(), LLM 기반 turn 분석(TurnAnalysis) 모듈.  BIZ-497 — Unified TurnPlanner `primary`와 eligi (+59 more)
 
-### Community 43 - "Community 43"
-Cohesion: 0.05
-Nodes (45): ActiveProjectRow(), formatRelative(), BlocklistTable(), BlocklistTableProps, DryRunPreviewModal(), InsightRow(), InsightsList(), InsightsListProps (+37 more)
-
-### Community 44 - "Community 44"
+### Community 45 - "Community 45"
 Cohesion: 0.05
 Nodes (51): CronJobsTable(), CronJobsTableProps, CronJobsTableRow(), formatRelative(), LAST_RUN_LABEL, LAST_RUN_TONE, RowProps, ExpressionInput() (+43 more)
 
-### Community 45 - "Community 45"
+### Community 46 - "Community 46"
+Cohesion: 0.05
+Nodes (55): assess_realtime_result(), assess_tool_result(), EvidenceFreshness, EvidenceSourceType, EvidenceState, EvidenceStatus, format_evidence_context(), _json_object() (+47 more)
+
+### Community 47 - "Community 47"
 Cohesion: 0.04
 Nodes (59): _inject_env_secret_refs(), config.yaml에서 skills 섹션을 로드한다., config의 시크릿 참조를 스킬 실행용 환경변수로 주입한다.      런타임 스킬은 기존 CLI 생태계와 호환되도록 API 키를 환경변수로 읽, _agent_with_defaults(), _coerce_float_config(), _coerce_int_config(), _coerce_optional_name(), _coerce_optional_positive_int() (+51 more)
 
-### Community 46 - "Community 46"
-Cohesion: 0.08
-Nodes (66): _allow_v4_legacy_fallback(), Target pre-dispatch 실패에서만 legacy executor 진입을 허용한다., compare_shadow_run(), LegacyRunTelemetryV1, 고정 no-send 설정 아래 per-run rollback telemetry를 만든다., 비교에 필요한 legacy facade의 원문 없는 최소 관측값이다., Registry→invocation→result identity가 정확할 때만 telemetry를 만든다., Legacy primary와 V4 shadow를 비교하고 per-run rollback signal을 만든다. (+58 more)
-
-### Community 47 - "Community 47"
-Cohesion: 0.05
-Nodes (60): CaptureFixture, DreamingPromptSpec, _extract_format_vars(), load_dreaming_prompt(), _load_uncached(), _parse_yaml(), PromptLoadError, BIZ-301 — dreaming 프롬프트 YAML 로더 (repo-root SoT).  dreaming 의 system/user prompt (+52 more)
-
 ### Community 48 - "Community 48"
 Cohesion: 0.05
-Nodes (45): RecipeCard(), RecipeCardProps, RecipesList(), RecipesListProps, RecipesListState, FieldProps, RetryPolicyModal(), RetryPolicyModalProps (+37 more)
+Nodes (60): CaptureFixture, DreamingPromptSpec, _extract_format_vars(), load_dreaming_prompt(), _load_uncached(), _parse_yaml(), PromptLoadError, BIZ-301 — dreaming 프롬프트 YAML 로더 (repo-root SoT).  dreaming 의 system/user prompt (+52 more)
 
 ### Community 49 - "Community 49"
 Cohesion: 0.06
@@ -802,12 +802,12 @@ Cohesion: 0.04
 Nodes (65): _atomic_write(), build_recipe_yaml(), handle_recipe_generate(), install_validated_recipe(), _json(), _normalize_parameters(), _normalize_render_params(), _normalize_string_list() (+57 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.05
-Nodes (45): LLMCapabilities, Provider profile capability contracts for LLM routing., Model-independent capabilities exposed by a provider profile., LLMRoute, A named role route resolved to a primary backend and optional retry., LLMRouter, 라우터를 초기화한다.          Args:             backends: 백엔드 이름 → LLMBackend 설정 매핑., 등록된 모든 백엔드의 이름 목록을 반환한다. (+37 more)
+Cohesion: 0.08
+Nodes (65): _allow_v4_legacy_fallback(), Target pre-dispatch 실패에서만 legacy executor 진입을 허용한다., compare_shadow_run(), LegacyRunTelemetryV1, 비교에 필요한 legacy facade의 원문 없는 최소 관측값이다., Registry→invocation→result identity가 정확할 때만 telemetry를 만든다., Legacy primary와 V4 shadow를 비교하고 per-run rollback signal을 만든다., _budget() (+57 more)
 
 ### Community 52 - "Community 52"
-Cohesion: 0.07
-Nodes (51): ErrorListener, _errorListeners, FetchAdminInit, getAdminApiBaseUrl(), onAdminApiError(), setAdminApiBaseUrl(), dryRun(), DryRunResult (+43 more)
+Cohesion: 0.05
+Nodes (45): LLMCapabilities, Provider profile capability contracts for LLM routing., Model-independent capabilities exposed by a provider profile., LLMRoute, A named role route resolved to a primary backend and optional retry., LLMRouter, 라우터를 초기화한다.          Args:             backends: 백엔드 이름 → LLMBackend 설정 매핑., 등록된 모든 백엔드의 이름 목록을 반환한다. (+37 more)
 
 ### Community 53 - "Community 53"
 Cohesion: 0.05
@@ -826,32 +826,32 @@ Cohesion: 0.05
 Nodes (50): applyLLMPatch(), ApplyResponse, dryRunLLMPatch(), getLLMConfig(), listSecrets(), LLMConfig, PolicyResultDTO, ProviderConfig (+42 more)
 
 ### Community 57 - "Community 57"
-Cohesion: 0.07
-Nodes (43): AdminApiError, AdminApiErrorPayload, fetchAdmin(), newIdempotencyKey(), readBase(), readToken(), UseAdminResourceOptions, UseAdminResourceState (+35 more)
-
-### Community 58 - "Community 58"
 Cohesion: 0.05
 Nodes (38): 실제 자식 프로세스를 사용한 ``kill_process_group`` 통합 테스트.  행 걸린(hung) 자식 프로세스가 SIGTERM을 무시할, 메트릭 싱크에 SIGTERM/SIGKILL 통계가 누적된다., ``setsid``로 격리된 자식 프로세스를 생성한다., 자식 프로세스가 ``READY`` 마커를 stdout에 출력할 때까지 대기.      파이썬 인터프리터 기동 + 시그널 핸들러 설치가 끝나기 전, SIGTERM을 무시하는 자식은 SIGKILL로 강제 종료되어야 한다., SIGTERM에 정상 응답하는 자식은 SIGKILL 없이 종료되어야 한다., 자식이 spawn한 손자 프로세스도 그룹 단위로 종료되어야 한다., _spawn() (+30 more)
 
-### Community 59 - "Community 59"
-Cohesion: 0.06
-Nodes (34): AreaDef, AreaIcon, AREAS, findAreaByPath(), searchAreas(), AreaPlaceholder(), AreaPlaceholderProps, CommandPalette() (+26 more)
-
-### Community 60 - "Community 60"
+### Community 58 - "Community 58"
 Cohesion: 0.06
 Nodes (45): formatDateTime(), META_TONE, STATUS_LABEL, STATUS_TONE, TraceDetailModal(), TraceDetailModalProps, Highlighted(), LEVEL_LABEL (+37 more)
 
-### Community 61 - "Community 61"
+### Community 59 - "Community 59"
 Cohesion: 0.06
 Nodes (34): _execute_command(), execute_recipe(), 레시피 실행기 — v1(스텝 기반) 실행 + v2(instructions) 변수 렌더링.  v1 동작 흐름: 1. 필수 파라미터 검증 및 기본값, 단일 스텝을 실행하여 ``StepResult`` 를 반환한다.      PROMPT 스텝은 변수 치환된 텍스트만 SUCCESS 결과로 돌려주고,, 롤백 정책 발동 시, 성공한 스텝들의 ``rollback`` 명령을 역순 실행한다.      - 이미 SKIPPED/FAILED인 스텝은 대상에, Instructions recipe를 strict ``query.v1`` 실행 프롬프트로 렌더한다.      domain parsing과 sou, ${variable_name} 패턴을 실제 값으로 치환한다.      매칭되지 않는 변수는 원본 패턴을 그대로 유지한다., stderr를 사용자 노출용 한 줄 요약으로 줄인다.      상세 stderr는 별도로 ``debug_log`` 에 보존되므로,     여기서 (+26 more)
 
-### Community 62 - "Community 62"
+### Community 60 - "Community 60"
+Cohesion: 0.07
+Nodes (44): AdminApiError, AdminApiErrorPayload, fetchAdmin(), newIdempotencyKey(), readBase(), readToken(), buildLogsPath(), entryKey() (+36 more)
+
+### Community 61 - "Community 61"
 Cohesion: 0.06
 Nodes (56): _as_text(), _as_type_str(), _clamp(), _coerce_float(), _coerce_timestamp(), derive_topic_hint(), extract_keywords(), extract_topic_hints() (+48 more)
 
-### Community 63 - "Community 63"
+### Community 62 - "Community 62"
 Cohesion: 0.05
 Nodes (45): annotate_study_freshness(), ContextRetrievalConfig, ContextRetrievalService, _parse_iso_datetime(), Agent context retrieval service — RAG와 장기기억 회수 조립 전담.  오케스트레이터가 LLM/tool loop 제어, context retrieval에 필요한 설정값 묶음., 과거 대화 RAG와 Dreaming 장기기억을 시스템 프롬프트 context로 회수한다., 오케스트레이터에서 생성된 store/service와 retrieval 설정을 보관한다.          ``study_retriever`` 는 (+37 more)
+
+### Community 63 - "Community 63"
+Cohesion: 0.06
+Nodes (32): AreaDef, AreaIcon, AREAS, findAreaByPath(), searchAreas(), AreaPlaceholder(), AreaPlaceholderProps, CommandPalette() (+24 more)
 
 ### Community 64 - "Community 64"
 Cohesion: 0.06
@@ -906,124 +906,124 @@ Cohesion: 0.05
 Nodes (47): main(), _pdf_with_marker(), 응답 본문 없이 attribution과 검증 상태만 출력한다., Credential-gated OpenRouter Gemini parity smoke를 실행한다., 환경 또는 승인된 .env에서 secret을 읽되 값/길이/경로를 노출하지 않는다., OpenRouter 전용 임시 route config와 최소 credential 파일을 작성한다., 외부 PDF 라이브러리 없이 단일 페이지 marker PDF를 생성한다., _read_secret() (+39 more)
 
 ### Community 77 - "Community 77"
+Cohesion: 0.08
+Nodes (35): AuditListResponse, AuditRowButton(), AuditRowButtonProps, AuditTimelineProps, ErrorPanelProps, TimelineSectionProps, AUDIT_ACTIONS, AUDIT_AREAS (+27 more)
+
+### Community 78 - "Community 78"
 Cohesion: 0.07
 Nodes (27): LLMBackend, 단일 LLM 백엔드의 설정 정보.      config.yaml의 providers 섹션 한 항목이 이 객체 하나에 매핑된다.     API 백, MockProvider, _ModelProvider, Tests for the LLM router., A mock provider for testing., BIZ-252 — LLMRequest.system_blocks 가 프로바이더 send() 까지 전달되어야         Anthropic pro, BIZ-259 — on_text_delta 미지정 시 send() 경로 유지 (회귀 0). (+19 more)
 
-### Community 78 - "Community 78"
+### Community 79 - "Community 79"
+Cohesion: 0.05
+Nodes (26): MetricsCollector, ``kill_process_group`` 결과를 메트릭에 반영한다.          Args:             killed: SIGKILL, 스킬 자동 재시도 1회를 기록한다 (재시도 시도 직전 호출)., 재시도 끝에 스킬이 성공했음을 기록한다., 재시도 한도까지 실패해 자동 회복에 실패했음을 기록한다., 스레드 안전한 에이전트 작업 메트릭 수집기.      threading.Lock으로 동시 접근을 보호하며, 각 메트릭은 단조 증가 카운터이다., 위험 파일 목록을 사이클 직전에 스냅샷하고 보존 회전하는 매니저.      Attributes:         backup_root: ``.ag, SafetyBackupManager (+18 more)
+
+### Community 80 - "Community 80"
 Cohesion: 0.06
 Nodes (44): handle_asset_inventory(), _iter_recipe_files(), _mcp_inventory(), _native_tool_inventory(), _normalize_type(), 운영자용 런타임 asset inventory 도구.  ``asset_inventory``는 운영자가 native tools, SimpleClaw, 허용 type 외 입력은 all로 fail-closed 정규화한다., type 요청을 실제 payload section 목록으로 변환한다. (+36 more)
 
-### Community 79 - "Community 79"
-Cohesion: 0.08
-Nodes (39): useAdminMutation(), useAdminQuery(), buildLogsPath(), entryKey(), entryMatchesSearch(), LEVEL_API_TO_TOKEN, LEVEL_TOKEN_TO_API, LEVEL_TOKENS (+31 more)
-
-### Community 80 - "Community 80"
+### Community 81 - "Community 81"
 Cohesion: 0.05
 Nodes (35): SystemRestartResponse, FlowState, MODE_META, ModeMeta, RestartActionsProps, RestartMode, DrawerSize, WIDTH (+27 more)
 
-### Community 81 - "Community 81"
+### Community 82 - "Community 82"
 Cohesion: 0.07
 Nodes (34): ArgumentParser, _assert_contract_set(), _BoundedPlannerRouter, _contract_identity(), _contract_set_violations(), _contract_slot(), ContractIdentity, ContractSetViolation (+26 more)
 
-### Community 82 - "Community 82"
+### Community 83 - "Community 83"
 Cohesion: 0.07
 Nodes (45): write_private_json(), canonical_json_sha256(), file_sha256(), UTF-8 canonical JSON(sort keys, compact separators)의 SHA-256., 파일에 기록된 실제 byte sequence의 SHA-256., begin_training_invocation(), classify_training_failure(), complete_training_invocation() (+37 more)
 
-### Community 83 - "Community 83"
+### Community 84 - "Community 84"
+Cohesion: 0.07
+Nodes (40): _await_if_needed(), guard 통과 전에는 final을 만들지 않고 safe renderer를 최대 한 번 호출한다., ActionReceiptLike, canonical_artifact_content_hash(), _canonical_artifact_hash(), canonical_artifact_id(), delivery_id(), guard_redispatch() (+32 more)
+
+### Community 85 - "Community 85"
 Cohesion: 0.07
 Nodes (45): detect_trace_risk_flags(), normalize_recipe_name(), normalize_recipe_risk_flags(), 성공한 tool trace를 recipe(반복 실행 절차) 후보로 추상화하는 학습 보조 모듈.  ``SkillSuggestion`` 이 "새 능, recipe risk flag 목록을 recipe allowlist 기준으로 정화한다 (BIZ-435).      skill 쪽 :func:`n, redacted source trace에서 allowlist 위험 플래그를 감지한다 (BIZ-435).      LLM payload의 self, recipe name을 recipe_generate와 동일한 규칙의 kebab-case로 정규화한다., LLM 후보 JSON payload를 검증 결과가 포함된 RecipeSuggestion으로 만든다. (+37 more)
 
-### Community 84 - "Community 84"
+### Community 86 - "Community 86"
 Cohesion: 0.05
 Nodes (16): ConcurrencyPool, 동시성 풀: 세마포어 기반 서브에이전트 동시 실행 제한.  asyncio.Semaphore를 사용하여 최대 동시 실행 수를 제어한다. 슬롯이 모, asyncio.Semaphore 기반 서브에이전트 동시 실행 슬롯 관리자.      실행 중(running)·대기 중(queued)·가용(ava, 슬롯을 획득한다. 모든 슬롯이 사용 중이면 대기한다., 풀의 현재 상태(실행 중/대기 중/최대)를 딕셔너리로 반환한다., 워크스페이스 매니저: 서브에이전트용 샌드박스 디렉터리 생성 및 정리.  각 서브에이전트에 격리된 작업 디렉터리를 제공하여 파일 시스템 충돌을 방, 서브에이전트용 샌드박스 워크스페이스 디렉터리를 관리한다.      base_dir 아래에 agent_id별 하위 디렉터리를 생성하고,     c, 서브에이전트의 워크스페이스 디렉터리를 삭제한다. (+8 more)
 
-### Community 85 - "Community 85"
+### Community 87 - "Community 87"
 Cohesion: 0.06
 Nodes (44): AST, _architecture_violations(), _control_flow_expressions(), _core_sources(), _imported_modules(), _is_asset_specific_import(), _is_payload_expression(), _payload_key_accesses() (+36 more)
 
-### Community 86 - "Community 86"
+### Community 88 - "Community 88"
 Cohesion: 0.06
 Nodes (33): _clamped_float(), _coerce_archive_after_days(), _coerce_context_cron(), _coerce_default_ttl_days(), _coerce_dreaming_max_tokens(), _coerce_language_policy(), _coerce_proactive_policy(), load_daemon_config() (+25 more)
 
-### Community 87 - "Community 87"
+### Community 89 - "Community 89"
 Cohesion: 0.07
 Nodes (23): Content, Part, GeminiProvider, Google Gemini API 프로바이더 — Native Function Calling 지원.  Google의 genai SDK를 사용하여 G, dict/dataclass 첨부를 Gemini inline bytes attachment로 정규화한다., 텍스트 + 지원 첨부를 Gemini Content.parts 순서로 변환한다., generic 메시지 리스트를 Gemini Contents로 변환한다.          assistant, user, tool 세 가지 role, Google Gemini API 프로바이더. (+15 more)
 
-### Community 88 - "Community 88"
+### Community 90 - "Community 90"
 Cohesion: 0.07
 Nodes (37): cluster_workspace(), _copy_fixtures(), _load_conversation(), _mock_router(), _new_topic_payload(), _outside_text(), BIZ-75 — Dreaming 품질 회귀 테스트.  부모: BIZ-66 §3 / BIZ-72(A) + BIZ-73(B) 위에 얹는 회귀 가드., 파일 본문에서 모든 managed marker *이전*의 영역과 *이후*의 영역을 합친 문자열을 반환.      "outside" 정의 = ma (+29 more)
 
-### Community 89 - "Community 89"
+### Community 91 - "Community 91"
 Cohesion: 0.08
 Nodes (20): ClarifyOption, decode_callback_data(), encode_callback_data(), normalize_options(), ReAct `clarify` tool: 다지선다 질문을 채널 인라인 키보드로 렌더하는 브리지.  BIZ-260 / Hermes PR #24199, 옵션 인덱스를 텔레그램 callback_data 페이로드로 직렬화한다.      포맷: ``c:<idx>``. ``MAX_CALLBACK_DAT, ``c:<idx>`` 페이로드에서 옵션 인덱스를 회수한다. 부적합하면 None.      잘못된 prefix / 음수 / 정수 아닌 후미는 모두, 단일 다지선다 옵션.      Attributes:         index: 0-based 인덱스. callback_data 의 후미 (``c (+12 more)
 
-### Community 90 - "Community 90"
+### Community 92 - "Community 92"
 Cohesion: 0.06
 Nodes (42): _bullets(), _dedup_keep_order(), _ensure_title(), _format_update_line(), merge_open_questions(), merge_study_update(), _parse_page(), Study wiki 페이지(Markdown)에 수집 결과를 *부분 병합*하는 updater.  설계 의도 — "통째로 덮어쓰지 않는다": (+34 more)
 
-### Community 91 - "Community 91"
+### Community 93 - "Community 93"
 Cohesion: 0.06
 Nodes (45): BIZ-383 실시간 evidence 스킬의 raw query fallback과 timeline validation 테스트.  이 스킬은 오케스, 인자가 없으면 빈 payload를 반환한다., raw Korean args 직접 호출이 Unicode/base64 오류로 끝나지 않는다., 미래 일정만 언급한 출처는 stale_or_pre_event로 분류된다., 끝난 이벤트와 남은 일정이 함께 있는 출처는 current_pending로 분류된다., 종료 + 확정 cue가 있는 출처는 final로 분류된다., 진행 중 cue만 있으면 결과 미확정으로 partial로 분류된다., 검증할 본문이 없으면 no_evidence로 분류된다. (+37 more)
 
-### Community 92 - "Community 92"
-Cohesion: 0.07
-Nodes (29): EvidenceState, EvidenceStatus, Structured evidence state passed into the finalization gate., Outcome of the required current-turn evidence attempt., ExecutionCallbacks, ExecutionRouter, PlanGate를 통과한 UnifiedTurnPlan의 상위 실행 mode dispatcher.  이 모듈은 ``execution.mode``를, ExecutionMode별 실행 controller callback 묶음. (+21 more)
-
-### Community 93 - "Community 93"
+### Community 94 - "Community 94"
 Cohesion: 0.06
 Nodes (23): BackoffStrategy, CronJob, ActionType, DB에 저장된 모든 작업을 APScheduler에 등록한다.          Returns:             로드된 활성 작업 수, 새 크론 작업을 생성하고 DB 및 APScheduler에 등록한다.          재시도 정책 인자는 모두 선택적이며, 미지정 시 ``Cron, 크론 작업의 속성을 업데이트한다. 스케줄 변경 시 APScheduler 재등록., 크론 작업을 APScheduler와 DB에서 모두 삭제한다., 크론 작업을 활성화한다.          circuit-break로 자동 비활성된 작업을 사용자가 재활성화할 때 누적된         실패 카운 (+15 more)
 
-### Community 94 - "Community 94"
+### Community 95 - "Community 95"
 Cohesion: 0.07
 Nodes (27): 텍스트가 ``/recipe-name`` 명령인지 확인하고 해당 레시피를 실행한다.      ``react_loop_fn``은 오케스트레이터의 바, try_recipe_command(), BIZ-421 — 수동 슬래시 명령의 v1(steps 기반) 레시피 실행 검증.  배경: `/agent-study-daily` 같은 comman, 실패 시 error summary 는 포함하되 stderr 전체 debug log 는 감춘다., key=value 파라미터가 ${var} 스텝 변수로 치환된다., react_loop_fn 의 bound object(_command_guard)로 위험 명령을 차단한다., v1 경로도 recipe start/complete 이벤트를 step count detail 로 발행한다., BIZ-423 — recipe `settings.timeout` 이 수동 슬래시 경로에서     ``execute_recipe(timeout=. (+19 more)
 
-### Community 95 - "Community 95"
+### Community 96 - "Community 96"
 Cohesion: 0.07
 Nodes (41): assess_study_context(), classify_response_route(), _contains_any(), _is_single_current_fact(), Fallback response route classifier for SimpleClaw turns.  BIZ-426 — 일반 turn 의 pr, 주입된 Agent Study context 의 신선도/신뢰도 요약., 배경지식만으로 답하면 위험한 상태(stale 또는 저신뢰)인지., 주입된 study context 블록의 stale/저신뢰 여부를 보수적으로 판정한다.      라우터는 시계(clock)를 직접 들지 않는다. (+33 more)
 
-### Community 96 - "Community 96"
+### Community 97 - "Community 97"
 Cohesion: 0.08
 Nodes (21): LLM 응답 델타를 텔레그램에 점진적으로 반영하는 sink (BIZ-259).      수명주기:         1. ``await sink.s, Placeholder 메시지를 보내 streaming 시작을 표시한다.          실패하면 sink 는 비활성 상태로 남아 후속 ``on_, TelegramStreamSink, _FakeBot, python-telegram-bot 의 ``Bot`` 호환 fake — 호출 기록만 누적한다.      BIZ-259 sink 테스트용. sen, BIZ-259 — LLM 응답 점진 스트리밍 sink., 최종 답변의 **굵게** 마크다운은 Telegram 에서 실제 bold 로 보이게 변환한다., continuation 이 모두 성공하면 첫 청크 edit + 후속 send 계약을 유지한다. (+13 more)
 
-### Community 97 - "Community 97"
+### Community 98 - "Community 98"
 Cohesion: 0.06
 Nodes (34): _clean_optional_str(), load_llm_config(), load_llm_usage_config(), _normalize_provider_identity(), _normalize_route(), _optional_decimal(), LLM routing config loader.  LLM provider 설정과 api_key 시크릿 해소를 담당한다., Return a stripped string or None for blank/non-string values. (+26 more)
 
-### Community 98 - "Community 98"
+### Community 99 - "Community 99"
 Cohesion: 0.07
 Nodes (42): _dump(), _find_skill(), handle_skill_validate(), _normalize_command_args(), 운영자용 runtime skill 독립 검증 도구.  ``skill_validate``는 SimpleClaw runtime skill의 disc, config.yaml을 읽고 실패 시 빈 dict와 warning 문자열을 반환한다., raw config에서 skills directory 설정을 기본값으로 보강한다., 이름이 정확히 일치하는 runtime skill을 반환한다. (+34 more)
 
-### Community 99 - "Community 99"
+### Community 100 - "Community 100"
 Cohesion: 0.05
 Nodes (20): CronJobExecution, ExecutionStatus, 크론 작업의 단일 실행 기록.      한 스케줄 트리거 안에서 재시도가 발생하면 시도마다 별도 레코드를 남긴다.     ``attempt``는, 일시 정지된 태스크의 직렬화된 상태.      task_id: 태스크 고유 식별자     serialized_state: JSON으로 직렬화된, WaitState, 실행 기록을 삽입하고 생성된 ID를 반환한다., 특정 작업의 최근 실행 기록을 조회한다., DB 행을 CronJobExecution 데이터 클래스로 변환한다. (+12 more)
 
-### Community 100 - "Community 100"
+### Community 101 - "Community 101"
 Cohesion: 0.08
 Nodes (24): 상위 feature flag와 이벤트 종류별 flag를 fail-closed로 보관한다., OpportunityStatus, ProactiveOpportunity, detector가 큐에 적재하고 presenter가 사용자에게 노출할 후보., 저장된 dict를 ProactiveOpportunity로 복원한다., 현재 시각 기준 만료 여부를 판단한다., Opportunity Queue에 남는 후보의 상태 전이 값., OpportunityStore (+16 more)
 
-### Community 101 - "Community 101"
+### Community 102 - "Community 102"
 Cohesion: 0.07
 Nodes (23): Vertex AI Gemini 프로바이더 — ADC/service account 기반 OAuth 인증 (BIZ-444).  GeminiProvi, Vertex AI 백엔드로 통신하는 Gemini 프로바이더., VertexGeminiProvider를 초기화한다.          Args:             model: 사용할 Gemini 모델 ID, VertexGeminiProvider, _make_provider(), VertexGeminiProvider 단위 테스트 (BIZ-444).  Vertex AI Gemini 프로바이더의 인증 경로(SA JSON/AD, SA JSON 파싱 실패도 LLMAuthError 로 매핑되어야 한다., 상속된 send() 경로가 Vertex 백엔드 이름/에러 매핑으로 동작하는지 검증. (+15 more)
 
-### Community 102 - "Community 102"
+### Community 103 - "Community 103"
 Cohesion: 0.07
 Nodes (29): GenericAssetAdapter, graph dispatch node가 자산 종류와 무관하게 사용하는 비동기 표면., CronGraphFacade, CronScheduler가 opt-in으로 주입받는 최소 V4 runtime 표면이다., AdapterDeliveryResult, CallbackDeliveryAdapter, CronDeliveryAdapter, DeliveryAdapter (+21 more)
 
-### Community 103 - "Community 103"
+### Community 104 - "Community 104"
 Cohesion: 0.06
 Nodes (35): PlannerCatalogSensitiveTextError, 민감 원문 없이 catalog 직렬화를 중단하는 명시적 보안 오류., dispatch 전에 반환할 수 있는 안정적인 tool gate 오류., ToolCallRejected, native_tool_names(), NativeToolSpec, registry 조건을 통과한 native tool function-call 이름 집합을 반환한다., dispatch mapping이 native registry와 일치하는지 검증한다.      execute_skill은 외부 스킬 동적 도구라 (+27 more)
 
-### Community 104 - "Community 104"
+### Community 105 - "Community 105"
 Cohesion: 0.08
 Nodes (29): AdminAPIError, fetchAdmin(), FetchAdminOptions, ApplyResponse, applyTelegramPatch(), applyWebhookPatch(), ChannelsConfig, ChannelTestResponse (+21 more)
 
-### Community 105 - "Community 105"
-Cohesion: 0.08
-Nodes (29): EditProviderModal(), EditProviderModalProps, validate(), FallbackChainCard(), FallbackChainCardProps, ProviderCard(), ProviderCardProps, ProvidersGrid() (+21 more)
-
 ### Community 106 - "Community 106"
 Cohesion: 0.08
-Nodes (38): _await_if_needed(), guard 통과 전에는 final을 만들지 않고 safe renderer를 최대 한 번 호출한다., ActionReceiptLike, canonical_artifact_content_hash(), _canonical_artifact_hash(), canonical_artifact_id(), delivery_id(), guard_redispatch() (+30 more)
+Nodes (29): EditProviderModal(), EditProviderModalProps, validate(), FallbackChainCard(), FallbackChainCardProps, ProviderCard(), ProviderCardProps, ProvidersGrid() (+21 more)
 
 ### Community 107 - "Community 107"
 Cohesion: 0.07
@@ -1058,552 +1058,552 @@ Cohesion: 0.10
 Nodes (38): Element, FetchPage, ResolveNewsUrl, _as_datetime(), _as_of_date(), build_naver_search_url(), _candidate_from_item(), canonical_kbo_team() (+30 more)
 
 ### Community 115 - "Community 115"
-Cohesion: 0.10
-Nodes (29): compile_core_graph(), 검증된 graph를 caller 소유 checkpointer와 compile한다., CheckpointContractError, CheckpointPathIsolationError, ChoiceV1, InterruptModel, InterruptRequestV1, V4 clarification/confirmation interrupt와 stale-resume guard. (+21 more)
-
-### Community 116 - "Community 116"
 Cohesion: 0.07
 Nodes (36): AgentUpdateFilterResult, filter_agent_updates(), filter_agent_updates_with_stats(), _is_duplicate_of_memory(), _is_event_log(), _is_policy_rule(), _normalize(), AGENT.md dreaming update 필터.  AGENT.md는 에이전트의 지속 행동 규칙과 운영 정책을 담는 파일이다. Dreaming (+28 more)
 
-### Community 117 - "Community 117"
+### Community 116 - "Community 116"
 Cohesion: 0.08
 Nodes (29): _now_iso(), 대상 SQLite 경로로 store 를 초기화한다.          Args:             path: index DB 경로. 운영 배치, FK 제약을 켠 연결을 연다. 호출자가 close 를 책임진다., migration SoT SQL 을 읽어 idempotent 하게 테이블을 생성한다.          프로덕션 conversations.db 는, topic 을 삽입하거나 갱신한다(PK ``id`` 충돌 시 update).          ``created_at`` 은 최초 삽입 시각을 보, study item 한 건을 추가하고 새 행 id 를 반환한다.          Args:             topic_id: 소속 topi, id 로 item 한 건을 조회한다(없으면 None)., 한 topic 의 item 을 최신 수집순으로 반환한다. (+21 more)
 
-### Community 118 - "Community 118"
+### Community 117 - "Community 117"
 Cohesion: 0.06
 Nodes (12): _msg(), ConversationStore 시맨틱 클러스터(Phase 3) CRUD 단위 테스트.  검증 범위: - semantic_clusters 테이블, store(), TestAssignCluster, TestCreateCluster, TestGetCluster, TestGetMessagesForCluster, TestGetMessageWithEmbedding (+4 more)
 
-### Community 119 - "Community 119"
+### Community 118 - "Community 118"
 Cohesion: 0.05
 Nodes (38): dependencies, clsx, lucide-react, next, react, react-dom, swr, description (+30 more)
 
-### Community 120 - "Community 120"
+### Community 119 - "Community 119"
 Cohesion: 0.07
 Nodes (37): _format_web_search_results(), _grounding_chunk_entries(), handle_web_search(), 질의어로 후보 URL을 검색하고 title/url/snippet(+상위 본문 발췌) 결과를 반환한다.      ``body_fetcher`` 가, Gemini 그라운딩 응답의 web 청크를 title/url/source 엔트리로 변환한다.      grounding_metadata 가 없거, 검색 결과를 LLM 이 바로 URL 선택에 쓸 수 있는 compact text로 렌더한다.      상위 결과에 ``body`` 발췌가 채워져, _make_grounding_response(), BIZ-365 — query 기반 web_search 내장 도구 테스트.  검색 backend는 네트워크를 직접 호출하지 않고 mock하여 ha (+29 more)
 
-### Community 121 - "Community 121"
+### Community 120 - "Community 120"
 Cohesion: 0.07
 Nodes (22): CronJobsList(), CronJobsListProps, CronJobsListState, CronHealth, CronHistorySummary, CronJob, CronJobStatus, CronRunSummary (+14 more)
 
-### Community 122 - "Community 122"
+### Community 121 - "Community 121"
 Cohesion: 0.12
 Nodes (38): load_topic_update_prompt(), ``prompts/study/topic_update.yaml`` 을 로드/검증한다., FakeCollector, _make_runner(), Daily study runner 검증 — registry → planner → updater → index store 흐름.  DoD: - r, 기존 페이지의 수동 섹션은 run 후에도 보존된다., collector 가 비어 있으면(placeholder 폴백) 안전한 no-op 으로 흐른다., 일반 뉴스 후보는 relevance 임계 미만이면 wiki 에 쓰지 않는다. (+30 more)
 
-### Community 123 - "Community 123"
+### Community 122 - "Community 122"
 Cohesion: 0.07
 Nodes (29): ResultIcon(), ListPanel(), ListPanelProps, PanelMessage(), AuditApiEntry, AuditListResponse, formatNumber(), formatRelativeTs() (+21 more)
 
-### Community 124 - "Community 124"
+### Community 123 - "Community 123"
 Cohesion: 0.10
 Nodes (31): SourceFetcher, InterestSignal, 관심사 topic 의 seed 가 되는 단일 신호.      Attributes:         topic_hint: 이 신호에서 도출한 짧은, build_interest_signals_from_sources(), merge_signal_providers(), Agent Study daily evolution 을 위한 관심 신호 provider 계층.  daily runner 가 대화/메모리 저장소 내, 여러 provider 의 신호를 합쳐 가중치 내림차순으로 정렬한다.      빈 topic_hint 신호는 후보 topic 을 만들 수 없으므로, topic evolution 에 쓸 최근 관심 신호를 수집하는 인터페이스. (+23 more)
 
-### Community 125 - "Community 125"
+### Community 124 - "Community 124"
 Cohesion: 0.08
 Nodes (34): build_turn_frame(), _contains_any(), ContextCandidate, extract_context_candidates(), _extract_keywords(), _is_followup(), _normalized_frame(), [Deprecated fallback] Follow-up/축약 사용자 발화의 결정적 맥락 정규화(TurnFrame).  BIZ-426 — pri (+26 more)
 
-### Community 126 - "Community 126"
+### Community 125 - "Community 125"
 Cohesion: 0.08
 Nodes (24): OPTIONS, Shell(), Sidebar(), HEALTH_DOTS, STATUS_CLASS, ThemeToggle(), Topbar(), NAV_ITEMS (+16 more)
 
-### Community 127 - "Community 127"
+### Community 126 - "Community 126"
 Cohesion: 0.09
 Nodes (22): adopt_env_trace_id(), get_trace_id(), inject_trace_id_env(), new_trace_id(), Trace ID 전파용 컨텍스트 모듈.  분산 트레이싱을 위한 trace_id를 ``contextvars.ContextVar``로 관리한다. -, 새로운 trace_id(uuid4 hex)를 생성하여 현재 컨텍스트에 설정하고 반환한다., 주어진 trace_id를 현재 컨텍스트에 설정하고 복원용 토큰을 반환한다.      크론 잡·웹훅 등 외부에서 들어온 trace_id를 명시적으, ``set_trace_id``가 반환한 토큰으로 이전 값을 복원한다. (+14 more)
 
-### Community 128 - "Community 128"
+### Community 127 - "Community 127"
 Cohesion: 0.10
 Nodes (14): ClusterAssignment, IncrementalClusterer, 점진 클러스터링(IncrementalClusterer) — 시맨틱 메모리 그래프 갱신용.  주요 동작 흐름 (spec 005 Phase 3):, 기존 centroid에 신규 멤버 임베딩을 누적 평균으로 합친다.          공식: ``(old * n + new) / (n + 1)``., 클러스터 할당 결과.      Attributes:         cluster_id: 부착할 기존 클러스터 id. ``None``이면 신규 클, 임계값 기반 점진 클러스터링.      한 번에 하나의 임베딩을 받아 기존 클러스터들과 비교한 뒤,     부착할 클러스터 id를 결정하거나 신, 클러스터 임계값을 설정한다.          Args:             threshold: 부착을 허용하는 최소 코사인 유사도. 기본 0., 주어진 임베딩에 대해 가장 가까운 기존 클러스터를 찾는다.          매칭 점수가 임계값 이상이면 그 클러스터 id를, 미만이면 ``Non (+6 more)
 
-### Community 129 - "Community 129"
+### Community 128 - "Community 128"
 Cohesion: 0.08
 Nodes (27): ConversationEndDetector, _ConversationIntent, 대화 종료 시점의 명시적 proactive intent 감지기.  이 감지기는 사용자 응답 latency를 늘리지 않도록 LLM을 호출하지 않고, 감지된 후보를 pending row로 upsert하고, 감지되지 않으면 None을 반환한다., keyword 우선순위로 cron/follow-up/issue intent를 분류한다., 짧은 감탄/감사/잡담은 명시 intent로 오탐하지 않는다., 동일 발화가 중복 감지될 때 같은 cooldown_key가 되도록 정규화한다., presenter가 사용자에게 제안할 수 있는 초안 문구를 만든다. (+19 more)
 
-### Community 130 - "Community 130"
+### Community 129 - "Community 129"
 Cohesion: 0.09
 Nodes (33): 정책 평가 시점의 TPO/운영 제한 값 묶음., TPOContext, _days_between(), _in_quiet_hours(), _parse_hhmm(), _quiet_hours_end(), TPO(Time/Place/Occasion) proactive 발송 정책 엔진.  이 엔진은 후보 자체의 confidence/urgency와 사, quiet hours와 budget을 우회해도 되는 긴급 후보인지 판단한다. (+25 more)
 
-### Community 131 - "Community 131"
+### Community 130 - "Community 130"
 Cohesion: 0.08
 Nodes (17): Config read/patch routes를 등록한다., register_routes(), Insight source/list/blocklist routes를 등록한다., register_routes(), Agent Study Wiki 조회/조작 routes를 등록한다., register_routes(), Memory suggestion review loop routes를 등록한다., register_routes() (+9 more)
 
-### Community 132 - "Community 132"
-Cohesion: 0.07
-Nodes (12): MetricsCollector, ``kill_process_group`` 결과를 메트릭에 반영한다.          Args:             killed: SIGKILL, 스킬 자동 재시도 1회를 기록한다 (재시도 시도 직전 호출)., 재시도 끝에 스킬이 성공했음을 기록한다., 재시도 한도까지 실패해 자동 회복에 실패했음을 기록한다., 스레드 안전한 에이전트 작업 메트릭 수집기.      threading.Lock으로 동시 접근을 보호하며, 각 메트릭은 단조 증가 카운터이다., 메트릭스 정확성: 토큰, 에러율, 실행 횟수., 메트릭스 수집: 토큰, 에러율, 실행 횟수. (+4 more)
-
-### Community 133 - "Community 133"
+### Community 131 - "Community 131"
 Cohesion: 0.11
 Nodes (33): normalize_risk_flags(), normalize_skill_name(), risk flag 목록을 allowlist 값만 남긴 정렬된 리스트로 정규화한다 (BIZ-432).      LLM payload 나 legac, suggestion_from_candidate_payload(), validate_skill_package_plan(), skill learning 후보 저장/검증 단위 테스트., schema-shaped {path, content} 배열이 dict 매핑으로 정규화된다., 대소문자/구분자만 다른 allowlist 값은 정규화해 보존한다. (+25 more)
 
-### Community 134 - "Community 134"
+### Community 132 - "Community 132"
 Cohesion: 0.14
 Nodes (33): GenericSkillAdapter, typed invocation을 검증하고 discovery된 정확한 Skill 하나만 호출한다., build_contract_registry(), 현재 discovery definition만 사용해 deterministic registry를 만든다., _core_digest(), _definitions(), _entry(), _invocation() (+25 more)
 
-### Community 135 - "Community 135"
+### Community 133 - "Community 133"
 Cohesion: 0.06
 Nodes (34): dependencies, next, react, react-dom, description, devDependencies, eslint, @eslint/js (+26 more)
 
-### Community 136 - "Community 136"
+### Community 134 - "Community 134"
 Cohesion: 0.08
 Nodes (20): _format_block_page_response(), handle_web_fetch(), _is_headless_retryable_static_error(), 차단 페이지로 판정된 응답을 LLM 이 재시도하지 않도록 합성 메시지로 포맷한다.      BIZ-190: 응답 첫 줄에 ``FETCH_BLOC, 정적 fetch 오류 중 headless 브라우저 재시도가 의미 있는 케이스를 판별한다.      403 Forbidden은 서버가 일반 HTT, URL에서 웹 페이지를 가져와 텍스트 내용을 반환한다.      기본 흐름: 정적 HTML fetch → 본문 길이가 ``STATIC_FALLB, Tests for web_fetch built-in tool., 정적 본문이 임계값 미만이면 자동으로 headless 경로로 폴백. (+12 more)
 
-### Community 137 - "Community 137"
+### Community 135 - "Community 135"
 Cohesion: 0.12
 Nodes (13): 서브에이전트 서브프로세스를 생성하고 관리한다.      동시성 풀, 워크스페이스 매니저, 기본 권한 범위를 config에서 초기화한다., SubAgentSpawner, Write a Python script to tmp_path and return its path., 서브에이전트가 응답 meta에 첨부한 정보가 SubAgentResult.meta로 전달되어야 한다., status 필드가 없는 응답은 안전한 에러로 변환되어야 한다., 알 수 없는 status 값은 schema_violation으로 분류된다., 최상위가 객체가 아닌 응답은 거부되어야 한다., exit=0이지만 status=error인 응답은 그대로 전달되어야 한다. (+5 more)
 
-### Community 138 - "Community 138"
-Cohesion: 0.09
-Nodes (25): HealthSnapshot, SystemInfoResponse, ConfigDumpCard(), ConfigDumpCardProps, formatBytes(), formatUptime(), percent(), UNITS (+17 more)
-
-### Community 139 - "Community 139"
+### Community 136 - "Community 136"
 Cohesion: 0.07
 Nodes (21): Full pipeline: resolve -> parse -> assemble., Local AGENT.md should override global., Small token budget triggers truncation., Empty directories produce empty prompt., TestFullPipeline, 로컬 및 글로벌 디렉터리에서 페르소나 파일을 탐색·해석한다.      동일 유형의 파일이 양쪽에 있으면 로컬 파일이 우선한다.     결과는 S, resolve_persona_files(), 로컬 페르소나 파일이 전역 파일을 Override. (+13 more)
 
-### Community 140 - "Community 140"
+### Community 137 - "Community 137"
 Cohesion: 0.08
 Nodes (33): find_legacy_memory_backup(), 드리밍/데몬 라이브 파일의 사이클 단위 안전 스냅샷 (BIZ-132).  배경:     BIZ-28(2026-05-05) 사고 — `git rm, ``.agent/memory-backup/`` 의 ``{stem}.{ts}.bak`` 형식 백업 중 최신본 1개를 찾는다.      ``Drea, _make_clock(), _make_test_db(), BIZ-132 Phase 1 — SafetyBackupManager 단위 테스트.  검증 시나리오: 1. ``snapshot`` 이 위험 파일, 같은 초에 두 번 호출해도 디렉터리가 충돌하지 않는다(suffix 부여)., max_cycles=3 인 매니저에 5번 snapshot → 가장 최근 3개만 남는다. (+25 more)
 
-### Community 141 - "Community 141"
+### Community 138 - "Community 138"
 Cohesion: 0.09
 Nodes (21): _cron_add(), _cron_disable(), _cron_enable(), _cron_list(), _cron_remove(), GoalCommand, 슬래시 명령어 핸들러 모듈 — /cron, /recipe 처리.  사용자가 입력한 슬래시 명령어를 파싱하고 적절한 핸들러로 디스패치한다.  동작, 등록된 cron 작업 목록을 반환한다 (builtin_tools의 공유 함수에 위임). (+13 more)
 
-### Community 142 - "Community 142"
+### Community 139 - "Community 139"
 Cohesion: 0.12
 Nodes (21): _diff_payload(), _handle_materialize(), handle_skill_learning(), _planned_files(), _planned_paths(), operator-only skill_learning native tool handler.  BIZ-429 — 운영자 승인 UX 를 담당한다. `, diff/materialize 대상 skill 루트를 인자 → 학습 설정 → 스킬 설정 순으로 정한다., list 응답 한 건 — 운영자가 훑어보고 show 대상을 고를 수 있는 최소 요약. (+13 more)
 
-### Community 143 - "Community 143"
+### Community 140 - "Community 140"
 Cohesion: 0.09
 Nodes (16): CLIProvider, 외부 CLI 도구를 LLM 프로바이더로 감싸는 서브프로세스 래퍼.  로컬에 설치된 CLI LLM 도구(예: llama.cpp, ollama 등), 외부 CLI 도구를 LLM 백엔드로 감싸는 프로바이더., CLIProvider를 초기화한다.          Args:             command: 실행할 CLI 바이너리 이름 또는 경로., CLI 래퍼: 존재하지 않는 CLI 도구 에러., Tests for the CLI wrapper provider., Test CLI wrapper with echo command., TestCLIProvider (+8 more)
 
-### Community 144 - "Community 144"
+### Community 141 - "Community 141"
 Cohesion: 0.06
 Nodes (23): 문자열 안의 key=value 스타일 secret을 제거한다., 중첩 payload를 순회하며 secret key의 값을 마스킹한 JSON 문자열로 만든다., cron 이벤트 중 failure/circuit-break만 복구 후보로 저장한다., _dt_from_value(), _dt_to_str(), OpportunityType, PolicyDecision, PolicyDecisionAction (+15 more)
 
-### Community 145 - "Community 145"
+### Community 142 - "Community 142"
 Cohesion: 0.10
 Nodes (31): build_google_news_rss_url(), build_naver_sports_schedule_url(), build_sports_page_url(), parse_naver_kbo_schedule(), 상태 필터 없이 기준일 하루의 KBO schedule API URL을 만든다., 기존 호출자를 위해 structured schedule URL helper를 유지한다., 네이버 KBO schedule JSON에서 구조화 필드로 대상 경기를 결정한다., 한 경기 카드에서 함께 추출한 KBO 점수·상태 fact. (+23 more)
 
-### Community 146 - "Community 146"
+### Community 143 - "Community 143"
 Cohesion: 0.10
 Nodes (17): _check_float_range(), _check_int_range(), classify_keys(), _flatten(), _max_level(), _path_matches(), PolicyResult, Admin API 정책 엔진 — 적용 등급/검증/영향 모듈 분류.  ``docs/admin-requirements.md`` §2.1의 결정 매트 (+9 more)
 
-### Community 147 - "Community 147"
+### Community 144 - "Community 144"
 Cohesion: 0.16
 Nodes (32): load_fixtures(), UTF-8 JSONL fixture를 순서대로 읽고 중복 ID를 거부한다., 한 planner prediction을 gold와 비교하고 redacted 결과만 반환한다., score_prediction(), BIZ-488 fixed fixture의 critical prediction을 모델 adapter로 손실 없이 평가한다., test_fixed_fixture_predictions_round_trip_at_one_hundred_percent(), _fixture_row(), load_fixtures_from_rows() (+24 more)
 
-### Community 148 - "Community 148"
+### Community 145 - "Community 145"
+Cohesion: 0.07
+Nodes (19): stdio MCP smoke test using the real mcp SDK.  fake stdio MCP server(fixtures/fak, test_stdio_mcp_discovery_and_call(), test_stdio_mcp_operator_scope_enforced_on_real_server(), MCPManager, 연결에 성공한 서버들의 이름 목록을 반환한다., 연결 실패 서버별 오류 요약을 반환한다., MCP 서버 연결을 관리하고 도구 접근을 제공하는 클래스., MCP 클라이언트 초기화 및 도구 목록. (+11 more)
+
+### Community 146 - "Community 146"
 Cohesion: 0.08
 Nodes (19): LLMUsageEvent, 실제 provider attempt 하나에 대응하는 content-free 회계 이벤트다., 원본 이벤트를 유지하면서 계산 비용과 가격 버전을 연결한다., 모든 문자열 필드를 저장 가능한 bounded 값으로 fail-closed 정규화한다., attempt event 하나를 fail-open 회계 경계로 전달한다., 원문 노출이 허용된 실제 구성·코드 dimension의 bounded registry다., 필드에 대응하는 닫힌 원문 허용 집합을 반환한다., registry가 증명한 값만 원문으로 두고 나머지는 결정적으로 치환한다.      문자 모양이나 credential denylist는 신뢰 근 (+11 more)
 
-### Community 149 - "Community 149"
+### Community 147 - "Community 147"
 Cohesion: 0.12
 Nodes (22): ProactiveActionExecutor, 승인된 proactive suggested action 실행기.  사용자 승인 전에는 어떠한 외부 side effect도 만들지 않는다. Tel, 사용자가 선택한 새 스케줄을 pending action payload에 반영한다., 단일 opportunity를 변경해 JSONL 저장소에 다시 쓴다., payload의 ISO datetime 값을 optional datetime으로 복원한다., 오류 요약에 섞인 흔한 secret 패턴을 제거한다., 사용자가 승인한 SuggestedAction을 실제 런타임 side effect로 실행한다., store와 선택적 CronScheduler를 주입한다. 생성자는 side effect를 만들지 않는다. (+14 more)
 
-### Community 150 - "Community 150"
+### Community 148 - "Community 148"
 Cohesion: 0.10
 Nodes (11): 도구 실행 실패 시 LLM 에 노출되는 에러 문자열을 정화한다.      - framing 토큰을 제거하여 role-confusion 차단, sanitize_tool_error(), Tool error sanitizer regression tests.  Hermes Agent PR #26823 적용 — 도구가 던진 stder, Hermes PR #26823 의 기본 helper 는 instruction 류 패턴 자체는     삭제하지 않지만, SimpleClaw 는 P, TestAnsiAndControlChars, TestCDATAStripping, TestCodeFenceStripping, TestEnvelope (+3 more)
 
-### Community 151 - "Community 151"
-Cohesion: 0.08
-Nodes (17): _AsyncContextManager, _initialize_result_with_capabilities(), _install_fake_mcp(), Tests for MCP client manager., Server without command should be skipped., Fresh manager starts with no tools or servers., tools capability가 없는 MCP 서버도 연결 성공으로 기록한다., tools capability가 있으면 기존처럼 도구 목록을 등록한다. (+9 more)
-
-### Community 152 - "Community 152"
+### Community 149 - "Community 149"
 Cohesion: 0.08
 Nodes (29): _asset_from_capability(), _asset_from_native_spec(), _canonical_json(), catalog_prompt_metrics(), _compact_description(), _contract_catalog_fields(), _default_native_specs(), _execute_skill_adapter_asset() (+21 more)
 
-### Community 153 - "Community 153"
+### Community 150 - "Community 150"
 Cohesion: 0.10
 Nodes (26): emit_progress_event(), format_progress_line(), ProgressEvent, 런타임 progress 이벤트 모델과 사용자 노출용 compact 포맷터.  Telegram streaming 중 tool/skill/comma, 콜백이 있으면 progress 이벤트를 발행하되 UI 실패가 런타임을 막지 않게 한다., 도구/스킬/명령/레시피 실행 중 사용자에게 노출할 상태 이벤트., 사용자 노출 전 secret-like 값을 ``[REDACTED]`` 로 치환하고 한 줄로 압축한다., 단일 progress 이벤트를 Telegram placeholder 에 들어갈 compact 한 줄로 만든다.      BIZ-425: ``co (+18 more)
 
-### Community 154 - "Community 154"
+### Community 151 - "Community 151"
 Cohesion: 0.10
 Nodes (26): _complete_sports_observation(), _installed_sports_helper(), _orchestrator_config(), 실제 installer 산출물을 runtime discovery로 다시 읽는다., 실제 설치 asset으로 raw planner부터 validator까지 관통한다., Required claims는 planner output에서 production execution 경계로만 흐른다., Trusted discovery와 actual dispatch registry가 다르면 helper를 실행하지 않는다., Raw helper effect 상태는 typed result와 common validator까지 보존된다. (+18 more)
 
-### Community 155 - "Community 155"
+### Community 152 - "Community 152"
 Cohesion: 0.11
 Nodes (22): format_usage_alert(), LLMUsageStore, LLM 사용량을 내용 없이 영속 집계하고 임계 경보 claim을 관리한다.  이 모듈은 저장 직전 문자열을 다시 정규화하는 방어 경계를 제공하고, 새 claim 또는 retry 가능한 failed/expired claim을 원자적으로 획득한다., claim의 terminal dispatch 상태를 짧은 transaction으로 갱신한다., 성공한 claim을 재획득 불가능한 sent 상태로 확정한다., 실패 claim에 다음 재시도 가능 시각을 durable하게 기록한다., 테스트·운영 진단용으로 특정 claim의 content-free 상태를 반환한다. (+14 more)
 
-### Community 156 - "Community 156"
+### Community 153 - "Community 153"
 Cohesion: 0.11
 Nodes (17): assemble_prompt(), 페르소나 파일들을 토큰 예산 이내의 시스템 프롬프트로 조합한다.      파일 순서는 SOUL → AGENT → USER → MEMORY. 조합, _make_persona(), Tests for the prompt assembler., SOUL 파일이 없어도 기존 AGENT/USER/MEMORY 조합이 깨지지 않아야 한다., 토큰 예산 초과 시 MEMORY부터 잘려도 SOUL 규칙은 보존되어야 한다., Test assembly with fewer than 3 files., Helper to create a PersonaFile with a single section. (+9 more)
 
-### Community 157 - "Community 157"
+### Community 154 - "Community 154"
 Cohesion: 0.09
 Nodes (22): v2 레시피의 instructions에 내장 변수와 사용자 변수를 치환한다.      내장 변수 (실행 시점 KST 기준 자동 주입):, render_instructions(), discover_recipes(), 단일 디렉터리만 스캔해 ``RecipeDefinition`` 리스트를 만든다.      공유 헬퍼 — ``discover_recipes`` 가, 지정된 디렉터리에서 모든 레시피를 탐색한다.      Args:         recipes_dir: 레시피가 위치한 상위 디렉터리 경로 (1차, _scan_recipes_dir(), _load_recipe_yaml(), Live equity research recipe guardrail tests.  SimpleClaw의 운영 recipe는 사용자 홈의 live (+14 more)
 
-### Community 158 - "Community 158"
+### Community 155 - "Community 155"
 Cohesion: 0.13
 Nodes (25): agentDir(), applyUndo(), assemblePrompt(), deletePersonaFile(), DiskFileMeta, estimateTokens(), FILE_MAP, fileFor() (+17 more)
 
-### Community 159 - "Community 159"
+### Community 156 - "Community 156"
+Cohesion: 0.12
+Nodes (21): CheckpointContractError, CheckpointPathIsolationError, ChoiceV1, InterruptModel, InterruptRequestV1, V4 clarification/confirmation interrupt와 stale-resume guard., resume가 저장된 exact control point와 일치하지 않는다., stale checkpoint/catalog/contract를 dispatch 전에 fail-closed로 거부한다. (+13 more)
+
+### Community 157 - "Community 157"
 Cohesion: 0.09
 Nodes (13): _clamp01(), compute_topic_score(), normalize_mentions(), 반복 언급 횟수를 0~1 의 포화 곡선으로 정규화한다.      선형 ``count / N`` 은 한 번 폭증한 주제를 과대평가한다. 대신 포화, 마지막 신호 이후 경과 시간을 0~1 최근성 신호로 변환한다(지수 감쇠).      ``factor = 0.5 ** (age_hours / ha, 값을 0.0~1.0 구간으로 자른다(입력 신호 방어 + 출력 정규화 공용)., 다섯 신호를 가중합해 topic 의 0.0~1.0 점수를 만든다.      모든 입력은 0.0~1.0 정규화 신호로 가정하되, 호출자 실수를 방, recency_decay_factor() (+5 more)
 
-### Community 160 - "Community 160"
+### Community 158 - "Community 158"
 Cohesion: 0.08
 Nodes (18): Graph retry/delivery 소유권을 보존한 scheduler 결과로 변환한다., CronActionResult, 오케스트레이터에서 스케줄러로 전달하는 구조화 cron 결과.      기존 SQLite status/schema는 바꾸지 않고, 스케줄러가 텍스, _normalize_cron_action_result(), 크론 스케줄러: APScheduler 래퍼 + 크론 작업 CRUD 관리.  크론 작업의 생성·수정·삭제·실행을 담당하며, APScheduler와, 기존 string/None 결과를 구조화 cron 계약으로 정규화한다., 표준 crontab의 day_of_week 표기를 APScheduler 표기로 변환한다.      표준 cron: 0/7=sun, 1=mon,, 작업의 대상 액션을 실행하고, NO_NOTIFY 필터링 후 알림을 전송한다.          처리 흐름:         1. process_cr (+10 more)
 
-### Community 161 - "Community 161"
+### Community 159 - "Community 159"
 Cohesion: 0.09
 Nodes (28): _contains_any(), handle_log_debug(), _normalize_action(), _normalize_lines(), _normalize_pattern(), 운영자용 로그 진단 native tool.  ``log_debug``는 운영자가 live bot 로그를 read-only로 조회해 빈 응답, t, 허용 action 외 입력은 recent로 fail-closed 정규화한다., lines 값을 운영자 응답에 적합한 범위로 제한한다. (+20 more)
 
-### Community 162 - "Community 162"
+### Community 160 - "Community 160"
 Cohesion: 0.09
 Nodes (23): execute_skill 도구 dispatch 를 전용 모듈에 위임한다., LLM이 반환한 스킬 이름을 등록된 스킬과 fuzzy-match한다., Contract Registry가 concrete Skill import 없이 사용할 asset 종류다., Skill-owned argument binding을 registry 공통 표면으로 노출한다., 실행·안전·V4 contract 전체의 현재 canonical fingerprint를 계산한다., SKILL.md에서 파싱된 단일 스킬의 메타데이터., SkillDefinition, _declared_capability() (+15 more)
 
-### Community 163 - "Community 163"
+### Community 161 - "Community 161"
 Cohesion: 0.10
 Nodes (24): _planner_native_specs(), Planner→PlanGate를 실행하고 redacted telemetry만 남긴다., 정적 native 설명의 slash 구분자를 path-free catalog 문장으로 정규화한다., aggregate_turn_planner_shadow_events(), build_turn_planner_shadow_event(), build_turn_planner_shadow_failure_event(), emit_turn_planner_shadow_event(), _nonnegative_int() (+16 more)
 
-### Community 164 - "Community 164"
+### Community 162 - "Community 162"
 Cohesion: 0.10
 Nodes (25): DreamingKpiWindow, DreamingRejection, DreamingRun, DreamingRunStatus, DreamingStatusResponse, getDreamingStatusV2(), listDreamingRuns(), ListDreamingRunsResponse (+17 more)
 
-### Community 165 - "Community 165"
+### Community 163 - "Community 163"
 Cohesion: 0.08
 Nodes (24): DryRunResponse, META, PolicyLevel, PolicyPill(), Hot, meta, ProcessRestart, ServiceRestart (+16 more)
 
-### Community 166 - "Community 166"
+### Community 164 - "Community 164"
+Cohesion: 0.10
+Nodes (21): HealthSnapshot, SystemInfoResponse, ConfigDumpCard(), ConfigDumpCardProps, formatBytes(), formatUptime(), percent(), UNITS (+13 more)
+
+### Community 165 - "Community 165"
 Cohesion: 0.10
 Nodes (17): 일회성 reveal 토큰 — TTL 만료 또는 1회 사용 시 폐기., _RevealEntry, AuditEntry, _is_secret_key(), _mask_secrets(), _mask_value(), Admin API 감사 로그 — JSONL 일별 로테이션 저장소.  Admin UI(BIZ-37/41)에서 발생하는 모든 설정 변경/시스템 액션, 한 줄 JSON으로 직렬화한다 — JSONL 추가용. (+9 more)
 
-### Community 167 - "Community 167"
+### Community 166 - "Community 166"
 Cohesion: 0.11
 Nodes (21): proactive 제안을 InlineKeyboard와 함께 Telegram으로 보낸다., build_proactive_callback_data(), format_proactive_message(), ProactivePresenter, Proactive opportunity를 Telegram 제안으로 노출하는 presenter.  Detector가 큐에 적재한 pending 후, Telegram callback action을 store 상태 전이나 executor 호출로 처리한다., store 이력을 모아 정책 엔진에 넘길 TPOContext를 만든다., Telegram 64 byte 제한 안에 들어가는 proactive callback_data를 만든다. (+13 more)
 
-### Community 168 - "Community 168"
+### Community 167 - "Community 167"
 Cohesion: 0.10
 Nodes (24): 성공한 복잡 tool trace를 best-effort pending skill 후보로 적재한다., pending skill 후보를 운영자에게 알린다 — 최소한 명확한 이벤트 로그를 남긴다.          채널(Telegram 등)이 ``_s, LLM으로 skill package 후보 JSON을 생성한다.          BIZ-429 — BIZ-427 의 provider-neutral, 성공한 복잡 tool trace를 best-effort pending recipe 후보로 적재한다.          BIZ-428 — skill, ToolLoopRunner가 오케스트레이터 wrapper에 돌려주는 최종 결과., ToolLoopResult, is_complex_successful_trace(), _complex_result() (+16 more)
 
-### Community 169 - "Community 169"
+### Community 168 - "Community 168"
 Cohesion: 0.09
 Nodes (28): build_turn_plan_response_schema(), parse_turn_plan_payload(), 현재 runtime catalog의 tool/declared asset 이름으로 schema를 좁힌다.      정적 schema의 자유 문자열, JSON 문자열을 파싱해 semantic clamp가 적용된 UnifiedTurnPlan을 만든다., _assert_strict_objects(), _payload(), BIZ-491 — UnifiedTurnPlan 모델·schema·semantic clamp 계약 테스트., nullable 없이 no-asset sentinel을 쓰고 모든 object를 strict하게 만든다. (+20 more)
 
-### Community 170 - "Community 170"
+### Community 169 - "Community 169"
 Cohesion: 0.11
 Nodes (28): _asset_name(), FixtureFormatError, FixtureMessage, GoldExpectation, _is_primary_asset(), _is_string_array(), _normalized_execution_mode(), parse_fixture() (+20 more)
 
-### Community 171 - "Community 171"
+### Community 170 - "Community 170"
 Cohesion: 0.10
 Nodes (26): Filterer, Logger, _install_filter(), install_telegram_token_redaction(), 표준 라이브러리 로그 레코드에서 비밀값을 마스킹합니다.  Telegram은 Bot API와 파일 다운로드 URL 경로에 봇 토큰을 포함합니다., URL 형태를 유지하면서 Telegram 봇 토큰 경로를 마스킹합니다., 문자열과 지연 로깅 인자에 포함된 비밀값을 재귀적으로 마스킹합니다., 포매터가 평가하기 전에 레코드의 Telegram 봇 토큰을 제거합니다. (+18 more)
 
-### Community 172 - "Community 172"
+### Community 171 - "Community 171"
 Cohesion: 0.10
 Nodes (28): decode_payload(), _default_fetch_page(), _expected_event_date(), extract_time_signals(), _fetch_raw(), fetch_text(), _html_to_text(), is_usable_realtime_evidence() (+20 more)
 
-### Community 173 - "Community 173"
+### Community 172 - "Community 172"
 Cohesion: 0.08
 Nodes (10): in_memory_manager(), _InMemoryBackend, _load_setup_module(), ``scripts/setup_admin_api.py`` 단위 테스트 (BIZ-245).  검증 항목:  - ``_resolve_token_bac, 단위 테스트용 시크릿 백엔드 — keyring/keychain 을 건드리지 않는다., 모든 백엔드를 인메모리로 교체한 매니저를 모듈 전역 SoT 에도 꽂는다., setup_mod(), TestEnsureToken (+2 more)
 
-### Community 174 - "Community 174"
+### Community 173 - "Community 173"
 Cohesion: 0.10
 Nodes (26): Recipe 진단 도구가 쓰는 경량 render helper.  ``recipe_validate``와 ``recipe_generate``는 lo, instructions 텍스트에 내장 KST 변수와 사용자 변수를 치환한다.      Runtime executor의 ``render_instr, legacy step content의 ``${name}`` 변수를 치환한다., render_instructions_preview(), substitute_step_variables(), handle_recipe_validate(), _is_within(), _normalize_render_params() (+18 more)
 
-### Community 175 - "Community 175"
+### Community 174 - "Community 174"
 Cohesion: 0.13
 Nodes (21): deleteMemoryEntry(), exportConversationsUrl(), getActiveProjects(), getDreamingStatus(), getMemoryIndex(), jsonRequest(), MemoryIndexResponse, patchMemoryEntry() (+13 more)
 
-### Community 176 - "Community 176"
+### Community 175 - "Community 175"
 Cohesion: 0.10
 Nodes (15): _pick_split_index(), 텔레그램 봇: 폴링 기반 메시지 수신, 화이트리스트 인증, 메시지 핸들링.  python-telegram-bot 라이브러리를 사용하여 텔레그램, 첨부 payload를 sandbox에 best-effort 저장하고 절대 경로를 반환한다., ``text`` 를 ``start_*`` 상태에서 적용한 뒤의 (in_code, fence) 를 돌려준다., ``head`` 내에서 자연 경계를 우선해 분할 인덱스를 고른다.      우선순위: ``\\n\\n`` > ``\\n`` > 공백 > 하드 컷, 텔레그램 4096자 한계에 맞춰 ``text`` 를 분할한다.      - 분할이 필요 없으면 ``[text]`` 그대로 돌려준다 (헤더 없음), 최종 텍스트로 메시지를 교체한다. 4096 초과 시 BIZ-253 분할.          Args:             final_text:, 실패한 지점부터 tail 만 재전송해 prefix 중복을 피한다.          첫 청크 edit 가 이미 성공했다면 ``failed_inde (+7 more)
 
-### Community 177 - "Community 177"
+### Community 176 - "Community 176"
 Cohesion: 0.07
 Nodes (27): 0. 운영 컨텍스트, 1.1 데이터 영역 (설정 + 운영 데이터 혼합), 1. 설정 카탈로그, 2.1 적용 정책 등급, 2.2 마스킹 규칙, 2.3 검증 정책, 2.4 시크릿 참조 자동완성, 2. 노출/편집 정책 결정 매트릭스 (+19 more)
 
-### Community 178 - "Community 178"
+### Community 177 - "Community 177"
 Cohesion: 0.12
 Nodes (18): _doc_comment_ranges(), get_managed_section(), ManagedSection, ProtectedSectionError, ProtectedSectionMalformed, ProtectedSectionMissing, 드리밍이 갱신할 수 있는 영역(Protected Section)을 식별·강제하는 모듈.  배경:     AGENT.md가 수십 줄에서 두 줄로, 모든 protected-section 위반의 베이스 예외. (+10 more)
 
-### Community 179 - "Community 179"
+### Community 178 - "Community 178"
 Cohesion: 0.11
 Nodes (21): _is_valid_env_name(), load_skill_env_secret_refs(), 등록 skill 전용 child-process secret 환경변수 구성.  ``security.skill_env_secret_refs``는 전, SecretsManager의 이 기능에 필요한 최소 인터페이스., skill 전용 secret binding 설정이 안전하게 적용될 수 없음을 알린다., POSIX 호환 대문자 환경변수 이름인지 검사한다., executor가 받을 child env override를 방어적으로 복사·검증한다.      loader 외 호출자가 executor를 직접, skill별 secret reference를 child env override map으로 해소한다.      허용 형식은 ``{skill_nam (+13 more)
 
-### Community 180 - "Community 180"
+### Community 179 - "Community 179"
 Cohesion: 0.09
 Nodes (18): _fetch_headless(), `agent-browser` CLI 절대 경로를 탐색한다.      탐색 순서:       (a) ``override`` — 운영자가 ``age, 헤드리스 브라우저(`agent-browser` CLI)로 페이지를 렌더링하고 본문 텍스트를 반환한다.      `agent-browser ope, _resolve_agent_browser(), Tests for the agent orchestrator., BIZ-167 — `_fetch_headless` wait 단계가 ``load`` 전략 + 짧은 timeout 을 쓴다.      `networ, ``wait`` 단계의 인자가 ``--load load`` 여야 한다., ``wait`` 가 timeout 으로 죽어도 ``get text body`` 가 호출돼 부분 결과 회수. (+10 more)
 
-### Community 181 - "Community 181"
+### Community 180 - "Community 180"
 Cohesion: 0.10
 Nodes (13): Agent Study Wiki on-disk 레이아웃에 대한 얇은 read/write 어댑터.      수집 파이프라인이 아직 없거나 wiki, wiki 디렉터리와 topic registry 가 존재하는지 여부., topics.yaml 을 list[dict] 로 정규화해서 읽는다.          top-level list 와 ``{topics: [...], 모든 topic 을 뷰로 변환해 반환한다 (id 누락 항목은 건너뜀)., id 로 단일 topic 을 찾는다 (없으면 None)., topics/<id>/overview.md 본문을 반환한다 (없으면 None)., topics.yaml 에서 한 topic 을 찾아 mutate 적용 후 원자적으로 저장한다.          Raises:, topics.yaml 을 {topics: [...]} 형태로 atomic 하게 다시 쓴다. (+5 more)
 
-### Community 182 - "Community 182"
+### Community 181 - "Community 181"
 Cohesion: 0.11
 Nodes (17): BrowserHandoffPage, BrowserHandoffRequest, 브라우저 handoff 요청/페이지 payload 모델.  모델은 JSON 파일 store와 Chrome Native Messaging host, SimpleClaw가 로컬 Chrome에 열어 둔 URL handoff 요청., Chrome Extension이 사용자 승인 후 Native Host로 보낸 현재 탭 텍스트., UTC ISO timestamp를 일관된 형식으로 반환한다., dataclass 모델을 JSON 직렬화 가능한 dict로 변환한다., to_json_dict() (+9 more)
 
-### Community 183 - "Community 183"
+### Community 182 - "Community 182"
 Cohesion: 0.14
 Nodes (17): artifact_size(), preflight(), MLX-LM FunctionGemma 단일 QLoRA run의 재현·예산 계약., resume을 거부하고 tracker 업로드를 끈 단일 MLX QLoRA run을 실행한다., run_training(), _stop_process(), TrainingConfig, _config() (+9 more)
 
-### Community 184 - "Community 184"
+### Community 183 - "Community 183"
 Cohesion: 0.11
 Nodes (7): _msg(), ConversationStore 시맨틱 메모리(임베딩) 확장에 대한 단위 테스트.  검증 범위 (spec 005 Phase 1): - 임베딩 저, store(), TestAddEmbedding, TestAddMessageReturnsId, TestLegacyMigration, TestSearchSimilar
 
-### Community 185 - "Community 185"
+### Community 184 - "Community 184"
 Cohesion: 0.09
 Nodes (11): _add_msg_with_embedding(), DreamingPipeline Phase 3 (그래프형 클러스터 드리밍) 단위 테스트.  검증 범위: - assign_clusters_for_u, BIZ-72: 파일이 없으면 fail-closed — 자동 생성하지 않는다.          AGENT.md 30→2줄 사고처럼 "자동 생성"이, enable_clusters=False면 기존 append 동작 유지(managed:journal 안쪽으로)., 클러스터 모드 활성화된 파이프라인 + LLM 라우터 비활성(폴백).      BIZ-72: 클러스터 모드는 MEMORY.md의 ``managed, enable_clusters=True + 임베딩 부착된 메시지가 있으면 마커 섹션 생성., 클러스터 모드라도 임베딩이 없으면 영향받은 클러스터가 0개여야 한다., setup() (+3 more)
 
-### Community 186 - "Community 186"
+### Community 185 - "Community 185"
 Cohesion: 0.10
 Nodes (17): ABC, persona_workspace(), Integration test: persona engine + LLM router pipeline., Provider that records calls for testing., Create persona files for integration testing., Full pipeline: resolve persona -> assemble -> send to LLM., LLM works without persona files., RecordingProvider (+9 more)
 
-### Community 187 - "Community 187"
+### Community 186 - "Community 186"
 Cohesion: 0.14
 Nodes (21): GET(), activeProjectsFile(), agentDir(), conversationsDbFile(), dreaming, ENTRY_TYPES, exportConversationsJsonl(), GATE_POLICY_DEFAULTS (+13 more)
 
-### Community 188 - "Community 188"
+### Community 187 - "Community 187"
 Cohesion: 0.10
 Nodes (24): _deep_merge(), handle_config_inspect(), _normalize_section(), 운영자용 effective config 요약 도구.  ``config_inspect`` native tool은 운영자가 현재 프로세스가 바라보는, section 입력을 허용 목록 안의 값으로 정규화한다., config.yaml을 dict로 읽고, 실패해도 빈 dict와 오류 문자열을 반환한다., raw config와 기본값을 합쳐 요청 섹션만 반환한다., dict는 재귀 병합하고, 나머지 값은 override를 우선한다. (+16 more)
 
-### Community 189 - "Community 189"
+### Community 188 - "Community 188"
 Cohesion: 0.16
 Nodes (18): FactCheckController, Typed fact-check controller enforcing retrieval before composition., Run bounded typed adapters and gate factual finalization., ComposeCallable, LookupCallable, Typed outcome plus the provider-compatible evidence payload., RealtimeLookupResult, lookup() (+10 more)
 
-### Community 190 - "Community 190"
+### Community 189 - "Community 189"
 Cohesion: 0.18
 Nodes (11): handle_study_status(), ``study_status`` operator native tool 의 Function Calling 핸들러.      Args:, _now(), ``study_status`` operator native tool 단위 테스트 (BIZ-395).  Agent Study Wiki on-dis, 임시 wiki 디렉터리를 구성하고 경로를 반환한다., _store(), TestLowConfidence, TestNotConfigured (+3 more)
 
-### Community 191 - "Community 191"
+### Community 190 - "Community 190"
 Cohesion: 0.11
 Nodes (12): _extract_sections(), parse_markdown(), 마크다운 페르소나 파일 파서.  마크다운 형식의 페르소나 파일을 읽어 구조화된 PersonaFile 객체로 변환한다. markdown-it-py, 단일 마크다운 파일을 파싱하여 PersonaFile로 변환한다.      파일이 존재하지 않거나, 비어 있거나, 디코딩에 실패하면     섹션이, 마크다운 텍스트에서 헤딩 경계를 기준으로 섹션을 추출한다.      헤딩이 없으면 전체 텍스트를 제목 없는 단일 섹션으로 반환한다.     첫, Section, AGENT.md, USER.md, MEMORY.md를 파싱하여 섹션 추출., Tests for the markdown persona parser. (+4 more)
 
-### Community 192 - "Community 192"
+### Community 191 - "Community 191"
 Cohesion: 0.11
 Nodes (21): CalendarProvider, 테스트/런타임 Calendar provider의 최소 인터페이스., _is_skill_script_available(), _python_bin(), Dreaming context cron용 Calendar/Gmail 런타임 provider resolver.  운영 환경의 Google Cale, google-calendar-skill의 venv/script를 subprocess로 호출하는 provider., Calendar API 결과를 collector가 이해하는 metadata dict로 정규화한다., gmail-skill의 metadata search만 호출하고 body는 읽지 않는 provider. (+13 more)
 
-### Community 193 - "Community 193"
+### Community 192 - "Community 192"
 Cohesion: 0.11
 Nodes (21): Semantic source-selection data produced once by UnifiedTurnPlanner., RealtimeLookupRequest, classify_timeline_status(), _fact_from_source(), lookup_async(), 시간 cue 조합을 확정/대기/부분반영/오래됨 상태로 분류한다.      Returns:         - ``no_evidence``: 검증할, 출처 본문 시간 cue와 기준시각을 비교한 timeline validation dict를 만든다., timeline 상태를 최종 답변이 쓸 수 있는 짧은 자연어 설명으로 변환한다. (+13 more)
 
-### Community 194 - "Community 194"
+### Community 193 - "Community 193"
 Cohesion: 0.08
 Nodes (25): 2026-04-24 ~ 04-25, 2026-06-13, 2026-06-17, 2026-06-29, 2026-06-30, 2026-07-05, 2026-07-16, 2026-07-19 (+17 more)
 
-### Community 195 - "Community 195"
+### Community 194 - "Community 194"
 Cohesion: 0.15
 Nodes (22): _call(), _FakeOrchestrator, ledger(), ``verification_evidence`` operator native tool 단위 테스트 (BIZ-441).  record/list/su, _record(), subagent_ledger(), test_done_allowed_blocks_until_required_stages_pass(), test_done_allowed_ignores_optional_evidence() (+14 more)
 
-### Community 196 - "Community 196"
+### Community 195 - "Community 195"
 Cohesion: 0.15
 Nodes (23): Typed intent/domain metadata를 capability 선언과 비교하는 compatibility adapter.  안전 원칙:, 정규화 질문에 맞는 read-only 자동 실행 후보를 하나 고른다.      ``explicit_intents``/``explicit_doma, select_capability(), fake_recipe(), fake_skill(), BIZ-425 — metadata 기반 read-only capability router 테스트., 자산과 질문 양쪽 도메인이 특정됐는데 서로 다르면 매칭하지 않는다., realtime_lookup(현재/지금) cue 만으로는 자산을 특정하지 않는다. (+15 more)
 
-### Community 197 - "Community 197"
+### Community 196 - "Community 196"
 Cohesion: 0.09
 Nodes (12): 서브에이전트 표준 응답 프로토콜.  서브프로세스로 실행되는 서브에이전트가 stdout으로 반환해야 하는 JSON 응답의 표준 스키마를 정의하고,, 에러 응답의 상세 정보. 서브에이전트가 구조화된 에러를 보낼 때 사용한다., 서브에이전트 stdout JSON의 표준 스키마.      필수: status. 선택: data, error, meta.     success일, status와 동반 필드의 정합성을 강제한다.          - error 상태인데 error 필드가 비어 있으면 검증 실패 — 디버깅 정보가, error 필드를 사람이 읽을 수 있는 단일 문자열로 정규화한다., 비표준 응답을 안전하게 분류한 결과. 예외 대신 반환되어 spawner가 에러 결과로 변환한다., SubAgentErrorDetail, SubAgentResponse (+4 more)
 
-### Community 198 - "Community 198"
+### Community 197 - "Community 197"
 Cohesion: 0.12
 Nodes (19): deletePersona(), listPersona(), PersonaFileMeta, PersonaFileType, PersonaListResponse, PersonaPutResult, PersonaResolveResponse, PersonaUndoResult (+11 more)
 
-### Community 199 - "Community 199"
-Cohesion: 0.10
-Nodes (15): stdio MCP smoke test using the real mcp SDK.  fake stdio MCP server(fixtures/fak, test_stdio_mcp_discovery_and_call(), test_stdio_mcp_operator_scope_enforced_on_real_server(), MCPManager, 연결에 성공한 서버들의 이름 목록을 반환한다., 연결 실패 서버별 오류 요약을 반환한다., MCP 서버 연결을 관리하고 도구 접근을 제공하는 클래스., MCP 클라이언트 초기화 및 도구 목록. (+7 more)
-
-### Community 200 - "Community 200"
+### Community 198 - "Community 198"
 Cohesion: 0.09
 Nodes (9): LogEntry, 구조화된 실행 로거 — 일별 파일 로테이션.  에이전트 실행 이력을 JSONL 형식으로 일별 파일에 기록한다. - 각 LogEntry는 액션 타, 특정 날짜·trace_id의 로그 항목을 조회한다 (기본 날짜: 오늘).          ``trace_id``가 주어지면 해당 ID로 태그된, 에이전트 액션의 구조화된 로그 항목.      JSONL 한 줄로 직렬화되어 일별 로그 파일에 기록된다.      trace_id는 분산 트레이, JSON 문자열로 직렬화한다 (한글 유니코드 그대로 유지)., 로그 디렉터리를 생성한다. 실패 시 False를 반환한다., 오늘 날짜 기준 로그 파일 경로를 반환한다., 구조화된 로그 항목을 파일에 기록한다.          입출력 요약은 500자로 잘라내어 로그 비대화를 방지한다.         ``trace_ (+1 more)
 
-### Community 201 - "Community 201"
+### Community 199 - "Community 199"
 Cohesion: 0.15
 Nodes (22): Agent Study Wiki 패키지.  SimpleClaw 가 사용자의 관심사·Dreaming 결과·중요 뉴스를 매일 "공부"해서 Markdo, daily_dir(), index_path(), init_wiki_root(), Study Wiki 디렉터리 레이아웃 규약과 초기화.  위키는 단일 루트 디렉터리 아래에 다음 구조로 자료를 둔다.      <root>/, 위키 루트 경로를 ``~`` 가 풀린 절대 경로로 반환한다.      Args:         base: 사용할 루트. ``None`` 이면 :, ``topics.yaml`` 레지스트리 파일 경로를 반환한다., 주제 본문 페이지 디렉터리(``topics/``) 경로를 반환한다. (+14 more)
 
-### Community 202 - "Community 202"
+### Community 200 - "Community 200"
 Cohesion: 0.14
 Nodes (13): FakeTime, _make_http(), _make_runner(), drain_restart_simpleclaw.py 시퀀스 테스트 (BIZ-442).  launchctl/HTTP/sleep 을 전부 주입 fak, ``scripts/`` 는 PYTHONPATH 에 없으므로 importlib 으로 직접 로드한다., admin health 폴링 불가 시 grace 대기 후 재시작을 진행한다., sleep 이 시간을 진행시키는 결정적 clock — 폴링 deadline 검증용., launchctl 호출을 기록하는 fake subprocess.run. (+5 more)
 
-### Community 203 - "Community 203"
+### Community 201 - "Community 201"
 Cohesion: 0.08
 Nodes (23): assertions, categories:accessibility, categories:best-practices, categories:performance, categories:seo, cumulative-layout-shift, largest-contentful-paint, total-blocking-time (+15 more)
 
-### Community 204 - "Community 204"
+### Community 202 - "Community 202"
 Cohesion: 0.13
 Nodes (22): ActionResult, ActionResultLedger, fallback_for_empty_final_from_ledger(), 성공/실패/미확정을 3분류로 반환한다 (unknown 은 None)., 한 turn 동안의 ActionResult 누적 ledger., empty final answer 시 ledger 기반 결정적 fallback 텍스트를 만든다.      side-effect 성공이 하나도 없, tool loop 한 step 의 runtime 해석 결과 snapshot., side-effect 성공 + unknown 결과 조합은 확인 필요 항목으로 함께 보고한다. (+14 more)
 
-### Community 205 - "Community 205"
+### Community 203 - "Community 203"
 Cohesion: 0.12
 Nodes (23): infer_action_result(), ToolCall 정보와 sanitized output 에서 ActionResult 를 best-effort 추론한다.      기존 `_disp, ActionResultLedger 모델/추론/fallback 포매터 단위 테스트 (BIZ-436).  검증 범위: - ActionResult.o, calendar create plain-text 성공은 좁은 조건(tool+skill+명시 문구)에서만 인정한다., 다른 스킬 출력에 'Event created successfully'가 인용돼도 성공으로 넓히지 않는다., 계약 없는 일반 텍스트 결과는 성공으로 단정하지 않고 unknown으로 남긴다., 본문 중간에 error/failed 단어가 있어도 헤더가 아니면 실패로 오분류하지 않는다., 스킬이 JSON envelope을 반환하면 heuristic보다 우선해 파싱한다. (+15 more)
 
-### Community 206 - "Community 206"
+### Community 204 - "Community 204"
 Cohesion: 0.13
 Nodes (17): _extract_format_vars(), _load_uncached(), _parse_yaml(), PromptLoadError, 시스템 프롬프트 YAML 로더.  운영 중 LLM에 직접 전달되는 시스템/보조 프롬프트는 코드 상수 대신 레포 루트의 ``prompts/syst, repo root 를 결정한다. 명시값 > env > pyproject walk-up., ``start`` 부모를 거슬러 올라가 marker 파일을 가진 첫 디렉터리 반환., ``str.format`` placeholder 이름 집합을 추출한다. (+9 more)
 
-### Community 207 - "Community 207"
+### Community 205 - "Community 205"
 Cohesion: 0.09
 Nodes (14): AccessAttempt, 접근 제어 로그 항목.      채널(telegram/webhook)별로 인증 시도를 기록하여 보안 감사에 활용한다., 채널 모델(channels.models) 단위 테스트.  ChannelError 계층 구조, EventActionType 열거형, AccessA, authorized를 생략하면 기본값 False여야 한다 (보안 기본값: 비인가)., timestamp를 생략하면 현재 시각이 자동 설정되어야 한다., details를 생략하면 빈 문자열이어야 한다., EventActionType 열거형의 값과 멤버 수를 검증한다., PROMPT 멤버의 값이 문자열 'prompt'여야 한다. (+6 more)
 
-### Community 208 - "Community 208"
+### Community 206 - "Community 206"
 Cohesion: 0.09
 Nodes (15): _extract_input_schema(), _positive_number(), MCP (Model Context Protocol) 클라이언트 관리자.  외부 MCP 서버에 연결하여 도구(tool)를 검색하고 호출하는 기능을, 단일 MCP 서버에 연결하고 제공하는 도구들을 로드한다., MCP subprocess에 전달할 환경변수를 조립한다.          baseline 키(PATH/HOME 등)와 XDG_* 만 상속하고,, initialize 응답에 tools/list capability가 선언됐는지 확인한다., 지정한 서버의 MCP 도구를 실행하고 결과를 반환한다.          Args:             server_name: 도구를 제공하는, 새 stdio 세션을 열어 도구를 1회 호출한다. (+7 more)
 
-### Community 209 - "Community 209"
+### Community 207 - "Community 207"
 Cohesion: 0.17
 Nodes (18): FakeClient, sports_response(), test_all_outputs_keep_public_schema_keys(), test_esports_live_normalizes_epoch_and_team_score(), test_general_tennis_uses_participant_and_score_fields(), test_golf_leaderboard_is_projected_and_bounded(), test_golf_player_standings_projection(), test_invalid_input_returns_bounded_json_without_fetch() (+10 more)
 
-### Community 210 - "Community 210"
+### Community 208 - "Community 208"
 Cohesion: 0.17
 Nodes (20): _call(), _Clock, ledger(), ``review_subagent_ledger`` operator native tool 단위 테스트 (BIZ-440).  start/complet, _start(), test_complete_requires_record_id(), test_complete_stores_summary_and_severity(), test_create_followup_note_links_note_and_issue_id() (+12 more)
 
-### Community 211 - "Community 211"
+### Community 209 - "Community 209"
 Cohesion: 0.15
 Nodes (21): append_request_fragment(), _format_page_result(), handle_browser_handoff(), _is_internal_url(), _looks_sensitive(), open_chrome(), `browser_handoff` native tool handler.  이 도구는 자동 fetch가 차단된 interactive URL 요청에서, localhost/private network URL은 Chrome handoff에서도 차단한다. (+13 more)
 
-### Community 212 - "Community 212"
+### Community 210 - "Community 210"
 Cohesion: 0.09
 Nodes (22): 1. 디렉토리 생성, 2. recipe.yaml 작성, 3. 즉시 사용, Cron 예약 실행, v1 (Step 기반, 레거시), v1 스텝의 허용 키, v1 호출자 책임 (Cron 실행 경로), v2 (Instruction 기반, 권장) (+14 more)
 
-### Community 213 - "Community 213"
+### Community 211 - "Community 211"
 Cohesion: 0.19
 Nodes (21): recipe_learning 운영자 native tool 단위 테스트 (BIZ-428)., BIZ-435 — legacy 저장분의 unknown/secret-like risk flag는 list/show 어디에도     노출되지 않고,, require_operator_accept=False 설정으로도 accepted 게이트는 우회되지 않는다 (BIZ-435)., 수동 dispatch도 operator context가 아니면 recipe_learning을 실행하지 않는다., handler 호출에 필요한 store/config/경로 묶음을 준비한다., _recipe_yaml(), _seed_suggestion(), test_accept_and_reject_update_status() (+13 more)
 
-### Community 214 - "Community 214"
+### Community 212 - "Community 212"
 Cohesion: 0.21
 Nodes (22): _candidate_payload(), _complex_result(), _enabled_learning_block(), _orchestrator(), orchestrator recipe learning capture hook 단위 테스트 (BIZ-428)., BIZ-427 — structured_output 게이트가 켜져 있으면 response_schema를 강제한다., LLM/schema 실패는 warning 로그만 남기고 예외를 전파하지 않는다., BIZ-435 — provider 예외 메시지는 로그에 남기지 않고 class/진단만 기록한다. (+14 more)
 
-### Community 215 - "Community 215"
+### Community 213 - "Community 213"
 Cohesion: 0.17
 Nodes (20): _build_ledger(), _build_subagent_ledger(), _error_json(), _handle_done_allowed(), _handle_list(), _handle_record(), _handle_summary(), handle_verification_evidence() (+12 more)
 
-### Community 216 - "Community 216"
+### Community 214 - "Community 214"
 Cohesion: 0.18
 Nodes (21): _call_dreaming_llm(), _extract_json_object(), _format_conversations(), DreamingPipeline에서 분리한 단계별 service 함수.  이 모듈의 함수들은 ``DreamingPipeline`` 인스턴스 메서드, USER.md insights 갱신용 LLM 호출 (BIZ-299).      Returns:         ``{"user_insights":, SOUL.md 갱신용 LLM 호출 (BIZ-299).      Returns:         ``{"soul_updates": str}`` —, AGENT.md 갱신용 LLM 호출 (BIZ-299).      Returns:         ``{"agent_updates": str}``, USER.md active-projects 섹션 갱신용 LLM 호출 (BIZ-299).      Returns:         ``{"activ (+13 more)
 
-### Community 217 - "Community 217"
+### Community 215 - "Community 215"
 Cohesion: 0.15
 Nodes (19): build_runner(), main(), live bridge 와 동일하게 Google News RSS 를 최우선 collector 로 두는 정책.      RSS 가 0건이면 후순위, config 로부터 운영 collector 구성의 StudyRunner 를 만든다., daily study run 을 1회 실행하고 요약을 JSON 으로 출력한다., _rss_first_policy(), CallbackWebSearchCollector, GoogleNewsRSSCollector (+11 more)
 
-### Community 218 - "Community 218"
+### Community 216 - "Community 216"
 Cohesion: 0.12
 Nodes (19): _coerce_str_tuple(), parse_capability_metadata(), YAML 리스트/단일 문자열을 소문자 문자열 튜플로 정규화한다., `capability:` YAML 블록을 :class:`CapabilityMetadata` 로 변환한다.      Args:         ra, BIZ-425 — skill/recipe capability metadata 파싱 테스트.  metadata contract 의 핵심 계약: -, side_effects 를 명시하지 않으면 read_only=true 여도 자동 실행 금지., test_full_coverage_requires_query_and_asset_result_contracts(), test_intents_and_domains_are_normalized_to_lowercase() (+11 more)
 
-### Community 219 - "Community 219"
+### Community 217 - "Community 217"
 Cohesion: 0.18
 Nodes (20): materialize_skill_suggestion(), MaterializeResult, _next_backup_dir(), 승인된 skill learning 후보를 runtime skill package로 쓰는 materializer.  BIZ-429/BIZ-432, 충돌하지 않는 백업 디렉터리 경로를 만든다., materialize 결과 경로 요약., 승인된 후보를 ``<target>/<skill>/`` 패키지로 안전하게 작성한다.      Args:         suggestion: mat, make_suggestion() (+12 more)
 
-### Community 220 - "Community 220"
+### Community 218 - "Community 218"
 Cohesion: 0.11
 Nodes (18): _completed(), _FakeResponse, restart_runtime 운영자 native tool 회귀 테스트., kickstart 후 PID 변경, Admin health, scheduler/dashboard/telegram/FD 상태를 반환한다., kickstart가 성공해도 post-health 실패와 PID 미변경은 log_debug로 이어갈 수 있게 표시한다., urllib response context manager 대체용., operator message 경로는 LLMRequest tools에 restart_runtime을 포함한다., Admin API health body bytes를 반환한다. (+10 more)
 
-### Community 221 - "Community 221"
+### Community 219 - "Community 219"
 Cohesion: 0.18
 Nodes (19): ledger(), SubagentReviewLedger 단위 테스트 (BIZ-440).  required/optional gate 구분, merge blockin, _start(), test_can_merge_blocked_while_required_incomplete(), test_can_merge_is_issue_scoped(), test_complete_stores_summary_severity_and_timestamp(), test_completed_record_is_not_late_even_past_deadline(), test_late_optional_finding_links_followup_issue_id() (+11 more)
 
-### Community 222 - "Community 222"
+### Community 220 - "Community 220"
 Cohesion: 0.12
 Nodes (15): registry snapshot과 exact definition을 고정해 drift를 탐지한다., registry snapshot과 exact definition을 고정해 drift를 탐지한다., BaseException, ConnectedFailurePhase, _compile_connected_graph(), _connected_checkpointer(), _connected_error(), 예외 원문을 복구할 수 없는 bounded digest diagnostic으로 투영한다. (+7 more)
 
+### Community 221 - "Community 221"
+Cohesion: 0.10
+Nodes (20): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+12 more)
+
+### Community 222 - "Community 222"
+Cohesion: 0.10
+Nodes (20): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+12 more)
+
 ### Community 223 - "Community 223"
-Cohesion: 0.10
-Nodes (20): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+12 more)
-
-### Community 224 - "Community 224"
-Cohesion: 0.10
-Nodes (20): compilerOptions, allowJs, baseUrl, esModuleInterop, incremental, isolatedModules, jsx, lib (+12 more)
-
-### Community 225 - "Community 225"
 Cohesion: 0.10
 Nodes (19): _deterministic_rollout_sample(), _fallback_for_empty_final_after_tools(), _is_direct_without_asset(), _parse_undo_command(), Agent orchestrator — 페르소나·스킬·메모리·LLM을 하나로 묶는 중앙 조율기.  응답 파이프라인 (Native Function, user/chat cohort를 프로세스 재시작과 무관한 rollout bucket에 고정한다., 원문 없이 primary asset의 owner-qualified identity만 기록한다., PlanGate asset과 connected registry가 공유할 exact identity를 요구한다. (+11 more)
 
-### Community 226 - "Community 226"
+### Community 224 - "Community 224"
 Cohesion: 0.13
 Nodes (16): PoolExhaustedError, 서브에이전트 스포너 데이터 모델.  서브에이전트의 생명주기(PENDING→RUNNING→SUCCESS/FAILURE/TIMEOUT/KILLED), 서브에이전트 작업의 기본 예외 클래스., 서브에이전트 생성에 실패했을 때 발생하는 예외., 동시 실행 풀이 가득 차서 대기열이 없을 때 발생하는 예외., 위임된 작업을 수행하는 서브프로세스 서브에이전트.      스포너가 생성하고 풀에서 동시 실행 수를 관리한다., 완료된 서브에이전트의 파싱된 출력 결과.      서브에이전트 stdout의 JSON을 파싱하여 status, data, error, meta를, SpawnError (+8 more)
 
-### Community 227 - "Community 227"
+### Community 225 - "Community 225"
 Cohesion: 0.15
 Nodes (19): Decimal, estimate_cost_microusd(), microusd_to_decimal_usd(), normalize_usage(), provider_cost_usd_to_microusd(), 내용을 저장하지 않는 LLM 사용량·예상 비용 계약을 제공한다.  provider별 원시 usage를 공통 토큰 구조로 정규화하고, 저장 가능한, provider 응답 dict를 공통 token breakdown으로 정규화한다., cache subset을 중복 과금하지 않고 예상 비용을 micro-USD로 계산한다. (+11 more)
 
-### Community 228 - "Community 228"
+### Community 226 - "Community 226"
 Cohesion: 0.14
 Nodes (12): LLM 라우터: 설정 기반 백엔드 선택 및 메시지 라우팅.  config.yaml의 llm 섹션을 읽어 여러 LLM 프로바이더를 초기화하고, 요, 선택된 backend에 전송하고 확정 가능한 attempt 결과를 기록한다.          semantic validator를 사용하는 호출은, Resolve the mutually-exclusive backend/route selectors., Return a compatible retry backend only when a retry is actually needed., 요청을 적절한 백엔드로 라우팅하고 응답을 반환한다.          BIZ-259: ``on_text_delta`` 콜백이 주어지면 프로바이더의, Send through a route and retry once when semantic validation fails.          A c, 현재 요청 messages에 provider-neutral multimodal attachments가 있는지 확인한다.      BIZ-448, 응답이 사용자에게 보일 내용이 전혀 없는 empty final 인지 판정한다.      BIZ-448 — 보이는 텍스트도 tool call 도 (+4 more)
 
-### Community 229 - "Community 229"
+### Community 227 - "Community 227"
 Cohesion: 0.11
 Nodes (8): NormalizedUsage, provider 중립 token breakdown과 선택적 provider 보고 비용이다., input/output 중 하나라도 provider가 보고했는지 반환한다., 알려진 input/output token 합계를 반환한다., Tests for the web dashboard., trace_id 필터 + 타임라인 엔드포인트 (BIZ-25) 동작을 검증한다., TestDashboardServer, TestDashboardTraceTimeline
 
-### Community 230 - "Community 230"
+### Community 228 - "Community 228"
 Cohesion: 0.10
 Nodes (11): Real Skill Command Scenarios.  High-difficulty test scenarios simulating real us, Build agent environment with REAL global skills from ~/.agents/skills/., real_env(), TestCmd_CheckCalendar, TestCmd_CheckEmail, TestCmd_FindRestaurant, TestCmd_MultiSkillConversation, TestCmd_NewsSearch (+3 more)
 
-### Community 231 - "Community 231"
+### Community 229 - "Community 229"
+Cohesion: 0.15
+Nodes (12): _initialize_result_with_capabilities(), _install_fake_mcp(), Tests for MCP client manager., Server without command should be skipped., tools capability가 없는 MCP 서버도 연결 성공으로 기록한다., tools capability가 있으면 기존처럼 도구 목록을 등록한다., tools/list 실패는 해당 서버만 실패 처리하고 다른 서버 연결은 계속한다., discovery 결과에 tool input schema와 server scope가 보존된다. (+4 more)
+
+### Community 230 - "Community 230"
 Cohesion: 0.12
 Nodes (19): lightweight_config(), _persona(), BIZ-314 시스템 프롬프트 경량화 회귀 테스트., 마크다운 목록에 남은 managed marker 설명 꼬리도 system prompt에서 제거한다., 구 AGENT.md의 항상 이해 요약 지시를 복잡 작업 한정 규칙으로 정규화한다., 테스트용 PersonaFile을 만든다., asset selector가 켜진 최소 orchestrator config를 만든다., selector가 fallback을 요청하는 function-call 응답 mock. (+11 more)
 
-### Community 232 - "Community 232"
+### Community 231 - "Community 231"
 Cohesion: 0.14
 Nodes (20): _candidate_set(), primary_config(), BIZ-495 — Unified plan이 고정한 context/tool scope의 실행 계약., standalone/topic-shift는 자동 history/RAG를 다시 끌어오지 않는다., safe direct asset는 다른 allowlisted 후보까지 노출하지 않는 좁은 loop다., production catalog의 raw plan이 경계를 통과해 exact skill만 실행한다., primary planner와 의도적으로 켠 legacy selector를 함께 구성한다., 각 iteration의 hallucinated call도 gate를 지나며 loop는 관찰 후 계속된다. (+12 more)
 
-### Community 233 - "Community 233"
+### Community 232 - "Community 232"
 Cohesion: 0.14
 Nodes (18): LLM으로 recipe(반복 워크플로) 후보 JSON을 생성한다.          BIZ-427 structured output 게이트가 켜져, build_recipe_candidate_prompt(), recipe(반복 워크플로) 후보 초안을 요청하는 프롬프트를 만든다.      skill 후보 프롬프트가 "새 능력/도구 사용법" 문서화를 요구, build_skill_candidate_prompt(), _files_mapping_from_payload(), _frontmatter_description(), _frontmatter_name(), _path_has_traversal() (+10 more)
 
-### Community 234 - "Community 234"
+### Community 233 - "Community 233"
 Cohesion: 0.12
 Nodes (18): _coerce_float(), _coerce_int(), _error_json(), _ok_json(), _parse_iso(), 운영자용 Agent Study Wiki 조회/강제 업데이트 도구 (BIZ-395).  Agent Study Wiki 는 SimpleClaw 가, 기본 now 제공자 — 테스트는 store 에 now 콜백을 주입해 고정한다., ISO8601 문자열을 timezone-aware datetime 으로 파싱한다.      naive 값은 UTC 로 간주하고, 흔한 ``Z`` (+10 more)
 
-### Community 235 - "Community 235"
+### Community 234 - "Community 234"
 Cohesion: 0.18
 Nodes (3): 서브에이전트 stdout을 표준 스키마로 검증한다.      검증 실패는 예외를 던지지 않고 `ValidationFailure`로 반환하여,, validate_response(), TestValidateResponse
 
-### Community 236 - "Community 236"
+### Community 235 - "Community 235"
 Cohesion: 0.13
 Nodes (18): decode_native_message(), encode_native_message(), handle_message(), _is_internal_url(), _load_store_from_config(), main(), Chrome Native Messaging host for SimpleClaw browser handoff.  Chrome 확장 프로그램은 현재, Native Messaging host CLI entrypoint. (+10 more)
 
-### Community 237 - "Community 237"
+### Community 236 - "Community 236"
 Cohesion: 0.14
 Nodes (9): make_secret_rotation_callback(), ``web/admin/.env.local`` 와 ``admin_api_token`` 동기화 헬퍼 (BIZ-245).  토큰을 회전할 때마다 Ne, admin_api 회전 핸들러에 꽂을 콜백 팩토리.      핸들러는 ``(backend, name, new_value)`` 시그니처로 호출하며, ``.env.local`` 의 ``ADMIN_API_TOKEN`` / ``ADMIN_API_BASE`` 라인을 갱신한다.      Args:, sync_env_local(), ``simpleclaw.channels.admin_env_local`` 단위 테스트 (BIZ-245).  BIZ-244 사고 — vault 만, TestRepoRootResolution, TestSecretRotationCallback (+1 more)
 
-### Community 238 - "Community 238"
+### Community 237 - "Community 237"
 Cohesion: 0.13
 Nodes (11): EventActionType, 웹훅 이벤트가 트리거하는 액션 유형.      PROMPT: 자유 텍스트 프롬프트 실행     RECIPE: 미리 정의된 레시피 실행, 수신된 웹훅 POST 요청을 처리한다.          보안 검사 순서:         1. Rate limit (429) — 인증 실패 케이스, 인증·정책 통과 후 실제 페이로드 파싱과 디스패치를 수행한다., 슬라이딩 윈도우 rate limit을 평가한다.          통과하면 ``None``, 차단되어야 하면 ``Retry-After`` 헤더에, 연속 차단 카운터를 1 증가시키고 임계 도달 시 알림을 발사한다., 단일 IP 폭주 패턴을 감지하면 알림을 발사한다.          burst window 내 요청이 임계 이상이면 트리거. 인증 실패 직후에 호, 쿨다운을 적용해 비정상 트래픽 알림을 발사한다.          같은 ``key``에 대해 ``alert_cooldown`` 초 안에 연속 호출 (+3 more)
 
-### Community 239 - "Community 239"
+### Community 238 - "Community 238"
 Cohesion: 0.13
 Nodes (18): _deep_copy(), load_study_config(), _merge_section(), Agent Study Wiki config loader.  Study Wiki는 사용자 프로필/기억(USER.md, MEMORY.md, insi, config.yaml에서 Study Wiki(``study:``) 설정을 로드한다.      파일이 없거나 study 키가 없거나 형식이 잘못되, 중첩 dict를 안전하게 복사한다.      ``_STUDY_DEFAULTS``는 dict + scalar 만으로 구성되므로 ``copy.dee, defaults 위에 사용자 override를 재귀 병합한다.      defaults에 존재하는 키만 순회하므로, 사용자가 오타 낸 미지의 키, Study Wiki config 로더 단위 테스트.  config skeleton 단계의 계약을 고정한다: 기본값(opt-in), 파일/섹션 부 (+10 more)
 
-### Community 240 - "Community 240"
+### Community 239 - "Community 239"
 Cohesion: 0.17
 Nodes (5): find_managed_sections(), _is_inside_any_range(), 오프셋이 ``ranges`` 중 어느 하나의 [start, end) 안에 있는지 검사., 텍스트에서 모든 managed 섹션을 파싱하고 짝·중첩·중복을 검증한다.      Args:         text: 검사 대상 파일 본문., TestFindManagedSections
 
-### Community 241 - "Community 241"
+### Community 240 - "Community 240"
 Cohesion: 0.11
 Nodes (16): FileType, PersonaFile, PromptAssembly, 페르소나 파싱 엔진의 데이터 모델.  마크다운 페르소나 파일을 구조화된 객체로 표현하기 위한 Enum과 dataclass 정의를 담고 있다., 페르소나 파일의 유형.      SOUL: 에이전트 아이덴티티·성격·말투 (최우선)     AGENT: 에이전트 행동 지시     USER: 사, 페르소나 파일의 로드 출처.      LOCAL: 프로젝트 로컬 디렉터리 (우선순위 높음)     GLOBAL: 사용자 전역 디렉터리 (우선순위, 마크다운 헤딩 하나와 그 본문 내용.      Attributes:         level: 헤딩 수준 (1=h1, 2=h2, ...). 헤딩, 파싱된 하나의 페르소나 마크다운 파일.      Attributes:         file_type: 파일 유형 (SOUL / AGENT / (+8 more)
 
-### Community 242 - "Community 242"
+### Community 241 - "Community 241"
 Cohesion: 0.16
 Nodes (9): filter_env(), 서브프로세스 환경변수 필터링 모듈.  서브프로세스 실행 전 os.environ에서 민감한 키(API 키, 토큰, 시크릿 등)를 제거한 사본을 반, 민감한 키를 제거한 ``os.environ`` 사본을 반환한다.      Args:         passthrough: 블록리스트에 매칭되더라, argv 를 실행해 stdout JSON 을 파싱한다(실패 시 ``{"ok": False, ...}``)., _subprocess_json(), Tests for subprocess environment variable filtering., Tests for filter_env()., Create a controlled environment dict for testing. (+1 more)
 
-### Community 243 - "Community 243"
+### Community 242 - "Community 242"
 Cohesion: 0.23
 Nodes (15): register(), AdminTokenState, AdminTokenStatus, getAdminTokenState(), logMismatchOnce(), logRecoveryOnce(), markDaemonUnreachable(), markTokenChecked() (+7 more)
 
-### Community 244 - "Community 244"
+### Community 243 - "Community 243"
 Cohesion: 0.15
 Nodes (10): handle_file_write(), _is_within(), 파일에 내용을 쓴다 (워크스페이스 디렉토리 내에서만 허용).      append=True이면 기존 파일에 추가, 아니면 덮어쓴다., ``path`` 가 ``root`` 의 자손(또는 동일) 인지 안전하게 검사한다.      BIZ-142: 기존 ``str(target).sta, 사용자가 제공한 경로를 해석하고 안전 경계를 검증한다.      BIZ-142:     - ``~`` 를 사용자 홈 디렉터리로 확장한다 (운영, resolve_safe_path(), BIZ-142: resolve_safe_path 의 경계 검증 — ``~`` 확장, persona_local_dir     화이트리스트, pre, Tests for file_write built-in tool. (+2 more)
 
-### Community 245 - "Community 245"
+### Community 244 - "Community 244"
 Cohesion: 0.13
 Nodes (12): ChannelError, 채널 통신 데이터 모델.  외부 채널(Telegram, Webhook)에서 사용하는 공통 데이터 구조를 정의한다. - 채널별 예외 계층 (Cha, TelegramError, WebhookError, 채널 에러 클래스의 상속 계층 구조를 검증한다., TelegramError는 ChannelError의 하위 클래스여야 한다., WebhookError는 ChannelError의 하위 클래스여야 한다., ChannelError는 Exception의 하위 클래스여야 한다. (+4 more)
 
-### Community 246 - "Community 246"
+### Community 245 - "Community 245"
 Cohesion: 0.11
 Nodes (19): 0.1 multica-ai/multica, 0.2 Google Stitch, 0.3 DESIGN.md 컨벤션 비교, 0. 사전 조사 요약, 1. Principles, 3.1 Atomic, 3.2 Molecular, 3.3 Layout (+11 more)
 
-### Community 247 - "Community 247"
+### Community 246 - "Community 246"
 Cohesion: 0.18
 Nodes (13): MemoryCluster, MemoryClusterMap(), MemoryClusterMapProps, TONE_BG, TONE_CYCLE, PersonaEditor(), TONE_BG, TraceTimeline() (+5 more)
 
-### Community 248 - "Community 248"
+### Community 247 - "Community 247"
 Cohesion: 0.11
 Nodes (13): SimpleClaw Documentation, 문서 목차, 시작하기, 아키텍처 개요, 주요 기능, 0) 사전 점검, 1) 롤백 가능한 백업 생성, 2) 런타임 자산 이전 (`~/.simpleclaw` → `~/.simpleclaw-agent/default`) (+5 more)
 
-### Community 249 - "Community 249"
+### Community 248 - "Community 248"
 Cohesion: 0.13
 Nodes (18): _count_tokens(), _normalize_persona_policy_conflicts(), 시스템 프롬프트 어셈블러 — 토큰 버짓 관리.  여러 페르소나 파일(SOUL, AGENT, USER, MEMORY)을 하나의 시스템 프롬프트로, 원본 persona 파일의 운영 설명용 HTML comment를 prompt 렌더링에서 제거한다., 파서 단계에서 HTML 주석 껍질이 사라진 dreaming 설명 찌꺼기를 제거한다., 렌더링된 시스템 프롬프트에서 일반 HTML comment를 제거한다.      Persona 파일의 HTML comment는 운영 메모·관리 마, tiktoken을 사용하여 텍스트의 토큰 수를 계산한다.      Args:         text: 토큰 수를 셀 대상 텍스트., Dreaming managed 블록을 렌더링 시점에 제거한다.      Dreaming은 장기기억 sidecar/RAG로 회수되어야 하므로, 페 (+10 more)
 
-### Community 250 - "Community 250"
+### Community 249 - "Community 249"
 Cohesion: 0.15
 Nodes (10): _build_provider(), _FakeModels, BIZ-427 — Gemini structured output config 매핑 테스트.  fake Gemini client 로 ``Gemini, structured 응답도 기존과 동일하게 LLMResponse 로 반환되어야 한다., BIZ-430 — required 계약은 힌트 유무와 무관하다. 힌트 없는 required         스트리밍 요청도 API 호출 전에 즉시, generate_content 호출 kwargs 를 기록하는 fake — config 검증용., 미지정 시 config 에 structured output 필드가 세팅되지 않아야 한다 (회귀 0)., required 인데 mime/schema 가 반쪽이면 API 호출 전에 실패해야 한다. (+2 more)
 
-### Community 251 - "Community 251"
+### Community 250 - "Community 250"
 Cohesion: 0.27
 Nodes (15): CronGraphResultV1, Graph facade가 scheduler에 반환하는 domain-neutral 완료 축이다., FakeCronFacade, _job(), LangGraph V4 Cron ingress, retry ownership, notifier 격리 회귀., _scheduler(), test_daemon_injects_opt_in_v4_facade_without_db_migration(), test_default_graph_checkpoint_filename_is_not_daemon_or_conversation_db() (+7 more)
+
+### Community 251 - "Community 251"
+Cohesion: 0.18
+Nodes (13): ExecutionCallbacks, ExecutionRouter, PlanGate를 통과한 UnifiedTurnPlan의 상위 실행 mode dispatcher.  이 모듈은 ``execution.mode``를, ExecutionMode별 실행 controller callback 묶음., 검증된 plan을 mode에 대응하는 callback 하나로 전달한다., Dispatch the same turn object selected by its immutable plan., PlanGate PASS 이후 사용할 mode→callback 경계를 만든다.          BIZ-495/BIZ-497부터 primary와, _callbacks() (+5 more)
 
 ### Community 252 - "Community 252"
 Cohesion: 0.16
@@ -1674,52 +1674,52 @@ Cohesion: 0.24
 Nodes (14): BackendPricing, 특정 backend 가격표의 버전·근거·token별 단가다., LLMUsageService, 가격 계산·저장·metric·log·threshold alert를 fail-open으로 조합한다., 의존성과 bounded alert retry 정책을 고정한다., _event(), test_daily_alert_claim_deduplicates_across_service_restart(), test_failed_alert_is_retried_after_cooldown_across_restart() (+6 more)
 
 ### Community 269 - "Community 269"
-Cohesion: 0.15
-Nodes (15): 드리밍 파이프라인을 초기화한다.          Args:             conversation_store: 대화 이력 저장소 인스턴스., 위험 파일 목록을 사이클 직전에 스냅샷하고 보존 회전하는 매니저.      Attributes:         backup_root: ``.ag, SafetyBackupManager, _create_telegram_notifier(), _create_webhook_alert_notifier(), _format_webhook_alert(), _kill_existing_bots(), main() (+7 more)
-
-### Community 270 - "Community 270"
 Cohesion: 0.19
 Nodes (11): _human_lang_name(), is_supported(), language_instruction_block(), LanguagePolicy, BIZ-80 — Dreaming 산출물의 1차 언어 정규화.  dreaming 이 USER.md / MEMORY.md / AGENT.md / S, LLM dreaming 프롬프트에 삽입할 1차 언어 강제 지시문 (BIZ-80).      파일별 ``per_file`` 매핑이 비어 있으면 단, 언어 코드를 프롬프트용 사람이 읽는 이름으로., ``lang`` 이 본 모듈의 휴리스틱이 신뢰할 만한 코드인지. (+3 more)
 
-### Community 271 - "Community 271"
+### Community 270 - "Community 270"
 Cohesion: 0.12
 Nodes (17): Admin API, LLM 라우팅 설정, SimpleClaw, 개발 가이드, 도구 · 스킬 · 레시피 · MCP 경계, 동작 방식, 라이선스, 사전 요구 사항 (+9 more)
 
-### Community 272 - "Community 272"
+### Community 271 - "Community 271"
 Cohesion: 0.24
 Nodes (6): 운영자 검토를 기다리는 recipe(workflow) 후보., JSONL recipe suggestion sidecar 저장소., 같은 trace fingerprint의 pending 후보는 새로 만들지 않고 갱신한다., RecipeSuggestion, RecipeSuggestionStore, RecipeSuggestionStatus
 
-### Community 273 - "Community 273"
+### Community 272 - "Community 272"
 Cohesion: 0.20
 Nodes (6): _cron_list(), handle_cron_action(), ReAct 루프에서 발생한 cron 액션을 처리한다.      list, add, remove, enable, disable 액션을 지원한다., cron 작업 목록을 포맷팅하여 반환한다 (ReAct 핸들러와 /cron 명령이 공유)., Tests for cron as a built-in tool via _dispatch_tool_call., TestCronToolIntegration
 
-### Community 274 - "Community 274"
+### Community 273 - "Community 273"
 Cohesion: 0.18
 Nodes (15): agent_browser_npx_fallback_command(), call_invokes_agent_browser(), command_writes_to_recipes_dir(), execute_command(), is_agent_browser_command(), is_composite_agent_browser_chain(), 명령 실행 dispatch 경계.  오케스트레이터는 대화 상태와 tool loop 흐름만 보유하고, 셸 명령 실행의 보안 검사·정규화·fallb, runtime shell command가 configured live recipes.dir에 쓰려는지 감지한다. (+7 more)
 
-### Community 275 - "Community 275"
+### Community 274 - "Community 274"
 Cohesion: 0.16
 Nodes (7): drain 상태/active operation 컨트롤러 — 채널·admin health 가 공유한다., DrainController 를 교체 주입한다 (테스트/커스텀 배선용)., DrainController, drain 상태 파일 + in-process active operation 카운터.      bot 프로세스와 deploy script 가 같은, drain 요청을 해제한다 — 파일이 없어도 조용히 성공(멱등)., 현재 실행 중 operation 수(이 프로세스 기준)., TestActiveOperations
 
-### Community 276 - "Community 276"
+### Community 275 - "Community 275"
 Cohesion: 0.12
 Nodes (9): 사용자/채팅이 화이트리스트에 포함되어 있는지 확인한다.          Fail-closed 정책: 화이트리스트가 설정되지 않으면 모든 메시지를, 접근 시도를 로그에 기록한다. 비인가 접근 시 경고 로그를 남긴다., ``(chat_id, message_id)`` 키에 옵션 본문을 적재한다 (LRU).          같은 키가 이미 있으면 새 옵션으로 덮어쓰, 캐시에서 (chat_id, message_id, option_index) 에 해당하는 옵션을 회수.          존재하지 않거나 인덱스 범위, ``ClarifyRequest`` 로부터 InlineKeyboardMarkup 을 생성.          한 줄당 한 버튼 — 옵션 본문이 모바, 일반 텍스트 응답 또는 clarify 인라인 키보드를 보낸다.          ``clarify_provider`` 가 ``ClarifyRequ, 인라인 키보드 버튼 탭 → 화이트리스트 재검증 → 옵션 본문 주입.          BIZ-260 DoD:         - 인바운드 메시지와, parse_proactive_callback_data() (+1 more)
 
-### Community 277 - "Community 277"
+### Community 276 - "Community 276"
 Cohesion: 0.27
 Nodes (15): Asset, build_prompt(), _key(), load_manifest(), _load_skills_config(), main(), parse_selection(), 스파이크 manifest를 production guardrail 입력 모델로 변환한다. (+7 more)
 
-### Community 278 - "Community 278"
+### Community 277 - "Community 277"
 Cohesion: 0.13
 Nodes (12): ACTIVE_INSIGHTS, ARCHIVED_INSIGHTS, BLOCKLIST, capture(), captureForTheme(), __dirname, DREAMING_STATUS, MEMORY_INDEX (+4 more)
 
-### Community 279 - "Community 279"
+### Community 278 - "Community 278"
 Cohesion: 0.15
 Nodes (15): cleanup_module(), _populate_legacy_agent_dir(), BIZ-138 — ``scripts/cleanup_legacy_agent_dir.py`` 단위 테스트.  격리 스크립트가: 1. dry-run, ``skills/`` 와 ``recipes/`` 같은 프로젝트 자산은 절대 격리되지 않는다., source 가 비었거나 프로젝트 자산만 있을 때 카운터가 0 으로 종료., source 디렉터리가 아예 없으면 깨끗이 0 으로 종료(에러 없음)., ``scripts/cleanup_legacy_agent_dir.py`` 를 모듈로 직접 import.      ``scripts/`` 는 PYT, BIZ-138 시나리오의 잔여 파일 일습을 source 에 만들어둔다. (+7 more)
 
-### Community 280 - "Community 280"
+### Community 279 - "Community 279"
 Cohesion: 0.12
 Nodes (6): orchestrator(), 오케스트레이터 drain 게이트 테스트 (BIZ-442).  검증 범위: - drain 중 새 ``process_message`` 는 파이프라인, 게이트는 진입 시 1회만 평가 — 진행 중 turn 은 drain 이 걸려도 완료된다., TestDrainConfigWiring, TestProcessCronMessageDrainGate, TestProcessMessageDrainGate
+
+### Community 280 - "Community 280"
+Cohesion: 0.15
+Nodes (7): Orchestrator의 RAG 회상 통합 테스트 (spec 005 Phase 2).  검증 범위: - RAG 비활성 시 기존 동작(슬라이딩 윈, _save_turn이 user/assistant 양쪽에 대해 백그라운드 임베딩을 스케줄한다., isolated=True(cron)에서는 RAG가 호출되지 않아야 한다., BIZ-29: ``_retrieve_relevant_context`` 호출이 structured_logger에 적재되는지., TestRAGStructuredLogging, TestSaveTurnEmbedding, TestToolLoopIntegration
 
 ### Community 281 - "Community 281"
 Cohesion: 0.17
@@ -2395,45 +2395,41 @@ Nodes (3): ComposeCallback, GuardCallback, SafeRenderCallback
 
 ### Community 458 - "Community 458"
 Cohesion: 0.50
-Nodes (3): load_security_config(), Security config loader.  시크릿 볼트/마스터키 경로를 expanduser 가능한 절대 문자열로 정규화한다., config.yaml에서 security 섹션을 로드한다.      BIZ-302 후속 — ``vault_path`` / ``master_key
-
-### Community 459 - "Community 459"
-Cohesion: 0.50
 Nodes (3): Runtime contract test fixtures.  외부 네트워크, live Telegram, live runtime DB를 건드리지 않, Create a live-shape command recipe fixture with recipe settings., recipe_contract_dir()
 
-### Community 461 - "Community 461"
+### Community 460 - "Community 460"
 Cohesion: 0.50
 Nodes (4): _contains_any(), _normalized(), 대소문자·공백 차이를 제거한 비교 문자열을 만든다., 정규화된 text에 alias 대안 중 하나가 포함되는지 검사한다.
 
-### Community 462 - "Community 462"
+### Community 461 - "Community 461"
 Cohesion: 0.50
 Nodes (3): Agent Identity, Role, Tone & Style
 
-### Community 463 - "Community 463"
+### Community 462 - "Community 462"
 Cohesion: 0.50
 Nodes (3): Core Memory, Long-term Notes, Recent Summary
 
-### Community 464 - "Community 464"
+### Community 463 - "Community 463"
 Cohesion: 0.50
 Nodes (3): __getattr__(), LLM routing layer with multi-provider support and CLI wrapping., Lazy router exports to avoid config-loader import cycles.
 
-### Community 468 - "Community 468"
+### Community 467 - "Community 467"
 Cohesion: 0.83
 Nodes (3): cleanText(), cloneWithoutNoise(), extractReadableText()
 
-### Community 469 - "Community 469"
+### Community 468 - "Community 468"
 Cohesion: 0.50
 Nodes (3): Install, Privacy boundary, SimpleClaw Page Reader Chrome Extension
 
-### Community 470 - "Community 470"
+### Community 469 - "Community 469"
 Cohesion: 0.50
 Nodes (3): list_all_tools(), Skill loader engine and MCP client., Combine skills and MCP tools into a unified list.      Skills take priority over
 
-### Community 471 - "Community 471"
+### Community 470 - "Community 470"
 Cohesion: 0.50
 Nodes (3): Script, test-skill, Trigger
 
-### Community 472 - "Community 472"
+### Community 471 - "Community 471"
 Cohesion: 0.67
 Nodes (3): _load_evaluator_script(), Actual-provider V4 evaluator assembly regression tests., test_runtime_catalog_passes_native_specs_to_connected_probe_definitions()
 
@@ -2452,16 +2448,16 @@ Nodes (3): child, __dirname, nextBin
 ## Knowledge Gaps
 - **1147 isolated node(s):** `manifest_version`, `name`, `version`, `description`, `permissions` (+1142 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **90 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **91 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `AgentOrchestrator` connect `Community 10` to `Community 0`, `Community 129`, `Community 2`, `Community 3`, `Community 132`, `Community 5`, `Community 259`, `Community 7`, `Community 8`, `Community 6`, `Community 282`, `Community 12`, `Community 141`, `Community 14`, `Community 269`, `Community 16`, `Community 272`, `Community 18`, `Community 275`, `Community 20`, `Community 19`, `Community 17`, `Community 23`, `Community 24`, `Community 25`, `Community 26`, `Community 27`, `Community 284`, `Community 28`, `Community 154`, `Community 280`, `Community 281`, `Community 161`, `Community 162`, `Community 291`, `Community 163`, `Community 413`, `Community 168`, `Community 297`, `Community 45`, `Community 46`, `Community 47`, `Community 49`, `Community 50`, `Community 53`, `Community 54`, `Community 188`, `Community 189`, `Community 63`, `Community 319`, `Community 193`, `Community 199`, `Community 329`, `Community 78`, `Community 213`, `Community 214`, `Community 92`, `Community 220`, `Community 350`, `Community 225`, `Community 98`, `Community 230`, `Community 103`, `Community 232`, `Community 233`, `Community 109`, `Community 112`, `Community 113`, `Community 252`, `Community 381`?**
+- **Why does `AgentOrchestrator` connect `Community 2` to `Community 0`, `Community 128`, `Community 3`, `Community 259`, `Community 5`, `Community 6`, `Community 7`, `Community 8`, `Community 10`, `Community 138`, `Community 12`, `Community 282`, `Community 14`, `Community 271`, `Community 16`, `Community 145`, `Community 274`, `Community 18`, `Community 20`, `Community 19`, `Community 17`, `Community 23`, `Community 151`, `Community 25`, `Community 26`, `Community 27`, `Community 284`, `Community 279`, `Community 280`, `Community 159`, `Community 160`, `Community 161`, `Community 281`, `Community 291`, `Community 413`, `Community 167`, `Community 297`, `Community 46`, `Community 47`, `Community 48`, `Community 49`, `Community 50`, `Community 51`, `Community 53`, `Community 54`, `Community 187`, `Community 188`, `Community 62`, `Community 319`, `Community 192`, `Community 329`, `Community 79`, `Community 80`, `Community 211`, `Community 212`, `Community 218`, `Community 350`, `Community 223`, `Community 99`, `Community 228`, `Community 231`, `Community 232`, `Community 104`, `Community 109`, `Community 22`, `Community 112`, `Community 113`, `Community 251`, `Community 252`, `Community 381`?**
   _High betweenness centrality (0.122) - this node is a cross-community bridge._
-- **Why does `SuggestionStatus` connect `Community 35` to `Community 37`?**
+- **Why does `SuggestionStatus` connect `Community 35` to `Community 41`?**
   _High betweenness centrality (0.074) - this node is a cross-community bridge._
-- **Why does `SuggestionStore` connect `Community 37` to `Community 0`, `Community 1`, `Community 166`, `Community 6`, `Community 108`, `Community 269`, `Community 146`, `Community 24`?**
+- **Why does `SuggestionStore` connect `Community 41` to `Community 0`, `Community 1`, `Community 5`, `Community 165`, `Community 108`, `Community 143`, `Community 23`?**
   _High betweenness centrality (0.064) - this node is a cross-community bridge._
 - **Are the 297 inferred relationships involving `AgentOrchestrator` (e.g. with `AssetSelectionResult` and `CapabilityExecutor`) actually correct?**
   _`AgentOrchestrator` has 297 INFERRED edges - model-reasoned connections that need verification._
