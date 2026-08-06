@@ -1,6 +1,5 @@
 """V4 primary fail-closed receipt와 promotion-zero 계약."""
 
-from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4ExecutionReceiptV1,
@@ -8,6 +7,7 @@ from simpleclaw.graph_runtime.runtime import (
     ShadowSideEffectCountsV1,
     TargetDispatchTraceV1,
 )
+from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
 from simpleclaw.graph_runtime.status import TerminalOutcome
 
 
