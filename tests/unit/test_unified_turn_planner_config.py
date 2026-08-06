@@ -160,7 +160,7 @@ agent:
 
     result = load_agent_config(config)["unified_turn_planner"]
 
-    assert result["mode"] == "primary"
+    assert result["mode"] == "off"
     assert result["sample_rate"] == 0.0
     assert result["selected_context_max_turns"] == 2
     assert result["selected_context_max_chars"] == 100

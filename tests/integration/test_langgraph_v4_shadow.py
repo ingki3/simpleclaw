@@ -12,7 +12,11 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
-from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.orchestrator import (
+    AgentOrchestrator,
+    _allow_v4_legacy_fallback,
+    _is_direct_without_asset,
+)
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
@@ -33,6 +37,7 @@ from simpleclaw.graph_runtime.adapters.delivery import (
     SenderReceipt,
     TelegramDeliveryAdapter,
 )
+from simpleclaw.graph_runtime.adapters.base import AdapterResponse
 from simpleclaw.graph_runtime.adapters.persistence import (
     ConversationStorePersistenceAdapter,
 )
@@ -63,6 +68,7 @@ from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowTurnRunner,
     _ShadowBudgetStop,
     _ShadowRunBudget,
+    _DurableInvocationClaims,
     _TargetDispatchGuard,
     _TargetDispatchInvariantError,
 )
@@ -84,6 +90,7 @@ from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
+pytestmark = pytest.mark.offline
 
 
 def _registry():
@@ -361,7 +368,7 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     assert result.comparison is None
     assert result.canary is None
     assert result.execution.result_source == "langgraph_v4"
-    assert result.execution.final_content == '{"fixture_result":"primary-source"}'
+    assert result.execution.final_content == "primary-source"
     assert result.execution.provenance.startswith(
         "langgraph_v4:recipe:contract-fixture-workflow:"
     )
@@ -369,6 +376,193 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     assert result.execution.side_effect_counts.total == 0
     assert result.execution.rollback_required is False
     assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+async def test_connected_primary_reentry_reuses_durable_terminal_without_dispatch(
+    tmp_path,
+) -> None:
+    calls = 0
+    checkpoint = tmp_path / "durable-checkpoint.sqlite3"
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "durable-result"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(tmp_path / "durable-conversation.db"),
+            recipe_executor=executor,
+        )
+
+    kwargs = {
+        "plan": _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        "legacy": None,
+        "request_id": "durable-request",
+        "session_key": "durable-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    resumed = await runner().run(**kwargs)
+
+    assert calls == 1
+    assert first.execution.final_content == "durable-result"
+    assert resumed.execution.final_content == "durable-result"
+    assert resumed.execution.dispatch_trace.exactly_once is True
+    assert resumed.execution.rollback_required is False
+
+
+def test_durable_claimed_invocation_requires_manual_recovery(tmp_path) -> None:
+    invocation = _invocation(_registry())
+    first = _DurableInvocationClaims(tmp_path / "claim-checkpoint.sqlite3")
+    resumed = _DurableInvocationClaims(tmp_path / "claim-checkpoint.sqlite3")
+
+    assert first.claim("claim-request", invocation) is None
+    with pytest.raises(_TargetDispatchInvariantError, match="manual_recovery_required"):
+        resumed.claim("claim-request", invocation)
+
+
+def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
+    invocation = _invocation(_registry())
+    receipt = LangGraphV4ExecutionReceiptV1(
+        mode="primary",
+        request_id="fallback-request",
+        selected_route="recipe",
+        final_artifact=None,
+        dispatch_trace=TargetDispatchTraceV1(
+            target_asset_ref=invocation.asset_ref,
+            invocation_id=invocation.invocation_id,
+            attempted=1,
+            executed=1,
+            succeeded=0,
+        ),
+        budget_usage=_budget(),
+        side_effect_counts=ShadowSideEffectCountsV1(),
+        terminal_outcome=TerminalOutcome.FAILED,
+        rollback_required=True,
+        rollback_reasons=("post_dispatch_failure",),
+    )
+
+    assert _allow_v4_legacy_fallback({"on_failure": "legacy"}, None) is True
+    assert _allow_v4_legacy_fallback({"on_failure": "legacy"}, receipt) is False
+
+
+def test_execution_receipt_rejects_false_success_invariants() -> None:
+    invocation = _invocation(_registry())
+    with pytest.raises(ValueError, match="exactly-one dispatch"):
+        LangGraphV4ExecutionReceiptV1(
+            mode="primary",
+            request_id="false-success",
+            selected_route="recipe",
+            final_artifact=None,
+            dispatch_trace=TargetDispatchTraceV1(
+                target_asset_ref=invocation.asset_ref,
+                invocation_id=invocation.invocation_id,
+                attempted=0,
+                executed=0,
+                succeeded=0,
+            ),
+            budget_usage=_budget(),
+            side_effect_counts=ShadowSideEffectCountsV1(),
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            rollback_required=False,
+            rollback_reasons=(),
+        )
+
+
+def test_v4_primary_preserves_direct_no_asset_parity() -> None:
+    planned = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    direct = replace(
+        planned,
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.NO_MATCH,
+            primary_asset=None,
+            supporting_assets=(),
+        ),
+        execution=replace(
+            planned.execution,
+            primary_asset=None,
+            allowed_assets=(),
+            allowed_tools=(),
+        ),
+    )
+
+    assert _is_direct_without_asset(direct) is True
+
+
+@pytest.mark.asyncio
+async def test_connected_primary_unsafe_effect_never_promotes_final(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def unsafe_dispatch(_self, invocation, **_kwargs):
+        result = NormalizedAssetResultV1(
+            invocation_id=invocation.invocation_id,
+            output_contract=invocation.output_contract,
+            status=AssetResultStatus.RESOLVED,
+            payload={"answer": "must-not-promote"},
+            payload_hash=hashlib.sha256(b"unsafe").hexdigest(),
+            effect_status=EffectStatus.CONFIRMATION_REQUIRED,
+        )
+        return AdapterResponse(
+            invocation_id=invocation.invocation_id,
+            status=AssetResultStatus.RESOLVED,
+            input_payload_hash=invocation.payload_hash,
+            effect_status=EffectStatus.CONFIRMATION_REQUIRED,
+            result=result,
+            dispatched=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.graph_runtime.shadow.GenericRecipeAdapter.dispatch",
+        unsafe_dispatch,
+    )
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "unsafe-checkpoint.sqlite3",
+        ),
+        definitions=_definitions(),
+        conversation_store=ConversationStore(tmp_path / "unsafe-conversation.db"),
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="unsafe-effect-request",
+        session_key="unsafe-effect-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.final_content is None
+    assert result.execution.rollback_required is True
+    assert "effect_not_safe" in result.execution.rollback_reasons
+    assert result.execution.dispatch_trace.succeeded == 0
 
 
 @pytest.mark.asyncio
@@ -525,7 +719,9 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
                 request_id=request_id,
                 content="V4가 만든 최종 응답",
                 outcome=TerminalOutcome.COMPLETED,
-                content_hash="v4-content-hash",
+                content_hash=hashlib.sha256(
+                    "content.v1\x1fV4가 만든 최종 응답".encode()
+                ).hexdigest(),
             ),
             dispatch_trace=TargetDispatchTraceV1(
                 target_asset_ref=AssetRefV1(

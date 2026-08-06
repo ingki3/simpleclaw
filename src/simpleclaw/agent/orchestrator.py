@@ -25,6 +25,7 @@ import os
 import random
 import shlex
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -168,6 +169,7 @@ from simpleclaw.daemon.drain import (
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
 from simpleclaw.graph_runtime.runtime import (
+    LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
@@ -316,6 +318,30 @@ def _canary_read_only_eligible(
         ):
             return False
     return True
+
+
+def _allow_v4_legacy_fallback(
+    v4: Mapping[str, object],
+    execution: LangGraphV4ExecutionReceiptV1 | None,
+) -> bool:
+    """Target pre-dispatch 실패에서만 legacy executor 진입을 허용한다."""
+    if str(v4.get("on_failure", "fail_closed")) != "legacy":
+        return False
+    return execution is None or (
+        execution.dispatch_trace.attempted == 0
+        and execution.dispatch_trace.executed == 0
+    )
+
+
+def _is_direct_without_asset(plan: UnifiedTurnPlan) -> bool:
+    """Connected exact-asset 경로 밖의 ordinary direct turn을 식별한다."""
+    return (
+        plan.execution.mode is ExecutionMode.DIRECT_ANSWER
+        and plan.capability.primary_asset is None
+        and not plan.capability.supporting_assets
+        and not plan.execution.allowed_assets
+        and not plan.execution.allowed_tools
+    )
 
 _ATTACHMENT_CONTEXT_HEADER = "Attachment context"
 
@@ -1535,6 +1561,10 @@ class AgentOrchestrator:
         run_v4 = architecture == "langgraph_v4" and (
             rollout_mode == "primary" or canary_read_only
         )
+        # V4 connected runner는 exact asset executor다. 일반 대화는 기존 direct
+        # 경로가 소유하며 primary rollout 때문에 사용자 실패로 바뀌지 않는다.
+        if run_v4 and _is_direct_without_asset(effective_plan):
+            run_v4 = False
         if run_v4 and not _canary_read_only_eligible(effective_plan, catalog):
             self._record_unified_rollout_path(
                 path="fail_closed",
@@ -1598,7 +1628,7 @@ class AgentOrchestrator:
                 )
 
             if failure_reason:
-                if str(v4.get("on_failure", "fail_closed")) == "legacy":
+                if _allow_v4_legacy_fallback(v4, execution):
                     self._record_unified_rollout_path(
                         path="legacy_fallback",
                         reason=failure_reason,

@@ -299,6 +299,7 @@ class LangGraphV4ExecutionReceiptV1:
     terminal_outcome: TerminalOutcome
     rollback_required: bool
     rollback_reasons: tuple[str, ...]
+    effect_status: EffectStatus = EffectStatus.NONE
     result_source: Literal["langgraph_v4"] = "langgraph_v4"
 
     def __post_init__(self) -> None:
@@ -308,6 +309,26 @@ class LangGraphV4ExecutionReceiptV1:
             raise ValueError("execution receipt identifiers are required")
         if self.rollback_required != bool(self.rollback_reasons):
             raise ValueError("rollback flag and reasons must agree")
+        if not self.rollback_required:
+            if not self.dispatch_trace.exactly_once:
+                raise ValueError("successful receipt requires exactly-one dispatch")
+            if self.side_effect_counts.total:
+                raise ValueError("successful receipt requires zero external side effects")
+            if self.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}:
+                raise ValueError("successful receipt requires a safe effect status")
+            if self.terminal_outcome is not TerminalOutcome.COMPLETED:
+                raise ValueError("successful receipt requires completed terminal outcome")
+            if self.final_artifact is None:
+                raise ValueError("successful receipt requires a final artifact")
+            if self.final_artifact.request_id != self.request_id:
+                raise ValueError("final artifact request identity mismatch")
+            if self.final_artifact.outcome is not self.terminal_outcome:
+                raise ValueError("final artifact outcome mismatch")
+            expected_hash = hashlib.sha256(
+                f"content.v1\x1f{self.final_artifact.content}".encode("utf-8")
+            ).hexdigest()
+            if self.final_artifact.content_hash != expected_hash:
+                raise ValueError("final artifact content hash mismatch")
 
     @property
     def final_content(self) -> str | None:

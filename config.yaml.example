@@ -218,7 +218,8 @@ agent:
         mode: no_send  # no_send | deferred (legacy live 입력은 deferred로 정규화)
         max_attempts: 1
       # graph/provider/contract/dispatch 불변식 실패 시 기본은 사용자 전송 전 차단.
-      # 명시적으로 legacy를 선택한 경우에만 기존 primary로 fallback한다.
+      # legacy fallback은 target executor 진입 전 실패에만 허용된다. dispatch가
+      # attempted/executed/ambiguous이면 이 값과 무관하게 fail-closed한다.
       on_failure: fail_closed  # fail_closed | legacy
 
 # BIZ-202 — 레시피 디렉터리. 봇이 채팅에서 작성한 레시피와 데몬 cron 이 로드하는

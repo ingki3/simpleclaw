@@ -27,6 +27,7 @@ from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
+EXPECTED_CONTRACT_COUNT = 4
 
 
 class _ExplicitBackendRouter:
@@ -251,8 +252,7 @@ async def _run(args: argparse.Namespace) -> int:
                     raise RuntimeError("connected V4 typed execution receipt rejected run")
                 results.append(result)
 
-        if store.get_recent():
-            raise RuntimeError("shadow graph wrote to ConversationStore")
+        stored_messages = store.get_recent()
 
     contracts = {
         contract
@@ -262,14 +262,22 @@ async def _run(args: argparse.Namespace) -> int:
             result.telemetry.output_contract_ref,
         )
     }
-    if len(contracts) < 3:
-        raise RuntimeError("contract continuity covered fewer than three contracts")
+    if len(contracts) != EXPECTED_CONTRACT_COUNT:
+        raise RuntimeError(
+            "contract continuity count mismatch "
+            f"(expected={EXPECTED_CONTRACT_COUNT} actual={len(contracts)})"
+        )
     counts = tuple(result.side_effect_counts for result in results)
     telegram = sum(item.telegram_send for item in counts)
     notifier = sum(item.notifier for item in counts)
     persistence = sum(item.conversation_write for item in counts)
+    if args.assert_zero_delivery and (telegram or notifier):
+        raise RuntimeError("delivery side-effect assertion failed")
+    if args.assert_zero_persistence and (persistence or stored_messages):
+        raise RuntimeError("persistence side-effect assertion failed")
     stop_conditions = {result.telemetry.budget_usage.stop_condition for result in results}
-    print(f"ACTUAL_PROVIDER=PASS backend={backend} model={model}")
+    print(f"ACTUAL_PLANNER_PROVIDER=PASS backend={backend} model={model}")
+    print("ASSET_EXECUTOR=fixture")
     print(f"PROVIDER_CALLS={planner_router.calls}/{args.max_provider_calls}")
     print(f"ROLLOUT_MODE={args.mode}")
     print("RECIPE_FIRST_3_WAY=PASS")
@@ -277,7 +285,10 @@ async def _run(args: argparse.Namespace) -> int:
     print("RESULT_SOURCE=langgraph_v4")
     print("TARGET_DISPATCH_EXACTLY_ONCE=true")
     print("TYPED_FINAL=PASS")
-    print(f"ASSET_CONTRACT_CONTINUITY={len(contracts)}/{len(contracts)}")
+    print(
+        "ASSET_CONTRACT_CONTINUITY="
+        f"{len(contracts)}/{EXPECTED_CONTRACT_COUNT}"
+    )
     print(f"TELEGRAM_SEND_COUNT={telegram}")
     print(f"CRON_NOTIFIER_COUNT={notifier}")
     print(f"CONVERSATION_WRITE_COUNT={persistence}")
