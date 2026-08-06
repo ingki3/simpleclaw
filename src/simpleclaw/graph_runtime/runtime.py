@@ -783,7 +783,8 @@ class SQLiteDeliveryJournal:
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE graph_delivery_journal SET dispatching_attempt = ? "
-                "WHERE delivery_id = ? AND receipt_json IS NULL",
+                "WHERE delivery_id = ? AND receipt_json IS NULL "
+                "AND dispatching_attempt IS NULL",
                 (attempt, delivery_id),
             )
             if cursor.rowcount != 1:

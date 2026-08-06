@@ -174,9 +174,12 @@ from simpleclaw.graph_runtime.runtime import (
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
 )
+from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
 from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowResultV1,
     ConnectedShadowTurnRunner,
+    DurableDispatchProvenanceV1,
+    load_durable_dispatch_provenance,
 )
 from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import (
@@ -196,6 +199,12 @@ from simpleclaw.memory.models import (
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
     MessageRole,
+)
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryCoordinator,
+    PrimaryDeliveryMetadataV1,
+    PrimaryDeliveryOutcomeV1,
+    PrimaryResponseText,
 )
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
@@ -323,9 +332,12 @@ def _canary_read_only_eligible(
 def _allow_v4_legacy_fallback(
     v4: Mapping[str, object],
     execution: LangGraphV4ExecutionReceiptV1 | None,
+    provenance: DurableDispatchProvenanceV1 | None = None,
 ) -> bool:
     """Target pre-dispatch 실패에서만 legacy executor 진입을 허용한다."""
     if str(v4.get("on_failure", "fail_closed")) != "legacy":
+        return False
+    if provenance is None or not provenance.pre_dispatch_proven:
         return False
     return execution is None or (
         execution.dispatch_trace.attempted == 0
@@ -1024,6 +1036,45 @@ class AgentOrchestrator:
     # Public API
     # ------------------------------------------------------------------
 
+    def deferred_primary_delivery_required(self) -> bool:
+        """V4 primary final은 streaming placeholder보다 durable send가 우선이다."""
+        return (
+            self._unified_turn_planner_config.get("architecture")
+            == "langgraph_v4"
+            and self._unified_turn_planner_config.get("mode") == "primary"
+        )
+
+    async def deliver_primary_response(
+        self,
+        response: PrimaryResponseText,
+        destination_ref: str,
+        sender,
+    ) -> PrimaryDeliveryOutcomeV1:
+        """Telegram actual send receipt 뒤 delivered assistant만 저장한다."""
+        v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
+        if not isinstance(v4, dict):
+            raise RuntimeError("langgraph_v4 delivery configuration is missing")
+        checkpoint = v4.get("checkpoint", {})
+        if not isinstance(checkpoint, dict):
+            raise RuntimeError("langgraph_v4 checkpoint configuration is missing")
+        raw_path = str(checkpoint.get("path") or "")
+        checkpoint_path = (
+            resolve_checkpoint_path(raw_path)
+            if raw_path
+            else resolve_checkpoint_path()
+        )
+        journal_path = checkpoint_path.with_name(
+            f"{checkpoint_path.name}.deliveries.sqlite3"
+        )
+        return await PrimaryDeliveryCoordinator(
+            journal_path=journal_path,
+            conversation_store=self._store,
+        ).deliver_telegram(
+            response,
+            destination_ref=destination_ref,
+            sender=sender,
+        )
+
     async def prewarm_embedding(self) -> bool:
         """Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.
 
@@ -1136,6 +1187,7 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
+        request_id: str | None = None,
     ) -> str:
         """drain 게이트를 거쳐 메시지를 처리한다 (BIZ-442).
 
@@ -1161,6 +1213,7 @@ class AgentOrchestrator:
         turn = TurnExecutionState.create(
             session_key=session_key,
             original_text=text,
+            turn_id=request_id,
         )
         session_token = current_session_key_var.set(session_key)
         turn_token = current_turn_id_var.set(turn.turn_id)
@@ -1391,6 +1444,21 @@ class AgentOrchestrator:
                         session_key=turn.session_key,
                     )
 
+                if tool_loop_result.primary_delivery is not None:
+                    metadata = tool_loop_result.primary_delivery
+                    inbound_id, created = self._store.save_inbound_once(
+                        ConversationMessage(
+                            role=MessageRole.USER,
+                            content=text,
+                            channel="telegram",
+                        ),
+                        session_key=metadata.session_key,
+                        request_id=metadata.request_id,
+                    )
+                    if created:
+                        self._schedule_embedding(inbound_id, text)
+                    return PrimaryResponseText(response_text, metadata)
+
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
                     text, response_text, list(msg_ids)
@@ -1597,6 +1665,7 @@ class AgentOrchestrator:
                 turn.transition(TurnPhase.REJECTED)
                 return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
             execution = None
+            dispatch_provenance = None
             failure_reason = ""
             try:
                 connected = await self._execute_langgraph_v4_connected(
@@ -1627,8 +1696,26 @@ class AgentOrchestrator:
                     type(exc).__name__,
                 )
 
+            checkpoint = v4.get("checkpoint", {})
+            if isinstance(checkpoint, dict):
+                try:
+                    dispatch_provenance = load_durable_dispatch_provenance(
+                        str(checkpoint.get("path") or ""),
+                        turn.turn_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 증거 조회 실패도 fail-closed
+                    logger.warning(
+                        "LangGraph V4 dispatch provenance unavailable "
+                        "(error_type=%s)",
+                        type(exc).__name__,
+                    )
+
             if failure_reason:
-                if _allow_v4_legacy_fallback(v4, execution):
+                if _allow_v4_legacy_fallback(
+                    v4,
+                    execution,
+                    dispatch_provenance,
+                ):
                     self._record_unified_rollout_path(
                         path="legacy_fallback",
                         reason=failure_reason,
@@ -1681,6 +1768,12 @@ class AgentOrchestrator:
                     selected_route=execution.selected_route,
                     model_calls=usage_router.response_count,
                     tokens=usage_router.output_tokens,
+                    primary_delivery=PrimaryDeliveryMetadataV1(
+                        request_id=execution.request_id,
+                        artifact_id=execution.final_artifact.artifact_id,
+                        artifact_hash=execution.final_artifact.content_hash,
+                        session_key=turn.session_key,
+                    ),
                 )
 
         self._record_unified_rollout_path(

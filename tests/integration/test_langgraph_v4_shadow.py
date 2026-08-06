@@ -66,6 +66,7 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowTurnRunner,
+    DurableDispatchProvenanceV1,
     _DurableInvocationClaims,
     _ShadowBudgetStop,
     _ShadowRunBudget,
@@ -460,8 +461,128 @@ def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
         rollback_reasons=("post_dispatch_failure",),
     )
 
-    assert _allow_v4_legacy_fallback({"on_failure": "legacy"}, None) is True
-    assert _allow_v4_legacy_fallback({"on_failure": "legacy"}, receipt) is False
+    not_started = DurableDispatchProvenanceV1(
+        request_id="fallback-request",
+        lifecycle="not_started",
+    )
+    executed = DurableDispatchProvenanceV1(
+        request_id="fallback-request",
+        lifecycle="executed",
+        invocation_id=invocation.invocation_id,
+    )
+
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, not_started
+    ) is True
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, None
+    ) is False
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, receipt, executed
+    ) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    definitions = _definitions()
+    recipes = tuple(
+        item for item in definitions if item.contract_asset_type == "recipe"
+    )
+    skills = tuple(
+        item for item in definitions if item.contract_asset_type == "skill"
+    )
+    planned = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    planned = replace(
+        planned,
+        capability=replace(planned.capability, coverage=CapabilityCoverage.FULL),
+    )
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        return replace(planned, catalog_fingerprint=catalog.fingerprint)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    checkpoint = tmp_path / "receipt-loss-checkpoint.sqlite3"
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._unified_turn_planner_config = {
+        "architecture": "langgraph_v4",
+        "mode": "primary",
+        "context_candidate_limit": 8,
+        "context_candidate_max_chars": 6000,
+        "selected_context_max_turns": 3,
+        "selected_context_max_chars": 2400,
+        "max_tokens": 2048,
+        "telemetry": {"enabled": False},
+        "langgraph_v4": {
+            "budget_valid": True,
+            "on_failure": "legacy",
+            "checkpoint": {"path": str(checkpoint)},
+        },
+    }
+    orchestrator._router = object()
+    orchestrator._cron_scheduler = None
+    orchestrator._browser_handoff_config = {"enabled": False}
+    orchestrator._recipes = recipes
+    orchestrator._store = ConversationStore(tmp_path / "receipt-loss.db")
+    orchestrator._structured_logger = None
+    orchestrator._exposable_skills = MethodType(
+        lambda self: list(skills), orchestrator
+    )
+    legacy_calls = 0
+
+    async def execute_then_lose_receipt(self, **kwargs):
+        invocation = _invocation(_registry())
+        claims = _DurableInvocationClaims(checkpoint)
+        assert claims.claim(kwargs["request_id"], invocation) is None
+        claims.mark_executed(invocation.invocation_id)
+        claims.mark_ambiguous(invocation.invocation_id)
+        raise RuntimeError("receipt construction failed")
+
+    async def legacy_must_not_run(self, *_args, **_kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        raise AssertionError("post-dispatch legacy fallback must not run")
+
+    orchestrator._execute_langgraph_v4_connected = MethodType(
+        execute_then_lose_receipt,
+        orchestrator,
+    )
+    orchestrator._run_tool_loop_result = MethodType(
+        legacy_must_not_run,
+        orchestrator,
+    )
+    turn = TurnExecutionState.create(
+        session_key="receipt-loss-session",
+        original_text=planned.original_text,
+        turn_id="receipt-loss-request",
+    )
+
+    result = await orchestrator._run_unified_turn_planner_primary(
+        planned.original_text,
+        recent_rows=[],
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        operator_tools=False,
+        turn=turn,
+    )
+
+    assert result.success is False
+    assert legacy_calls == 0
+    assert turn.phase.value == "rejected"
+    assert _DurableInvocationClaims(checkpoint).provenance(
+        turn.turn_id
+    ).lifecycle == "ambiguous"
 
 
 @pytest.mark.offline
@@ -780,6 +901,11 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
     assert result.text == "V4가 만든 최종 응답"
     assert result.success is True
     assert result.selected_route == "recipe"
+    assert result.primary_delivery is not None
+    assert result.primary_delivery.request_id == turn.turn_id
+    assert result.primary_delivery.artifact_hash == (
+        hashlib.sha256("content.v1\x1fV4가 만든 최종 응답".encode()).hexdigest()
+    )
     assert turn.final_text == result.text
     assert turn.phase.value == "completed"
 

@@ -302,6 +302,10 @@ async def main():
         attachment_dir=attachment_dir,
         # BIZ-442 — drain 중 새 메시지에 짧은 점검 안내로 즉답.
         drain_notice_provider=drain_controller.maintenance_notice,
+        primary_delivery_handler=orchestrator.deliver_primary_response,
+        deferred_delivery_required=(
+            orchestrator.deferred_primary_delivery_required
+        ),
     )
 
     # Cron scheduler — notifier is the only external wiring.

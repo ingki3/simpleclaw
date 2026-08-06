@@ -11,7 +11,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -27,6 +27,7 @@ from .adapters.native_tool import GenericNativeToolAdapter, NativeToolExecutor
 from .adapters.recipe import GenericRecipeAdapter, RecipeExecutor
 from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
+from .checkpoint import resolve_checkpoint_path
 from .composition import FinalCompositionRuntime
 from .contracts import (
     AssetInvocationV1,
@@ -96,6 +97,28 @@ class _ShadowBudgetStop(RuntimeError):
 
 class _TargetDispatchInvariantError(RuntimeError):
     """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
+
+
+DurableDispatchLifecycle = Literal[
+    "not_started",
+    "claimed",
+    "executed",
+    "terminal",
+    "ambiguous",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class DurableDispatchProvenanceV1:
+    """Receipt 소실 뒤에도 fallback 판단에 쓰는 durable dispatch 증거다."""
+
+    request_id: str
+    lifecycle: DurableDispatchLifecycle
+    invocation_id: str | None = None
+
+    @property
+    def pre_dispatch_proven(self) -> bool:
+        return self.lifecycle == "not_started"
 
 
 class _TargetDispatchGuard:
@@ -289,6 +312,50 @@ class _DurableInvocationClaims:
                 "WHERE invocation_id = ? AND lifecycle != 'terminal'",
                 (invocation_id,),
             )
+
+    def provenance(self, request_id: str) -> DurableDispatchProvenanceV1:
+        """request의 durable claim 상태를 receipt와 독립적으로 반환한다."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT invocation_id, lifecycle FROM graph_invocation_claims "
+                "WHERE request_id = ? ORDER BY invocation_id",
+                (request_id,),
+            ).fetchall()
+        if not rows:
+            return DurableDispatchProvenanceV1(
+                request_id=request_id,
+                lifecycle="not_started",
+            )
+        if len(rows) != 1:
+            return DurableDispatchProvenanceV1(
+                request_id=request_id,
+                lifecycle="ambiguous",
+            )
+        invocation_id, lifecycle = str(rows[0][0]), str(rows[0][1])
+        if lifecycle not in {
+            "claimed",
+            "executed",
+            "terminal",
+            "ambiguous",
+        }:
+            lifecycle = "ambiguous"
+        return DurableDispatchProvenanceV1(
+            request_id=request_id,
+            lifecycle=cast(DurableDispatchLifecycle, lifecycle),
+            invocation_id=invocation_id,
+        )
+
+
+def load_durable_dispatch_provenance(
+    checkpoint_path: str | Path,
+    request_id: str,
+) -> DurableDispatchProvenanceV1:
+    """Production orchestrator가 receipt-loss 예외 뒤 journal을 직접 조회한다."""
+    if not str(checkpoint_path):
+        raise ValueError("checkpoint path is required for dispatch provenance")
+    return _DurableInvocationClaims(
+        resolve_checkpoint_path(checkpoint_path)
+    ).provenance(request_id)
 
 
 class _ShadowRunBudget:
