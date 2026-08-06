@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-611](mention://issue/968d342f-5794-4fd3-b1d8-bfe2d085f348): Sports production installer 경로와 package artifact를 정렬** — `sports-live` no-arg installer를 runtime `recipes.dir`와 일치시키고 canonical sports assets를 wheel/sdist package resource로 배포한다. [PR #642](https://github.com/ingki3/simpleclaw/pull/642)의 fresh CI와 exact-head 독립 deployment review 전에는 merge하지 않으며, live install·config·restart·primary activation은 BIZ-573 범위로 유지한다. (진행: 2026-08-06)
+
 - [x] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — connected asset의 owner/schema hash/binding/fingerprint preflight와 canonical `sports-live`·`naver-sports-skill` production installer SoT를 보강하고 production-installer output 기반 exact KBO no-send 3회 및 fresh CI를 통과했다. [PR #639](https://github.com/ingki3/simpleclaw/pull/639)은 독립 Stage D PASS 후 squash merge됐다 (`53c31e70fbbc9f8f5290bad3379f89ea31d5873c`). 부모 BIZ-573은 corrective release/controlled smoke 전까지 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (완료: 2026-08-06)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
