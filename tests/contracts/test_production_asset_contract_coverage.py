@@ -9,6 +9,18 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts.install_naver_sports_skill import (
+    CANONICAL_SKILL_MD,
+)
+from scripts.install_naver_sports_skill import (
+    install as install_naver_sports_skill,
+)
+from scripts.install_sports_live_recipe import (
+    CANONICAL_RECIPE,
+)
+from scripts.install_sports_live_recipe import (
+    install as install_sports_live_recipe,
+)
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
@@ -20,14 +32,6 @@ from simpleclaw.graph_runtime.contracts_registry import (
     build_contract_registry,
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
-from scripts.install_naver_sports_skill import (
-    CANONICAL_SKILL_MD,
-    install as install_naver_sports_skill,
-)
-from scripts.install_sports_live_recipe import (
-    CANONICAL_RECIPE,
-    install as install_sports_live_recipe,
-)
 from simpleclaw.recipes.loader import discover_recipes, load_recipe
 from simpleclaw.recipes.models import RecipeParseError
 from simpleclaw.skills.discovery import discover_skills

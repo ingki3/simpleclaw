@@ -93,9 +93,8 @@ def test_invalid_asset_fails_before_destination_change(
         encoding="utf-8",
     )
 
-    with pytest.raises((FileNotFoundError, ValueError)):
+    with pytest.raises((FileNotFoundError, TypeError, ValueError)):
         resolve_runtime_asset("widget:comet", assets_root=tmp_path)
 
     assert sentinel.read_text(encoding="utf-8") == "preserve"
     assert not (tmp_path / "installed/escape").exists()
-

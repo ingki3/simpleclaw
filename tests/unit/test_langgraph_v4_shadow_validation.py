@@ -14,6 +14,8 @@ import simpleclaw.langgraph_v4_shadow_validation as validation
 from scripts.dev import validate_langgraph_v4_no_send as fixture_validation
 from scripts.dev.validate_langgraph_v4_no_send import (
     EXPECTED_CONTRACT_SET,
+)
+from scripts.dev.validate_langgraph_v4_no_send import (
     definitions as _definitions,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry

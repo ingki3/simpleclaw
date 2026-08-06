@@ -12,14 +12,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from simpleclaw.langgraph_v4_shadow_validation import (  # noqa: E402
+from simpleclaw.langgraph_v4_shadow_validation import (
     ContractIdentity,
     _parser,
     _run,
 )
-from simpleclaw.llm.models import LLMResponse  # noqa: E402
-from simpleclaw.recipes.loader import discover_recipes  # noqa: E402
-from simpleclaw.skills.discovery import discover_skills  # noqa: E402
+from simpleclaw.llm.models import LLMResponse
+from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.skills.discovery import discover_skills
 
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
 EXPECTED_CONTRACT_SET = frozenset(
@@ -71,23 +71,29 @@ def definitions():
 def cases() -> tuple[tuple[str, str], ...]:
     return (
         (
-            "Use the exact full-coverage recipe contract-fixture-workflow, which "
-            "owns all evidence, to verify the current contract validation status. "
-            "Use direct_answer as the fallback execution mode.",
+            (
+                "Use the exact full-coverage recipe contract-fixture-workflow, which "
+                "owns all evidence, to verify the current contract validation status. "
+                "Use direct_answer as the fallback execution mode."
+            ),
             "recipe",
         ),
         (
-            "Use the exact full-coverage skill contract-fixture-step, which owns "
-            "all evidence, to verify the current contract validation status. Use "
-            "answer_with_evidence as the fallback execution mode.",
+            (
+                "Use the exact full-coverage skill contract-fixture-step, which owns "
+                "all evidence, to verify the current contract validation status. Use "
+                "answer_with_evidence as the fallback execution mode."
+            ),
             "react",
         ),
         (
-            "Use the exact full-coverage skill contract-fixture-step, which owns "
-            "all evidence, to verify and compare the current contract validation "
-            "status. Resolve the explicit dependency graph and conflicting "
-            "validation branches with resolve_complex_problem as the fallback "
-            "execution mode.",
+            (
+                "Use the exact full-coverage skill contract-fixture-step, which owns "
+                "all evidence, to verify and compare the current contract validation "
+                "status. Resolve the explicit dependency graph and conflicting "
+                "validation branches with resolve_complex_problem as the fallback "
+                "execution mode."
+            ),
             "deep_research",
         ),
     )

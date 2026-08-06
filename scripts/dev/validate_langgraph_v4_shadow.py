@@ -15,11 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from simpleclaw.langgraph_v4_shadow_validation import _parser, _run  # noqa: E402
-from simpleclaw.llm.models import LLMResponse  # noqa: E402
-from simpleclaw.production_assets import install_runtime_asset  # noqa: E402
-from simpleclaw.recipes.loader import discover_recipes  # noqa: E402
-from simpleclaw.skills.discovery import discover_skills  # noqa: E402
+from simpleclaw.langgraph_v4_shadow_validation import _parser, _run
+from simpleclaw.llm.models import LLMResponse
+from simpleclaw.production_assets import install_runtime_asset
+from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.skills.discovery import discover_skills
 
 DEFAULT_SCENARIO = (
     REPO_ROOT / "tests/fixtures/langgraph_v4_shadow/kbo_no_send.yaml"
@@ -38,7 +38,7 @@ class _ScenarioRouter:
             raise RuntimeError("scenario prompt mismatch")
         planner = self._scenario["planner"]
         if not isinstance(planner, dict):
-            raise ValueError("scenario planner must be a mapping")
+            raise TypeError("scenario planner must be a mapping")
         payload = {
             "context": {
                 "relation": "standalone",
@@ -94,7 +94,7 @@ class _ScenarioRouter:
 def _load_scenario(path: Path) -> dict[str, object]:
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError("scenario must be a mapping")
+        raise TypeError("scenario must be a mapping")
     return raw
 
 
@@ -110,7 +110,7 @@ async def _main() -> int:
     ):
         raise ValueError("scenario assets must be refs")
     if not isinstance(expected, dict):
-        raise ValueError("scenario expected must be a mapping")
+        raise TypeError("scenario expected must be a mapping")
 
     with tempfile.TemporaryDirectory(prefix="simpleclaw-scenario-assets-") as temp:
         installed = Path(temp)

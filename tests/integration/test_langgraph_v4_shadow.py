@@ -13,6 +13,9 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from scripts.dev.validate_langgraph_v4_no_send import (
+    definitions as _connected_validation_definitions,
+)
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.context_candidates import ContextCandidateSet
@@ -90,9 +93,6 @@ from simpleclaw.graph_runtime.status import (
     EffectStatus,
     InvocationStatus,
     TerminalOutcome,
-)
-from scripts.dev.validate_langgraph_v4_no_send import (
-    definitions as _connected_validation_definitions,
 )
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter

@@ -79,7 +79,7 @@ def _safe_relative(value: object, *, field: str) -> PurePosixPath:
 
 def _mapping(value: object, *, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"{field} must be a mapping")
+        raise TypeError(f"{field} must be a mapping")
     return value
 
 
