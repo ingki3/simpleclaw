@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
 import yaml
 
+import simpleclaw.production_assets as production_assets
 from simpleclaw.production_assets import install_runtime_asset, resolve_runtime_asset
 
 
@@ -98,3 +100,121 @@ def test_invalid_asset_fails_before_destination_change(
 
     assert sentinel.read_text(encoding="utf-8") == "preserve"
     assert not (tmp_path / "installed/escape").exists()
+
+
+def test_source_symlink_escape_fails_before_destination_change(tmp_path: Path) -> None:
+    asset = _asset_tree(tmp_path)
+    outside = asset.parent / "outside-secret"
+    outside.write_bytes(b"external secret\n")
+    source = asset / "payload.txt"
+    source.unlink()
+    source.symlink_to("../outside-secret")
+    manifest_path = asset / "runtime-asset.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "installed/comet"
+    destination.mkdir(parents=True)
+    (destination / "sentinel").write_text("old", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime asset source"):
+        install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert (destination / "sentinel").read_text(encoding="utf-8") == "old"
+    assert not (destination / "nested/payload.txt").exists()
+
+
+def test_package_traversable_symlink_source_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TraversableResource:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        @property
+        def name(self) -> str:
+            return self.path.name
+
+        def joinpath(self, *descendants: str) -> TraversableResource:
+            return TraversableResource(self.path.joinpath(*descendants))
+
+        def is_file(self) -> bool:
+            return self.path.is_file()
+
+        def is_symlink(self) -> bool:
+            return self.path.is_symlink()
+
+        def read_bytes(self) -> bytes:
+            return self.path.read_bytes()
+
+    asset = _asset_tree(tmp_path)
+    outside = asset.parent / "outside-secret"
+    outside.write_bytes(b"package escape\n")
+    source = asset / "payload.txt"
+    source.unlink()
+    source.symlink_to("../outside-secret")
+    manifest_path = asset / "runtime-asset.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["sha256"] = hashlib.sha256(outside.read_bytes()).hexdigest()
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        production_assets,
+        "_asset_root",
+        lambda: (TraversableResource(tmp_path), "package:test"),
+    )
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        resolve_runtime_asset("widget:comet")
+
+
+@pytest.mark.parametrize("fault", ("write", "move_old", "install_new", "cleanup"))
+def test_install_fault_restores_destination_without_residue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    _asset_tree(tmp_path)
+    destination = tmp_path / "installed/comet"
+    destination.mkdir(parents=True)
+    (destination / "old.txt").write_text("old", encoding="utf-8")
+
+    original_write_bytes = Path.write_bytes
+    original_replace = os.replace
+
+    if fault == "write":
+        def fail_write(path: Path, data: bytes) -> int:
+            if ".staged-" in str(path):
+                raise OSError("injected staged write failure")
+            return original_write_bytes(path, data)
+
+        monkeypatch.setattr(Path, "write_bytes", fail_write)
+    elif fault in {"move_old", "install_new"}:
+        def fail_replace(source: os.PathLike[str], target: os.PathLike[str]) -> None:
+            source_path = Path(source)
+            if fault == "move_old" and source_path == destination:
+                raise OSError("injected destination move failure")
+            if fault == "install_new" and ".staged-" in source_path.name:
+                raise OSError("injected replacement failure")
+            original_replace(source, target)
+
+        monkeypatch.setattr(production_assets.os, "replace", fail_replace)
+    else:
+        def fail_backup_cleanup(path: os.PathLike[str]) -> None:
+            raise OSError("injected backup cleanup failure")
+
+        monkeypatch.setattr(production_assets.shutil, "rmtree", fail_backup_cleanup)
+
+    with pytest.raises(OSError, match="injected"):
+        install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert (destination / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (destination / "nested/payload.txt").exists()
+    assert not list(destination.parent.glob(".comet.staged-*"))
+    assert not list(destination.parent.glob(".comet.backup-*"))

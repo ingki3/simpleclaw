@@ -114,6 +114,11 @@ manifest를 검증한 뒤 전체 디렉터리를 atomic하게 교체합니다. w
 같은 tree를 `simpleclaw/runtime_assets/**` package resource로 포함하므로 source
 checkout과 installed distribution이 동일 resolver를 사용합니다.
 
+filesystem source는 resolved asset root 내부의 regular file이어야 하며 symlink는
+digest가 일치해도 거부합니다. 설치 중 staged write, directory swap, 기존 directory
+cleanup이 실패하면 예외를 반환하기 전에 이전 destination을 복원하고 installer-owned
+staged/backup directory를 제거합니다.
+
 ```bash
 # Canonical interface
 python scripts/install_runtime_asset.py --asset skill:naver-sports-skill

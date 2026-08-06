@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import uuid
 from dataclasses import dataclass
 from importlib.resources import files
@@ -66,6 +67,7 @@ class ResolvedRuntimeAsset:
     manifest: RuntimeAssetManifest
     root: AssetResource
     provenance: str
+    source_bytes: tuple[bytes, ...]
 
 
 def _safe_relative(value: object, *, field: str) -> PurePosixPath:
@@ -165,6 +167,36 @@ def _asset_root() -> tuple[AssetResource, str]:
     return packaged, "package:simpleclaw/runtime_assets"
 
 
+def _read_regular_asset_file(
+    root: AssetResource,
+    relative: PurePosixPath,
+) -> bytes:
+    """Read one contained regular file without following filesystem symlinks."""
+    source = root.joinpath(*relative.parts)
+    if isinstance(root, Path) and isinstance(source, Path):
+        root_resolved = root.resolve(strict=True)
+        try:
+            source_stat = source.lstat()
+            source_resolved = source.resolve(strict=True)
+            source_resolved.relative_to(root_resolved)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise ValueError(
+                f"runtime asset source escapes asset root: {relative}"
+            ) from exc
+        expected = root_resolved.joinpath(*relative.parts)
+        if source_resolved != expected or not stat.S_ISREG(source_stat.st_mode):
+            raise ValueError(
+                f"runtime asset source must be a contained regular file: {relative}"
+            )
+    else:
+        is_symlink = getattr(source, "is_symlink", None)
+        if callable(is_symlink) and is_symlink():
+            raise ValueError(f"runtime asset source must not be a symlink: {relative}")
+        if not source.is_file():
+            raise FileNotFoundError(f"runtime asset source missing: {relative}")
+    return source.read_bytes()
+
+
 def resolve_runtime_asset(
     asset: str | Path,
     *,
@@ -194,16 +226,16 @@ def resolve_runtime_asset(
         raise ValueError(
             f"runtime asset ref mismatch: expected {asset!s}, got {manifest.ref}"
         )
+    source_bytes: list[bytes] = []
     for declared in manifest.files:
-        source = root.joinpath(*declared.source.parts)
-        if not source.is_file():
-            raise FileNotFoundError(f"runtime asset source missing: {declared.source}")
-        actual = hashlib.sha256(source.read_bytes()).hexdigest()
+        content = _read_regular_asset_file(root, declared.source)
+        actual = hashlib.sha256(content).hexdigest()
         if actual != declared.sha256:
             raise ValueError(
                 f"runtime asset source digest mismatch: {declared.source}"
             )
-    return ResolvedRuntimeAsset(manifest, root, provenance)
+        source_bytes.append(content)
+    return ResolvedRuntimeAsset(manifest, root, provenance, tuple(source_bytes))
 
 
 def _configured_parent(
@@ -238,6 +270,21 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
+def _remove_owned_tree(root: Path) -> None:
+    """Remove an installer-owned tree without following symlinks."""
+    if root.is_symlink() or not root.is_dir():
+        root.unlink(missing_ok=True)
+        return
+    with os.scandir(root) as entries:
+        for entry in entries:
+            path = Path(entry.path)
+            if entry.is_dir(follow_symlinks=False):
+                _remove_owned_tree(path)
+            else:
+                path.unlink()
+    root.rmdir()
+
+
 def install_runtime_asset(
     asset: str | Path,
     *,
@@ -256,10 +303,8 @@ def install_runtime_asset(
     destination = parent / manifest.name
 
     payload: dict[PurePosixPath, bytes] = {}
-    for declared in manifest.files:
-        payload[declared.destination] = resolved.root.joinpath(
-            *declared.source.parts
-        ).read_bytes()
+    for declared, content in zip(manifest.files, resolved.source_bytes, strict=True):
+        payload[declared.destination] = content
     expected = {path.as_posix(): content for path, content in payload.items()}
     if _tree_bytes(destination) == expected:
         return destination, resolved
@@ -268,6 +313,8 @@ def install_runtime_asset(
     token = uuid.uuid4().hex
     staged = parent / f".{manifest.name}.staged-{token}"
     backup = parent / f".{manifest.name}.backup-{token}"
+    destination_moved = False
+    replacement_installed = False
     try:
         for relative, content in payload.items():
             target = staged.joinpath(*relative.parts)
@@ -280,13 +327,18 @@ def install_runtime_asset(
             raise RuntimeError("staged runtime asset verification failed")
         if destination.exists():
             os.replace(destination, backup)
+            destination_moved = True
         os.replace(staged, destination)
+        replacement_installed = True
         if backup.exists():
             shutil.rmtree(backup)
     except BaseException:
+        if destination_moved:
+            if replacement_installed and destination.exists():
+                os.replace(destination, staged)
+            if backup.exists():
+                os.replace(backup, destination)
         if staged.exists():
-            shutil.rmtree(staged)
-        if backup.exists() and not destination.exists():
-            os.replace(backup, destination)
+            _remove_owned_tree(staged)
         raise
     return destination, resolved
