@@ -149,9 +149,9 @@ def _tag_connected_error(
     exc: BaseException,
 ) -> BaseException:
     """기존 public exception type을 깨지 않고 phase diagnostic을 부착한다."""
-    setattr(exc, "connected_phase", phase)
-    setattr(exc, "connected_error_type", type(exc).__name__)
-    setattr(exc, "connected_safe_message", _sanitized_exception_message(exc))
+    exc.connected_phase = phase
+    exc.connected_error_type = type(exc).__name__
+    exc.connected_safe_message = _sanitized_exception_message(exc)
     return exc
 
 
