@@ -1347,15 +1347,17 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     assert "request_id=receipt-loss-request" in messages
     assert "original_mode=direct_answer" in messages
     assert "effective_mode=direct_answer" in messages
-    assert "original_asset=recipe:contract-fixture-workflow" in messages
-    assert "effective_asset=recipe:contract-fixture-workflow" in messages
+    assert "original_asset_kind=recipe" in messages
+    assert "effective_asset_kind=recipe" in messages
+    assert "original_asset_hash=" in messages
+    assert "effective_asset_hash=" in messages
     assert "failure_phase=setup" in messages
     assert "phase=setup" in messages
     assert "code=connected_setup_failed" in messages
     assert "error_type=RuntimeError" in messages
-    assert (
-        "selected_asset_identity=recipe:contract-fixture-workflow" in messages
-    )
+    assert "selected_asset_kind=recipe" in messages
+    assert "selected_asset_hash=" in messages
+    assert "contract-fixture-workflow" not in messages
     assert "catalog_fingerprint=" in messages
     assert "registry_fingerprint=" in messages
     assert "owned_input_contract_present=None" in messages
@@ -1554,7 +1556,8 @@ async def test_connected_registry_failure_preserves_phase_cause_and_redacts_prom
     assert captured.value.phase == "registry_lookup"
     assert captured.value.code == "asset_not_registered_read_only"
     assert captured.value.error_type == "ValueError"
-    assert captured.value.selected_asset_identity == "recipe:missing-KBO-원문"
+    assert captured.value.selected_asset_kind == "recipe"
+    assert captured.value.selected_asset_hash == ""
     assert captured.value.catalog_fingerprint == plan.catalog_fingerprint
     assert captured.value.registry_fingerprint
     assert captured.value.owned_input_contract_present is False
@@ -1660,7 +1663,8 @@ async def test_connected_runner_blocks_catalog_registry_snapshot_drift_before_di
 
     assert captured.value.phase == "registry_lookup"
     assert captured.value.code == "approved_asset_fingerprint_mismatch"
-    assert captured.value.selected_asset_identity == f"recipe:{recipe.name}"
+    assert captured.value.selected_asset_kind == "recipe"
+    assert recipe.name not in str(captured.value)
     assert captured.value.approved_asset_hash == recipe.definition_fingerprint
     assert captured.value.selected_asset_hash == drifted_recipe.definition_fingerprint
     assert calls == 0
