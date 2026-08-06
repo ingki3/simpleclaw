@@ -47,6 +47,29 @@ class _ExplicitBackendRouter:
         return response
 
 
+class _BoundedPlannerRouter:
+    """Actual-provider smoke의 전체 call 수와 wall-clock deadline을 강제한다."""
+
+    def __init__(self, router, *, max_calls: int, deadline_seconds: float) -> None:
+        self._router = router
+        self._max_calls = max_calls
+        self._deadline_seconds = deadline_seconds
+        self._started = asyncio.get_running_loop().time()
+        self.calls = 0
+
+    async def send(self, request):
+        if self.calls >= self._max_calls:
+            raise RuntimeError("actual-provider call cap exhausted")
+        remaining = self._deadline_seconds - (
+            asyncio.get_running_loop().time() - self._started
+        )
+        if remaining <= 0:
+            raise TimeoutError("actual-provider deadline exhausted")
+        self.calls += 1
+        async with asyncio.timeout(remaining):
+            return await self._router.send(request)
+
+
 def _definitions():
     """검증 전용 read-only contract fixture만 discovery한다."""
     recipes = discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
@@ -80,11 +103,15 @@ async def _skill_executor(_definition, _argv):
 
 
 async def _run(args: argparse.Namespace) -> int:
-    """Actual provider가 선택한 exact plan 세 건을 production graph에서 실행한다."""
+    """Actual provider exact plan을 bounded no-send graph에서 실행한다."""
     if args.architecture != "langgraph_v4":
         raise ValueError("--architecture must be langgraph_v4")
     if args.repeat <= 0:
         raise ValueError("--repeat must be positive")
+    if args.max_provider_calls <= 0:
+        raise ValueError("--max-provider-calls must be positive")
+    if args.deadline_seconds <= 0:
+        raise ValueError("--deadline-seconds must be positive")
     if not args.config.is_file():
         raise FileNotFoundError(f"config not found: {args.config}")
 
@@ -95,8 +122,13 @@ async def _run(args: argparse.Namespace) -> int:
         native_specs=_planner_native_specs(),
     )
     router = create_router(args.config)
-    planner_router = (
+    explicit_router = (
         _ExplicitBackendRouter(router, args.backend) if args.backend else router
+    )
+    planner_router = _BoundedPlannerRouter(
+        explicit_router,
+        max_calls=args.max_provider_calls,
+        deadline_seconds=args.deadline_seconds,
     )
     cases = (
         (
@@ -133,7 +165,7 @@ async def _run(args: argparse.Namespace) -> int:
         store = ConversationStore(isolated / "conversations.db")
         facade = LangGraphV4RolloutFacade(
             architecture="langgraph_v4",
-            mode="shadow",
+            mode=args.mode,
             shadow_no_send=True,
             budget=ShadowBudgetUsageV1(
                 max_graph_steps=40,
@@ -171,9 +203,9 @@ async def _run(args: argparse.Namespace) -> int:
                     router=planner_router,
                     max_tokens=2048,
                 )
-                if isinstance(planner_router, _ExplicitBackendRouter):
-                    backend = planner_router.last_backend_name or args.backend
-                    model = planner_router.last_model or "unknown"
+                if isinstance(explicit_router, _ExplicitBackendRouter):
+                    backend = explicit_router.last_backend_name or args.backend
+                    model = explicit_router.last_model or "unknown"
                 gate = PlanGate().evaluate(
                     plan,
                     candidates=candidates,
@@ -187,10 +219,14 @@ async def _run(args: argparse.Namespace) -> int:
                     )
                 result = await runner.run(
                     plan=gate.effective_plan,
-                    legacy=LegacyRunTelemetryV1(
-                        selected_route=route,
-                        terminal_outcome=TerminalOutcome.COMPLETED,
-                        model_calls=1,
+                    legacy=(
+                        LegacyRunTelemetryV1(
+                            selected_route=route,
+                            terminal_outcome=TerminalOutcome.COMPLETED,
+                            model_calls=1,
+                        )
+                        if args.mode == "shadow"
+                        else None
                     ),
                     request_id=f"actual-{repetition}-{index}",
                     session_key="actual-provider-shadow",
@@ -199,8 +235,20 @@ async def _run(args: argparse.Namespace) -> int:
                 )
                 if result.telemetry.selected_route != route:
                     raise RuntimeError("actual planner route continuity mismatch")
-                if result.comparison.rollback_required or not result.canary.eligible:
+                if args.mode == "shadow" and (
+                    result.comparison is None
+                    or result.canary is None
+                    or result.comparison.rollback_required
+                    or not result.canary.eligible
+                ):
                     raise RuntimeError("connected shadow rollout gate rejected run")
+                if (
+                    result.execution.result_source != "langgraph_v4"
+                    or result.execution.final_content is None
+                    or not result.execution.dispatch_trace.exactly_once
+                    or result.execution.rollback_required
+                ):
+                    raise RuntimeError("connected V4 typed execution receipt rejected run")
                 results.append(result)
 
         if store.get_recent():
@@ -222,21 +270,36 @@ async def _run(args: argparse.Namespace) -> int:
     persistence = sum(item.conversation_write for item in counts)
     stop_conditions = {result.telemetry.budget_usage.stop_condition for result in results}
     print(f"ACTUAL_PROVIDER=PASS backend={backend} model={model}")
+    print(f"PROVIDER_CALLS={planner_router.calls}/{args.max_provider_calls}")
+    print(f"ROLLOUT_MODE={args.mode}")
     print("RECIPE_FIRST_3_WAY=PASS")
     print("REACT_TO_DEEPRESEARCH=PASS")
+    print("RESULT_SOURCE=langgraph_v4")
+    print("TARGET_DISPATCH_EXACTLY_ONCE=true")
+    print("TYPED_FINAL=PASS")
     print(f"ASSET_CONTRACT_CONTINUITY={len(contracts)}/{len(contracts)}")
     print(f"TELEGRAM_SEND_COUNT={telegram}")
     print(f"CRON_NOTIFIER_COUNT={notifier}")
     print(f"CONVERSATION_WRITE_COUNT={persistence}")
     print(f"STOP_CONDITION={','.join(sorted(stop_conditions))}")
-    print(f"ROLLBACK_REQUIRED={str(any(r.comparison.rollback_required for r in results)).lower()}")
+    print(
+        "ROLLBACK_REQUIRED="
+        f"{str(any(r.execution.rollback_required for r in results)).lower()}"
+    )
     return 0
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--architecture", default="langgraph_v4")
+    parser.add_argument(
+        "--mode",
+        choices=("shadow", "read_only_canary", "primary"),
+        default="shadow",
+    )
     parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--max-provider-calls", type=int, default=12)
+    parser.add_argument("--deadline-seconds", type=float, default=300.0)
     parser.add_argument(
         "--backend",
         default="",

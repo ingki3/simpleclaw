@@ -172,7 +172,10 @@ from simpleclaw.graph_runtime.runtime import (
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
 )
-from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
+from simpleclaw.graph_runtime.shadow import (
+    ConnectedShadowResultV1,
+    ConnectedShadowTurnRunner,
+)
 from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import (
     LLMRequest,
@@ -274,12 +277,15 @@ def _canary_read_only_eligible(
     execution = plan.execution
     if execution.requires_confirmation:
         return False
-    if execution.mode is ExecutionMode.DIRECT_ANSWER:
+    if (
+        execution.mode is ExecutionMode.DIRECT_ANSWER
+        and plan.capability.primary_asset is None
+        and not plan.capability.supporting_assets
+        and not execution.allowed_tools
+    ):
         return (
-            plan.capability.primary_asset is None
-            and not plan.capability.supporting_assets
-            and not execution.allowed_tools
-            and not plan.fact_check.required
+            not plan.fact_check.required
+            and not execution.allowed_assets
         )
     if plan.capability.coverage.value != "full_coverage":
         return False
@@ -1307,6 +1313,24 @@ class AgentOrchestrator:
                     limit=max(self._history_limit, planner_candidate_limit),
                     session_key=turn.session_key,
                 )
+                rollout_mode = str(
+                    self._unified_turn_planner_config.get("mode", "primary")
+                )
+                v4_read_only_canary = (
+                    self._unified_turn_planner_config.get("architecture")
+                    == "langgraph_v4"
+                    and rollout_mode == "read_only_canary"
+                    and _deterministic_rollout_sample(
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        sample_rate=float(
+                            self._unified_turn_planner_config.get(
+                                "sample_rate",
+                                0.0,
+                            )
+                        ),
+                    )
+                )
                 tool_loop_result = await self._run_unified_turn_planner_primary(
                     text,
                     recent_rows=recent_rows,
@@ -1314,6 +1338,7 @@ class AgentOrchestrator:
                     on_text_delta=on_text_delta,
                     on_progress=on_progress,
                     operator_tools=operator_tools,
+                    canary_read_only=v4_read_only_canary,
                     turn=turn,
                 )
                 response_text = tool_loop_result.text
@@ -1505,22 +1530,132 @@ class AgentOrchestrator:
             )
             turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
-        if canary_read_only and not _canary_read_only_eligible(
-            effective_plan,
-            catalog,
-        ):
+        architecture = str(config.get("architecture", "legacy_v2"))
+        rollout_mode = str(config.get("mode", "primary"))
+        run_v4 = architecture == "langgraph_v4" and (
+            rollout_mode == "primary" or canary_read_only
+        )
+        if run_v4 and not _canary_read_only_eligible(effective_plan, catalog):
             self._record_unified_rollout_path(
                 path="fail_closed",
-                reason="canary_ineligible_plan",
+                reason="v4_read_only_ineligible_plan",
                 execution_mode=effective_plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
             turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
 
+        if run_v4:
+            v4 = config.get("langgraph_v4", {})
+            if not isinstance(v4, dict) or not bool(v4.get("budget_valid", False)):
+                self._record_unified_rollout_path(
+                    path="fail_closed",
+                    reason="langgraph_v4_budget_unbounded",
+                    execution_mode=effective_plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                turn.transition(TurnPhase.REJECTED)
+                return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+            selected = effective_plan.capability.primary_asset
+            if selected is None or selected.asset_type not in {"recipe", "skill"}:
+                self._record_unified_rollout_path(
+                    path="fail_closed",
+                    reason="langgraph_v4_exact_asset_required",
+                    execution_mode=effective_plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                turn.transition(TurnPhase.REJECTED)
+                return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+            execution = None
+            failure_reason = ""
+            try:
+                connected = await self._execute_langgraph_v4_connected(
+                    plan=effective_plan,
+                    legacy=None,
+                    mode=(
+                        "read_only_canary"
+                        if canary_read_only
+                        else "primary"
+                    ),
+                    request_id=turn.turn_id,
+                    session_key=turn.session_key,
+                    skills=tuple(self._exposable_skills()),
+                    recipes=tuple(getattr(self, "_recipes", ())),
+                    planner_model_calls=usage_router.response_count,
+                    planner_tokens=usage_router.output_tokens,
+                    on_progress=on_progress,
+                )
+                execution = connected.execution
+                if execution.rollback_required:
+                    failure_reason = ",".join(execution.rollback_reasons)
+                elif execution.final_content is None:
+                    failure_reason = "typed_final_missing"
+            except Exception as exc:
+                failure_reason = f"runtime_{type(exc).__name__}"
+                logger.warning(
+                    "LangGraph V4 primary isolated (error_type=%s)",
+                    type(exc).__name__,
+                )
+
+            if failure_reason:
+                if str(v4.get("on_failure", "fail_closed")) == "legacy":
+                    self._record_unified_rollout_path(
+                        path="legacy_fallback",
+                        reason=failure_reason,
+                        execution_mode=effective_plan.execution.mode.value,
+                        gate_status=gate_result.status.value,
+                    )
+                else:
+                    self._record_unified_rollout_path(
+                        path="fail_closed",
+                        reason=failure_reason,
+                        execution_mode=effective_plan.execution.mode.value,
+                        gate_status=gate_result.status.value,
+                    )
+                    turn.transition(TurnPhase.REJECTED)
+                    return ToolLoopResult(
+                        _UNIFIED_PLAN_REJECTED_MESSAGE,
+                        success=False,
+                    )
+            else:
+                assert execution is not None
+                assert execution.final_content is not None
+                turn.transition(TurnPhase.EXECUTING)
+                if effective_plan.fact_check.required:
+                    turn.transition(TurnPhase.COLLECTING_EVIDENCE)
+                    turn.record_evidence(
+                        EvidenceState(
+                            required=True,
+                            attempted=True,
+                            status=EvidenceStatus.FOUND,
+                            source_type=EvidenceSourceType.APPROVED_TOOL,
+                            freshness=EvidenceFreshness.CURRENT_TURN,
+                            evidence_text=execution.provenance,
+                            query=effective_plan.context.standalone_question,
+                        )
+                    )
+                    turn.verify_evidence()
+                    turn.transition(TurnPhase.EVIDENCE_VERIFIED)
+                turn.transition(TurnPhase.FINALIZING)
+                turn.set_final_text(execution.final_content)
+                turn.transition(TurnPhase.COMPLETED)
+                self._record_unified_rollout_path(
+                    path="langgraph_v4",
+                    reason="typed_primary_result",
+                    execution_mode=effective_plan.execution.mode.value,
+                    gate_status=gate_result.status.value,
+                )
+                return ToolLoopResult(
+                    execution.final_content,
+                    success=True,
+                    selected_route=execution.selected_route,
+                    model_calls=usage_router.response_count,
+                    tokens=usage_router.output_tokens,
+                )
+
         self._record_unified_rollout_path(
             path="primary",
-            reason="canary_eligible" if canary_read_only else "primary_mode",
+            reason="legacy_primary",
             execution_mode=effective_plan.execution.mode.value,
             gate_status=gate_result.status.value,
         )
@@ -1686,7 +1821,6 @@ class AgentOrchestrator:
             and effective_plan.capability.primary_asset.asset_type == "recipe"
             else factual_handler
         )
-        architecture = str(config.get("architecture", "legacy_v2"))
         if architecture == "capability_first_v3":
             if not bool(config.get("resolution_budget_valid", False)):
                 self._record_unified_rollout_path(
@@ -2304,7 +2438,34 @@ class AgentOrchestrator:
         skills: tuple[SkillDefinition, ...],
         recipes: tuple[RecipeDefinition, ...],
     ) -> None:
-        """Primary의 exact plan을 V4 graph와 rollout gate 끝까지 연결한다."""
+        """Legacy primary와 비교할 background shadow 실행만 예약한다."""
+        await self._execute_langgraph_v4_connected(
+            plan=plan,
+            legacy=legacy,
+            mode="shadow",
+            request_id=request_id,
+            session_key=session_key,
+            skills=skills,
+            recipes=recipes,
+            planner_model_calls=legacy.model_calls,
+            planner_tokens=legacy.tokens,
+        )
+
+    async def _execute_langgraph_v4_connected(
+        self,
+        *,
+        plan: UnifiedTurnPlan,
+        legacy: LegacyRunTelemetryV1 | None,
+        mode: str,
+        request_id: str,
+        session_key: str,
+        skills: tuple[SkillDefinition, ...],
+        recipes: tuple[RecipeDefinition, ...],
+        planner_model_calls: int,
+        planner_tokens: int,
+        on_progress: ProgressCallback | None = None,
+    ) -> ConnectedShadowResultV1:
+        """Exact read-only plan을 V4 graph receipt까지 한 번만 실행한다."""
         v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
         if not isinstance(v4, dict):
             raise TypeError("langgraph_v4 configuration is required")
@@ -2329,7 +2490,7 @@ class AgentOrchestrator:
         )
         facade = LangGraphV4RolloutFacade(
             architecture="langgraph_v4",
-            mode="shadow",
+            mode=mode,
             shadow_no_send=bool(v4.get("shadow_no_send", False)),
             budget=budget,
             checkpoint_path=str(checkpoint.get("path") or ""),
@@ -2339,15 +2500,15 @@ class AgentOrchestrator:
             raw = await self._execute_skill(definition.name, shlex.join(argv))
             decoded = json.loads(raw)
             if not isinstance(decoded, dict):
-                raise TypeError("shadow skill output must be a JSON object")
+                raise TypeError("connected skill output must be a JSON object")
             return decoded
 
         async def execute_recipe(definition, bound_steps):
             if not bound_steps:
-                raise ValueError("shadow recipe requires declared binding")
+                raise ValueError("connected recipe requires declared binding")
             payload = json.loads(bound_steps[0].source_payload_json)
             if not isinstance(payload, dict):
-                raise TypeError("shadow recipe payload must be an object")
+                raise TypeError("connected recipe payload must be an object")
             raw = await self._execute_exact_recipe_asset(
                 definition.name,
                 {
@@ -2358,9 +2519,10 @@ class AgentOrchestrator:
                     )
                     for key, value in payload.items()
                 },
+                on_progress=on_progress,
             )
             if not isinstance(raw, dict):
-                raise TypeError("shadow recipe output must be a JSON object")
+                raise TypeError("connected recipe output must be a JSON object")
             return raw
 
         result = await ConnectedShadowTurnRunner(
@@ -2374,8 +2536,8 @@ class AgentOrchestrator:
             legacy=legacy,
             request_id=request_id,
             session_key=session_key,
-            planner_model_calls=legacy.model_calls,
-            planner_tokens=legacy.tokens,
+            planner_model_calls=planner_model_calls,
+            planner_tokens=planner_tokens,
         )
         telemetry = self._unified_turn_planner_config.get("telemetry", {})
         if (
@@ -2383,25 +2545,38 @@ class AgentOrchestrator:
             or not isinstance(telemetry, dict)
             or not telemetry.get("enabled", True)
         ):
-            return
+            return result
         allowed = set(v4.get("telemetry_fields", ()))
-        shadow_fields = {
+        event_fields = {
             key: value
             for key, value in result.telemetry.as_dict().items()
             if key in allowed
         }
+        event_fields.update(
+            {
+                key: value
+                for key, value in result.execution.as_dict().items()
+                if key in allowed
+            }
+        )
+        event_fields.update(
+            side_effect_counts=result.side_effect_counts.as_dict(),
+            rollback_required=result.execution.rollback_required,
+            rollback_reason=(
+                ",".join(result.execution.rollback_reasons) or None
+            ),
+        )
+        if result.canary is not None:
+            event_fields["canary_eligible"] = result.canary.eligible
         self._structured_logger.log(
-            action_type="langgraph_v4_shadow_rollout",
+            action_type=f"langgraph_v4_{mode}_rollout",
             status=(
-                "failure" if result.comparison.rollback_required else "success"
+                "failure" if result.execution.rollback_required else "success"
             ),
             trace_id="",
-            **shadow_fields,
-            side_effect_counts=result.side_effect_counts.as_dict(),
-            rollback_required=result.comparison.rollback_required,
-            rollback_reason=",".join(result.comparison.rollback_reasons) or None,
-            canary_eligible=result.canary.eligible,
+            **event_fields,
         )
+        return result
 
     async def process_operator_message(
         self,

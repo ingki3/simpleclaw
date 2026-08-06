@@ -27,7 +27,12 @@ from .adapters.recipe import GenericRecipeAdapter, RecipeExecutor
 from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
 from .composition import FinalCompositionRuntime
-from .contracts import AssetInvocationV1, AssetRefV1, NormalizedAssetResultV1
+from .contracts import (
+    AssetInvocationV1,
+    AssetRefV1,
+    FinalArtifactV1,
+    NormalizedAssetResultV1,
+)
 from .contracts_registry import (
     ContractAssetDefinition,
     ContractRegistryError,
@@ -48,6 +53,7 @@ from .runtime import (
     GraphDeliveryContext,
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
+    LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     PersistenceRuntime,
@@ -55,6 +61,7 @@ from .runtime import (
     ShadowComparisonTelemetryV1,
     ShadowRunTelemetryV1,
     ShadowSideEffectCountsV1,
+    TargetDispatchTraceV1,
     evaluate_read_only_canary,
 )
 from .side_effect_monitor import capture_shadow_side_effects
@@ -69,12 +76,13 @@ from .status import (
 
 @dataclass(frozen=True, slots=True)
 class ConnectedShadowResultV1:
-    """한 production shadow graph 실행의 telemetry와 rollout 결론이다."""
+    """한 connected graph 실행의 telemetry와 mode별 receipt다."""
 
     telemetry: ShadowRunTelemetryV1
-    comparison: ShadowComparisonTelemetryV1
-    canary: CanaryGateDecisionV1
+    comparison: ShadowComparisonTelemetryV1 | None
+    canary: CanaryGateDecisionV1 | None
     side_effect_counts: ShadowSideEffectCountsV1
+    execution: LangGraphV4ExecutionReceiptV1
 
 
 class _ShadowBudgetStop(RuntimeError):
@@ -83,6 +91,44 @@ class _ShadowBudgetStop(RuntimeError):
     def __init__(self, stop_condition: str) -> None:
         self.stop_condition = stop_condition
         super().__init__(stop_condition)
+
+
+class _TargetDispatchInvariantError(RuntimeError):
+    """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
+
+
+class _TargetDispatchGuard:
+    """한 graph run에서 selected invocation을 정확히 한 번만 실행한다."""
+
+    def __init__(self, invocation: AssetInvocationV1) -> None:
+        self._invocation = invocation
+        self.attempted = 0
+        self.executed = 0
+        self.succeeded = 0
+        self.duplicate_blocked = 0
+
+    def begin(self) -> None:
+        self.attempted += 1
+        if self.attempted != 1:
+            self.duplicate_blocked += 1
+            raise _TargetDispatchInvariantError("duplicate_target_dispatch")
+
+    def mark_executed(self) -> None:
+        self.executed += 1
+
+    def complete(self, *, succeeded: bool) -> None:
+        if succeeded:
+            self.succeeded += 1
+
+    def snapshot(self) -> TargetDispatchTraceV1:
+        return TargetDispatchTraceV1(
+            target_asset_ref=self._invocation.asset_ref,
+            invocation_id=self._invocation.invocation_id,
+            attempted=self.attempted,
+            executed=self.executed,
+            succeeded=self.succeeded,
+            duplicate_blocked=self.duplicate_blocked,
+        )
 
 
 class _ShadowRunBudget:
@@ -332,7 +378,7 @@ class ConnectedShadowTurnRunner:
         self,
         *,
         plan: UnifiedTurnPlan,
-        legacy: LegacyRunTelemetryV1,
+        legacy: LegacyRunTelemetryV1 | None,
         request_id: str,
         session_key: str,
         planner_model_calls: int,
@@ -388,6 +434,7 @@ class ConnectedShadowTurnRunner:
             )
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
+        dispatch_guard = _TargetDispatchGuard(invocation)
         budget_controller = _ShadowRunBudget(
             self._facade.budget,
             planner_model_calls=planner_model_calls,
@@ -396,11 +443,19 @@ class ConnectedShadowTurnRunner:
 
         async def dispatch(_state: Mapping[str, object]) -> dict[str, object]:
             nonlocal response
+            dispatch_guard.begin()
             budget_controller.reserve_asset_call()
+            dispatch_guard.mark_executed()
             try:
                 response = await adapter.dispatch(invocation)
             finally:
                 budget_controller.release_asset_call()
+            dispatch_guard.complete(
+                succeeded=(
+                    response.status is AssetResultStatus.RESOLVED
+                    and response.result is not None
+                )
+            )
             if response.result is None:
                 failed_result = NormalizedAssetResultV1(
                     invocation_id=invocation.invocation_id,
@@ -571,6 +626,7 @@ class ConnectedShadowTurnRunner:
         Path(self._facade.checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
         state: Mapping[str, object] = {}
         stop_condition = "completed"
+        failure_code: str | None = None
         async with AsyncSqliteSaver.from_conn_string(
             str(self._facade.checkpoint_path)
         ) as checkpointer:
@@ -602,6 +658,12 @@ class ConnectedShadowTurnRunner:
                     stop_condition = "deadline"
                 except _ShadowBudgetStop as exc:
                     stop_condition = exc.stop_condition
+                except _TargetDispatchInvariantError as exc:
+                    stop_condition = "blocked"
+                    failure_code = str(exc)
+                except Exception as exc:  # noqa: BLE001 - typed rollback boundary
+                    stop_condition = "failed"
+                    failure_code = f"graph_{type(exc).__name__}"
         if stop_condition != "completed" and response is None:
             stopped_status = (
                 AssetResultStatus.FAILED
@@ -623,7 +685,7 @@ class ConnectedShadowTurnRunner:
                 input_payload_hash=invocation.payload_hash,
                 effect_status=stopped_effect,
                 result=stopped_result,
-                error_code=stop_condition,
+                error_code=failure_code or stop_condition,
             )
         if response is None or response.result is None:
             raise RuntimeError("connected shadow graph did not produce a typed result")
@@ -634,6 +696,7 @@ class ConnectedShadowTurnRunner:
             DeliveryStatus.NOT_READY,
         )
         budget = budget_controller.usage(stop_condition)
+        dispatch_trace = dispatch_guard.snapshot()
         invocation_status = _invocation_status(response)
         terminal_outcome = state.get("terminal_outcome", TerminalOutcome.FAILED)
         if stop_condition == "deadline":
@@ -660,16 +723,66 @@ class ConnectedShadowTurnRunner:
             delivery_status=delivery_status,
             budget_usage=budget,
             model_call_attribution={"planner": planner_model_calls, "composer": 0},
+            dispatch_trace=dispatch_trace,
         )
         counts = ShadowSideEffectCountsV1(
             telegram_send=monitor.telegram_send,
             conversation_write=monitor.conversation_write,
             notifier=monitor.notifier,
         )
-        comparison = self._facade.compare(
-            legacy,
-            telemetry,
-            side_effect_counts=counts,
+        comparison = (
+            self._facade.compare(
+                legacy,
+                telemetry,
+                side_effect_counts=counts,
+            )
+            if legacy is not None
+            else None
         )
-        canary = evaluate_read_only_canary(comparison, [entry.snapshot])
-        return ConnectedShadowResultV1(telemetry, comparison, canary, counts)
+        canary = (
+            evaluate_read_only_canary(comparison, [entry.snapshot])
+            if comparison is not None
+            else None
+        )
+        final_artifact = state.get("final_artifact")
+        if final_artifact is not None and not isinstance(
+            final_artifact, FinalArtifactV1
+        ):
+            raise TypeError("connected graph returned an invalid final artifact")
+        rollback_reasons: list[str] = []
+        if stop_condition != "completed":
+            rollback_reasons.append(failure_code or stop_condition)
+        if not dispatch_trace.exactly_once:
+            rollback_reasons.append("target_dispatch_not_exactly_once")
+        if invocation_status is not InvocationStatus.SUCCEEDED:
+            rollback_reasons.append("invocation_not_succeeded")
+        if response.status is not AssetResultStatus.RESOLVED:
+            rollback_reasons.append("asset_result_not_resolved")
+        if terminal_outcome is not TerminalOutcome.COMPLETED:
+            rollback_reasons.append("graph_not_completed")
+        if final_artifact is None:
+            rollback_reasons.append("typed_final_missing")
+        if delivery_status is not DeliveryStatus.SHADOWED:
+            rollback_reasons.append("graph_delivery_not_deferred")
+        if counts.total:
+            rollback_reasons.append("external_side_effect")
+        unique_reasons = tuple(dict.fromkeys(rollback_reasons))
+        execution = LangGraphV4ExecutionReceiptV1(
+            mode=self._facade.mode,
+            request_id=request_id,
+            selected_route=route,
+            final_artifact=final_artifact,
+            dispatch_trace=dispatch_trace,
+            budget_usage=budget,
+            side_effect_counts=counts,
+            terminal_outcome=terminal_outcome,
+            rollback_required=bool(unique_reasons),
+            rollback_reasons=unique_reasons,
+        )
+        return ConnectedShadowResultV1(
+            telemetry,
+            comparison,
+            canary,
+            counts,
+            execution,
+        )
