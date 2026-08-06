@@ -17,7 +17,11 @@ from simpleclaw.graph_runtime.adapters.persistence import (
 )
 from simpleclaw.graph_runtime.contracts import DeliveryIntentV1
 from simpleclaw.graph_runtime.events import DeliveryReceiptV1
-from simpleclaw.graph_runtime.idempotency import delivery_id, persistence_id
+from simpleclaw.graph_runtime.idempotency import (
+    delivery_id,
+    persistence_id,
+    validate_canonical_artifact_identity,
+)
 from simpleclaw.graph_runtime.runtime import (
     DeliveryRuntime,
     InMemoryPersistenceJournal,
@@ -83,11 +87,12 @@ class PrimaryDeliveryCoordinator:
         sender: SenderCallback,
     ) -> PrimaryDeliveryOutcomeV1:
         metadata = response.metadata
-        expected_hash = hashlib.sha256(
-            f"content.v1\x1f{response}".encode()
-        ).hexdigest()
-        if metadata.artifact_hash != expected_hash:
-            raise ValueError("primary response content hash mismatch")
+        validate_canonical_artifact_identity(
+            request_id=metadata.request_id,
+            content=str(response),
+            artifact_id=metadata.artifact_id,
+            content_hash=metadata.artifact_hash,
+        )
         identity = delivery_id(
             metadata.request_id,
             metadata.artifact_hash,

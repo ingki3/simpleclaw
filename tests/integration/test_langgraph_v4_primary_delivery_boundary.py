@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +10,11 @@ from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.graph_runtime.adapters.delivery import SendNotStartedError
+from simpleclaw.graph_runtime.idempotency import (
+    IdempotencyInvariantError,
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.status import DeliveryStatus
 from simpleclaw.memory import ConversationStore
 from simpleclaw.outbound_delivery import (
@@ -21,14 +25,13 @@ from simpleclaw.outbound_delivery import (
 
 
 def _response(content: str = "V4 primary answer") -> PrimaryResponseText:
+    request_id = "telegram:42:1001"
     return PrimaryResponseText(
         content,
         PrimaryDeliveryMetadataV1(
-            request_id="telegram:42:1001",
-            artifact_id="artifact-1",
-            artifact_hash=hashlib.sha256(
-                f"content.v1\x1f{content}".encode()
-            ).hexdigest(),
+            request_id=request_id,
+            artifact_id=canonical_artifact_id(request_id, content),
+            artifact_hash=canonical_artifact_content_hash(content),
             session_key="telegram-session-1",
         ),
     )
@@ -76,6 +79,54 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
     assert [(message.role.value, message.content) for message in messages] == [
         ("assistant", "V4 primary answer")
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "metadata_update",
+    [
+        {"artifact_id": "arbitrary-artifact"},
+        {
+            "request_id": "telegram:42:stale",
+            "artifact_id": canonical_artifact_id(
+                "telegram:42:1001", "V4 primary answer"
+            ),
+        },
+    ],
+)
+async def test_actual_telegram_rejects_noncanonical_artifact_before_send(
+    tmp_path,
+    metadata_update,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+    )
+    canonical = _response()
+    response = PrimaryResponseText(
+        str(canonical),
+        PrimaryDeliveryMetadataV1(
+            request_id=metadata_update.get(
+                "request_id", canonical.metadata.request_id
+            ),
+            artifact_id=metadata_update["artifact_id"],
+            artifact_hash=canonical.metadata.artifact_hash,
+            session_key=canonical.metadata.session_key,
+        ),
+    )
+    sender = AsyncMock()
+
+    with pytest.raises(IdempotencyInvariantError, match="identity mismatch"):
+        await coordinator.deliver_telegram(
+            response,
+            destination_ref="42",
+            sender=sender,
+        )
+
+    sender.assert_not_awaited()
+    assert store.get_recent(session_key="telegram-session-1") == []
 
 
 @pytest.mark.asyncio
@@ -236,10 +287,12 @@ async def test_clarify_callback_replay_uses_stable_request_delivery_identity(
                 "clarified answer",
                 PrimaryDeliveryMetadataV1(
                     request_id=request_id,
-                    artifact_id="clarify-artifact",
-                    artifact_hash=hashlib.sha256(
-                        b"content.v1\x1fclarified answer"
-                    ).hexdigest(),
+                    artifact_id=canonical_artifact_id(
+                        request_id, "clarified answer"
+                    ),
+                    artifact_hash=canonical_artifact_content_hash(
+                        "clarified answer"
+                    ),
                     session_key="telegram-clarify-session",
                 ),
             )

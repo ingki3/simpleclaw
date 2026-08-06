@@ -14,7 +14,11 @@ from simpleclaw.graph_runtime.adapters.delivery import (
 )
 from simpleclaw.graph_runtime.contracts import DeliveryIntentV1
 from simpleclaw.graph_runtime.events import DeliveryReceiptV1
-from simpleclaw.graph_runtime.idempotency import IdempotencyInvariantError
+from simpleclaw.graph_runtime.idempotency import (
+    IdempotencyInvariantError,
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.runtime import (
     DeliveryRuntime,
     InMemoryDeliveryJournal,
@@ -24,11 +28,13 @@ from simpleclaw.graph_runtime.status import DeliveryStatus
 
 
 def _intent(*, attempts: int = 1) -> DeliveryIntentV1:
+    request_id = "request-1"
+    content = "hello"
     return DeliveryIntentV1(
         delivery_id="delivery-1",
-        request_id="request-1",
-        artifact_id="artifact-1",
-        artifact_hash="artifact-hash",
+        request_id=request_id,
+        artifact_id=canonical_artifact_id(request_id, content),
+        artifact_hash=canonical_artifact_content_hash(content),
         channel="telegram",
         destination_ref="chat-1",
         max_attempts=attempts,

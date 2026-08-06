@@ -23,6 +23,36 @@ def _stable_id(namespace: str, *parts: str) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _canonical_artifact_hash(namespace: str, *parts: str) -> str:
+    return hashlib.sha256(
+        "\x1f".join((namespace, *parts)).encode("utf-8")
+    ).hexdigest()
+
+
+def canonical_artifact_id(request_id: str, content: str) -> str:
+    """request와 최종 본문에 결합된 canonical artifact identity를 만든다."""
+    return _canonical_artifact_hash("artifact.v1", request_id, content)
+
+
+def canonical_artifact_content_hash(content: str) -> str:
+    """최종 본문 schema namespace를 포함한 canonical content hash를 만든다."""
+    return _canonical_artifact_hash("content.v1", content)
+
+
+def validate_canonical_artifact_identity(
+    *,
+    request_id: str,
+    content: str,
+    artifact_id: str,
+    content_hash: str,
+) -> None:
+    """artifact/request/content 조합이 canonical identity인지 fail-closed 검증한다."""
+    if content_hash != canonical_artifact_content_hash(content):
+        raise IdempotencyInvariantError("final artifact content hash mismatch")
+    if artifact_id != canonical_artifact_id(request_id, content):
+        raise IdempotencyInvariantError("final artifact identity mismatch")
+
+
 def delivery_id(request_id: str, artifact_hash: str, destination_ref: str) -> str:
     """같은 final artifact와 destination의 전송 identity를 고정한다."""
     return _stable_id("delivery.v1", request_id, artifact_hash, destination_ref)

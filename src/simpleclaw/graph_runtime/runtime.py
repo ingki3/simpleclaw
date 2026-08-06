@@ -40,6 +40,7 @@ from .idempotency import (
     IdempotencyInvariantError,
     UniquePayloadLedger,
     persistence_id,
+    validate_canonical_artifact_identity,
 )
 from .status import (
     AssetResultStatus,
@@ -332,11 +333,12 @@ class LangGraphV4ExecutionReceiptV1:
                 raise ValueError("final artifact request identity mismatch")
             if self.final_artifact.outcome is not self.terminal_outcome:
                 raise ValueError("final artifact outcome mismatch")
-            expected_hash = hashlib.sha256(
-                f"content.v1\x1f{self.final_artifact.content}".encode()
-            ).hexdigest()
-            if self.final_artifact.content_hash != expected_hash:
-                raise ValueError("final artifact content hash mismatch")
+            validate_canonical_artifact_identity(
+                request_id=self.request_id,
+                content=self.final_artifact.content,
+                artifact_id=self.final_artifact.artifact_id,
+                content_hash=self.final_artifact.content_hash,
+            )
 
     @property
     def final_content(self) -> str | None:

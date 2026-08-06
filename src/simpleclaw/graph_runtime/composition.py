@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 from collections.abc import Awaitable, Callable
 
 from .contracts import DraftArtifactV1, FinalArtifactV1, NormalizedAssetResultV1
+from .idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from .status import TerminalOutcome
 
 ComposeCallback = Callable[[NormalizedAssetResultV1], str | Awaitable[str]]
@@ -18,10 +21,6 @@ async def _await_if_needed(value):
     if inspect.isawaitable(value):
         return await value
     return value
-
-
-def _hash(*parts: str) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 class FinalCompositionRuntime:
@@ -77,7 +76,7 @@ class FinalCompositionRuntime:
                 return None
             content = safe_content.strip()
 
-        artifact_id = _hash("artifact.v1", request_id, content)
+        artifact_id = canonical_artifact_id(request_id, content)
         draft = DraftArtifactV1(
             artifact_id=artifact_id,
             request_id=request_id,
@@ -89,7 +88,7 @@ class FinalCompositionRuntime:
             request_id=draft.request_id,
             content=draft.content,
             outcome=draft.outcome,
-            content_hash=_hash("content.v1", draft.content),
+            content_hash=canonical_artifact_content_hash(draft.content),
         )
         prior = self._finals.setdefault(request_id, final)
         if prior != final:

@@ -51,6 +51,10 @@ from simpleclaw.graph_runtime.contracts import (
     NormalizedAssetResultV1,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.runtime import (
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
@@ -1147,6 +1151,51 @@ def test_execution_receipt_rejects_false_success_invariants() -> None:
 
 
 @pytest.mark.offline
+@pytest.mark.parametrize(
+    "artifact_update",
+    [
+        {"artifact_id": "arbitrary-artifact"},
+        {"request_id": "stale-request"},
+        {"content": "stale content"},
+        {"content_hash": "stale-content-hash"},
+    ],
+)
+def test_execution_receipt_rejects_noncanonical_final_artifact(
+    artifact_update,
+) -> None:
+    request_id = "receipt-request"
+    content = "canonical answer"
+    invocation = _invocation(_registry())
+    final = FinalArtifactV1(
+        artifact_id=canonical_artifact_id(request_id, content),
+        request_id=request_id,
+        content=content,
+        outcome=TerminalOutcome.COMPLETED,
+        content_hash=canonical_artifact_content_hash(content),
+    ).model_copy(update=artifact_update)
+
+    with pytest.raises(ValueError, match="(identity|content hash) mismatch"):
+        LangGraphV4ExecutionReceiptV1(
+            mode="primary",
+            request_id=request_id,
+            selected_route="recipe",
+            final_artifact=final,
+            dispatch_trace=TargetDispatchTraceV1(
+                target_asset_ref=invocation.asset_ref,
+                invocation_id=invocation.invocation_id,
+                attempted=1,
+                executed=1,
+                succeeded=1,
+            ),
+            budget_usage=_budget(),
+            side_effect_counts=ShadowSideEffectCountsV1(),
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            rollback_required=False,
+            rollback_reasons=(),
+        )
+
+
+@pytest.mark.offline
 def test_v4_primary_preserves_direct_no_asset_parity() -> None:
     planned = _plan(
         "recipe",
@@ -1382,13 +1431,15 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
             request_id=request_id,
             selected_route="recipe",
             final_artifact=FinalArtifactV1(
-                artifact_id="v4-artifact",
+                artifact_id=canonical_artifact_id(
+                    request_id, "V4가 만든 최종 응답"
+                ),
                 request_id=request_id,
                 content="V4가 만든 최종 응답",
                 outcome=TerminalOutcome.COMPLETED,
-                content_hash=hashlib.sha256(
-                    "content.v1\x1fV4가 만든 최종 응답".encode()
-                ).hexdigest(),
+                content_hash=canonical_artifact_content_hash(
+                    "V4가 만든 최종 응답"
+                ),
             ),
             dispatch_trace=TargetDispatchTraceV1(
                 target_asset_ref=AssetRefV1(
@@ -1441,7 +1492,7 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
     assert result.primary_delivery is not None
     assert result.primary_delivery.request_id == turn.turn_id
     assert result.primary_delivery.artifact_hash == (
-        hashlib.sha256("content.v1\x1fV4가 만든 최종 응답".encode()).hexdigest()
+        canonical_artifact_content_hash("V4가 만든 최종 응답")
     )
     assert turn.final_text == result.text
     assert turn.phase.value == "completed"
