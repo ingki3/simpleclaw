@@ -169,6 +169,10 @@ from simpleclaw.daemon.drain import (
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
 from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
@@ -1465,8 +1469,23 @@ class AgentOrchestrator:
                         session_key=turn.session_key,
                     )
 
-                if tool_loop_result.primary_delivery is not None:
-                    metadata = tool_loop_result.primary_delivery
+                metadata = tool_loop_result.primary_delivery
+                if (
+                    metadata is None
+                    and self.deferred_primary_delivery_required()
+                ):
+                    metadata = PrimaryDeliveryMetadataV1(
+                        request_id=turn.turn_id,
+                        artifact_id=canonical_artifact_id(
+                            turn.turn_id,
+                            response_text,
+                        ),
+                        artifact_hash=canonical_artifact_content_hash(
+                            response_text
+                        ),
+                        session_key=turn.session_key,
+                    )
+                if metadata is not None:
                     return PrimaryResponseText(response_text, metadata)
 
                 msg_ids = self._save_turn(text, response_text)
