@@ -134,6 +134,7 @@ def test_connected_exception_does_not_promote_provider_code() -> None:
         "selected_hash",
         "approved_hash",
         "catalog_fingerprint",
+        "catalog_fallback_fingerprint",
         "registry_fingerprint",
         "exception_message",
     ],
@@ -181,7 +182,14 @@ def test_structured_fields_are_closed_or_hashed_before_formatter(
             ),
         )
     )
-    catalog = PlannerCatalog(assets=assets, fingerprint="e" * 64)
+    catalog = PlannerCatalog(
+        assets=assets,
+        fingerprint=(
+            marker
+            if marker_field == "catalog_fallback_fingerprint"
+            else "e" * 64
+        ),
+    )
     base = _asset_zero_plan()
     original = replace(
         base,
@@ -208,7 +216,10 @@ def test_structured_fields_are_closed_or_hashed_before_formatter(
         selected_asset_hash=marker if marker_field == "selected_hash" else "a" * 64,
         approved_asset_hash=marker if marker_field == "approved_hash" else "9" * 64,
         catalog_fingerprint=(
-            marker if marker_field == "catalog_fingerprint" else "b" * 64
+            marker
+            if marker_field
+            in {"catalog_fingerprint", "catalog_fallback_fingerprint"}
+            else "b" * 64
         ),
         registry_fingerprint=(
             marker if marker_field == "registry_fingerprint" else "c" * 64
@@ -225,13 +236,18 @@ def test_structured_fields_are_closed_or_hashed_before_formatter(
         )
 
     formatted = caplog.text
-    assert marker not in formatted
+    assert formatted.count(marker) == 0
     assert "original_asset_kind=recipe" in formatted
     assert "effective_asset_kind=recipe" in formatted
     expected_original_hash = "" if marker_field == "original_fingerprint" else "d" * 64
     expected_effective_hash = "" if marker_field == "effective_fingerprint" else "f" * 64
     assert f"original_asset_hash={expected_original_hash} " in formatted
     assert f"effective_asset_hash={expected_effective_hash} " in formatted
+    expected_catalog_fingerprint = {
+        "catalog_fingerprint": "e" * 64,
+        "catalog_fallback_fingerprint": "",
+    }.get(marker_field, "b" * 64)
+    assert f"catalog_fingerprint={expected_catalog_fingerprint} " in formatted
     assert "error_message=message_sha256=" in formatted
     assert _selected_asset_hash(effective, catalog) == expected_effective_hash
 

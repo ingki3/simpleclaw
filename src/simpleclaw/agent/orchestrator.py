@@ -348,6 +348,16 @@ def _selected_asset_kind(plan: UnifiedTurnPlan) -> str:
     return "unknown"
 
 
+def _closed_fingerprint(value: str | None) -> str:
+    """Canonical lowercase SHA-256 fingerprint만 formatter 경계에 허용한다."""
+    fingerprint = value or ""
+    if len(fingerprint) != 64:
+        return ""
+    if any(character not in "0123456789abcdef" for character in fingerprint):
+        return ""
+    return fingerprint
+
+
 def _selected_asset_hash(
     plan: UnifiedTurnPlan,
     catalog: PlannerCatalog,
@@ -364,12 +374,7 @@ def _selected_asset_hash(
     )
     if len(matches) != 1:
         return ""
-    fingerprint = matches[0].definition_fingerprint or ""
-    if len(fingerprint) != 64:
-        return ""
-    if any(character not in "0123456789abcdef" for character in fingerprint):
-        return ""
-    return fingerprint
+    return _closed_fingerprint(matches[0].definition_fingerprint)
 
 
 def _log_unified_turn_planner_effective(
@@ -431,7 +436,9 @@ def _log_langgraph_v4_primary_isolated(
         diagnostic.selected_asset_kind,
         diagnostic.selected_asset_hash,
         diagnostic.approved_asset_hash,
-        diagnostic.catalog_fingerprint or catalog.fingerprint,
+        _closed_fingerprint(
+            diagnostic.catalog_fingerprint or catalog.fingerprint
+        ),
         diagnostic.registry_fingerprint,
         diagnostic.owned_input_contract_present,
         diagnostic.owned_output_contract_present,
