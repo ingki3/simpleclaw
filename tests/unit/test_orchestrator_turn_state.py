@@ -28,9 +28,14 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_planner import PlannerUnavailable
+from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.capability import CapabilityMetadata
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryMetadataV1,
+    PrimaryResponseText,
+)
 from simpleclaw.skills.models import SkillDefinition
 
 
@@ -153,6 +158,118 @@ async def test_process_message_uses_one_primary_plan_and_scoped_store(
             session_key=session_key
         )
     ] == ["hello", "typed answer"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_boundary", ["planner", "asset"])
+async def test_v4_ingress_persists_user_once_before_execution_crash(
+    config_file,
+    monkeypatch,
+    crash_boundary,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+    orchestrator._unified_turn_planner_config.update(
+        {"architecture": "langgraph_v4", "mode": "primary"}
+    )
+    request_id = f"telegram:20:{crash_boundary}-crash"
+    session_key = SessionIdentity("telegram", "10", "20").stable_key()
+    executions = 0
+
+    async def crash_after_ingress(_text, *, recent_rows, turn, **_kwargs):
+        nonlocal executions
+        executions += 1
+        assert recent_rows == []
+        persisted = orchestrator._store.get_recent(session_key=session_key)
+        assert [
+            (message.role, message.content, message.turn_id)
+            for message in persisted
+        ] == [(MessageRole.USER, "crash-safe request", request_id)]
+        raise RuntimeError(f"injected {crash_boundary} crash")
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_unified_turn_planner_primary",
+        crash_after_ingress,
+    )
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match=f"injected {crash_boundary} crash"):
+            await orchestrator.process_message(
+                "crash-safe request",
+                10,
+                20,
+                request_id=request_id,
+            )
+
+    assert executions == 2
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, "crash-safe request", request_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_id", "request_text"),
+    [
+        ("telegram:20:stable-ordinary", "stable ordinary request"),
+        (
+            "telegram:callback:callback-id:20:1001:0",
+            "stable callback option",
+        ),
+    ],
+)
+async def test_v4_telegram_replay_excludes_current_inbound_and_keeps_one_user_row(
+    config_file,
+    monkeypatch,
+    request_id,
+    request_text,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+    orchestrator._unified_turn_planner_config.update(
+        {"architecture": "langgraph_v4", "mode": "primary"}
+    )
+    session_key = SessionIdentity("telegram", "10", "20").stable_key()
+    candidate_batches = []
+
+    async def primary_result(_text, *, recent_rows, turn, **_kwargs):
+        candidate_batches.append(list(recent_rows))
+        return ToolLoopResult(
+            "durable response",
+            primary_delivery=PrimaryDeliveryMetadataV1(
+                request_id=turn.turn_id,
+                artifact_id="artifact-stable-ordinary",
+                artifact_hash="hash-stable-ordinary",
+                session_key=turn.session_key,
+            ),
+        )
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_unified_turn_planner_primary",
+        primary_result,
+    )
+
+    first = await orchestrator.process_message(
+        request_text,
+        10,
+        20,
+        request_id=request_id,
+    )
+    replay = await orchestrator.process_message(
+        request_text,
+        10,
+        20,
+        request_id=request_id,
+    )
+
+    assert isinstance(first, PrimaryResponseText)
+    assert isinstance(replay, PrimaryResponseText)
+    assert candidate_batches == [[], []]
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, request_text, request_id)]
 
 
 async def _async_response(text: str) -> LLMResponse:

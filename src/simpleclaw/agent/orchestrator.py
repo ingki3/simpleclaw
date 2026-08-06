@@ -1382,7 +1382,10 @@ class AgentOrchestrator:
                 # follow-up 정규화/clarify/intents/domains/route 를 LLM structured
                 # JSON 판단 하나로 결정한다. 분석 비활성 또는 provider 장애 시에만
                 # 기존 결정적(keyword) 경로(BIZ-425 TurnFrame + response_router)로
-                # 내려간다. DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문 유지.
+                # 내려간다. V4 actual-response ingress는 stable request identity가
+                # 정해진 이 경계에서 실행보다 먼저 user row를 durable 저장한다.
+                # replay된 현재 요청은 planner context에서 제외해 첫 실행과 동일한
+                # context 후보를 유지한다.
                 planner_candidate_limit = int(
                     self._unified_turn_planner_config.get(
                         "context_candidate_limit",
@@ -1393,6 +1396,23 @@ class AgentOrchestrator:
                     limit=max(self._history_limit, planner_candidate_limit),
                     session_key=turn.session_key,
                 )
+                if self.deferred_primary_delivery_required():
+                    recent_rows = [
+                        row
+                        for row in recent_rows
+                        if row[1].turn_id != turn.turn_id
+                    ]
+                    inbound_id, created = self._store.save_inbound_once(
+                        ConversationMessage(
+                            role=MessageRole.USER,
+                            content=text,
+                            channel="telegram",
+                        ),
+                        session_key=turn.session_key,
+                        request_id=turn.turn_id,
+                    )
+                    if created:
+                        self._schedule_embedding(inbound_id, text)
                 rollout_mode = str(
                     self._unified_turn_planner_config.get("mode", "primary")
                 )
@@ -1447,17 +1467,6 @@ class AgentOrchestrator:
 
                 if tool_loop_result.primary_delivery is not None:
                     metadata = tool_loop_result.primary_delivery
-                    inbound_id, created = self._store.save_inbound_once(
-                        ConversationMessage(
-                            role=MessageRole.USER,
-                            content=text,
-                            channel="telegram",
-                        ),
-                        session_key=metadata.session_key,
-                        request_id=metadata.request_id,
-                    )
-                    if created:
-                        self._schedule_embedding(inbound_id, text)
                     return PrimaryResponseText(response_text, metadata)
 
                 msg_ids = self._save_turn(text, response_text)

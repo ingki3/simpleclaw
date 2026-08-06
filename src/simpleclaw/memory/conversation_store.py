@@ -227,11 +227,29 @@ class ConversationStore:
         session_key: str,
         turn_id: str,
     ) -> tuple[int, int]:
-        """Persist one user/assistant pair and session checkpoint atomically."""
+        """Persist one user/assistant pair and session checkpoint atomically.
+
+        A V4 actual-response ingress may already have persisted the user row before
+        planner/asset execution.  Reuse that row (and an already completed pair on
+        replay) instead of creating duplicate history for the same stable turn.
+        """
         now = datetime.now().astimezone().isoformat()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             ids: list[int] = []
             for message in (user_message, assistant_message):
+                existing = conn.execute(
+                    "SELECT id, content FROM messages WHERE session_key = ? "
+                    "AND turn_id = ? AND role = ? ORDER BY id LIMIT 1",
+                    (session_key, turn_id, message.role.value),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing[1]) != message.content:
+                        raise ValueError(
+                            "turn_id already exists with a different message payload"
+                        )
+                    ids.append(int(existing[0]))
+                    continue
                 cursor = conn.execute(
                     "INSERT INTO messages "
                     "(role, content, timestamp, token_count, channel, "
