@@ -90,7 +90,6 @@ from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
-pytestmark = pytest.mark.offline
 
 
 def _registry():
@@ -328,6 +327,7 @@ def test_target_dispatch_guard_blocks_second_attempt_before_execution() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     tmp_path,
 ) -> None:
@@ -379,6 +379,7 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_reentry_reuses_durable_terminal_without_dispatch(
     tmp_path,
 ) -> None:
@@ -426,6 +427,7 @@ async def test_connected_primary_reentry_reuses_durable_terminal_without_dispatc
     assert resumed.execution.rollback_required is False
 
 
+@pytest.mark.offline
 def test_durable_claimed_invocation_requires_manual_recovery(tmp_path) -> None:
     invocation = _invocation(_registry())
     first = _DurableInvocationClaims(tmp_path / "claim-checkpoint.sqlite3")
@@ -436,6 +438,7 @@ def test_durable_claimed_invocation_requires_manual_recovery(tmp_path) -> None:
         resumed.claim("claim-request", invocation)
 
 
+@pytest.mark.offline
 def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
     invocation = _invocation(_registry())
     receipt = LangGraphV4ExecutionReceiptV1(
@@ -461,6 +464,7 @@ def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
     assert _allow_v4_legacy_fallback({"on_failure": "legacy"}, receipt) is False
 
 
+@pytest.mark.offline
 def test_execution_receipt_rejects_false_success_invariants() -> None:
     invocation = _invocation(_registry())
     with pytest.raises(ValueError, match="exactly-one dispatch"):
@@ -484,6 +488,7 @@ def test_execution_receipt_rejects_false_success_invariants() -> None:
         )
 
 
+@pytest.mark.offline
 def test_v4_primary_preserves_direct_no_asset_parity() -> None:
     planned = _plan(
         "recipe",
@@ -509,6 +514,7 @@ def test_v4_primary_preserves_direct_no_asset_parity() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_unsafe_effect_never_promotes_final(
     tmp_path,
     monkeypatch,
@@ -566,6 +572,7 @@ async def test_connected_primary_unsafe_effect_never_promotes_final(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
     tmp_path,
 ) -> None:
@@ -610,6 +617,7 @@ async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_provider_failure_is_typed_before_delivery(
     tmp_path,
 ) -> None:
@@ -650,6 +658,7 @@ async def test_connected_primary_provider_failure_is_typed_before_delivery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_orchestrator_primary_response_source_is_v4_receipt(
     tmp_path,
     monkeypatch,
