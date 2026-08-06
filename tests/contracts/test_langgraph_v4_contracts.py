@@ -7,6 +7,7 @@ from simpleclaw.graph_runtime.runtime import (
     ShadowSideEffectCountsV1,
     TargetDispatchTraceV1,
 )
+from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
 from simpleclaw.graph_runtime.status import TerminalOutcome
 
 
@@ -48,3 +49,27 @@ def test_primary_pre_dispatch_failure_has_typed_reason_and_zero_promotion() -> N
     assert receipt.dispatch_trace.attempted == 0
     assert receipt.final_content is None
     assert receipt.side_effect_counts.total == 0
+
+
+def test_connected_error_provenance_is_closed_and_hash_only() -> None:
+    marker = "ASCII_ASSET_IDENTITY_MARKER_614"
+    diagnostic = ConnectedExecutionError(
+        "binding",
+        ValueError(marker),
+        code=marker,
+        selected_asset_kind=marker,
+        selected_asset_hash=marker,
+        approved_asset_hash=marker,
+        catalog_fingerprint=marker,
+        registry_fingerprint=marker,
+    )
+
+    assert diagnostic.phase == "binding"
+    assert diagnostic.code == "connected_binding_failed"
+    assert diagnostic.error_type == "ValueError"
+    assert diagnostic.selected_asset_kind == "unknown"
+    assert diagnostic.selected_asset_hash == ""
+    assert diagnostic.approved_asset_hash == ""
+    assert diagnostic.catalog_fingerprint == ""
+    assert diagnostic.registry_fingerprint == ""
+    assert marker not in str(diagnostic)
