@@ -6,8 +6,15 @@ import ast
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).parents[2]
 CORE_ROOT = REPO_ROOT / "src/simpleclaw/graph_runtime"
+PRODUCTION_MODULES = (
+    REPO_ROOT / "src/simpleclaw/production_assets.py",
+    REPO_ROOT / "src/simpleclaw/langgraph_v4_shadow_validation.py",
+)
+ASSET_ROOT = REPO_ROOT / "runtime_assets"
 GENERIC_ASSET_IMPORTS = frozenset(
     {
         "simpleclaw.recipes.executor",
@@ -102,12 +109,24 @@ def _is_asset_specific_import(module: str) -> bool:
     )
 
 
-def _architecture_violations(sources: dict[str, str]) -> list[str]:
+def _architecture_violations(
+    sources: dict[str, str],
+    *,
+    concrete_literals: frozenset[str] = frozenset(),
+) -> list[str]:
     """Static asset 의미, asset별 import, evidence reducer를 AST에서 찾는다."""
     violations: list[str] = []
     for label, source in sources.items():
         tree = ast.parse(source, filename=label)
         for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value in concrete_literals
+            ):
+                violations.append(
+                    f"{label}:{node.lineno}:static-runtime-asset:{node.value}"
+                )
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
@@ -139,9 +158,53 @@ def _core_sources() -> dict[str, str]:
     }
 
 
+def _production_sources() -> dict[str, str]:
+    sources = _core_sources()
+    sources.update(
+        {
+            path.relative_to(REPO_ROOT).as_posix(): path.read_text(encoding="utf-8")
+            for path in PRODUCTION_MODULES
+        }
+    )
+    return sources
+
+
+def _manifest_literals() -> frozenset[str]:
+    """Asset-local manifests에서 concrete identity/path literals를 수집한다."""
+    literals: set[str] = set()
+    for path in ASSET_ROOT.rglob("runtime-asset.yaml"):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        asset = raw["asset"]
+        literals.update((asset["name"], f"{asset['type']}:{asset['name']}"))
+        for item in raw["files"]:
+            literals.update((item["source"], item["destination"]))
+    return frozenset(literals)
+
+
 def test_core_has_no_fixture_literal_asset_import_or_evidence_reducer() -> None:
     """새 fixture가 Core의 static registration/branch/import를 만들지 못하게 한다."""
     assert _architecture_violations(_core_sources()) == []
+
+
+def test_production_installer_and_validator_have_no_concrete_runtime_asset() -> None:
+    """Manifest에 추가된 asset identity가 production module에 고정되지 않는다."""
+    assert _architecture_violations(
+        _production_sources(),
+        concrete_literals=_manifest_literals(),
+    ) == []
+
+
+def test_architecture_guard_kills_manifest_literal_in_production_mutation() -> None:
+    """새 manifest identity를 Core 상수로 옮기는 mutation을 반드시 탐지한다."""
+    literal = next(
+        item for item in sorted(_manifest_literals()) if ":" in item
+    )
+    mutated = {"installer.py": f"ASSET = {literal!r}\n"}
+
+    assert _architecture_violations(
+        mutated,
+        concrete_literals=_manifest_literals(),
+    ) == [f"installer.py:1:static-runtime-asset:{literal}"]
 
 
 def test_architecture_guard_kills_payload_key_branch_mutation() -> None:

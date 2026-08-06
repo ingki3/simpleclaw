@@ -49,6 +49,8 @@ dev = [
 "scripts/migrate_secrets.py" = ["E402"]
 "scripts/run_bot.py" = ["BLE001", "DTZ005", "S110"]
 "scripts/setup_admin_api.py" = ["E402"]
+"scripts/dev/validate_langgraph_v4_no_send.py" = ["E402"]
+"scripts/dev/validate_langgraph_v4_shadow.py" = ["E402"]
 "src/simpleclaw/agent/builtin_tools.py" = ["BLE001", "DTZ005", "DTZ006", "S110"]
 "src/simpleclaw/agent/clarify.py" = ["TRY004"]
 "src/simpleclaw/agent/commands.py" = ["BLE001"]
@@ -143,7 +145,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 markers = [
     "offline: integration test that does not require external network, API keys, live Telegram, or live daemon",
     "live: test requires live local runtime or operator-controlled environment",

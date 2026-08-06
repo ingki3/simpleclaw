@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.dev.validate_langgraph_v4_no_send import definitions as _definitions
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import (
@@ -43,7 +44,6 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     load_scenarios,
 )
 from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
-from simpleclaw.langgraph_v4_shadow_validation import _definitions
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
