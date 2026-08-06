@@ -487,6 +487,192 @@ async def test_connected_primary_concurrent_owner_waits_and_reuses_terminal(
     assert second.execution.dispatch_trace.exactly_once is True
 
 
+def _request_drift_plan(axis: str) -> UnifiedTurnPlan:
+    if axis == "asset":
+        return _plan(
+            "skill",
+            "contract-fixture-step",
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
+        )
+    plan = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    return replace(
+        plan,
+        context=replace(
+            plan.context,
+            standalone_question="connected-shadow-drifted-value",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("axis", ("asset", "payload"))
+async def test_connected_primary_request_claim_rejects_sequential_drift(
+    tmp_path,
+    axis: str,
+) -> None:
+    calls = {"recipe": 0, "skill": 0}
+    checkpoint = tmp_path / f"sequential-{axis}-claim.sqlite3"
+
+    async def recipe_executor(_definition, _bound_steps):
+        calls["recipe"] += 1
+        return {"fixture_result": "immutable-result"}
+
+    async def skill_executor(_definition, _argv):
+        calls["skill"] += 1
+        return {"operation_result": "must-not-run"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(
+                tmp_path / f"sequential-{axis}-conversation.db"
+            ),
+            recipe_executor=recipe_executor,
+            skill_executor=skill_executor,
+        )
+
+    first = await runner().run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="same-sequential-request",
+        session_key="same-sequential-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+    drifted = await runner().run(
+        plan=_request_drift_plan(axis),
+        legacy=None,
+        request_id="same-sequential-request",
+        session_key="same-sequential-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert calls == {"recipe": 1, "skill": 0}
+    assert first.execution.final_content == "immutable-result"
+    assert drifted.execution.final_artifact is None
+    assert drifted.execution.rollback_required is True
+    error_code = (
+        "request_identity_mismatch"
+        if axis == "asset"
+        else "invocation_identity_mismatch"
+    )
+    assert error_code in drifted.execution.rollback_reasons
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_request_claims"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_invocation_claims"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("axis", ("asset", "payload"))
+async def test_connected_primary_request_claim_rejects_concurrent_drift(
+    tmp_path,
+    axis: str,
+) -> None:
+    calls = {"recipe": 0, "skill": 0}
+    checkpoint = tmp_path / f"concurrent-{axis}-claim.sqlite3"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def recipe_executor(_definition, _bound_steps):
+        calls["recipe"] += 1
+        started.set()
+        await release.wait()
+        return {"fixture_result": "immutable-result"}
+
+    async def skill_executor(_definition, _argv):
+        calls["skill"] += 1
+        return {"operation_result": "must-not-run"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(
+                tmp_path / f"concurrent-{axis}-conversation.db"
+            ),
+            recipe_executor=recipe_executor,
+            skill_executor=skill_executor,
+        )
+
+    owner = asyncio.create_task(
+        runner().run(
+            plan=_plan(
+                "recipe",
+                "contract-fixture-workflow",
+                ExecutionMode.DIRECT_ANSWER,
+            ),
+            legacy=None,
+            request_id="same-concurrent-request",
+            session_key="same-concurrent-session",
+            planner_model_calls=0,
+            planner_tokens=0,
+        )
+    )
+    await started.wait()
+    contender = asyncio.create_task(
+        runner().run(
+            plan=_request_drift_plan(axis),
+            legacy=None,
+            request_id="same-concurrent-request",
+            session_key="same-concurrent-session",
+            planner_model_calls=0,
+            planner_tokens=0,
+        )
+    )
+    await asyncio.sleep(0.03)
+    assert calls == {"recipe": 1, "skill": 0}
+    release.set()
+    first, drifted = await asyncio.gather(owner, contender)
+
+    assert calls == {"recipe": 1, "skill": 0}
+    assert first.execution.final_content == "immutable-result"
+    assert drifted.execution.final_artifact is None
+    assert drifted.execution.rollback_required is True
+    error_code = (
+        "request_identity_mismatch"
+        if axis == "asset"
+        else "invocation_identity_mismatch"
+    )
+    assert error_code in drifted.execution.rollback_reasons
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_request_claims"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_invocation_claims"
+        ).fetchone()[0] == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.offline
 async def test_connected_terminal_resume_uses_composition_guard_and_safe_renderer(

@@ -192,6 +192,11 @@ class _DurableInvocationClaims:
                 "response_json TEXT, signature_json TEXT, owner_token TEXT, "
                 "lease_expires_at REAL, fencing_token INTEGER NOT NULL DEFAULT 0)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS graph_request_claims ("
+                "request_id TEXT PRIMARY KEY, invocation_id TEXT NOT NULL, "
+                "signature_json TEXT NOT NULL)"
+            )
             columns = {
                 str(row[1])
                 for row in conn.execute("PRAGMA table_info(graph_invocation_claims)")
@@ -254,6 +259,93 @@ class _DurableInvocationClaims:
             sort_keys=True,
             separators=(",", ":"),
         )
+
+    @classmethod
+    def _request_signature_json(
+        cls,
+        invocation: AssetInvocationV1,
+        binding_ref: AssetBindingRefV1 | None,
+    ) -> str:
+        return json.dumps(
+            {
+                "invocation_id": invocation.invocation_id,
+                "asset_ref": invocation.asset_ref.model_dump(mode="json"),
+                "definition_fingerprint": invocation.definition_fingerprint,
+                "input_payload": invocation.payload,
+                "input_payload_hash": invocation.payload_hash,
+                "input_contract": invocation.input_contract.model_dump(mode="json"),
+                "output_contract": invocation.output_contract.model_dump(mode="json"),
+                "binding_ref": (
+                    binding_ref.model_dump(mode="json")
+                    if binding_ref is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _ensure_request_claim(
+        cls,
+        conn: sqlite3.Connection,
+        request_id: str,
+        invocation: AssetInvocationV1,
+        binding_ref: AssetBindingRefV1 | None,
+        *,
+        create: bool,
+    ) -> bool:
+        """request 전체의 최초 execution signature를 immutable하게 고정한다."""
+        signature_json = cls._request_signature_json(invocation, binding_ref)
+        row = conn.execute(
+            "SELECT invocation_id, signature_json FROM graph_request_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is not None:
+            if tuple(row) != (invocation.invocation_id, signature_json):
+                error_code = (
+                    "invocation_identity_mismatch"
+                    if str(row[0]) == invocation.invocation_id
+                    else "request_identity_mismatch"
+                )
+                raise _TargetDispatchInvariantError(error_code)
+            return True
+
+        invocation_signature_json = cls._signature_json(invocation, binding_ref)
+        historical = conn.execute(
+            "SELECT invocation_id, request_id, asset_type, asset_name, "
+            "payload_hash, signature_json FROM graph_invocation_claims "
+            "WHERE request_id = ? ORDER BY invocation_id",
+            (request_id,),
+        ).fetchall()
+        identity = cls._identity(request_id, invocation)
+        if historical:
+            same_invocation = (
+                len(historical) == 1
+                and str(historical[0][0]) == invocation.invocation_id
+            )
+            if (
+                not same_invocation
+                or tuple(historical[0][1:5]) != identity
+                or historical[0][5] != invocation_signature_json
+            ):
+                error_code = (
+                    "invocation_identity_mismatch"
+                    if same_invocation
+                    else "request_identity_mismatch"
+                )
+                raise _TargetDispatchInvariantError(error_code)
+        elif not create:
+            return False
+
+        conn.execute(
+            "INSERT INTO graph_request_claims "
+            "(request_id, invocation_id, signature_json) VALUES (?, ?, ?)",
+            (request_id, invocation.invocation_id, signature_json),
+        )
+        return True
 
     @staticmethod
     def _validate_response(
@@ -361,6 +453,13 @@ class _DurableInvocationClaims:
             expired_executed = False
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
+                self._ensure_request_claim(
+                    conn,
+                    request_id,
+                    invocation,
+                    binding_ref,
+                    create=True,
+                )
                 row = conn.execute(
                     "SELECT request_id, asset_type, asset_name, payload_hash, "
                     "lifecycle, response_json, signature_json, owner_token, "
@@ -447,6 +546,15 @@ class _DurableInvocationClaims:
     ) -> AdapterResponse | None:
         """Checkpoint가 callback을 생략한 resume에서 terminal receipt를 읽는다."""
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._ensure_request_claim(
+                conn,
+                request_id,
+                invocation,
+                binding_ref,
+                create=False,
+            ):
+                return None
             row = conn.execute(
                 "SELECT request_id, asset_type, asset_name, payload_hash, "
                 "lifecycle, response_json, signature_json FROM graph_invocation_claims "
