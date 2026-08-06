@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import inspect
 import json
-import re
 import secrets
 import sqlite3
 import time
@@ -111,25 +110,30 @@ ConnectedFailurePhase = Literal[
     "dispatch",
     "receipt",
 ]
+_CONNECTED_FAILURE_PHASES = frozenset(
+    {"setup", "registry", "registry_lookup", "binding", "dispatch", "receipt"}
+)
+_CONNECTED_ERROR_TYPES = frozenset(
+    {
+        "CancelledError",
+        "ContractRegistryError",
+        "IntegrityError",
+        "InvalidStateError",
+        "OperationalError",
+        "OSError",
+        "RuntimeError",
+        "TimeoutError",
+        "TypeError",
+        "ValueError",
+    }
+)
 
 
 def _sanitized_exception_message(exc: BaseException) -> str:
-    """원문·credential을 보존하지 않는 bounded exception diagnostic을 만든다."""
-    message = " ".join(str(exc).split())
-    if not message:
-        return "empty_message"
-    message = re.sub(r"https?://\S+", "[redacted-url]", message, flags=re.IGNORECASE)
-    message = re.sub(
-        r"(?i)(authorization|api[_-]?key|token|secret|password)\s*[:=]\s*\S+",
-        r"\1=[redacted]",
-        message,
-    )
-    # 자연어 prompt/provider payload는 phase diagnostic에 필요하지 않다. 내부
-    # validation message는 ASCII로 작성하므로 비 ASCII message는 hash만 남긴다.
-    if any(ord(char) > 127 for char in message):
-        digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
-        return f"redacted_non_ascii_message_sha256={digest}"
-    return message[:240]
+    """예외 원문을 복구할 수 없는 bounded digest diagnostic으로 투영한다."""
+    message = str(exc)
+    digest = hashlib.sha256(message.encode("utf-8", errors="replace")).hexdigest()
+    return f"message_sha256={digest[:16]}"
 
 
 class ConnectedExecutionError(RuntimeError):
@@ -150,13 +154,16 @@ class ConnectedExecutionError(RuntimeError):
         owned_output_contract_present: bool | None = None,
         owned_binding_present: bool | None = None,
     ) -> None:
-        self.phase = phase
-        self.code = code or getattr(
-            cause,
-            "code",
-            f"connected_{phase}_failed",
+        self.phase: ConnectedFailurePhase = (
+            phase if phase in _CONNECTED_FAILURE_PHASES else "setup"
         )
-        self.error_type = type(cause).__name__
+        # Provider가 임의 ``code`` attribute에 payload를 담을 수 있으므로 자동
+        # 승격하지 않는다. 호출자가 정적으로 지정한 code 또는 phase code만 쓴다.
+        self.code = code or f"connected_{self.phase}_failed"
+        cause_type = type(cause).__name__
+        self.error_type = (
+            cause_type if cause_type in _CONNECTED_ERROR_TYPES else "ExternalError"
+        )
         self.safe_message = _sanitized_exception_message(cause)
         self.selected_asset_identity = selected_asset_identity
         self.selected_asset_hash = selected_asset_hash
@@ -167,7 +174,7 @@ class ConnectedExecutionError(RuntimeError):
         self.owned_output_contract_present = owned_output_contract_present
         self.owned_binding_present = owned_binding_present
         super().__init__(
-            f"{phase}:{self.code}:{self.error_type}:{self.safe_message}"
+            f"{self.phase}:{self.code}:{self.error_type}:{self.safe_message}"
         )
 
 
@@ -186,8 +193,11 @@ def _tag_connected_error(
     exc: BaseException,
 ) -> BaseException:
     """기존 public exception type을 깨지 않고 phase diagnostic을 부착한다."""
-    exc.connected_phase = phase
-    exc.connected_error_type = type(exc).__name__
+    exc.connected_phase = phase if phase in _CONNECTED_FAILURE_PHASES else "setup"
+    cause_type = type(exc).__name__
+    exc.connected_error_type = (
+        cause_type if cause_type in _CONNECTED_ERROR_TYPES else "ExternalError"
+    )
     exc.connected_safe_message = _sanitized_exception_message(exc)
     return exc
 

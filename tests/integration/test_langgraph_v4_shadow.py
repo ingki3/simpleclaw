@@ -1299,7 +1299,14 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
         assert await claims.claim(kwargs["request_id"], invocation) is None
         claims.mark_executed(invocation.invocation_id)
         claims.mark_ambiguous(invocation.invocation_id)
-        raise RuntimeError("receipt construction failed")
+        try:
+            raise ValueError(
+                'ASCII_PRIVATE_PROMPT_MARKER_639 '
+                '{"api_key":"json-private-key","password":"json-password"} '
+                'https://provider.example/v1?token=url-private-token 사용자 비공개 질문'
+            )
+        except ValueError as cause:
+            raise RuntimeError("BEARER provider-private-token") from cause
 
     async def legacy_must_not_run(self, *_args, **_kwargs):
         nonlocal legacy_calls
@@ -1336,7 +1343,7 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     assert _DurableInvocationClaims(checkpoint).provenance(
         turn.turn_id
     ).lifecycle == "ambiguous"
-    messages = "\n".join(record.getMessage() for record in caplog.records)
+    messages = caplog.text
     assert "request_id=receipt-loss-request" in messages
     assert "original_mode=direct_answer" in messages
     assert "effective_mode=direct_answer" in messages
@@ -1354,8 +1361,15 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     assert "owned_input_contract_present=None" in messages
     assert "owned_output_contract_present=None" in messages
     assert "owned_binding_present=None" in messages
-    assert "error_message=receipt construction failed" in messages
+    assert "error_message=message_sha256=" in messages
     assert planned.original_text not in messages
+    assert "ASCII_PRIVATE_PROMPT_MARKER_639" not in messages
+    assert "json-private-key" not in messages
+    assert "json-password" not in messages
+    assert "provider-private-token" not in messages
+    assert "provider.example" not in messages
+    assert "사용자 비공개 질문" not in messages
+    assert "Traceback" not in messages
 
 
 @pytest.mark.offline
@@ -1689,9 +1703,9 @@ async def test_connected_dispatch_valueerror_is_typed_and_sanitized(
 
     diagnostic = ",".join(result.execution.rollback_reasons)
     assert (
-        "dispatch:connected_dispatch_failed:ValueError:"
-        "provider dispatch failed token=[redacted]"
+        "dispatch:connected_dispatch_failed:ValueError:message_sha256="
     ) in diagnostic
+    assert "provider dispatch failed" not in diagnostic
     assert "top-secret" not in diagnostic
     assert result.execution.final_content is None
     assert result.execution.side_effect_counts.total == 0
