@@ -15,12 +15,12 @@ from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_planner import plan_turn_with_llm
+from simpleclaw.graph_runtime.contracts import ContractRefV1
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
 )
-from simpleclaw.graph_runtime.contracts import ContractRefV1
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import LLMResponse
@@ -249,11 +249,11 @@ def _contract_set_violations(
     violations: list[ContractSetViolation] = []
     fields = tuple(ContractIdentity.__dataclass_fields__)
 
-    for wanted in sorted(tuple(missing)):
+    for wanted in sorted(missing):
         drifted = next(
             (
                 candidate
-                for candidate in sorted(tuple(extra))
+                for candidate in sorted(extra)
                 if candidate.contract_id == wanted.contract_id
                 or (
                     _contract_slot(candidate)
@@ -281,11 +281,11 @@ def _contract_set_violations(
 
     violations.extend(
         ContractSetViolation(kind="missing", expected=item)
-        for item in sorted(tuple(missing))
+        for item in sorted(missing)
     )
     violations.extend(
         ContractSetViolation(kind="extra", actual=item)
-        for item in sorted(tuple(extra))
+        for item in sorted(extra)
     )
     return tuple(violations)
 
