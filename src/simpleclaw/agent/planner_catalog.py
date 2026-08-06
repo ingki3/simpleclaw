@@ -218,6 +218,15 @@ class PlannerCatalog:
     assets: tuple[PlannerAsset, ...]
     fingerprint: str
 
+    def exact_asset(self, asset_type: str, name: str) -> PlannerAsset | None:
+        """동일 snapshot에서 owner identity가 정확히 하나인 자산을 반환한다."""
+        matches = tuple(
+            asset
+            for asset in self.assets
+            if (asset.asset_type, asset.name) == (asset_type, name)
+        )
+        return matches[0] if len(matches) == 1 else None
+
     def to_prompt_json(self, *, runtime_only: bool = True) -> str:
         """Planner 입력용 compact JSON array를 반환한다.
 

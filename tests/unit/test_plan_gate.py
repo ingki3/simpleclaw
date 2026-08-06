@@ -741,7 +741,8 @@ def test_safe_declared_direct_asset_passes() -> None:
     )
 
     assert result.status is GateStatus.PASS
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_side_effecting_direct_asset_requires_confirmation() -> None:
@@ -770,7 +771,8 @@ def test_side_effecting_direct_asset_requires_confirmation() -> None:
     assert [item.code for item in result.violations] == [
         "asset.confirmation_required"
     ]
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_reminder_mutation_stops_for_confirmation_before_dispatch() -> None:
@@ -798,7 +800,8 @@ def test_reminder_mutation_stops_for_confirmation_before_dispatch() -> None:
     )
 
     assert result.status is GateStatus.CONFIRMATION_REQUIRED
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_missing_side_effect_confirmation_flag_requests_repair() -> None:

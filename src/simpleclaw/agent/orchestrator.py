@@ -1793,6 +1793,7 @@ class AgentOrchestrator:
                     "effective_asset=%s failure_phase=%s phase=%s code=%s "
                     "error_type=%s "
                     "selected_asset_identity=%s selected_asset_hash=%s "
+                    "approved_asset_hash=%s "
                     "catalog_fingerprint=%s registry_fingerprint=%s "
                     "owned_input_contract_present=%s "
                     "owned_output_contract_present=%s owned_binding_present=%s "
@@ -1809,6 +1810,7 @@ class AgentOrchestrator:
                     diagnostic.selected_asset_identity
                     or _selected_asset_identity(effective_plan),
                     diagnostic.selected_asset_hash,
+                    diagnostic.approved_asset_hash,
                     diagnostic.catalog_fingerprint or catalog.fingerprint,
                     diagnostic.registry_fingerprint,
                     diagnostic.owned_input_contract_present,

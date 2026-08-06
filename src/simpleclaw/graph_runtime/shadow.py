@@ -143,6 +143,7 @@ class ConnectedExecutionError(RuntimeError):
         code: str | None = None,
         selected_asset_identity: str = "none",
         selected_asset_hash: str = "",
+        approved_asset_hash: str = "",
         catalog_fingerprint: str = "",
         registry_fingerprint: str = "",
         owned_input_contract_present: bool | None = None,
@@ -159,6 +160,7 @@ class ConnectedExecutionError(RuntimeError):
         self.safe_message = _sanitized_exception_message(cause)
         self.selected_asset_identity = selected_asset_identity
         self.selected_asset_hash = selected_asset_hash
+        self.approved_asset_hash = approved_asset_hash
         self.catalog_fingerprint = catalog_fingerprint
         self.registry_fingerprint = registry_fingerprint
         self.owned_input_contract_present = owned_input_contract_present
@@ -1130,6 +1132,7 @@ class ConnectedShadowTurnRunner:
         diagnostic = {
             "selected_asset_identity": f"{asset_ref.type}:{asset_ref.name}",
             "selected_asset_hash": definition_fingerprint,
+            "approved_asset_hash": plan.approved_asset_fingerprint,
             "catalog_fingerprint": plan.catalog_fingerprint,
             "registry_fingerprint": self._registry.fingerprint,
             "owned_input_contract_present": input_present,
@@ -1147,6 +1150,19 @@ class ConnectedShadowTurnRunner:
                 "registry_lookup",
                 exc,
                 code="asset_not_registered_read_only",
+                **diagnostic,
+            ) from exc
+        if (
+            not plan.approved_asset_fingerprint
+            or plan.approved_asset_fingerprint != definition_fingerprint
+            or plan.approved_asset_fingerprint
+            != entry.snapshot.definition_fingerprint
+        ):
+            exc = ValueError("approved asset definition fingerprint mismatch")
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="approved_asset_fingerprint_mismatch",
                 **diagnostic,
             ) from exc
         try:

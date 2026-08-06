@@ -411,6 +411,7 @@ class ConnectedContractProbe:
                     primary_asset=ref,
                     supporting_assets=(),
                 ),
+                approved_asset_fingerprint=asset.definition_fingerprint or "",
             )
             self._sequence += 1
             result = await self._runner.run(
