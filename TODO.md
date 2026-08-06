@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — connected asset의 owner/schema hash/binding/fingerprint preflight와 canonical `sports-live`·`naver-sports-skill` production installer SoT를 보강하고 production-installer output 기반 exact KBO no-send 3회 및 fresh CI를 통과했다. [PR #639](https://github.com/ingki3/simpleclaw/pull/639)은 repository bookkeeping 보완 후 새 exact head의 독립 Stage D 재검토를 대기하며, 머지 전까지 완료 처리하지 않는다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
+- [x] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — connected asset의 owner/schema hash/binding/fingerprint preflight와 canonical `sports-live`·`naver-sports-skill` production installer SoT를 보강하고 production-installer output 기반 exact KBO no-send 3회 및 fresh CI를 통과했다. [PR #639](https://github.com/ingki3/simpleclaw/pull/639)은 독립 Stage D PASS 후 squash merge됐다 (`53c31e70fbbc9f8f5290bad3379f89ea31d5873c`). 부모 BIZ-573은 corrective release/controlled smoke 전까지 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (완료: 2026-08-06)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
 
