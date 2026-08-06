@@ -6,6 +6,7 @@ import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from simpleclaw.graph_runtime.adapters.delivery import (
     SenderCallback,
@@ -46,7 +47,7 @@ class PrimaryResponseText(str):
         cls,
         content: str,
         metadata: PrimaryDeliveryMetadataV1,
-    ) -> PrimaryResponseText:
+    ) -> Self:
         value = str.__new__(cls, content)
         value.metadata = metadata
         return value

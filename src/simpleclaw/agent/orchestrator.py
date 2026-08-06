@@ -168,13 +168,13 @@ from simpleclaw.daemon.drain import (
     DrainController,
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
+from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
 from simpleclaw.graph_runtime.runtime import (
     LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
 )
-from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
 from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowResultV1,
     ConnectedShadowTurnRunner,
@@ -1053,10 +1053,10 @@ class AgentOrchestrator:
         """Telegram actual send receipt 뒤 delivered assistant만 저장한다."""
         v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
         if not isinstance(v4, dict):
-            raise RuntimeError("langgraph_v4 delivery configuration is missing")
+            raise TypeError("langgraph_v4 delivery configuration is missing")
         checkpoint = v4.get("checkpoint", {})
         if not isinstance(checkpoint, dict):
-            raise RuntimeError("langgraph_v4 checkpoint configuration is missing")
+            raise TypeError("langgraph_v4 checkpoint configuration is missing")
         raw_path = str(checkpoint.get("path") or "")
         checkpoint_path = (
             resolve_checkpoint_path(raw_path)
@@ -1703,7 +1703,7 @@ class AgentOrchestrator:
                         str(checkpoint.get("path") or ""),
                         turn.turn_id,
                     )
-                except Exception as exc:  # noqa: BLE001 - 증거 조회 실패도 fail-closed
+                except Exception as exc:
                     logger.warning(
                         "LangGraph V4 dispatch provenance unavailable "
                         "(error_type=%s)",
