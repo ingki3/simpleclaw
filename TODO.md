@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — freshness-sensitive 실시간 조회 자산을 사용하는 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했으며 production freshness 경계는 변경하지 않았다. [PR #645](https://github.com/ingki3/simpleclaw/pull/645)의 fresh CI와 독립 Stage D 재검증 및 `dev` merge가 남아 있다. (진행: 2026-08-06)
-
 - [>] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 fail-closed하도록 구현한 [PR #643](https://github.com/ingki3/simpleclaw/pull/643)은 bookkeeping/provenance 보정 후 새 exact head의 fresh CI 3종과 독립 runtime safety 재리뷰를 기다린다. 리뷰 PASS와 squash merge 전까지 `in_review`/미완료를 유지하며 live config·deploy·restart·primary activation은 수행하지 않는다. (진행: 2026-08-06)
 
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
@@ -220,6 +218,8 @@
 ## Done
 
 ### 2026-08-06
+
+- [x] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — production freshness 경계 변경 없이 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했다. fresh CI 3종과 독립 Stage D exact-head 리뷰를 통과한 [PR #645](https://github.com/ingki3/simpleclaw/pull/645)을 `dev`에 squash merge(SHA `74da3d90e50f6def34e852610bfd5d79ec697c50`)했다. deploy·restart·live activation은 수행하지 않았다. (완료: 2026-08-06)
 
 - [x] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — 예외 원문과 chained traceback을 stable code/type/hash 진단으로 투영하고 formatter-level raw prompt·credential·chained-cause 누출을 차단했다. fail-closed·legacy 재실행 0·final promotion 0 회귀, fresh CI 3종 및 exact-head 독립 security review를 통과한 [PR #641](https://github.com/ingki3/simpleclaw/pull/641)을 `dev`에 squash merge(SHA `a9f942c90ffc4bc21515d75d280f2bff96b5627f`)했다. deploy·restart·live activation은 수행하지 않았다. (완료: 2026-08-06)
 
