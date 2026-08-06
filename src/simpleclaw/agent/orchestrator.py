@@ -1037,11 +1037,12 @@ class AgentOrchestrator:
     # ------------------------------------------------------------------
 
     def deferred_primary_delivery_required(self) -> bool:
-        """V4 primary final은 streaming placeholder보다 durable send가 우선이다."""
+        """V4 actual-response rollout은 durable send 전 streaming을 금지한다."""
         return (
             self._unified_turn_planner_config.get("architecture")
             == "langgraph_v4"
-            and self._unified_turn_planner_config.get("mode") == "primary"
+            and self._unified_turn_planner_config.get("mode")
+            in {"primary", "read_only_canary"}
         )
 
     async def deliver_primary_response(

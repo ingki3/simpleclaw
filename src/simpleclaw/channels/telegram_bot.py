@@ -628,6 +628,17 @@ class TelegramBot:
         self._primary_delivery_handler = primary_delivery_handler
         self._deferred_delivery_required = deferred_delivery_required
 
+    def _streaming_enabled_for_current_rollout(self) -> bool:
+        """Return whether a response may use the non-durable streaming sink."""
+        if not bool(self._streaming_config.get("enabled", False)):
+            return False
+        if self._deferred_delivery_required is None:
+            return True
+        try:
+            return not bool(self._deferred_delivery_required())
+        except Exception:
+            logger.exception("deferred delivery gate failed; disabling streaming")
+            return False
 
     def set_proactive_callback_handler(
         self, handler: Callable[..., Awaitable[str]] | None
@@ -1055,27 +1066,25 @@ class TelegramBot:
         if self._message_handler is None:
             return
 
+        callback_query_id = str(getattr(query, "id", "") or "missing")
+        request_id = (
+            f"telegram:callback:{callback_query_id}:{chat_id}:"
+            f"{message_id}:{option_index}"
+        )
+
         try:
             if self._clarify_consumer is not None:
                 try:
                     self._clarify_consumer(user_id, chat_id, thread_id)
                 except TypeError:
                     self._clarify_consumer(chat_id)
-            if thread_id is None:
-                response = await self._message_handler(
-                    option.body,
-                    user_id,
-                    chat_id,
-                )
-            else:
-                response = await self._message_handler(
-                    option.body,
-                    user_id,
-                    chat_id,
-                    thread_id=thread_id,
-                )
-        except TypeError:
-            response = await self._message_handler(option.body, user_id, chat_id)
+            response = await self.handle_message(
+                option.body,
+                user_id,
+                chat_id,
+                thread_id=thread_id,
+                request_id=request_id,
+            )
         except Exception:
             logger.exception("clarify callback message handler error")
             response = "An error occurred while processing your selection."
@@ -1251,19 +1260,7 @@ class TelegramBot:
                     # BIZ-259 — streaming.enabled 일 때 인증 후 sink 생성.
                     # 인증 실패는 handle_message 가 None 을 반환하므로 sink 누설 없음
                     # (먼저 인증 체크).
-                    streaming_enabled = bool(
-                        self._streaming_config.get("enabled", False)
-                    )
-                    if streaming_enabled and self._deferred_delivery_required is not None:
-                        try:
-                            streaming_enabled = not bool(
-                                self._deferred_delivery_required()
-                            )
-                        except Exception:
-                            logger.exception(
-                                "deferred delivery gate failed; disabling streaming"
-                            )
-                            streaming_enabled = False
+                    streaming_enabled = self._streaming_enabled_for_current_rollout()
                     request_id = (
                         f"telegram:{chat_id}:{update.message.message_id}"
                     )

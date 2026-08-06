@@ -414,6 +414,7 @@ def _mock_query(
     실제 라이브러리 의존 없이 ``_on_callback_query`` 의 흐름을 검증한다.
     """
     query = MagicMock()
+    query.id = "callback-query-1"
     query.from_user = MagicMock()
     query.from_user.id = user_id
     query.message = MagicMock()
@@ -542,7 +543,12 @@ class TestCallbackQueryWhitelist:
         await bot._on_callback_query(update, MagicMock())
 
         # 선택된 옵션 본문이 message_handler 로 흘러야 한다.
-        handler.assert_awaited_once_with("Bar body", 123, 999)
+        handler.assert_awaited_once_with(
+            "Bar body",
+            123,
+            999,
+            request_id="telegram:callback:callback-query-1:999:5:1",
+        )
         query.answer.assert_awaited()
 
     @pytest.mark.asyncio
@@ -593,7 +599,12 @@ class TestCallbackQueryWhitelist:
 
         await bot._on_callback_query(update, MagicMock())
 
-        handler.assert_awaited_once_with("Durable B", 123, 999)
+        handler.assert_awaited_once_with(
+            "Durable B",
+            123,
+            999,
+            request_id="telegram:callback:callback-query-1:999:42:1",
+        )
         consumer.assert_called_once_with(123, 999, None)
 
     @pytest.mark.asyncio
