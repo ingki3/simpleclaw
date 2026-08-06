@@ -333,7 +333,7 @@ class _DurableInvocationClaims:
                 error_code=value["error_code"],
             )
             if not isinstance(response.dispatched, bool):
-                raise ValueError("dispatched must be boolean")
+                raise TypeError("dispatched must be boolean")
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise _TargetDispatchInvariantError("corrupt_terminal_response") from exc
         return cls._validate_response(invocation, response)
