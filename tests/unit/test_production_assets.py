@@ -67,6 +67,49 @@ def test_install_is_idempotent_and_custom_destination_is_exact(tmp_path: Path) -
     assert second.stat().st_ino == inode
 
 
+def test_root_symlink_is_reinstalled_as_owned_regular_tree(tmp_path: Path) -> None:
+    _asset_tree(tmp_path)
+    outside = tmp_path / "outside-root"
+    payload = outside / "nested/payload.txt"
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"verified payload\n")
+    payload.chmod(0o644)
+    destination = tmp_path / "installed/comet"
+    destination.parent.mkdir(parents=True)
+    destination.symlink_to(outside, target_is_directory=True)
+
+    installed, _ = install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert installed == destination
+    assert not installed.is_symlink()
+    assert installed.lstat().st_mode & 0o170000 == 0o040000
+    installed_payload = installed / "nested/payload.txt"
+    assert not installed_payload.is_symlink()
+    assert installed_payload.read_bytes() == b"verified payload\n"
+    assert payload.read_bytes() == b"verified payload\n"
+
+
+def test_nested_file_symlink_is_reinstalled_as_regular_file(tmp_path: Path) -> None:
+    _asset_tree(tmp_path)
+    outside = tmp_path / "outside-file"
+    outside.write_bytes(b"verified payload\n")
+    outside.chmod(0o644)
+    destination = tmp_path / "installed/comet"
+    nested = destination / "nested"
+    nested.mkdir(parents=True)
+    installed_payload = nested / "payload.txt"
+    installed_payload.symlink_to(outside)
+
+    installed, _ = install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert installed == destination
+    assert not installed.is_symlink()
+    assert not installed_payload.is_symlink()
+    assert installed_payload.read_bytes() == b"verified payload\n"
+    assert installed_payload.stat().st_ino != outside.stat().st_ino
+    assert outside.read_bytes() == b"verified payload\n"
+
+
 @pytest.mark.parametrize(
     "mutation",
     ("digest", "missing", "source_traversal", "destination_traversal"),

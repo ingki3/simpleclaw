@@ -274,18 +274,57 @@ def _configured_parent(
     return Path(raw).expanduser()
 
 
-def _tree_state(root: Path) -> dict[str, tuple[bytes, int]]:
-    """설치 트리의 파일 bytes와 실행 권한 계약을 함께 읽는다."""
-    if not root.is_dir():
-        return {}
-    return {
-        path.relative_to(root).as_posix(): (
-            path.read_bytes(),
-            stat.S_IMODE(path.stat().st_mode),
-        )
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
+@dataclass(frozen=True)
+class _TreeState:
+    """symlink를 포함하지 않는 설치 트리의 완전한 상태를 표현한다."""
+
+    directories: frozenset[str]
+    files: dict[str, tuple[bytes, int]]
+
+
+def _tree_state(root: Path) -> _TreeState | None:
+    """root와 모든 하위 항목을 symlink 추적 없이 검증해 읽는다."""
+    try:
+        root_mode = root.lstat().st_mode
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(root_mode):
+        return None
+
+    directories: set[str] = set()
+    files: dict[str, tuple[bytes, int]] = {}
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                entry_stat = entry.stat(follow_symlinks=False)
+                path = Path(entry.path)
+                relative = path.relative_to(root).as_posix()
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    directories.add(relative)
+                    pending.append(path)
+                    continue
+                if not stat.S_ISREG(entry_stat.st_mode):
+                    return None
+                files[relative] = (
+                    path.read_bytes(),
+                    stat.S_IMODE(entry_stat.st_mode),
+                )
+    return _TreeState(frozenset(directories), files)
+
+
+def _expected_tree_state(
+    files: dict[str, tuple[bytes, int]],
+) -> _TreeState:
+    """manifest leaf에서 필요한 중간 디렉터리까지 포함한 상태를 만든다."""
+    directories = {
+        parent.as_posix()
+        for relative in files
+        for parent in PurePosixPath(relative).parents
+        if parent != PurePosixPath(".")
     }
+    return _TreeState(frozenset(directories), files)
 
 
 def _remove_owned_tree(root: Path) -> None:
@@ -323,13 +362,15 @@ def install_runtime_asset(
     payload: dict[PurePosixPath, bytes] = {}
     for declared, content in zip(manifest.files, resolved.source_bytes, strict=True):
         payload[declared.destination] = content
-    expected = {
-        declared.destination.as_posix(): (
-            payload[declared.destination],
-            0o755 if declared.executable else 0o644,
-        )
-        for declared in manifest.files
-    }
+    expected = _expected_tree_state(
+        {
+            declared.destination.as_posix(): (
+                payload[declared.destination],
+                0o755 if declared.executable else 0o644,
+            )
+            for declared in manifest.files
+        }
+    )
     if _tree_state(destination) == expected:
         return destination, resolved
 
@@ -356,7 +397,9 @@ def install_runtime_asset(
         replacement_installed = True
         if _tree_state(destination) != expected:
             raise RuntimeError("installed runtime asset verification failed")
-        if backup.exists():
+        if backup.is_symlink():
+            _remove_owned_tree(backup)
+        elif backup.exists():
             shutil.rmtree(backup)
     except BaseException:
         if destination_moved:
