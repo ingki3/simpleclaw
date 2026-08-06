@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-616](mention://issue/00906e74-a78f-4ba3-aa14-b157d7791fc3): V4 connected binding 진단 기대값을 sanitized 계약에 정렬** — fallback 미선언 CLI Skill의 stale `payload.safe_example_missing` 기대값을 closed phase code `connected_binding_failed`로 정렬하고, raw code·질문 비노출과 dispatch·Telegram·notifier·ConversationStore write 0을 회귀로 고정한다. source 검증과 Graphify provenance 갱신 후 fresh CI 및 독립 리뷰를 진행한다. (진행: 2026-08-07)
+
 - [x] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — 원 구현 [PR #639](https://github.com/ingki3/simpleclaw/pull/639) merge 뒤 late mandatory review finding을 corrective children BIZ-610/BIZ-611/BIZ-612에서 각각 formatter redaction, domain-neutral installer/package 경계, catalog→registry TOCTOU 차단으로 보완해 모두 exact-head 리뷰·fresh CI·squash merge했다. Combined 최신 `dev@1a3c8d74a17b28722651b2cb33ebae96cc5240eb`에서 production installer output 기반 KBO no-send 3회, typed final·dispatch exactly-once, contract continuity `2/2`, side effect `0/0/0`, combined regression `137 passed`, 전체 unit `3538 passed, 3 xfailed`, Ruff·diff·CI 4종을 통과해 부모 code/offline corrective 범위를 완료했다. BIZ-573은 release·controlled live activation 전까지 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (완료: 2026-08-06)
 
 
