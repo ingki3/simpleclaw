@@ -325,7 +325,7 @@ async def test_two_turn_drama_followup_preserves_context_in_collector_query(
                 search_query=search_query,
                 intents=("drama_info",),
                 required_claims=required_claims,
-                freshness_required=False,
+                freshness_required=True,
             ),
             execution=replace(
                 plan.execution,
