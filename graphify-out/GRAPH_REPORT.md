@@ -4,12 +4,12 @@
 - cluster-only mode — file stats not available
 
 ## Summary
-- 15194 nodes · 33792 edges · 574 communities (489 shown, 85 thin omitted)
+- 15194 nodes · 33792 edges · 571 communities (486 shown, 85 thin omitted)
 - Extraction: 75% EXTRACTED · 25% INFERRED · 0% AMBIGUOUS · INFERRED: 8571 edges (avg confidence: 0.68)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `dbcb1930`
+- Built from commit: `8f6ff035`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -405,8 +405,8 @@
 - [[_COMMUNITY_Community 388|Community 388]]
 - [[_COMMUNITY_Community 389|Community 389]]
 - [[_COMMUNITY_Community 390|Community 390]]
-- [[_COMMUNITY_Community 391|Community 391]]
 - [[_COMMUNITY_Community 392|Community 392]]
+- [[_COMMUNITY_Community 393|Community 393]]
 - [[_COMMUNITY_Community 394|Community 394]]
 - [[_COMMUNITY_Community 395|Community 395]]
 - [[_COMMUNITY_Community 396|Community 396]]
@@ -518,9 +518,9 @@
 - [[_COMMUNITY_Community 502|Community 502]]
 - [[_COMMUNITY_Community 503|Community 503]]
 - [[_COMMUNITY_Community 504|Community 504]]
-- [[_COMMUNITY_Community 505|Community 505]]
 - [[_COMMUNITY_Community 506|Community 506]]
 - [[_COMMUNITY_Community 507|Community 507]]
+- [[_COMMUNITY_Community 508|Community 508]]
 - [[_COMMUNITY_Community 509|Community 509]]
 - [[_COMMUNITY_Community 510|Community 510]]
 - [[_COMMUNITY_Community 511|Community 511]]
@@ -545,18 +545,15 @@
 - [[_COMMUNITY_Community 530|Community 530]]
 - [[_COMMUNITY_Community 531|Community 531]]
 - [[_COMMUNITY_Community 532|Community 532]]
-- [[_COMMUNITY_Community 533|Community 533]]
 - [[_COMMUNITY_Community 534|Community 534]]
-- [[_COMMUNITY_Community 535|Community 535]]
-- [[_COMMUNITY_Community 537|Community 537]]
-- [[_COMMUNITY_Community 539|Community 539]]
-- [[_COMMUNITY_Community 549|Community 549]]
+- [[_COMMUNITY_Community 536|Community 536]]
+- [[_COMMUNITY_Community 546|Community 546]]
+- [[_COMMUNITY_Community 559|Community 559]]
+- [[_COMMUNITY_Community 560|Community 560]]
+- [[_COMMUNITY_Community 561|Community 561]]
 - [[_COMMUNITY_Community 562|Community 562]]
 - [[_COMMUNITY_Community 563|Community 563]]
 - [[_COMMUNITY_Community 564|Community 564]]
-- [[_COMMUNITY_Community 565|Community 565]]
-- [[_COMMUNITY_Community 566|Community 566]]
-- [[_COMMUNITY_Community 567|Community 567]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `AgentOrchestrator` - 376 edges
@@ -585,11 +582,11 @@
 ## Import Cycles
 - None detected.
 
-## Communities (574 total, 85 thin omitted)
+## Communities (571 total, 85 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.01
-Nodes (203): PermissionScope, PoolExhaustedError, 서브에이전트 스포너 데이터 모델.  서브에이전트의 생명주기(PENDING→RUNNING→SUCCESS/FAILURE/TIMEOUT/KILLED), 서브에이전트 작업의 기본 예외 클래스., 서브에이전트 생성에 실패했을 때 발생하는 예외., 동시 실행 풀이 가득 차서 대기열이 없을 때 발생하는 예외., 서브에이전트에 적용되는 권한 제약.      allowed_paths: 접근 허용 파일 시스템 경로 목록     network: 네트워크 접근, 위임된 작업을 수행하는 서브프로세스 서브에이전트.      스포너가 생성하고 풀에서 동시 실행 수를 관리한다. (+195 more)
+Nodes (212): PermissionScope, PoolExhaustedError, 서브에이전트 스포너 데이터 모델.  서브에이전트의 생명주기(PENDING→RUNNING→SUCCESS/FAILURE/TIMEOUT/KILLED), 서브에이전트 작업의 기본 예외 클래스., 서브에이전트 생성에 실패했을 때 발생하는 예외., 동시 실행 풀이 가득 차서 대기열이 없을 때 발생하는 예외., 서브에이전트에 적용되는 권한 제약.      allowed_paths: 접근 허용 파일 시스템 경로 목록     network: 네트워크 접근, 위임된 작업을 수행하는 서브프로세스 서브에이전트.      스포너가 생성하고 풀에서 동시 실행 수를 관리한다. (+204 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.02
@@ -740,84 +737,84 @@ Cohesion: 0.04
 Nodes (43): AssetSelectionResult, filter_assets_by_selection(), selector 결과 순서를 보존해 실제 스킬/레시피 객체를 top-k로 축소한다., guardrail 적용 후 main LLM에 전달할 후보 목록과 fallback 신호., CapabilityDecision, capability router 가 고른 단일 자동 실행 후보., _deterministic_rollout_sample(), _format_attachment_context_note() (+35 more)
 
 ### Community 38 - "Community 38"
+Cohesion: 0.04
+Nodes (53): fetchAdmin(), getDreamingStatusV2(), BlocklistEntry, InsightItem, InsightListStatus, listBlocklist(), ListBlocklistResponse, listInsights() (+45 more)
+
+### Community 39 - "Community 39"
 Cohesion: 0.05
 Nodes (47): BackupDetailModal(), BackupDetailModalProps, BackupListCard(), BackupListCardProps, BackupListState, formatTimestamp(), ConfirmRestartDialog(), ConfirmRestartDialogProps (+39 more)
 
-### Community 39 - "Community 39"
+### Community 40 - "Community 40"
 Cohesion: 0.07
 Nodes (62): _handle_list_dreaming_runs(), ``GET /admin/v1/memory/dreaming/runs?limit=N``.      최근 N건의 사이클 메트릭을 최신순으로 반환. `, _handle_get_insight_sources(), _handle_list_blocklist(), _handle_list_insights(), Admin API insights route handlers., ``InsightMeta`` 를 JSON 응답 dict 로 변환.      Active/Archive 탭에서 InsightCard 가 직접 소비, ``GET /admin/v1/memory/insights``.      Query params:     - ``status``: ``active (+54 more)
 
-### Community 40 - "Community 40"
+### Community 41 - "Community 41"
 Cohesion: 0.05
 Nodes (33): handle_clarify(), LLM 이 호출한 ``clarify(question, options)`` 를 채널 브리지에 적재한다.      - ``chat_id`` 가 No, ClarifyOption, ClarifyRequest, decode_callback_data(), encode_callback_data(), normalize_options(), ReAct `clarify` tool: 다지선다 질문을 채널 인라인 키보드로 렌더하는 브리지.  BIZ-260 / Hermes PR #24199 (+25 more)
 
-### Community 41 - "Community 41"
+### Community 42 - "Community 42"
 Cohesion: 0.05
 Nodes (68): _changed_paths(), _collect_commit_range(), _collect_dirty(), _collect_open_prs(), _collect_origin_sync(), _collect_repo(), _error_text(), handle_deploy_status() (+60 more)
 
-### Community 42 - "Community 42"
+### Community 43 - "Community 43"
 Cohesion: 0.04
 Nodes (67): _atomic_write(), build_recipe_yaml(), handle_recipe_generate(), install_validated_recipe(), _json(), _normalize_parameters(), _normalize_render_params(), _normalize_string_list() (+59 more)
 
-### Community 43 - "Community 43"
+### Community 44 - "Community 44"
 Cohesion: 0.05
 Nodes (45): ActiveProjectRow(), formatRelative(), BlocklistTable(), BlocklistTableProps, DryRunPreviewModal(), InsightRow(), InsightsList(), InsightsListProps (+37 more)
 
-### Community 44 - "Community 44"
+### Community 45 - "Community 45"
 Cohesion: 0.05
 Nodes (51): CronJobsTable(), CronJobsTableProps, CronJobsTableRow(), formatRelative(), LAST_RUN_LABEL, LAST_RUN_TONE, RowProps, ExpressionInput() (+43 more)
 
-### Community 45 - "Community 45"
+### Community 46 - "Community 46"
 Cohesion: 0.05
 Nodes (32): filter_active_projects(), filter_meta_items(), filter_text_to_primary(), _human_lang_name(), is_primary_language(), is_supported(), language_instruction_block(), LanguagePolicy (+24 more)
 
-### Community 46 - "Community 46"
-Cohesion: 0.05
-Nodes (45): RecipeCard(), RecipeCardProps, RecipesList(), RecipesListProps, RecipesListState, FieldProps, RetryPolicyModal(), RetryPolicyModalProps (+37 more)
-
 ### Community 47 - "Community 47"
-Cohesion: 0.04
-Nodes (52): _normalize_provider_identity(), Normalize legacy provider config to explicit transport/profile keys., BackendType, LLM 백엔드 유형 — API 호출 또는 CLI 서브프로세스., create_router(), config.yaml 설정으로부터 LLMRouter를 생성한다.      Args:         config_path: config.yaml, LLMUsageSink, 라우터가 회계 저장소 구현과 결합되지 않게 하는 최소 기록 계약이다. (+44 more)
+Cohesion: 0.05
+Nodes (60): freshness_is_required(), freshness_optional_claims(), Planner payload와 분리된 deterministic freshness policy., Return the trusted policy decision for freshness validation., Return claims covered by the narrow non-current-fact exception., _asset_identity(), _canonical_sports_result_claims(), _canonicalize_exact_sports_plan() (+52 more)
 
 ### Community 48 - "Community 48"
 Cohesion: 0.05
-Nodes (49): DreamingRunRecord, DreamingRunStore, 드리밍 사이클 운영 메트릭 저장소 (BIZ-81).  배경:     BIZ-66 §3-K — "왜 5-03에 dreaming이 갱신되지 않았나", JSONL 기반 드리밍 메트릭 저장소.      한 회차에 보통 ``begin()`` → ``finish()`` 순서로 호출된다. ``begin, 모든 행을 시간 순(오래된 → 최신) 그대로 로드. 손상된 행은 WARN 로그 후 스킵., 모든 행을 atomic rename 으로 다시 쓴다. ``max_records`` 초과 분은 앞에서 잘라낸다., 단일 회차를 추가. 메트릭 기록 실패는 호출자(드리밍 사이클)에 전파하지 않는다., 동일 ``id`` 의 행을 갱신(없으면 새로 추가). 메트릭 실패는 전파하지 않는다. (+41 more)
+Nodes (45): RecipeCard(), RecipeCardProps, RecipesList(), RecipesListProps, RecipesListState, FieldProps, RetryPolicyModal(), RetryPolicyModalProps (+37 more)
 
 ### Community 49 - "Community 49"
+Cohesion: 0.04
+Nodes (52): _normalize_provider_identity(), Normalize legacy provider config to explicit transport/profile keys., BackendType, LLM 백엔드 유형 — API 호출 또는 CLI 서브프로세스., create_router(), config.yaml 설정으로부터 LLMRouter를 생성한다.      Args:         config_path: config.yaml, LLMUsageSink, 라우터가 회계 저장소 구현과 결합되지 않게 하는 최소 기록 계약이다. (+44 more)
+
+### Community 50 - "Community 50"
+Cohesion: 0.05
+Nodes (49): DreamingRunRecord, DreamingRunStore, 드리밍 사이클 운영 메트릭 저장소 (BIZ-81).  배경:     BIZ-66 §3-K — "왜 5-03에 dreaming이 갱신되지 않았나", JSONL 기반 드리밍 메트릭 저장소.      한 회차에 보통 ``begin()`` → ``finish()`` 순서로 호출된다. ``begin, 모든 행을 시간 순(오래된 → 최신) 그대로 로드. 손상된 행은 WARN 로그 후 스킵., 모든 행을 atomic rename 으로 다시 쓴다. ``max_records`` 초과 분은 앞에서 잘라낸다., 단일 회차를 추가. 메트릭 기록 실패는 호출자(드리밍 사이클)에 전파하지 않는다., 동일 ``id`` 의 행을 갱신(없으면 새로 추가). 메트릭 실패는 전파하지 않는다. (+41 more)
+
+### Community 51 - "Community 51"
 Cohesion: 0.05
 Nodes (56): Diff, FileChange, FileEntry, FileMutationTracker, format_footer(), _format_size(), Per-turn file mutation tracker — disk delta footer for ReAct observations (BIZ-2, 추적할 디렉터리 또는 명시 파일 목록.      Attributes:         label: footer 에 쓰이는 표시 prefix (예: (+48 more)
 
-### Community 50 - "Community 50"
+### Community 52 - "Community 52"
 Cohesion: 0.06
 Nodes (33): Content, GenerateContentConfig, Part, GeminiProvider, Google Gemini API 프로바이더 — Native Function Calling 지원.  Google의 genai SDK를 사용하여 G, Gemini enum/SDK 값을 로그 친화적인 문자열로 정규화한다., Gemini 종료 사유와 빈 출력 진단값을 provider-neutral dict로 추출한다., provider-neutral reasoning hint 를 Gemini native thinking config 로 매핑한다. (+25 more)
 
-### Community 51 - "Community 51"
+### Community 53 - "Community 53"
 Cohesion: 0.06
 Nodes (36): LLMBackend, LLMRequest, LLM에 보낼 요청 데이터.      backend_name이 None이면 라우터의 기본 백엔드가 사용된다.     messages가 주어지면, 단일 LLM 백엔드의 설정 정보.      config.yaml의 providers 섹션 한 항목이 이 객체 하나에 매핑된다.     API 백, _build_router(), BIZ-427 — provider-neutral structured output 요청 모델/라우터 전달 테스트.  ``LLMRequest`` 가, 미지정 시 구조화 출력 필드는 모두 비활성 — 기존 호출처 회귀 0., 전달된 structured output 필드가 그대로 보존되어야 한다. (+28 more)
 
-### Community 52 - "Community 52"
+### Community 54 - "Community 54"
 Cohesion: 0.05
 Nodes (50): applyLLMPatch(), ApplyResponse, dryRunLLMPatch(), getLLMConfig(), listSecrets(), LLMConfig, PolicyResultDTO, ProviderConfig (+42 more)
 
-### Community 53 - "Community 53"
+### Community 55 - "Community 55"
 Cohesion: 0.05
 Nodes (32): Recipe runtime entrypoint contracts.  `agent-study-daily` 사고처럼 recipe.yaml shape, loader는 command recipe의 settings.timeout을 보존해야 한다., discover_recipes는 live recipes.dir shape의 command recipe를 찾는다., executor 호출자는 recipe.settings.timeout을 전달할 수 있어야 한다., test_discover_recipes_finds_command_recipe(), test_execute_recipe_accepts_recipe_specific_timeout(), test_steps_recipe_preserves_settings_timeout(), load_recipe() (+24 more)
 
-### Community 54 - "Community 54"
+### Community 56 - "Community 56"
 Cohesion: 0.06
 Nodes (39): collector 가 한 source 를 수집한 결과.      relevance 필터와 wiki writer 가 공통으로 소비한다. ``con, StudyFetchResult, EvolutionSummary, 이번 pass 에서 신호를 받은 topic id 집합(생성+갱신)., 한 evolution pass 의 결과 요약.      daily note 의 ``Topic Evolution`` 섹션과 run summary, _coerce_float(), _coerce_int(), _confidence_grade() (+31 more)
 
-### Community 55 - "Community 55"
-Cohesion: 0.06
-Nodes (55): _asset_identity(), _canonical_sports_result_claims(), _canonicalize_exact_sports_plan(), _connected_dependencies_complete(), _eligible_exact_asset(), PlanViolation, UnifiedTurnPlan을 실행 전에 검증하는 순수 로컬 gate.  PlanGate는 사용자 의도나 route를 다시 추론하지 않는다. p, Recipe가 위임하는 skill도 동일 snapshot에서 executable인지 검증한다. (+47 more)
-
-### Community 56 - "Community 56"
+### Community 57 - "Community 57"
 Cohesion: 0.06
 Nodes (58): AssetCandidate, build_selector_assets(), build_selector_prompt(), _coerce_candidates(), _extract_selection_payload(), _has_explicit_recipe_intent(), _is_ambiguous_intent(), _needs_fallback() (+50 more)
-
-### Community 57 - "Community 57"
-Cohesion: 0.05
-Nodes (43): fetchAdmin(), getDreamingStatusV2(), BlocklistEntry, InsightItem, InsightListStatus, listBlocklist(), ListBlocklistResponse, listInsights() (+35 more)
 
 ### Community 58 - "Community 58"
 Cohesion: 0.07
@@ -1892,530 +1889,518 @@ Cohesion: 0.17
 Nodes (12): Cron 스케줄러, Cron 표현식, 관련 파일, 관리 명령, 동작 방식, 사용 예시, 설정, 실행 격리 (process_cron_message) (+4 more)
 
 ### Community 326 - "Community 326"
-Cohesion: 0.23
-Nodes (10): classifyConfidence(), CONFIDENCE_LABEL, CONFIDENCE_TONE, ConfidenceLevel, formatTimestamp(), InsightCard(), InsightCardActions, InsightCardData (+2 more)
-
-### Community 327 - "Community 327"
 Cohesion: 0.17
 Nodes (11): Function Gemma/Gemini Selector Spike, Recommendation for the real build, Verdict: PARTIAL, 결과, 데이터셋 / manifest, 목적, 산출물, 실패 / 주의 케이스 (+3 more)
 
-### Community 328 - "Community 328"
+### Community 327 - "Community 327"
 Cohesion: 0.20
 Nodes (9): ICON, ToastContext, ToastContextValue, ToastEntry, ToastOptions, ToastProvider(), ToastTone, TONE_CLASS (+1 more)
 
-### Community 329 - "Community 329"
+### Community 328 - "Community 328"
 Cohesion: 0.21
 Nodes (7): microusd_to_decimal_usd(), 표시용 micro-USD 정수를 정확한 Decimal USD로 변환한다., 허용된 dimension으로만 bounded 기간 집계를 반환한다., 설정 timezone의 일·월 경계를 UTC와 durable key로 변환한다., 현재 local day의 usage 집계를 반환한다., 현재 local month의 usage 집계를 반환한다., 도달한 일·월 임계값의 새 claim 또는 due retry를 비동기 발송한다.
 
-### Community 330 - "Community 330"
+### Community 329 - "Community 329"
 Cohesion: 0.21
 Nodes (10): _is_skill_script_available(), _python_bin(), Dreaming context cron용 Calendar/Gmail 런타임 provider resolver.  운영 환경의 Google Cale, google-calendar-skill의 venv/script를 subprocess로 호출하는 provider., Calendar API 결과를 collector가 이해하는 metadata dict로 정규화한다., 스킬 venv Python을 실행하고 JSON list stdout만 허용한다., 스킬 스크립트와 실행 Python이 모두 있는지 확인한다., 스킬 전용 venv Python 경로를 반환한다. (+2 more)
 
-### Community 331 - "Community 331"
+### Community 330 - "Community 330"
 Cohesion: 0.17
 Nodes (11): action, default_popup, default_title, background, service_worker, description, host_permissions, manifest_version (+3 more)
 
-### Community 332 - "Community 332"
+### Community 331 - "Community 331"
 Cohesion: 0.23
 Nodes (11): _assert_no_sqlite_fd_growth(), _count_open_sqlite_fds(), _is_sqlite_fd_target(), ConversationStore SQLite 파일 디스크립터 누수 회귀 테스트., BIZ-307 장기기억 조회/검색 메서드도 SQLite FD를 닫는다., FD target이 테스트 DB 또는 WAL/SHM sidecar를 가리키는지 판별한다., 현재 프로세스가 열어 둔 테스트 SQLite DB 관련 FD 수를 반환한다.      Linux CI에서는 ``/proc/self/fd``를 직, 반복 DB operation 이후 SQLite FD 수가 증가하지 않음을 검증한다. (+3 more)
 
-### Community 333 - "Community 333"
+### Community 332 - "Community 332"
 Cohesion: 0.17
 Nodes (11): _completed(), deploy_status 운영자 native tool 회귀 테스트., gh가 없거나 실패해도 git-only summary는 ok로 반환한다., operator message 경로는 LLMRequest tools에 deploy_status를 포함한다., subprocess.CompletedProcess 테스트 값을 만든다., 기본 runtime build에는 보이지 않고 operator gate가 열릴 때만 노출된다., git/gh mock 결과로 origin sync, dirty overlap, deploy/dev range, PR 목록을 요약한다., test_deploy_status_gracefully_falls_back_without_gh() (+3 more)
 
-### Community 334 - "Community 334"
+### Community 333 - "Community 333"
 Cohesion: 0.23
 Nodes (11): Gemini provider finish diagnostics preservation tests.  AI Studio exports can sh, Gemini-like text Part with no function call., Build a minimal Gemini-like response object for provider parsing tests., Empty STOP responses should keep finish reason and zero-output diagnostics., Prompt feedback block reasons should be visible without printing raw payloads., Streaming path should return the final candidate finish reason and usage too., _response(), test_send_preserves_empty_stop_finish_reason_and_zero_output_tokens() (+3 more)
 
-### Community 335 - "Community 335"
+### Community 334 - "Community 334"
 Cohesion: 0.23
 Nodes (11): 한국장 장마감 요약 live asset 품질 회귀 테스트.  `krstock` 레시피와 `kr-stock-skill`은 SimpleClaw 저장, live asset이 있는 운영 머신에서만 내용을 읽는다., 장마감 요약이 짧은 숫자 나열로 퇴화하지 않도록 핵심 섹션을 고정한다., krstock recipe는 구조화 summary를 개별 quote보다 먼저 요구해야 한다., 미확보 정량 데이터는 데이터 미확보로 남기고 뉴스 숫자를 승격하지 못하게 한다., skill 문서에도 장마감 요약용 조회·작성 workflow를 남겨 recipe와 정합성을 맞춘다., _read_live_asset(), test_krstock_recipe_requires_detailed_close_report_sections() (+3 more)
 
-### Community 336 - "Community 336"
+### Community 335 - "Community 335"
 Cohesion: 0.24
 Nodes (5): _filtered(), BIZ-443 — 공통 subprocess env scrub 정책 회귀 테스트.  ``filter_env``가 provider/gateway/a, TestBaselineAndPassthrough, TestGenericSecretSuffixScrub, TestProviderPrefixScrub
 
-### Community 338 - "Community 338"
+### Community 337 - "Community 337"
 Cohesion: 0.21
 Nodes (7): BIZ-24 보안 정책 회귀 테스트.      각 차단 유형(413/429/503)과 알림 경로가 의도대로 동작하는지 확인한다., server.start() 없이도 max_body_size 정책이 aiohttp 레벨에 반영되도록         client_max_size를, Content-Length가 max_body_size를 초과하면 본문을 읽기 전 413으로 차단된다., 슬라이딩 윈도우 한도를 넘으면 429 + Retry-After 헤더로 응답한다., 동시 처리 cap과 대기 큐가 모두 가득 차면 즉시 503 + Retry-After를 반환한다.          실제 동시성 경합을 만들지 않고, 동일 IP에서 연속 차단(401)이 임계 도달하면 텔레그램용 알림 콜백이 호출된다., TestWebhookSecurityHardening
 
-### Community 339 - "Community 339"
+### Community 338 - "Community 338"
 Cohesion: 0.29
 Nodes (4): handle_file_manage(), 파일 관리 작업을 처리한다 (list, mkdir, delete, info).      list/info는 프로젝트 + 페르소나 운영 디렉터리에, Tests for file_manage built-in tool., TestBuiltinFileManage
 
-### Community 340 - "Community 340"
+### Community 339 - "Community 339"
 Cohesion: 0.29
 Nodes (4): handle_file_read(), 파일의 텍스트 내용을 줄 번호와 함께 반환한다.      offset/limit으로 읽을 범위를 제어할 수 있으며, 음수 offset은 파일 끝, Tests for file_read built-in tool., TestBuiltinFileRead
 
-### Community 341 - "Community 341"
+### Community 340 - "Community 340"
 Cohesion: 0.24
 Nodes (10): BaseException, ConnectedFailurePhase, _closed_asset_kind(), _closed_fingerprint(), User-managed asset identity를 closed kind로만 투영한다., Canonical SHA-256만 diagnostic formatter로 전달한다., 예외 원문을 복구할 수 없는 bounded digest diagnostic으로 투영한다., 기존 public exception type을 깨지 않고 phase diagnostic을 부착한다. (+2 more)
 
-### Community 342 - "Community 342"
+### Community 341 - "Community 341"
 Cohesion: 0.25
 Nodes (10): main(), _pdf_with_marker(), 응답 본문 없이 attribution과 검증 상태만 출력한다., Credential-gated OpenRouter Gemini parity smoke를 실행한다., 환경 또는 승인된 .env에서 secret을 읽되 값/길이/경로를 노출하지 않는다., OpenRouter 전용 임시 route config와 최소 credential 파일을 작성한다., 외부 PDF 라이브러리 없이 단일 페이지 marker PDF를 생성한다., _read_secret() (+2 more)
 
-### Community 343 - "Community 343"
+### Community 342 - "Community 342"
 Cohesion: 0.18
 Nodes (10): 1. 목적 (Why), 2. 사용자 메모리 vs Study Wiki — 경계 (핵심), 3. 비목표 (Non-goals), 4. 데이터 모델, 5. Freshness / Confidence 정책, 6. Topic 진화 정책, 7. 설정 (config.yaml `study:`), Agent Study Wiki — 설계 문서 (+2 more)
 
-### Community 344 - "Community 344"
+### Community 343 - "Community 343"
 Cohesion: 0.18
 Nodes (10): Exit code 규칙, Python 서브에이전트 예시, `SubAgentErrorDetail` 구조, 검증 실패 폴백 표, 서브에이전트 응답 프로토콜, 일관성 규칙, 참고, 표준 응답 스키마 (+2 more)
 
-### Community 345 - "Community 345"
+### Community 344 - "Community 344"
 Cohesion: 0.20
 Nodes (10): _context_reduction(), evaluate_fixture_replays(), 전체 후보 대비 downstream 선택 문맥의 문자 축소율을 계산한다., 원문과 gold, 선택적 deterministic replay를 묶은 평가 case다., fixture에 저장된 prediction을 반복 평가해 오프라인 report를 만든다., TurnPlannerFixture, build_parser(), main() (+2 more)
 
-### Community 346 - "Community 346"
+### Community 345 - "Community 345"
 Cohesion: 0.18
 Nodes (6): Integration tests for communication channels., 동시성 큐 포화 시 queue_saturated alert가 발사된다., Test telegram bot authorization and message handling flow., Test webhook server start, handle events, and track state., 잘못된 token 연속 차단 시 alert callback이 1회만 발사된다., TestChannelsPipeline
 
-### Community 347 - "Community 347"
+### Community 346 - "Community 346"
 Cohesion: 0.29
 Nodes (4): is_auto_trigger_channel(), 채널 식별자가 cron/recipe 같은 자동/명령 트리거 출처인지 판단한다.      BIZ-76 의 단일 분류 진입점. 다음 조건 중 하나면, ``is_auto_trigger_channel`` 의 단일 분류 진입점 동작.      프로듀서(orchestrator) 와 컨슈머(dreami, TestIsAutoTriggerChannel
 
-### Community 348 - "Community 348"
+### Community 347 - "Community 347"
 Cohesion: 0.18
 Nodes (6): __dirname, DREAMING_STATUS, MEMORY_INDEX, OUT_DIR, ROOT, SUGGESTIONS
 
-### Community 349 - "Community 349"
+### Community 348 - "Community 348"
 Cohesion: 0.25
 Nodes (10): ensure_token(), main(), Admin API 운영 환경을 한 번에 부트스트랩하는 헬퍼.  `run_bot.py`가 띄우는 ``AdminAPIServer``(BIZ-58)와, 시크릿 매니저에서 토큰을 읽고 없으면 생성해 저장한다.      Args:         force: 기존 값이 있어도 새 토큰으로 덮어쓴다., ``web/admin/.env.local`` 의 ``ADMIN_API_TOKEN``/``ADMIN_API_BASE`` 를 갱신한다.      실, ``config.yaml``에 admin_api 블록이 없으면 보강한다.      이미 존재하는 키는 건드리지 않는다 — 운영자가 의도적으로 비, ``admin_api.token_secret`` 참조에서 (backend, key) 를 결정한다.      Returns:         (ba, _resolve_token_backend() (+2 more)
 
-### Community 350 - "Community 350"
+### Community 349 - "Community 349"
 Cohesion: 0.25
 Nodes (4): FakeClock, 테스트에서 결정적으로 시간을 진행시키는 now 콜백., script 가 clear 없이 죽어도 deadline 후 intake 가 자동 복귀한다., TestTimeout
 
-### Community 352 - "Community 352"
+### Community 351 - "Community 351"
 Cohesion: 0.31
 Nodes (10): _load_run_bot_module(), BIZ-34: run_bot webhook alert wiring helper tests., scripts/run_bot.py를 모듈로 로드한다.      run_bot.py는 패키지 모듈이 아닌 launch script이므로 impor, test_cron_telegram_notifier_sends_short_message_once(), test_cron_telegram_notifier_splits_long_message_without_truncation(), test_format_webhook_alert_burst_and_queue_summary(), test_format_webhook_alert_consecutive_blocks_korean_summary(), test_select_webhook_alert_chat_id_falls_back_to_user_ids() (+2 more)
 
-### Community 353 - "Community 353"
+### Community 352 - "Community 352"
 Cohesion: 0.24
 Nodes (8): declared_claim_bindings(), materialize_validated_claims(), Provider typed claim map을 exact asset evidence로 검증·정규화한다., 모든 item의 출처·시각·freshness가 완전한 provider claim만 반환한다., Recipe envelope가 명시한 claim→provider claim key binding만 추출한다., 검증된 provider claim key에 명시적으로 bind된 claim만 해결한다., _validated_claim_map(), 선택된 recipe identity 하나를 strict typed boundary로 실행한다.
 
-### Community 354 - "Community 354"
+### Community 353 - "Community 353"
 Cohesion: 0.27
 Nodes (8): ActiveProjectsResponse, ActiveProjectSummary, ActiveProjectRow(), ActiveProjectRowProps, ActiveProjectsPanel(), ActiveProjectsPanelProps, formatRelative(), PanelState
 
-### Community 355 - "Community 355"
+### Community 354 - "Community 354"
 Cohesion: 0.20
 Nodes (10): 4.1 Setting Edit Pattern (가장 자주 쓰임), 4.2 Secret Display & Rotate, 4.3 Dry-run Preview, 4.4 Audit Trail, 4.5 Health Surfacing, 4.6 Empty / First-run, 4.7 Compact Table, 4.8 Command Palette (⌘K) (+2 more)
 
-### Community 356 - "Community 356"
+### Community 355 - "Community 355"
 Cohesion: 0.29
 Nodes (8): CapabilityFirstActual, CapabilityFirstExpected, evaluate_capability_fixture_file(), Capability-first resolution 결과의 deterministic fixed-gold 채점., Architecture acceptance 축을 원문 없이 boolean으로 채점한다., No-send capability-first corpus의 wire shape를 검증한다., score_capability_first(), test_capability_first_metrics_reject_false_complex_and_repeat()
 
-### Community 357 - "Community 357"
+### Community 356 - "Community 356"
 Cohesion: 0.20
 Nodes (7): DestructiveSoft, Info, meta, Story, Success, Warn, WithUndo
 
-### Community 358 - "Community 358"
-Cohesion: 0.20
-Nodes (9): _create_telegram_notifier(), _format_webhook_alert(), _kill_existing_bots(), Telegram bot launcher.  Thin wrapper that wires together: - AgentOrchestrator (c, Create an async notifier that sends cron results to Telegram., 웹훅 운영 알림 대상 chat_id를 결정한다.      그룹/토픽 운영 채널이 별도로 있으면 ``chat_ids``를 우선 사용하고, 없으면, WebhookServer의 alert payload를 운영자가 읽기 쉬운 한국어로 변환한다., Kill any other run_bot.py processes to prevent 409 Conflict. (+1 more)
-
-### Community 359 - "Community 359"
+### Community 357 - "Community 357"
 Cohesion: 0.24
 Nodes (7): CommandGuard, _normalize(), 위험 명령어 탐지 가드 모듈.  Hermes Agent의 approval.py에서 영감을 받아 구현한 패턴 기반 위험 명령어 탐지기. 파괴적 명, 패턴 매칭을 위해 명령어 문자열을 정규화한다., 허용 목록(allowlist)을 지원하는 패턴 기반 위험 명령어 탐지기., 명령어가 위험 패턴에 매칭되면 DangerousCommandError를 발생시킨다.          ``pattern_key``가 허용 목록에, 명령어가 위험 패턴에 매칭되지 않으면 True를 반환한다.
 
-### Community 360 - "Community 360"
+### Community 358 - "Community 358"
 Cohesion: 0.20
 Nodes (6): BIZ-443 — cron 실행 경로의 env scrub / provider override 부재 회귀 테스트.  cron 잡의 COMMAND, cron 이 실행하는 recipe COMMAND 스텝 subprocess 는 scrub 된 env 를 받는다., scrub 후에도 PATH 등 baseline 은 남아 명령 실행이 가능하다., CronJob 에 provider/base_url/model override 필드가 없음을 고정한다.          cron 설정 한 줄로 L, TestCronCommandStepEnvScrub, TestCronJobHasNoProviderOverrideChannel
 
-### Community 361 - "Community 361"
+### Community 359 - "Community 359"
 Cohesion: 0.38
 Nodes (8): _binding(), _contract(), BIZ-566 discovery-built contract registry의 identity/validation 회귀., _skill(), test_duplicate_asset_owner_and_metadata_hash_conflicts_are_rejected(), test_legacy_definition_is_discovered_but_not_typed_registry_candidate(), test_malformed_additional_properties_is_rejected_before_candidate_build(), test_second_recipe_step_binding_owner_mismatch_is_rejected_by_registry()
 
-### Community 362 - "Community 362"
+### Community 360 - "Community 360"
 Cohesion: 0.27
 Nodes (9): kr-stock-skill live CLI 계약 회귀 테스트., CI 등 live skill이 없는 환경에서는 명시적으로 건너뛴다., CLI JSON 출력을 파싱해 계약 테스트가 stderr에 흔들리지 않게 한다., market-summary는 확보/미확보를 모두 구조화 JSON으로 표현해야 한다., 기존 quote JSON 계약은 FinanceDataReader source와 rows를 유지해야 한다., _require_live_cli(), _run_json(), test_kr_stock_cli_market_summary_json_shape() (+1 more)
 
-### Community 363 - "Community 363"
+### Community 361 - "Community 361"
 Cohesion: 0.20
 Nodes (5): Orchestrator의 RAG 회상 통합 테스트 (spec 005 Phase 2).  검증 범위: - RAG 비활성 시 기존 동작(슬라이딩 윈, _save_turn이 user/assistant 양쪽에 대해 백그라운드 임베딩을 스케줄한다., isolated=True(cron)에서는 RAG가 호출되지 않아야 한다., TestSaveTurnEmbedding, TestToolLoopIntegration
 
-### Community 364 - "Community 364"
+### Community 362 - "Community 362"
 Cohesion: 0.22
 Nodes (8): SimpleClaw Admin (web/admin), 검증 (백엔드 살아 있을 때), 구조, 데이터 패칭, 디자인 시스템 규약, 빠른 시작, 환경 변수 (`.env.local`), 후속 작업
 
-### Community 365 - "Community 365"
+### Community 363 - "Community 363"
 Cohesion: 0.22
 Nodes (5): Legacy action observation을 새 typed contract로 보수 변환한다.          순환 import를 피하려고 지, skill 문서 조회 같은 meta 결과를 제외한 사용자 작업 결과만 남긴다., turn 전체를 all_success/partial/all_failed/unknown 으로 집계한다., Legacy ledger 전체를 typed 결과 목록으로 변환하는 호환 adapter., OverallStatus
 
-### Community 366 - "Community 366"
+### Community 364 - "Community 364"
 Cohesion: 0.22
 Nodes (8): BIZ-512 실제 결과, BIZ-515 clean rerun 결과, FunctionGemma intent·asset classifier PoC, Teacher/student 계약, 데이터 계보와 privacy boundary, 목적과 비목표, 평가와 판정, 학습과 재현
 
-### Community 367 - "Community 367"
+### Community 365 - "Community 365"
 Cohesion: 0.22
 Nodes (8): Brand, Danger, Info, meta, Neutral, Story, Success, Warning
 
-### Community 368 - "Community 368"
+### Community 366 - "Community 366"
 Cohesion: 0.22
 Nodes (8): Destructive, Disabled, Ghost, meta, Outline, Primary, Secondary, Story
 
-### Community 369 - "Community 369"
+### Community 367 - "Community 367"
 Cohesion: 0.22
 Nodes (9): 2.1 컬러 — Primitive (Neutral), 2.2 컬러 — Primitive (Brand & State), 2.3 컬러 — Semantic (이걸 사용한다), 2.4 타이포, 2.5 간격 그리드, 2.6 라운딩 / 셰도우, 2.7 모션, 2.8 다크 모드 정책 (+1 more)
 
-### Community 370 - "Community 370"
+### Community 368 - "Community 368"
 Cohesion: 0.22
 Nodes (9): LLM 요청 모델, Migration and operations, Usage accounting and cost alerts, 관련 파일, 다중 LLM 라우팅, 동작 방식, 설정, 에러 처리 (+1 more)
 
-### Community 371 - "Community 371"
+### Community 369 - "Community 369"
 Cohesion: 0.22
 Nodes (9): Context-aware cron 후보 (BIZ-356), Fail-closed 시맨틱, Protected Section 모델 (BIZ-72), 동작 방식, 드리밍 파이프라인, 무결성 원칙, 설정, 운영 가이드 (+1 more)
 
-### Community 372 - "Community 372"
+### Community 370 - "Community 370"
 Cohesion: 0.22
 Nodes (8): AGENT.md 작성 예시, USER.md 작성 예시, 관련 파일, 동작 방식, 로컬 vs 전역 우선순위, 즉시 반영, 파일 구성, 페르소나 시스템
 
-### Community 373 - "Community 373"
+### Community 371 - "Community 371"
 Cohesion: 0.22
 Nodes (8): SimpleClaw란?, 멀티턴 도구 실행 (ReAct), 설계 원칙, 소개, 에이전트 오케스트레이터, 파일 기반 설정, 프로젝트 구조, 핵심 개념
 
-### Community 374 - "Community 374"
+### Community 372 - "Community 372"
 Cohesion: 0.22
 Nodes (6): End-to-end integration test for the persona pipeline., SOUL의 tone 규칙이 system prompt에 실제로 포함되어야 한다., Create a workspace with local and global persona files., BIZ-451: live-like persona dir(SOUL 포함)의 resolve → assemble 통합 검증., TestSoulPipeline, workspace()
 
-### Community 375 - "Community 375"
+### Community 373 - "Community 373"
 Cohesion: 0.22
 Nodes (7): Alert, Default, Large, meta, NotDismissible, Small, Story
 
-### Community 376 - "Community 376"
+### Community 374 - "Community 374"
 Cohesion: 0.31
 Nodes (8): _format_size(), _iter_quarantine_targets(), main(), quarantine(), BIZ-138 — `.agent/` 잔여 라이브 파일을 ``~/.simpleclaw/`` 격리 디렉터리로 정리.  배경 ---- BIZ-133, 사람이 읽을 수 있는 크기 문자열을 만들어 dry-run 출력을 친근하게., ``source_dir`` 의 잔여 라이브 데이터를 ``quarantine_root`` 로 격리 이동.      Returns:, source_dir 안에서 격리 대상 파일/디렉터리를 yield.
 
-### Community 377 - "Community 377"
+### Community 375 - "Community 375"
 Cohesion: 0.22
-Nodes (6): guard(), CommandGuard regression tests for Hermes v0.14.0 bypass patches.  Mapping to ups, `sudo -S` reads the password from stdin — the only sudo form an     LLM-driven a, Plain sudo (no privilege-relevant flag) is TTY-bound and excluded., TestSudoSafeForms, TestSudoStdinBruteForce
+Nodes (6): guard(), CommandGuard regression tests for Hermes v0.14.0 bypass patches.  Mapping to ups, Sudo askpass helper (``-A`` / ``--askpass``) can pull the password     from a no, Plain sudo (no privilege-relevant flag) is TTY-bound and excluded., TestSudoAskpass, TestSudoSafeForms
 
-### Community 378 - "Community 378"
+### Community 376 - "Community 376"
 Cohesion: 0.25
 Nodes (5): _make_text_response(), Orchestrator의 trace_id 발급/전파 통합 테스트 (BIZ-25).  검증 범위: - ``process_message`` 진입 시, 텍스트만 반환하는(도구 호출 없는) LLM 응답 mock., 메시지 처리 종료 후 컨텍스트의 trace_id가 외부 값으로 복원되어야 한다., TestOrchestratorTraceId
 
-### Community 381 - "Community 381"
+### Community 379 - "Community 379"
 Cohesion: 0.42
 Nodes (8): _assert_sourced_value_shape(), Live us-stock-skill CLI contract tests for BIZ-354., _run_json(), _skip_if_live_skill_missing(), test_us_stock_cli_earnings_json_contract(), test_us_stock_cli_fundamentals_json_contract(), test_us_stock_cli_valuation_json_contract(), test_usstock_recipe_prefers_structured_commands()
 
-### Community 382 - "Community 382"
+### Community 380 - "Community 380"
 Cohesion: 0.25
 Nodes (8): 3.1. 항상 CLI 를 통해 작업, 3.2. 이슈 생성 시 필수 인자, 3.3. 라벨 부착, 3.4. 출력 채널 — 결과는 코멘트로만 박제, 3.5. 멘션 디시플린 (loop avoidance), 3.6. Blocked / 운영자 액션 핸드오프, 3.7. 재실행 안전성 (Session timeout 대응), 3. Multica CLI 사용 가이드
 
-### Community 383 - "Community 383"
+### Community 381 - "Community 381"
 Cohesion: 0.25
 Nodes (8): 4.1. 브랜치 구조, 4.2. 작업 → 커밋 절차, 4.3. Push & PR 생성, 4.4. 머지 컨벤션, 4.5. 릴리스 PR (`dev → main`) 작성 DoD, 4.6. Worktree / 브랜치 위생 & 머지 후 정리, 4.7. Sub-issue 분리 패턴, 4. Git 워크플로 (PR/Push 절차)
 
-### Community 384 - "Community 384"
+### Community 382 - "Community 382"
 Cohesion: 0.25
 Nodes (5): AlertCallback, 웹훅 서버: aiohttp 기반 경량 REST 엔드포인트.  외부 시스템으로부터 이벤트를 수신하는 HTTP 서버를 제공한다. - POST /we, 웹훅 보안/트래픽 카운터 스냅샷을 반환한다.          대시보드 카드나 외부 메트릭 수집기에서 폴링용으로 사용한다., 웹훅 전용 카운터.      대시보드/테스트 검증/알림 판정에 활용된다. 모든 필드는 단조 증가., WebhookMetrics
 
-### Community 385 - "Community 385"
+### Community 383 - "Community 383"
 Cohesion: 0.25
 Nodes (7): Evidence 결과, LangGraph를 사용하지 않는 이유, Turn/Session State Contract, 결론, 상태 전이, 소유권, 의미 판단 경계
 
-### Community 386 - "Community 386"
+### Community 384 - "Community 384"
 Cohesion: 0.25
 Nodes (7): Error, Info, meta, Neutral, Story, Success, Warning
 
-### Community 387 - "Community 387"
+### Community 385 - "Community 385"
 Cohesion: 0.25
 Nodes (7): Runtime path contracts for SimpleClaw.  실제 `/Users/simplist` live 파일을 읽지 않는다. 대신, Study wiki default는 real HOME 기준 runtime data 위치여야 한다., Slash recipe discovery default는 live recipes.dir 규약과 일치한다., Runtime data 기본 경로는 Hermes profile 내부 shadow HOME을 가정하지 않는다., test_live_path_strings_are_home_relative_not_profile_relative(), test_recipe_command_default_path_contract(), test_study_wiki_default_path_contract()
 
-### Community 388 - "Community 388"
+### Community 386 - "Community 386"
 Cohesion: 0.36
 Nodes (7): build_inventory(), main(), _markdown(), Return a deterministic summary for one pytest directory., Build a read-only inventory of test and workflow surfaces., Render inventory as compact Markdown for PR/Multica comments., _test_dir_summary()
 
-### Community 389 - "Community 389"
+### Community 387 - "Community 387"
 Cohesion: 0.29
 Nodes (5): ProviderCard(), ProviderCardProps, Default, meta, Story
 
-### Community 390 - "Community 390"
+### Community 388 - "Community 388"
 Cohesion: 0.32
 Nodes (5): Integration tests for the sub-agent pipeline., Test complete spawn → execute → result lifecycle., Test that workspace directory is created for sub-agent., TestSubAgentPipeline, _write_script()
 
-### Community 391 - "Community 391"
+### Community 389 - "Community 389"
 Cohesion: 0.25
 Nodes (5): ToastContextValue, ToastState, TONE_CLASS, ToastContext, ToastTone
 
-### Community 392 - "Community 392"
+### Community 390 - "Community 390"
 Cohesion: 0.39
 Nodes (7): build_parser(), _fact_action_planned(), _load_cases(), main(), Bounded actual-provider planner/gate evaluation with no side effects., legacy payload가 canonical mode로 정규화된 뒤 사실 작업인지 판정한다., _run()
 
-### Community 394 - "Community 394"
+### Community 392 - "Community 392"
 Cohesion: 0.57
 Nodes (7): _child_skill(), _contract(), _invocation(), _recipe(), test_failed_recipe_result_is_fail_closed_without_redispatch(), test_missing_mapping_source_fails_before_recipe_executor(), test_recipe_owned_mapping_is_deterministic_and_preserves_input_hash()
 
-### Community 395 - "Community 395"
+### Community 393 - "Community 393"
 Cohesion: 0.29
 Nodes (7): 1.A. Stage A — 요청 수신 & 이슈 생성, 1.B. Stage B — 코드 생성 & 테스트, 1.C. Stage C — 커밋 & PR 생성, 1.D. Stage D — 리뷰 & 머지, 1.E. 비동기 / subagent 리뷰 정책, 1.F. 단계 간 공통 원칙, 1. 작업 단계 (Kanban Stages)
 
-### Community 396 - "Community 396"
+### Community 394 - "Community 394"
 Cohesion: 0.29
 Nodes (5): BadgeSize, SIZE, BadgeProps, BadgeTone, TONE
 
-### Community 397 - "Community 397"
+### Community 395 - "Community 395"
 Cohesion: 0.29
 Nodes (5): Checked, Default, Disabled, meta, Story
 
-### Community 398 - "Community 398"
+### Community 396 - "Community 396"
 Cohesion: 0.38
 Nodes (6): build_manifest(), main(), Chrome Native Messaging manifest dict를 생성한다., Chrome extension id 형식을 검증한다., Install the wrapper script and Chrome native messaging manifest., _validate_extension_id()
 
-### Community 399 - "Community 399"
+### Community 397 - "Community 397"
 Cohesion: 0.33
 Nodes (4): 마지막 틱 정보를 반환한다 (아직 실행 전이면 None)., 현재 데몬 상태를 HEARTBEAT.md 파일에 기록한다., 하트비트 틱 1회를 실행한다.          1. 더티 상태를 확인하고 필요 시 플러시         2. 활성 크론 작업 수와 대기 중인 태, HeartbeatTick
 
-### Community 400 - "Community 400"
+### Community 398 - "Community 398"
 Cohesion: 0.29
 Nodes (6): Browser Handoff, Re-authentication policy, Setup, Troubleshooting, What it does, What it does not do
 
-### Community 401 - "Community 401"
+### Community 399 - "Community 399"
 Cohesion: 0.29
 Nodes (5): DeleteCronJob, meta, Pending, RotateSecret, Story
 
-### Community 402 - "Community 402"
+### Community 400 - "Community 400"
 Cohesion: 0.29
 Nodes (5): Default, Large, meta, Small, Story
 
-### Community 403 - "Community 403"
+### Community 401 - "Community 401"
 Cohesion: 0.29
 Nodes (5): CalendarProvider, _coerce_datetime(), Provider 장애를 warning으로 흡수하면서 일정 metadata를 반환한다., Provider가 주는 ISO 문자열/datetime을 datetime으로 정규화한다., 테스트/런타임 Calendar provider의 최소 인터페이스.
 
-### Community 404 - "Community 404"
+### Community 402 - "Community 402"
 Cohesion: 0.29
 Nodes (4): 최근 window 내 대화를 redaction하여 snapshot으로 반환한다., Provider 장애를 warning으로 흡수하면서 최근 메일 metadata를 반환한다., 장기 evidence에 들어갈 수 있는 context 문자열에서 secret-like 값을 제거한다., redact_context_text()
 
-### Community 405 - "Community 405"
+### Community 403 - "Community 403"
 Cohesion: 0.29
 Nodes (5): MailProvider, 테스트/런타임 Gmail provider의 최소 인터페이스., gmail-skill의 metadata search만 호출하고 body는 읽지 않는 provider., Gmail metadata headers/snippet/labels만 반환한다., SkillGmailProvider
 
-### Community 406 - "Community 406"
+### Community 404 - "Community 404"
 Cohesion: 0.43
 Nodes (6): config/live skill 경로에서 Calendar/Gmail provider를 만든다., resolve_context_providers(), _make_skill_python(), Dreaming context cron 런타임 provider resolver를 검증한다., test_resolver_uses_calendar_skill_path_to_collect_next_24h_metadata(), test_resolver_uses_gmail_skill_path_to_collect_metadata_without_body()
 
-### Community 407 - "Community 407"
+### Community 405 - "Community 405"
 Cohesion: 0.33
 Nodes (6): install(), main(), Install the SimpleClaw realtime lookup runtime skill.  이 스크립트는 배포 repo의 Python m, runtime global skills directory에 realtime lookup skill wrapper를 설치한다., 설치 스크립트가 만든 runtime wrapper도 clean process에서 import된다., test_installed_wrapper_imports_in_clean_process()
 
-### Community 408 - "Community 408"
+### Community 406 - "Community 406"
 Cohesion: 0.29
 Nodes (4): DangerousCommandError, 위험한 패턴에 매칭된 명령어가 감지되었을 때 발생하는 예외., After the refactor that shared _SYSTEM_CONFIG_PATH and added     `find -exec(?:d, TestExistingPatternsStillFire
 
-### Community 409 - "Community 409"
+### Community 407 - "Community 407"
 Cohesion: 0.38
 Nodes (5): _lpga_request(), BIZ-523 — typed realtime request preserves planner semantics., test_lpga_request_is_unsupported_without_kbo_or_query_reclassification(), test_query_only_payload_fails_closed_as_unsupported(), test_request_payload_round_trip_preserves_all_semantic_fields()
 
-### Community 410 - "Community 410"
+### Community 408 - "Community 408"
 Cohesion: 0.43
 Nodes (5): _orchestrator(), BIZ-519 embedding pre-warm 시작 순서와 fail-open 계약 테스트., test_disabled_prewarm_skips_worker_and_is_fail_open(), test_load_failure_is_fail_open_and_does_not_log_sensitive_exception(), test_prewarm_runs_in_worker_and_records_redacted_success()
 
-### Community 412 - "Community 412"
+### Community 410 - "Community 410"
 Cohesion: 0.29
 Nodes (3): BIZ-442 — drain 중 새 메시지는 채널에서 짧은 점검 안내로 즉답한다., drain 안내도 인증 이후에만 — 비인가 사용자에게 운영 상태를 노출하지 않는다., TestTelegramDrainNotice
 
+### Community 411 - "Community 411"
+Cohesion: 0.29
+Nodes (6): Button, ButtonProps, ButtonSize, ButtonVariant, SIZE, VARIANT
+
+### Community 412 - "Community 412"
+Cohesion: 0.29
+Nodes (6): Button, ButtonProps, ButtonSize, ButtonVariant, SIZE, VARIANT
+
 ### Community 413 - "Community 413"
-Cohesion: 0.29
-Nodes (6): Button, ButtonProps, ButtonSize, ButtonVariant, SIZE, VARIANT
-
-### Community 414 - "Community 414"
-Cohesion: 0.29
-Nodes (6): Button, ButtonProps, ButtonSize, ButtonVariant, SIZE, VARIANT
-
-### Community 415 - "Community 415"
 Cohesion: 0.33
 Nodes (5): E2E (Playwright), SimpleClaw Admin 2.0 (web/admin-2), 구조, 디자인 토큰 import 합의 (S0 → S1 인계), 빠른 시작
 
-### Community 416 - "Community 416"
+### Community 414 - "Community 414"
 Cohesion: 0.33
 Nodes (4): load_dspy_fact_program(), Optional DSPy backend for complex fact planning.  Phase 1 does not require DSPy., Load the optional DSPy backend, or explain why it is unavailable., test_dspy_backend_reports_unavailable_without_dependency()
 
-### Community 417 - "Community 417"
-Cohesion: 0.33
-Nodes (5): freshness_is_required(), freshness_optional_claims(), Planner payload와 분리된 deterministic freshness policy., Return the trusted policy decision for freshness validation., Return claims covered by the narrow non-current-fact exception.
-
-### Community 418 - "Community 418"
+### Community 415 - "Community 415"
 Cohesion: 0.33
 Nodes (5): Gemini A/B policy, LLM transport and profile contract, OpenAI Responses extension, Operations, Transport boundaries
 
-### Community 419 - "Community 419"
+### Community 416 - "Community 416"
 Cohesion: 0.33
 Nodes (5): Default, Invalid, meta, Story, WithLeftIcon
 
-### Community 420 - "Community 420"
+### Community 417 - "Community 417"
 Cohesion: 0.40
 Nodes (5): _normalize_server(), _positive_int(), MCP configuration loader.  MCP 서버 정의는 외부 프로세스를 실행하므로 기본값은 disabled이고, 서버별 comman, 양의 정수만 허용하고 그 외는 default로 폴백한다., 단일 서버 설정을 검증/정규화한다. 사용할 수 없는 shape이면 None.
 
-### Community 421 - "Community 421"
+### Community 418 - "Community 418"
 Cohesion: 0.33
 Nodes (5): _parse_iso(), LaunchAgent restart 를 위한 drain/quiesce 상태 관리 (BIZ-442).  runtime-affecting deplo, 기본 now 제공자 — 테스트는 now 콜백을 주입해 시간을 고정한다., ISO8601 문자열을 timezone-aware datetime 으로 관대하게 파싱한다., _utcnow()
 
-### Community 422 - "Community 422"
+### Community 419 - "Community 419"
 Cohesion: 0.33
 Nodes (3): 실행 중 operation 을 1 증가시킨다., 실행 중 operation 을 1 감소시킨다 — 0 밑으로는 내려가지 않는다., ``with`` 블록 동안 operation 을 추적하는 컨텍스트 매니저.
 
-### Community 423 - "Community 423"
+### Community 420 - "Community 420"
 Cohesion: 0.33
 Nodes (5): contains_provider_identifier(), provider-neutral LLM request 필드만 canonical audit payload로 만든다., provider payload에 raw DB/user/chat/message 식별자가 있는지 검사한다., 실제 request를 privacy 검사하고 canonical SHA-256만 보존한다., request_payload()
 
-### Community 424 - "Community 424"
+### Community 421 - "Community 421"
 Cohesion: 0.33
 Nodes (5): Evidence, Multica, Runtime Surface, Summary, Validation
 
-### Community 425 - "Community 425"
+### Community 422 - "Community 422"
 Cohesion: 0.33
 Nodes (3): 레거시 컬럼 정규화 후 마이그레이션 러너에 위임해 스키마를 최신화한다.          설계 결정:         - 0001_initial.s, spec 005 이전 DB의 messages 테이블에 누락 컬럼을 추가한다.          이미 모든 컬럼이 있거나 messages 테이블이, 대화 저장소를 초기화한다.          Args:             db_path: SQLite 데이터베이스 파일 경로. 존재하지 않으면
 
-### Community 426 - "Community 426"
+### Community 423 - "Community 423"
 Cohesion: 0.33
 Nodes (5): Direct diagnostics, Inputs, Output contract, Registered SimpleClaw invocation, Naver Sports Skill
 
-### Community 427 - "Community 427"
+### Community 424 - "Community 424"
 Cohesion: 0.33
 Nodes (5): AgentDaemon 초기화 단위 테스트.  데몬 라이프사이클 통합은 ``tests/integration/test_daemon_pipeline., BIZ-139: config.yaml 의 ``~/.simpleclaw/...`` 경로가 홈 디렉터리로 풀려야 한다.      수정 전에는 ``P, 절대 경로는 expanduser 가 멱등적으로 동작해야 한다 (변경 없음)., test_init_expands_tilde_paths(), test_init_passes_through_absolute_paths()
 
-### Community 430 - "Community 430"
+### Community 427 - "Community 427"
 Cohesion: 0.33
 Nodes (5): live runtime smoke 스크립트의 안전 동작을 검증한다., Smoke CLI는 Telegram 전송 방지 옵션을 문서화한다., 임시 config/paths만으로 JSON smoke가 성공해야 한다., test_live_runtime_smoke_help_runs(), test_live_runtime_smoke_json_with_temp_paths()
 
-### Community 431 - "Community 431"
+### Community 428 - "Community 428"
 Cohesion: 0.33
 Nodes (4): DOT, StatusPillProps, StatusTone, TONE_BG
 
-### Community 432 - "Community 432"
+### Community 429 - "Community 429"
 Cohesion: 0.33
 Nodes (4): DOT, StatusPillProps, StatusTone, TONE_BG
 
-### Community 433 - "Community 433"
+### Community 430 - "Community 430"
 Cohesion: 0.40
 Nodes (5): ActionError, 실패한 step 의 구조화된 오류 정보., 실패만 있으면 빈 문자열을 돌려 기존 checked-but-failed 경로를 유지한다., test_fallback_degrades_for_failure_only_ledger(), test_fallback_reports_partial_success()
 
-### Community 434 - "Community 434"
+### Community 431 - "Community 431"
 Cohesion: 0.40
 Nodes (5): 10.1 Lighthouse CI, 10.2 키보드 전용 시나리오 (스모크), 10.3 VoiceOver(macOS) 검증 시나리오, 10.4 회귀 차단 흐름, 10. 부록 D: a11y · 성능 측정 (BIZ-55)
 
-### Community 435 - "Community 435"
+### Community 432 - "Community 432"
 Cohesion: 0.50
 Nodes (4): GRAPHIFY_FORCE, SIMPLECLAW_GRAPHIFY_TARGET, usage(), update_graphify.sh script
 
-### Community 436 - "Community 436"
+### Community 433 - "Community 433"
 Cohesion: 0.40
 Nodes (3): CronJob, CIRCUIT_TONE, CronJobRowProps
 
-### Community 437 - "Community 437"
+### Community 434 - "Community 434"
 Cohesion: 0.40
 Nodes (4): Failing, Healthy, meta, Story
 
-### Community 438 - "Community 438"
+### Community 435 - "Community 435"
 Cohesion: 0.40
 Nodes (4): Directory conventions (USER-OWNED), Identity (USER-OWNED — DREAMING MUST NOT TOUCH), Integrations (USER-OWNED), SimpleClaw Agent
 
-### Community 439 - "Community 439"
+### Community 436 - "Community 436"
 Cohesion: 0.40
 Nodes (4): After-marker user note (USER-OWNED), Core Memory, Manual journal (USER-OWNED), Static facts (USER-OWNED — DREAMING MUST NOT TOUCH)
 
-### Community 440 - "Community 440"
+### Community 437 - "Community 437"
 Cohesion: 0.40
 Nodes (4): After-marker manual section (USER-OWNED), Identity (USER-OWNED — DREAMING MUST NOT TOUCH), Manual preferences (USER-OWNED), User Profile
 
-### Community 441 - "Community 441"
+### Community 438 - "Community 438"
 Cohesion: 0.40
 Nodes (4): Basic Info, Preferences, User Profile, Work Context
 
-### Community 442 - "Community 442"
+### Community 439 - "Community 439"
 Cohesion: 0.40
 Nodes (4): assets, assets_total, recipes, skills
 
-### Community 443 - "Community 443"
+### Community 440 - "Community 440"
 Cohesion: 0.40
 Nodes (5): _fact_from_source(), 검증된 source를 최종 모델이 판별 가능한 구조화 fact로 변환한다., 검증을 통과해 realtime evidence로 사용할 수 있는 source body., SourceDocument, _document_source()
 
-### Community 445 - "Community 445"
+### Community 442 - "Community 442"
 Cohesion: 0.40
 Nodes (3): BadgeProps, BadgeTone, TONE
 
-### Community 447 - "Community 447"
+### Community 444 - "Community 444"
 Cohesion: 0.50
 Nodes (3): __getattr__(), 하위 호환을 위해 ``AgentOrchestrator``를 지연 노출하는 Agent 패키지., 에이전트 그래프를 즉시 import하지 않고 공개 오케스트레이터를 불러온다.
 
-### Community 448 - "Community 448"
+### Community 445 - "Community 445"
 Cohesion: 0.50
 Nodes (3): Active Memory tool dispatch 경계., `search_memory` 도구 호출을 처리해 장기기억/과거 대화를 온디맨드 회상한다., search_memory()
 
-### Community 449 - "Community 449"
+### Community 446 - "Community 446"
 Cohesion: 0.50
 Nodes (4): 0.1. 호칭 / 톤, 0.2. 런타임 답변 품질 — 맥락/의도 확장 원칙, 0.3 실시간 스포츠 source/parser 원칙, 0. 페르소나 (Persona)
 
-### Community 450 - "Community 450"
+### Community 447 - "Community 447"
 Cohesion: 0.50
 Nodes (4): 2.1. 사용자 확인 / Operator decision — default-option 패턴, 2.2. Plan 작성 필수 항목, 2.3. 테스트 코드 첨부, 2. 계획 수립 원칙 (Planning)
 
-### Community 451 - "Community 451"
+### Community 448 - "Community 448"
 Cohesion: 0.50
 Nodes (4): 5.1. 디렉토리 구조, 5.2. SimpleClaw 핵심 용어, 5.3. 작업 시 반드시 참고할 SoT, 5. 프로젝트 구조 & 핵심 용어
 
-### Community 452 - "Community 452"
+### Community 449 - "Community 449"
 Cohesion: 0.50
 Nodes (3): another-skill, Script, Trigger
 
-### Community 453 - "Community 453"
+### Community 450 - "Community 450"
 Cohesion: 0.50
 Nodes (3): ComposeCallback, GuardCallback, SafeRenderCallback
 
-### Community 454 - "Community 454"
+### Community 451 - "Community 451"
 Cohesion: 0.50
 Nodes (3): load_memory_config(), Semantic memory config loader.  RAG 및 long-term memory 설정을 기본값과 병합한다., config.yaml에서 시맨틱 메모리(RAG) 설정을 로드한다.      파일이 없거나 memory 키가 없으면 기본값(RAG 비활성)을 반환
 
-### Community 455 - "Community 455"
+### Community 452 - "Community 452"
 Cohesion: 0.50
 Nodes (3): load_security_config(), Security config loader.  시크릿 볼트/마스터키 경로를 expanduser 가능한 절대 문자열로 정규화한다., config.yaml에서 security 섹션을 로드한다.      BIZ-302 후속 — ``vault_path`` / ``master_key
 
-### Community 456 - "Community 456"
+### Community 453 - "Community 453"
 Cohesion: 0.50
 Nodes (3): Runtime contract test fixtures.  외부 네트워크, live Telegram, live runtime DB를 건드리지 않, Create a live-shape command recipe fixture with recipe settings., recipe_contract_dir()
 
-### Community 458 - "Community 458"
+### Community 455 - "Community 455"
 Cohesion: 0.50
 Nodes (4): _contains_any(), _normalized(), 대소문자·공백 차이를 제거한 비교 문자열을 만든다., 정규화된 text에 alias 대안 중 하나가 포함되는지 검사한다.
 
-### Community 459 - "Community 459"
+### Community 456 - "Community 456"
 Cohesion: 0.50
 Nodes (3): Agent Identity, Role, Tone & Style
 
-### Community 460 - "Community 460"
+### Community 457 - "Community 457"
 Cohesion: 0.50
 Nodes (3): Core Memory, Long-term Notes, Recent Summary
 
-### Community 461 - "Community 461"
+### Community 458 - "Community 458"
 Cohesion: 0.50
 Nodes (3): __getattr__(), LLM routing layer with multi-provider support and CLI wrapping., Lazy router exports to avoid config-loader import cycles.
 
-### Community 465 - "Community 465"
+### Community 462 - "Community 462"
 Cohesion: 0.83
 Nodes (3): cleanText(), cloneWithoutNoise(), extractReadableText()
 
-### Community 466 - "Community 466"
+### Community 463 - "Community 463"
 Cohesion: 0.50
 Nodes (3): Install, Privacy boundary, SimpleClaw Page Reader Chrome Extension
 
-### Community 467 - "Community 467"
+### Community 464 - "Community 464"
 Cohesion: 0.50
 Nodes (3): Script, test-skill, Trigger
 
-### Community 468 - "Community 468"
+### Community 465 - "Community 465"
 Cohesion: 0.67
 Nodes (3): _load_evaluator_script(), Actual-provider V4 evaluator assembly regression tests., test_runtime_catalog_passes_native_specs_to_connected_probe_definitions()
 
-### Community 469 - "Community 469"
+### Community 466 - "Community 466"
 Cohesion: 0.50
 Nodes (3): 테스트 인벤토리 스크립트 회귀 테스트., 인벤토리 JSON은 주요 테스트 계층과 workflow 목록을 포함한다., test_test_inventory_outputs_expected_keys()
 
-### Community 470 - "Community 470"
+### Community 467 - "Community 467"
 Cohesion: 0.50
 Nodes (3): child, __dirname, nextBin
 
-### Community 479 - "Community 479"
+### Community 476 - "Community 476"
 Cohesion: 0.50
 Nodes (3): child, __dirname, nextBin
 
@@ -2427,11 +2412,11 @@ Nodes (3): child, __dirname, nextBin
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `AgentOrchestrator` connect `Community 9` to `Community 0`, `Community 128`, `Community 130`, `Community 2`, `Community 4`, `Community 260`, `Community 6`, `Community 7`, `Community 136`, `Community 8`, `Community 10`, `Community 3`, `Community 261`, `Community 13`, `Community 14`, `Community 143`, `Community 16`, `Community 273`, `Community 18`, `Community 147`, `Community 276`, `Community 21`, `Community 24`, `Community 25`, `Community 410`, `Community 284`, `Community 29`, `Community 30`, `Community 157`, `Community 293`, `Community 37`, `Community 262`, `Community 40`, `Community 169`, `Community 42`, `Community 299`, `Community 49`, `Community 55`, `Community 184`, `Community 64`, `Community 321`, `Community 66`, `Community 71`, `Community 74`, `Community 203`, `Community 333`, `Community 205`, `Community 208`, `Community 84`, `Community 214`, `Community 215`, `Community 96`, `Community 353`, `Community 97`, `Community 228`, `Community 101`, `Community 232`, `Community 105`, `Community 107`, `Community 363`, `Community 378`, `Community 114`, `Community 116`, `Community 122`, `Community 125`?**
+- **Why does `AgentOrchestrator` connect `Community 9` to `Community 0`, `Community 128`, `Community 130`, `Community 2`, `Community 4`, `Community 260`, `Community 6`, `Community 7`, `Community 136`, `Community 8`, `Community 10`, `Community 3`, `Community 261`, `Community 13`, `Community 14`, `Community 143`, `Community 16`, `Community 273`, `Community 18`, `Community 147`, `Community 276`, `Community 21`, `Community 24`, `Community 25`, `Community 408`, `Community 284`, `Community 29`, `Community 30`, `Community 157`, `Community 293`, `Community 37`, `Community 262`, `Community 41`, `Community 169`, `Community 299`, `Community 43`, `Community 47`, `Community 51`, `Community 184`, `Community 64`, `Community 321`, `Community 66`, `Community 71`, `Community 74`, `Community 203`, `Community 332`, `Community 205`, `Community 208`, `Community 84`, `Community 214`, `Community 215`, `Community 352`, `Community 96`, `Community 97`, `Community 228`, `Community 101`, `Community 232`, `Community 105`, `Community 361`, `Community 107`, `Community 114`, `Community 116`, `Community 376`, `Community 122`, `Community 125`?**
   _High betweenness centrality (0.145) - this node is a cross-community bridge._
-- **Why does `SuggestionStatus` connect `Community 172` to `Community 57`?**
+- **Why does `SuggestionStatus` connect `Community 172` to `Community 38`?**
   _High betweenness centrality (0.066) - this node is a cross-community bridge._
-- **Why does `ConversationStore` connect `Community 2` to `Community 0`, `Community 1`, `Community 3`, `Community 5`, `Community 7`, `Community 8`, `Community 9`, `Community 403`, `Community 405`, `Community 153`, `Community 281`, `Community 34`, `Community 425`, `Community 45`, `Community 302`, `Community 180`, `Community 66`, `Community 67`, `Community 68`, `Community 332`, `Community 77`, `Community 215`, `Community 347`, `Community 93`, `Community 98`, `Community 120`?**
+- **Why does `ConversationStore` connect `Community 2` to `Community 0`, `Community 1`, `Community 3`, `Community 5`, `Community 7`, `Community 8`, `Community 9`, `Community 401`, `Community 403`, `Community 153`, `Community 281`, `Community 34`, `Community 422`, `Community 302`, `Community 46`, `Community 180`, `Community 66`, `Community 67`, `Community 68`, `Community 331`, `Community 77`, `Community 215`, `Community 346`, `Community 93`, `Community 98`, `Community 120`?**
   _High betweenness centrality (0.060) - this node is a cross-community bridge._
 - **Are the 297 inferred relationships involving `AgentOrchestrator` (e.g. with `AssetSelectionResult` and `CapabilityExecutor`) actually correct?**
   _`AgentOrchestrator` has 297 INFERRED edges - model-reasoned connections that need verification._
@@ -2440,4 +2425,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **What connects `manifest_version`, `name`, `version` to the rest of the system?**
   _5438 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.01176902710396229 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.011346839405269107 - nodes in this community are weakly interconnected._
