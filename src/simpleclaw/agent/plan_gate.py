@@ -57,6 +57,26 @@ class PlanGateResult:
     violations: tuple[PlanViolation, ...] = ()
 
 
+def _seal_approved_asset_snapshot(
+    plan: UnifiedTurnPlan,
+    *,
+    catalog: PlannerCatalog,
+) -> UnifiedTurnPlan:
+    """Gate가 검증한 선택 자산의 exact definition fingerprint를 봉인한다."""
+    selected = plan.capability.primary_asset
+    if selected is None:
+        return plan
+    asset = catalog.exact_asset(selected.asset_type, selected.name)
+    fingerprint = (
+        asset.definition_fingerprint
+        if asset is not None and asset.definition_fingerprint is not None
+        else ""
+    )
+    if fingerprint == plan.approved_asset_fingerprint:
+        return plan
+    return replace(plan, approved_asset_fingerprint=fingerprint)
+
+
 def _violation(code: str, field: str, message: str) -> PlanViolation:
     return PlanViolation(code=code, field=field, message=message)
 
@@ -409,6 +429,7 @@ class PlanGate:
                 effective_plan=None,
                 violations=tuple(violations),
             )
+        plan = _seal_approved_asset_snapshot(plan, catalog=catalog)
         if confirmation or plan.execution.requires_confirmation:
             if not confirmation:
                 confirmation.append(

@@ -182,6 +182,8 @@ class UnifiedTurnPlan:
     capability: CapabilityPlan = CapabilityPlan()
     source: str = "llm"
     catalog_fingerprint: str = ""
+    # Provider 입력이 아니라 PlanGate가 선택 자산의 승인 snapshot에서 봉인한다.
+    approved_asset_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         """Legacy execution asset fields를 capability adapter로 한 번 투영한다."""
