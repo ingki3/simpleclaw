@@ -11,16 +11,20 @@ from pathlib import Path
 import pytest
 
 import simpleclaw.langgraph_v4_shadow_validation as validation
+from scripts.dev import validate_langgraph_v4_no_send as fixture_validation
+from scripts.dev.validate_langgraph_v4_no_send import (
+    EXPECTED_CONTRACT_SET,
+)
+from scripts.dev.validate_langgraph_v4_no_send import (
+    definitions as _definitions,
+)
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.langgraph_v4_shadow_validation import (
-    EXPECTED_CONTRACT_SET,
     ContractIdentity,
     _assert_contract_set,
     _contract_identity,
     _contract_set_violations,
-    _definitions,
     _parser,
-    _run,
 )
 
 ROOT = Path(__file__).parents[2]
@@ -32,12 +36,13 @@ from dataclasses import replace
 
 sys.path.insert(0, "src")
 import simpleclaw.langgraph_v4_shadow_validation as validation
+from scripts.dev import validate_langgraph_v4_no_send as scenario
 
 mode, violation = sys.argv[1:]
-validation.create_router = lambda _config: validation._HermeticPlannerRouter()
+validation.create_router = lambda _config: scenario.HermeticPlannerRouter()
 
 if violation == "contract":
-    wanted = min(validation.EXPECTED_CONTRACT_SET)
+    wanted = min(scenario.EXPECTED_CONTRACT_SET)
     validation._contract_set_violations = lambda *_args, **_kwargs: (
         validation.ContractSetViolation(kind="missing", expected=wanted),
     )
@@ -58,7 +63,7 @@ if mode == "hermetic":
 else:
     cli_args.extend(("--config", "pyproject.toml"))
 sys.argv = cli_args
-raise SystemExit(validation.main())
+raise SystemExit(__import__("asyncio").run(scenario.run(validation._parser().parse_args())))
 """
 
 
@@ -73,7 +78,9 @@ def _fixture_contract_set() -> frozenset[ContractIdentity]:
 
 def test_fixture_contracts_match_canonical_exact_set() -> None:
     assert _fixture_contract_set() == EXPECTED_CONTRACT_SET
-    assert _contract_set_violations(_fixture_contract_set()) == ()
+    assert _contract_set_violations(
+        _fixture_contract_set(), expected=EXPECTED_CONTRACT_SET
+    ) == ()
 
 
 def test_same_count_wrong_member_reports_missing_and_extra() -> None:
@@ -87,7 +94,7 @@ def test_same_count_wrong_member_reports_missing_and_extra() -> None:
     )
     actual = frozenset((EXPECTED_CONTRACT_SET - {wanted}) | {wrong})
 
-    violations = _contract_set_violations(actual)
+    violations = _contract_set_violations(actual, expected=EXPECTED_CONTRACT_SET)
 
     assert {item.kind for item in violations} == {"missing", "extra"}
     assert {item.expected for item in violations if item.kind == "missing"} == {
@@ -103,10 +110,14 @@ def test_same_count_wrong_member_reports_missing_and_extra() -> None:
 
 def test_missing_and_extra_members_are_reported_independently() -> None:
     wanted = min(EXPECTED_CONTRACT_SET)
-    missing = _contract_set_violations(frozenset(EXPECTED_CONTRACT_SET - {wanted}))
+    missing = _contract_set_violations(
+        frozenset(EXPECTED_CONTRACT_SET - {wanted}),
+        expected=EXPECTED_CONTRACT_SET,
+    )
     extra_identity = ContractIdentity("skill", "extra", "extra.output", "1", "hash")
     extra = _contract_set_violations(
-        frozenset((*EXPECTED_CONTRACT_SET, extra_identity))
+        frozenset((*EXPECTED_CONTRACT_SET, extra_identity)),
+        expected=EXPECTED_CONTRACT_SET,
     )
 
     assert [(item.kind, item.expected) for item in missing] == [("missing", wanted)]
@@ -139,7 +150,7 @@ def test_owner_contract_version_and_schema_drift_are_structured(
     drifted = replace(wanted, **changes)
     actual = frozenset((EXPECTED_CONTRACT_SET - {wanted}) | {drifted})
 
-    violations = _contract_set_violations(actual)
+    violations = _contract_set_violations(actual, expected=EXPECTED_CONTRACT_SET)
 
     assert len(violations) == 1
     assert violations[0].kind == "drift"
@@ -218,11 +229,44 @@ async def test_hermetic_validator_avoids_provider_and_conversation_store(
         assert_zero_persistence=True,
     )
 
-    assert await _run(args) == 0
+    assert await fixture_validation.run(args) == 0
     output = capsys.readouterr().out
     assert "HERMETIC_PLANNER=PASS" in output
     assert "EXTERNAL_PROVIDER_CALLS=0" in output
     assert "CONTRACT_SET_VIOLATIONS=[]" in output
+    assert "TELEGRAM_SEND_COUNT=0" in output
+    assert "CRON_NOTIFIER_COUNT=0" in output
+    assert "CONVERSATION_WRITE_COUNT=0" in output
+
+
+def test_kbo_scenario_repeats_asset_zero_effective_plan_no_send() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/dev/validate_langgraph_v4_shadow.py",
+            "--hermetic",
+            "--mode",
+            "primary",
+            "--repeat",
+            "3",
+            "--max-provider-calls",
+            "3",
+            "--deadline-seconds",
+            "30",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = completed.stdout
+    assert output.count('"original_asset":null') == 3
+    assert output.count('"effective_asset":"recipe:sports-live"') == 3
+    assert "ASSET_DEFINITIONS=scenario_installer_output" in output
+    assert "TARGET_DISPATCH_EXACTLY_ONCE=true" in output
+    assert "TYPED_FINAL=PASS" in output
     assert "TELEGRAM_SEND_COUNT=0" in output
     assert "CRON_NOTIFIER_COUNT=0" in output
     assert "CONVERSATION_WRITE_COUNT=0" in output

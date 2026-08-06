@@ -24,7 +24,11 @@ from simpleclaw.agent.context_candidates import (
     ContextTrust,
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate, PlanGateResult
-from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
+from simpleclaw.agent.planner_catalog import (
+    PlannerAsset,
+    PlannerCatalog,
+    connected_contract_complete,
+)
 from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_plan import AssetRef, UnifiedTurnPlan
 from simpleclaw.agent.turn_planner import PlannerUnavailable, plan_turn_with_llm
@@ -407,6 +411,7 @@ class ConnectedContractProbe:
                     primary_asset=ref,
                     supporting_assets=(),
                 ),
+                approved_asset_fingerprint=asset.definition_fingerprint or "",
             )
             self._sequence += 1
             result = await self._runner.run(
@@ -737,14 +742,8 @@ def classify_contract(
             )
             continue
         assets.append(asset)
-        complete = all(
-            (
-                asset.declared,
-                asset.runtime_visible,
-                asset.coverage == "full_coverage",
-                bool(asset.input_contract_ref or asset.input_contract),
-                bool(asset.output_contract_ref or asset.output_contract),
-            )
+        complete = asset.coverage == "full_coverage" and connected_contract_complete(
+            asset
         )
         if not complete:
             issues.append(

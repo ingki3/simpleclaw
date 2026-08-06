@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.dev.validate_langgraph_v4_no_send import definitions as _definitions
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.plan_gate import PlanGate
 from simpleclaw.agent.planner_catalog import (
@@ -42,7 +43,10 @@ from simpleclaw.evaluation.langgraph_v4_scenario_eval import (
     SideEffectCounts,
     load_scenarios,
 )
-from simpleclaw.langgraph_v4_shadow_validation import _definitions
+from simpleclaw.graph_runtime.shadow import ConnectedExecutionError
+from simpleclaw.graph_runtime.side_effect_monitor import (
+    capture_shadow_side_effects,
+)
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
@@ -100,9 +104,10 @@ def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
     assets = []
     for name in names:
         mutation = name == "cron"
+        asset_type = _asset_type(name)
         assets.append(
             PlannerAsset(
-                asset_type=_asset_type(name),
+                asset_type=asset_type,
                 name=name,
                 description="fixed gold replay asset",
                 domains=(),
@@ -117,6 +122,13 @@ def _catalog(cases: tuple[ScenarioCase, ...]) -> PlannerCatalog:
                 runtime_visible=True,
                 coverage="full_coverage",
                 input_contract="query.v1",
+                contract_owner=f"{asset_type}:{name}",
+                input_contract_ref=f"{asset_type}.{name}.input@1",
+                output_contract_ref=f"{asset_type}.{name}.output@1",
+                input_schema_hash="i" * 64,
+                output_schema_hash="o" * 64,
+                binding_identity="binding:" + "b" * 64,
+                definition_fingerprint="d" * 64,
             )
         )
     return PlannerCatalog(tuple(assets), "scenario-catalog-v1")
@@ -915,6 +927,15 @@ async def test_cli_skill_uses_declared_example_when_question_is_not_contract_val
 async def test_cli_skill_without_declared_fallback_fails_closed(
     tmp_path: Path,
 ) -> None:
+    dispatch_calls = 0
+
+    class TrackingConnectedContractProbe(ConnectedContractProbe):
+        @staticmethod
+        async def _skill_executor(_definition, _argv):
+            nonlocal dispatch_calls
+            dispatch_calls += 1
+            return {"operation_result": "must-not-dispatch"}
+
     skill = next(
         item
         for item in discover_skills(
@@ -958,12 +979,28 @@ async def test_cli_skill_without_declared_fallback_fails_closed(
         ),
         catalog_fingerprint=catalog.fingerprint,
     )
-    probe = ConnectedContractProbe(definitions=(skill,), directory=tmp_path)
+    probe = TrackingConnectedContractProbe(
+        definitions=(skill,), directory=tmp_path
+    )
     selected_assets = tuple(
         item for item in catalog.assets if item.name == skill.name
     )
     try:
-        with pytest.raises(ValueError, match="payload.safe_example_missing"):
+        with (
+            capture_shadow_side_effects() as side_effects,
+            pytest.raises(ConnectedExecutionError) as captured,
+        ):
             await probe(load_scenarios(FIXTURE)[9], plan, selected_assets)
+        assert captured.value.phase == "binding"
+        assert captured.value.code == "connected_binding_failed"
+        assert captured.value.error_type == "ContractRegistryError"
+        assert captured.value.safe_message.startswith("message_sha256=")
+        assert "payload.safe_example_missing" not in str(captured.value)
+        assert "자연어 질문" not in str(captured.value)
+        assert dispatch_calls == 0
+        assert side_effects.telegram_send == 0
+        assert side_effects.notifier == 0
+        assert side_effects.conversation_write == 0
+        assert probe._store.get_recent() == []
     finally:
         probe.close()

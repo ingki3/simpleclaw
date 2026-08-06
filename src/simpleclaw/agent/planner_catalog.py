@@ -218,6 +218,15 @@ class PlannerCatalog:
     assets: tuple[PlannerAsset, ...]
     fingerprint: str
 
+    def exact_asset(self, asset_type: str, name: str) -> PlannerAsset | None:
+        """동일 snapshot에서 owner identity가 정확히 하나인 자산을 반환한다."""
+        matches = tuple(
+            asset
+            for asset in self.assets
+            if (asset.asset_type, asset.name) == (asset_type, name)
+        )
+        return matches[0] if len(matches) == 1 else None
+
     def to_prompt_json(self, *, runtime_only: bool = True) -> str:
         """Planner 입력용 compact JSON array를 반환한다.
 
@@ -230,6 +239,21 @@ class PlannerCatalog:
             if asset.runtime_visible or not runtime_only
         )
         return _canonical_json([_prompt_payload(asset) for asset in assets])
+
+
+def connected_contract_complete(asset: PlannerAsset) -> bool:
+    """Connected executor가 사용할 owner-qualified identity가 완전한지 판정한다."""
+    return bool(
+        asset.declared
+        and asset.runtime_visible
+        and asset.contract_owner == f"{asset.asset_type}:{asset.name}"
+        and asset.input_contract_ref
+        and asset.output_contract_ref
+        and asset.input_schema_hash
+        and asset.output_schema_hash
+        and asset.binding_identity
+        and asset.definition_fingerprint
+    )
 
 
 def _canonical_json(value: object) -> str:

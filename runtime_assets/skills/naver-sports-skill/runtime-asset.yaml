@@ -1,0 +1,14 @@
+schema_version: 1
+asset:
+  type: skill
+  name: naver-sports-skill
+destination:
+  default_parent: ~/.agents/skills
+files:
+  - source: SKILL.md
+    destination: SKILL.md
+    sha256: d1a3d565443b0786d9f2c60f4be74f769db52c1ae2d47f923e7700407ffb6a8c
+  - source: scripts/naver_sports.py
+    destination: scripts/naver_sports.py
+    sha256: 0c56a7e3a569a07c0f947ddfee38cf10258cd923b4d66dd3b2af7f5dde2f4edf
+    executable: true

@@ -13,11 +13,17 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from scripts.dev.validate_langgraph_v4_no_send import (
+    definitions as _connected_validation_definitions,
+)
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
+from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
     _allow_v4_legacy_fallback,
     _is_direct_without_asset,
+    _v4_connected_contract_eligible,
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
@@ -71,6 +77,7 @@ from simpleclaw.graph_runtime.runtime import (
     evaluate_read_only_canary,
 )
 from simpleclaw.graph_runtime.shadow import (
+    ConnectedExecutionError,
     ConnectedShadowTurnRunner,
     DurableDispatchProvenanceV1,
     _DurableInvocationClaims,
@@ -86,9 +93,6 @@ from simpleclaw.graph_runtime.status import (
     EffectStatus,
     InvocationStatus,
     TerminalOutcome,
-)
-from simpleclaw.langgraph_v4_shadow_validation import (
-    _definitions as _connected_validation_definitions,
 )
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter
@@ -123,6 +127,57 @@ def _definitions():
         item
         for item in (*recipes, *skills)
         if item.name in {"contract-fixture-workflow", "contract-fixture-step"}
+    )
+
+
+def _production_sports_definitions(tmp_path: Path):
+    recipes_dir = tmp_path / "production-recipes"
+    global_skills = tmp_path / "production-skills"
+    install_sports_live_recipe(recipes_dir)
+    install_naver_sports_skill(global_skills)
+    recipe = next(
+        item
+        for item in discover_recipes(recipes_dir)
+        if item.name == "sports-live"
+    )
+    skill = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"),
+            global_skills,
+        )
+        if item.name == "naver-sports-skill"
+    )
+    return recipe, skill
+
+
+def _kbo_incident_plan(catalog_fingerprint: str) -> UnifiedTurnPlan:
+    prompt = "Kbo 순위 상위 3팀 알려줘"
+    return UnifiedTurnPlan(
+        original_text=prompt,
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question=prompt,
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("sports",),
+        intents=("standings",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="",
+            intents=("standings",),
+            freshness_required=True,
+        ),
+        execution=ExecutionPlan(mode=ExecutionMode.DIRECT_ANSWER),
+        capability=CapabilityPlan(coverage=CapabilityCoverage.NO_MATCH),
+        confidence=1.0,
+        decision_summary="incident fixture",
+        catalog_fingerprint=catalog_fingerprint,
     )
 
 
@@ -162,6 +217,11 @@ def test_connected_validation_discovers_planner_visible_contract_fixtures() -> N
 
 def _plan(asset_type: str, name: str, mode: ExecutionMode) -> UnifiedTurnPlan:
     asset = AssetRef(asset_type=asset_type, name=name)
+    definition = next(
+        item
+        for item in _definitions()
+        if (item.contract_asset_type, item.name) == (asset_type, name)
+    )
     return UnifiedTurnPlan(
         original_text="connected shadow fixture",
         context=ContextSelection(
@@ -192,6 +252,7 @@ def _plan(asset_type: str, name: str, mode: ExecutionMode) -> UnifiedTurnPlan:
         ),
         confidence=1.0,
         decision_summary="connected fixture",
+        approved_asset_fingerprint=definition.definition_fingerprint,
     )
 
 
@@ -383,6 +444,156 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     assert result.execution.side_effect_counts.total == 0
     assert result.execution.rollback_required is False
     assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
+    tmp_path,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    original = _kbo_incident_plan(catalog.fingerprint)
+    gate = PlanGate().evaluate(
+        original,
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    assert original.capability.primary_asset is None
+    assert gate.effective_plan.capability.primary_asset == AssetRef(
+        "recipe", "sports-live"
+    )
+    assert _v4_connected_contract_eligible(gate.effective_plan, catalog) is True
+
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {
+            "schema": "asset_result.v1",
+            "status": "resolved",
+            "data": {"standings": ["team-1", "team-2", "team-3"]},
+        }
+
+    store = ConversationStore(tmp_path / "kbo-conversation.db")
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "kbo-checkpoint.sqlite3",
+            daemon_db_path=tmp_path / "daemon.db",
+            conversations_db_path=tmp_path / "kbo-conversation.db",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=store,
+        recipe_executor=executor,
+    )
+
+    for index in range(3):
+        result = await runner.run(
+            plan=gate.effective_plan,
+            legacy=None,
+            request_id=f"kbo-incident-{index}",
+            session_key="isolated-kbo-session",
+            planner_model_calls=1,
+            planner_tokens=100,
+        )
+        assert result.execution.final_content is not None
+        assert result.execution.dispatch_trace.exactly_once is True
+        assert result.execution.rollback_required is False
+        assert result.execution.side_effect_counts.total == 0
+
+    assert calls == 3
+    assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_kbo_live_stale_contract_fails_before_connected_dispatch(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    recipe, _skill = _production_sports_definitions(tmp_path)
+    stale_recipe = replace(
+        recipe,
+        input_contract=None,
+        output_contract=None,
+        step_bindings=(),
+    )
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        return _kbo_incident_plan(catalog.fingerprint)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._unified_turn_planner_config = {
+        "architecture": "langgraph_v4",
+        "mode": "primary",
+        "context_candidate_limit": 8,
+        "context_candidate_max_chars": 6000,
+        "selected_context_max_turns": 3,
+        "selected_context_max_chars": 2400,
+        "max_tokens": 2048,
+        "langgraph_v4": {"budget_valid": True},
+    }
+    orchestrator._router = object()
+    orchestrator._cron_scheduler = None
+    orchestrator._browser_handoff_config = {"enabled": False}
+    orchestrator._recipes = (stale_recipe,)
+    orchestrator._store = ConversationStore(tmp_path / "stale-contract.db")
+    orchestrator._structured_logger = None
+    orchestrator._exposable_skills = MethodType(lambda self: [], orchestrator)
+    connected_calls = 0
+    rollout_events: list[dict[str, object]] = []
+
+    async def connected_must_not_run(self, **_kwargs):
+        nonlocal connected_calls
+        connected_calls += 1
+        raise AssertionError("incomplete connected snapshot reached dispatch")
+
+    def record_rollout(self, **event):
+        rollout_events.append(event)
+
+    orchestrator._execute_langgraph_v4_connected = MethodType(
+        connected_must_not_run,
+        orchestrator,
+    )
+    orchestrator._record_unified_rollout_path = MethodType(
+        record_rollout,
+        orchestrator,
+    )
+    turn = TurnExecutionState.create(
+        session_key="stale-kbo-session",
+        original_text="Kbo 순위 상위 3팀 알려줘",
+        turn_id="stale-kbo-request",
+    )
+
+    result = await orchestrator._run_unified_turn_planner_primary(
+        turn.original_text,
+        recent_rows=[],
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        operator_tools=False,
+        turn=turn,
+    )
+
+    assert result.success is False
+    assert connected_calls == 0
+    assert turn.phase.value == "rejected"
+    assert rollout_events[-1]["reason"] == "gate_repair"
 
 
 @pytest.mark.asyncio
@@ -1028,6 +1239,7 @@ def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
 async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     tmp_path,
     monkeypatch,
+    caplog,
 ) -> None:
     definitions = _definitions()
     recipes = tuple(
@@ -1087,7 +1299,14 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
         assert await claims.claim(kwargs["request_id"], invocation) is None
         claims.mark_executed(invocation.invocation_id)
         claims.mark_ambiguous(invocation.invocation_id)
-        raise RuntimeError("receipt construction failed")
+        try:
+            raise ValueError(
+                'ASCII_PRIVATE_PROMPT_MARKER_639 '
+                '{"api_key":"json-private-key","password":"json-password"} '
+                'https://provider.example/v1?token=url-private-token 사용자 비공개 질문'
+            )
+        except ValueError as cause:
+            raise RuntimeError("BEARER provider-private-token") from cause
 
     async def legacy_must_not_run(self, *_args, **_kwargs):
         nonlocal legacy_calls
@@ -1124,6 +1343,35 @@ async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
     assert _DurableInvocationClaims(checkpoint).provenance(
         turn.turn_id
     ).lifecycle == "ambiguous"
+    messages = caplog.text
+    assert "request_id=receipt-loss-request" in messages
+    assert "original_mode=direct_answer" in messages
+    assert "effective_mode=direct_answer" in messages
+    assert "original_asset_kind=recipe" in messages
+    assert "effective_asset_kind=recipe" in messages
+    assert "original_asset_hash=" in messages
+    assert "effective_asset_hash=" in messages
+    assert "failure_phase=setup" in messages
+    assert "phase=setup" in messages
+    assert "code=connected_setup_failed" in messages
+    assert "error_type=RuntimeError" in messages
+    assert "selected_asset_kind=recipe" in messages
+    assert "selected_asset_hash=" in messages
+    assert "contract-fixture-workflow" not in messages
+    assert "catalog_fingerprint=" in messages
+    assert "registry_fingerprint=" in messages
+    assert "owned_input_contract_present=None" in messages
+    assert "owned_output_contract_present=None" in messages
+    assert "owned_binding_present=None" in messages
+    assert "error_message=message_sha256=" in messages
+    assert planned.original_text not in messages
+    assert "ASCII_PRIVATE_PROMPT_MARKER_639" not in messages
+    assert "json-private-key" not in messages
+    assert "json-password" not in messages
+    assert "provider-private-token" not in messages
+    assert "provider.example" not in messages
+    assert "사용자 비공개 질문" not in messages
+    assert "Traceback" not in messages
 
 
 @pytest.mark.offline
@@ -1218,6 +1466,253 @@ def test_v4_primary_preserves_direct_no_asset_parity() -> None:
     )
 
     assert _is_direct_without_asset(direct) is True
+
+
+@pytest.mark.offline
+def test_v4_connected_rejects_planner_asset_without_owned_contract_snapshot() -> None:
+    definitions = _definitions()
+    catalog = build_planner_catalog(
+        skills=tuple(
+            item for item in definitions if item.contract_asset_type == "skill"
+        ),
+        recipes=tuple(
+            item for item in definitions if item.contract_asset_type == "recipe"
+        ),
+        native_specs=(),
+    )
+    plan = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    plan = replace(
+        plan,
+        capability=replace(plan.capability, coverage=CapabilityCoverage.FULL),
+    )
+
+    assert _v4_connected_contract_eligible(plan, catalog) is True
+
+    selected = next(
+        asset for asset in catalog.assets if asset.name == "contract-fixture-workflow"
+    )
+    stale_catalog = replace(
+        catalog,
+        assets=tuple(
+            replace(
+                asset,
+                contract_owner=None,
+                input_contract_ref=None,
+                output_contract_ref=None,
+                input_schema_hash=None,
+                output_schema_hash=None,
+                binding_identity=None,
+                definition_fingerprint=None,
+            )
+            if asset is selected
+            else asset
+            for asset in catalog.assets
+        ),
+    )
+
+    assert _v4_connected_contract_eligible(plan, stale_catalog) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_registry_failure_preserves_phase_cause_and_redacts_prompt(
+    tmp_path,
+) -> None:
+    plan = replace(
+        _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        capability=replace(
+            _plan(
+                "recipe",
+                "contract-fixture-workflow",
+                ExecutionMode.DIRECT_ANSWER,
+            ).capability,
+            primary_asset=AssetRef("recipe", "missing-KBO-원문"),
+        ),
+    )
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(),
+        recipe_executor=None,
+    )
+
+    with pytest.raises(ConnectedExecutionError) as captured:
+        await runner.run(
+            plan=plan,
+            legacy=None,
+            request_id="registry-failure-request",
+            session_key="isolated-session",
+            planner_model_calls=1,
+            planner_tokens=10,
+        )
+
+    assert captured.value.phase == "registry_lookup"
+    assert captured.value.code == "asset_not_registered_read_only"
+    assert captured.value.error_type == "ValueError"
+    assert captured.value.selected_asset_kind == "recipe"
+    assert captured.value.selected_asset_hash == ""
+    assert captured.value.catalog_fingerprint == plan.catalog_fingerprint
+    assert captured.value.registry_fingerprint
+    assert captured.value.owned_input_contract_present is False
+    assert captured.value.owned_output_contract_present is False
+    assert captured.value.owned_binding_present is False
+    assert "KBO" not in captured.value.safe_message
+    assert isinstance(captured.value.__cause__, ValueError)
+
+
+@pytest.mark.parametrize("drift_axis", ("definition", "binding", "executor"))
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_runner_blocks_catalog_registry_snapshot_drift_before_dispatch(
+    tmp_path,
+    drift_axis,
+) -> None:
+    definitions = _definitions()
+    recipe = next(
+        item for item in definitions if item.name == "contract-fixture-workflow"
+    )
+    catalog = build_planner_catalog(
+        skills=tuple(
+            item for item in definitions if item.contract_asset_type == "skill"
+        ),
+        recipes=tuple(
+            item for item in definitions if item.contract_asset_type == "recipe"
+        ),
+        native_specs=(),
+    )
+    planned = replace(
+        _plan("recipe", recipe.name, ExecutionMode.DIRECT_ANSWER),
+        catalog_fingerprint=catalog.fingerprint,
+        approved_asset_fingerprint="",
+    )
+    gate = PlanGate().evaluate(
+        planned,
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    approved = gate.effective_plan
+    assert approved.approved_asset_fingerprint == recipe.definition_fingerprint
+
+    if drift_axis == "definition":
+        drifted_recipe = replace(recipe, description=f"{recipe.description} drift")
+    elif drift_axis == "binding":
+        drifted_recipe = replace(
+            recipe,
+            step_bindings=(
+                replace(recipe.step_bindings[0], binding_id="fixture-step.v2"),
+            ),
+        )
+    else:
+        drifted_recipe = replace(recipe, instructions="changed executor definition")
+    drifted_definitions = tuple(
+        drifted_recipe if item is recipe else item for item in definitions
+    )
+    original_registry = build_contract_registry(definitions)
+    drifted_registry = build_contract_registry(drifted_definitions)
+    owner = AssetRefV1(type="recipe", name=recipe.name)
+    original_entry = original_registry.asset(owner)
+    drifted_entry = drifted_registry.asset(owner)
+    assert original_entry is not None
+    assert drifted_entry is not None
+    assert original_entry.input_descriptor.ref == drifted_entry.input_descriptor.ref
+    assert original_entry.output_descriptor.ref == drifted_entry.output_descriptor.ref
+    assert (
+        original_entry.snapshot.definition_fingerprint
+        != drifted_entry.snapshot.definition_fingerprint
+    )
+
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "must-not-run"}
+
+    store = ConversationStore(tmp_path / f"{drift_axis}-conversation.db")
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / f"{drift_axis}-checkpoint.sqlite3",
+        ),
+        definitions=drifted_definitions,
+        conversation_store=store,
+        recipe_executor=executor,
+    )
+
+    with pytest.raises(ConnectedExecutionError) as captured:
+        await runner.run(
+            plan=approved,
+            legacy=None,
+            request_id=f"toctou-{drift_axis}",
+            session_key="toctou-session",
+            planner_model_calls=1,
+            planner_tokens=10,
+        )
+
+    assert captured.value.phase == "registry_lookup"
+    assert captured.value.code == "approved_asset_fingerprint_mismatch"
+    assert captured.value.selected_asset_kind == "recipe"
+    assert recipe.name not in str(captured.value)
+    assert captured.value.approved_asset_hash == recipe.definition_fingerprint
+    assert captured.value.selected_asset_hash == drifted_recipe.definition_fingerprint
+    assert calls == 0
+    assert store.get_recent() == []
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, None
+    ) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_dispatch_valueerror_is_typed_and_sanitized(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def fail_dispatch(_self, _invocation, **_kwargs):
+        raise ValueError("provider dispatch failed token=top-secret")
+
+    monkeypatch.setattr(
+        "simpleclaw.graph_runtime.adapters.recipe.GenericRecipeAdapter.dispatch",
+        fail_dispatch,
+    )
+    runner = _connected_runner(
+        tmp_path,
+        budget=_budget_with(),
+        recipe_executor=None,
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="dispatch-failure-request",
+        session_key="isolated-session",
+        planner_model_calls=1,
+        planner_tokens=10,
+    )
+
+    diagnostic = ",".join(result.execution.rollback_reasons)
+    assert (
+        "dispatch:connected_dispatch_failed:ValueError:message_sha256="
+    ) in diagnostic
+    assert "provider dispatch failed" not in diagnostic
+    assert "top-secret" not in diagnostic
+    assert result.execution.final_content is None
+    assert result.execution.side_effect_counts.total == 0
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -100,6 +100,160 @@ class _ShadowBudgetStop(RuntimeError):
 
 class _TargetDispatchInvariantError(RuntimeError):
     """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
+
+
+ConnectedFailurePhase = Literal[
+    "setup",
+    "registry",
+    "registry_lookup",
+    "binding",
+    "dispatch",
+    "receipt",
+]
+_CONNECTED_FAILURE_PHASES = frozenset(
+    {"setup", "registry", "registry_lookup", "binding", "dispatch", "receipt"}
+)
+_CONNECTED_ERROR_TYPES = frozenset(
+    {
+        "CancelledError",
+        "ContractRegistryError",
+        "IntegrityError",
+        "InvalidStateError",
+        "OperationalError",
+        "OSError",
+        "RuntimeError",
+        "TimeoutError",
+        "TypeError",
+        "ValueError",
+    }
+)
+_CONNECTED_ERROR_CODES = frozenset(
+    {
+        "approved_asset_fingerprint_mismatch",
+        "asset_identity_missing",
+        "asset_not_registered_read_only",
+    }
+)
+_CONNECTED_ASSET_KINDS = frozenset({"recipe", "skill", "native_tool"})
+
+
+def _closed_asset_kind(value: str) -> str:
+    """User-managed asset identity를 closed kind로만 투영한다."""
+    return value if value in _CONNECTED_ASSET_KINDS else "unknown"
+
+
+def _closed_fingerprint(value: str) -> str:
+    """Canonical SHA-256만 diagnostic formatter로 전달한다."""
+    normalized = value.lower()
+    if len(normalized) != 64:
+        return ""
+    if any(character not in "0123456789abcdef" for character in normalized):
+        return ""
+    return normalized
+
+
+def _sanitized_exception_message(exc: BaseException) -> str:
+    """예외 원문을 복구할 수 없는 bounded digest diagnostic으로 투영한다."""
+    message = str(exc)
+    digest = hashlib.sha256(message.encode("utf-8", errors="replace")).hexdigest()
+    return f"message_sha256={digest[:16]}"
+
+
+class ConnectedExecutionError(RuntimeError):
+    """Connected 경계의 typed provenance와 sanitized cause를 보존한다."""
+
+    def __init__(
+        self,
+        phase: ConnectedFailurePhase,
+        cause: BaseException,
+        *,
+        code: str | None = None,
+        selected_asset_kind: str = "none",
+        selected_asset_hash: str = "",
+        approved_asset_hash: str = "",
+        catalog_fingerprint: str = "",
+        registry_fingerprint: str = "",
+        owned_input_contract_present: bool | None = None,
+        owned_output_contract_present: bool | None = None,
+        owned_binding_present: bool | None = None,
+    ) -> None:
+        self.phase: ConnectedFailurePhase = (
+            phase if phase in _CONNECTED_FAILURE_PHASES else "setup"
+        )
+        # Provider가 임의 ``code`` attribute에 payload를 담을 수 있으므로 자동
+        # 승격하지 않는다. 호출자가 정적으로 지정한 code 또는 phase code만 쓴다.
+        self.code = (
+            code
+            if code in _CONNECTED_ERROR_CODES
+            else f"connected_{self.phase}_failed"
+        )
+        cause_type = type(cause).__name__
+        self.error_type = (
+            cause_type if cause_type in _CONNECTED_ERROR_TYPES else "ExternalError"
+        )
+        self.safe_message = _sanitized_exception_message(cause)
+        self.selected_asset_kind = (
+            "none"
+            if selected_asset_kind == "none"
+            else _closed_asset_kind(selected_asset_kind)
+        )
+        self.selected_asset_hash = _closed_fingerprint(selected_asset_hash)
+        self.approved_asset_hash = _closed_fingerprint(approved_asset_hash)
+        self.catalog_fingerprint = _closed_fingerprint(catalog_fingerprint)
+        self.registry_fingerprint = _closed_fingerprint(registry_fingerprint)
+        self.owned_input_contract_present = owned_input_contract_present
+        self.owned_output_contract_present = owned_output_contract_present
+        self.owned_binding_present = owned_binding_present
+        super().__init__(
+            f"{self.phase}:{self.code}:{self.error_type}:{self.safe_message}"
+        )
+
+
+def _connected_error(
+    phase: ConnectedFailurePhase,
+    exc: BaseException,
+    **diagnostic: Any,
+) -> ConnectedExecutionError:
+    if isinstance(exc, ConnectedExecutionError):
+        return exc
+    return ConnectedExecutionError(phase, exc, **diagnostic)
+
+
+def _tag_connected_error(
+    phase: ConnectedFailurePhase,
+    exc: BaseException,
+) -> BaseException:
+    """기존 public exception type을 깨지 않고 phase diagnostic을 부착한다."""
+    exc.connected_phase = phase if phase in _CONNECTED_FAILURE_PHASES else "setup"
+    cause_type = type(exc).__name__
+    exc.connected_error_type = (
+        cause_type if cause_type in _CONNECTED_ERROR_TYPES else "ExternalError"
+    )
+    exc.connected_safe_message = _sanitized_exception_message(exc)
+    return exc
+
+
+@asynccontextmanager
+async def _connected_checkpointer(path: str | Path):
+    """SQLite setup/teardown 실패를 connected setup phase로 고정한다."""
+    try:
+        async with AsyncSqliteSaver.from_conn_string(str(path)) as checkpointer:
+            yield checkpointer
+    except ConnectedExecutionError:
+        raise
+    except Exception as exc:
+        raise _connected_error("setup", exc) from exc
+
+
+def _compile_connected_graph(callbacks, completion_callbacks, *, checkpointer):
+    try:
+        return compile_core_graph(
+            callbacks,
+            completion_callbacks,
+            checkpointer=checkpointer,
+        )
+    except Exception as exc:
+        raise _connected_error("setup", exc) from exc
 
 
 DurableDispatchLifecycle = Literal[
@@ -963,7 +1117,13 @@ class ConnectedShadowTurnRunner:
     ) -> None:
         self._facade = facade
         self._definitions = tuple(definitions)
-        self._registry = build_contract_registry(self._definitions)
+        try:
+            self._registry = build_contract_registry(self._definitions)
+        except ContractRegistryError as exc:
+            _tag_connected_error("registry", exc)
+            raise
+        except Exception as exc:
+            raise _connected_error("registry", exc) from exc
         self._conversation_store = conversation_store
         self._recipe_executor = recipe_executor
         self._skill_executor = skill_executor
@@ -982,17 +1142,90 @@ class ConnectedShadowTurnRunner:
         """PlanGate가 승인한 exact asset을 graph completion 끝까지 no-send 실행한다."""
         selected = plan.capability.primary_asset
         if selected is None:
-            raise ValueError("connected shadow requires a planner-selected asset")
+            exc = ValueError("connected shadow requires a planner-selected asset")
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="asset_identity_missing",
+                catalog_fingerprint=plan.catalog_fingerprint,
+                registry_fingerprint=self._registry.fingerprint,
+            ) from exc
         asset_ref = AssetRefV1(type=selected.asset_type, name=selected.name)
-        entry = self._registry.asset(asset_ref)
-        if entry is None or not entry.snapshot.read_only or entry.snapshot.side_effects:
-            raise ValueError("connected shadow asset must be registered read-only")
-        payload = _question_payload(
-            self._registry,
-            entry,
-            plan.context.standalone_question,
+        definition_matches = tuple(
+            item
+            for item in self._definitions
+            if item.contract_asset_type == asset_ref.type
+            and item.name == asset_ref.name
         )
-        canonical = self._registry.validate_canonical(entry.input_descriptor, payload)
+        definition = definition_matches[0] if len(definition_matches) == 1 else None
+        input_present = bool(
+            definition is not None and definition.input_contract is not None
+        )
+        output_present = bool(
+            definition is not None and definition.output_contract is not None
+        )
+        binding_present = bool(
+            definition is not None and definition.contract_binding is not None
+        )
+        definition_fingerprint = (
+            definition.definition_fingerprint if definition is not None else ""
+        )
+        diagnostic = {
+            "selected_asset_kind": asset_ref.type,
+            "selected_asset_hash": definition_fingerprint,
+            "approved_asset_hash": plan.approved_asset_fingerprint,
+            "catalog_fingerprint": plan.catalog_fingerprint,
+            "registry_fingerprint": self._registry.fingerprint,
+            "owned_input_contract_present": input_present,
+            "owned_output_contract_present": output_present,
+            "owned_binding_present": binding_present,
+        }
+        entry = self._registry.asset(asset_ref)
+        if (
+            entry is None
+            or not entry.snapshot.read_only
+            or entry.snapshot.side_effects
+        ):
+            exc = ValueError("connected shadow asset must be registered read-only")
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="asset_not_registered_read_only",
+                **diagnostic,
+            ) from exc
+        if (
+            not plan.approved_asset_fingerprint
+            or plan.approved_asset_fingerprint != definition_fingerprint
+            or plan.approved_asset_fingerprint
+            != entry.snapshot.definition_fingerprint
+        ):
+            exc = ValueError("approved asset definition fingerprint mismatch")
+            raise _connected_error(
+                "registry_lookup",
+                exc,
+                code="approved_asset_fingerprint_mismatch",
+                **diagnostic,
+            ) from exc
+        try:
+            if definition is None:
+                raise ValueError("connected definition identity must resolve exactly once")
+            if (
+                definition.definition_fingerprint
+                != entry.snapshot.definition_fingerprint
+            ):
+                raise ValueError("connected definition fingerprint mismatch")
+            if entry.snapshot.declared_binding is None:
+                raise ValueError("connected definition binding is missing")
+            payload = _question_payload(
+                self._registry,
+                entry,
+                plan.context.standalone_question,
+            )
+            canonical = self._registry.validate_canonical(
+                entry.input_descriptor, payload
+            )
+        except Exception as exc:
+            raise _connected_error("binding", exc, **diagnostic) from exc
         invocation = AssetInvocationV1(
             invocation_id=hashlib.sha256(
                 f"{request_id}:{asset_ref.type}:{asset_ref.name}".encode()
@@ -1003,11 +1236,6 @@ class ConnectedShadowTurnRunner:
             payload=canonical.payload,
             payload_hash=canonical.payload_hash,
             output_contract=entry.output_descriptor.ref,
-        )
-        definition = next(
-            item
-            for item in self._definitions
-            if item.contract_asset_type == asset_ref.type and item.name == asset_ref.name
         )
         if asset_ref.type == "recipe":
             adapter = GenericRecipeAdapter(
@@ -1283,10 +1511,8 @@ class ConnectedShadowTurnRunner:
         state: Mapping[str, object] = {}
         stop_condition = "completed"
         failure_code: str | None = None
-        async with AsyncSqliteSaver.from_conn_string(
-            str(self._facade.checkpoint_path)
-        ) as checkpointer:
-            graph = compile_core_graph(
+        async with _connected_checkpointer(self._facade.checkpoint_path) as checkpointer:
+            graph = _compile_connected_graph(
                 callbacks,
                 completion_callbacks,
                 checkpointer=checkpointer,
@@ -1319,7 +1545,7 @@ class ConnectedShadowTurnRunner:
                     failure_code = str(exc)
                 except Exception as exc:  # noqa: BLE001 - typed rollback boundary
                     stop_condition = "failed"
-                    failure_code = f"graph_{type(exc).__name__}"
+                    failure_code = str(_connected_error("dispatch", exc))
         if response is None:
             try:
                 response = durable_claims.terminal(
@@ -1493,19 +1719,22 @@ class ConnectedShadowTurnRunner:
         if counts.total:
             rollback_reasons.append("external_side_effect")
         unique_reasons = tuple(dict.fromkeys(rollback_reasons))
-        execution = LangGraphV4ExecutionReceiptV1(
-            mode=self._facade.mode,
-            request_id=request_id,
-            selected_route=route,
-            final_artifact=final_artifact,
-            dispatch_trace=dispatch_trace,
-            budget_usage=budget,
-            side_effect_counts=counts,
-            terminal_outcome=terminal_outcome,
-            rollback_required=bool(unique_reasons),
-            rollback_reasons=unique_reasons,
-            effect_status=response.effect_status,
-        )
+        try:
+            execution = LangGraphV4ExecutionReceiptV1(
+                mode=self._facade.mode,
+                request_id=request_id,
+                selected_route=route,
+                final_artifact=final_artifact,
+                dispatch_trace=dispatch_trace,
+                budget_usage=budget,
+                side_effect_counts=counts,
+                terminal_outcome=terminal_outcome,
+                rollback_required=bool(unique_reasons),
+                rollback_reasons=unique_reasons,
+                effect_status=response.effect_status,
+            )
+        except Exception as exc:
+            raise _connected_error("receipt", exc) from exc
         return ConnectedShadowResultV1(
             telemetry,
             comparison,

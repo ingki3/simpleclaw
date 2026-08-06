@@ -68,6 +68,19 @@ def _asset(name: str = "reader", **changes) -> PlannerAsset:
         "input_contract": "query.v1",
     }
     values.update(changes)
+    asset_type = str(values["asset_type"])
+    owner = f"{asset_type}:{name}"
+    values.setdefault("contract_owner", owner)
+    values.setdefault("input_contract_ref", f"{asset_type}.{name}.input@1")
+    values.setdefault("output_contract_ref", f"{asset_type}.{name}.output@1")
+    values.setdefault("input_schema_hash", "i" * 64)
+    values.setdefault("output_schema_hash", "o" * 64)
+    values.setdefault("binding_identity", "binding:" + "b" * 64)
+    values.setdefault("definition_fingerprint", "d" * 64)
+    if values["input_contract"] is None:
+        values["input_contract_ref"] = None
+    if values["output_contract"] is None:
+        values["output_contract_ref"] = None
     return PlannerAsset(**values)
 
 
@@ -569,6 +582,28 @@ def test_contract_gap_and_complete_read_only_are_separate() -> None:
         classify_contract(catalog, (AssetRef("skill", "ok"),)).status
         == "read_only_complete"
     )
+
+
+def test_contract_classifier_rejects_capability_shorthand_without_owned_identity(
+) -> None:
+    shorthand = _asset(
+        "shorthand-only",
+        contract_owner=None,
+        input_contract_ref=None,
+        output_contract_ref=None,
+        input_schema_hash=None,
+        output_schema_hash=None,
+        binding_identity=None,
+        definition_fingerprint=None,
+    )
+
+    classification = classify_contract(
+        _catalog(shorthand),
+        (AssetRef("skill", shorthand.name),),
+    )
+
+    assert classification.status == "contract_coverage_gap"
+    assert classification.error_code == "contract.incomplete"
 
 
 def test_contract_requires_every_exact_asset_identity_to_be_safe() -> None:

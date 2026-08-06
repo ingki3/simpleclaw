@@ -105,6 +105,55 @@ review:
     path: "~/.simpleclaw-agent/default/verification_evidence_ledger.jsonl"
 ```
 
+### Runtime assets
+
+runtime asset의 authoring SoT는 root `runtime_assets/**`입니다. 각 asset-local
+`runtime-asset.yaml`이 identity, destination discovery, 설치 파일, SHA-256,
+executable bit를 data로 선언합니다. generic resolver는 구체적인 업무명 없이
+manifest를 검증한 뒤 전체 디렉터리를 atomic하게 교체합니다. wheel/sdist build는
+같은 tree를 `simpleclaw/runtime_assets/**` package resource로 포함하므로 source
+checkout과 installed distribution이 동일 resolver를 사용합니다.
+
+filesystem source는 resolved asset root 내부의 regular file이어야 하며 symlink는
+digest가 일치해도 거부합니다. 설치 중 staged write, directory swap, 기존 directory
+cleanup이 실패하면 예외를 반환하기 전에 이전 destination을 복원하고 installer-owned
+staged/backup directory를 제거합니다.
+
+```bash
+# Canonical interface
+python scripts/install_runtime_asset.py --asset skill:naver-sports-skill
+python scripts/install_runtime_asset.py --asset recipe:sports-live
+
+# Compatibility wrappers (asset ref만 generic installer에 전달)
+python scripts/install_naver_sports_skill.py
+python scripts/install_sports_live_recipe.py --config ~/.simpleclaw/config.yaml
+```
+
+첫 번째 명령은 runtime global skill discovery 기본값 `~/.agents/skills`에
+설치합니다. 두 번째 명령은 `config.yaml`의 `recipes.dir`를 읽으며, 설정 파일이나
+키가 없으면 runtime 기본값 `~/.simpleclaw-agent/default/recipes`를 사용합니다.
+일회성 override는 generic CLI의 `--destination`, compatibility recipe CLI의
+`--recipes-dir`로 지정합니다. 각 명령의 출력에서 resolved destination,
+source/package provenance, manifest SHA-256을 확인할 수 있습니다.
+
+artifact를 검증하려면 wheel을 만든 뒤 manifest와 모든 declared resource가
+포함됐는지 확인합니다.
+
+```bash
+python -m pip wheel . --no-deps --wheel-dir /tmp/simpleclaw-wheel
+python -m zipfile -l /tmp/simpleclaw-wheel/simpleclaw-*.whl | grep runtime_assets
+```
+
+KBO production-artifact no-send 시나리오는 domain-neutral production harness에
+fixture data와 installed definitions를 주입하는 아래 개발 CLI로 검증합니다.
+
+```bash
+python scripts/dev/validate_langgraph_v4_shadow.py --hermetic --mode primary --repeat 3
+```
+
+Live 반영은 asset backup 후 drain-aware restart와 위 검증을 거쳐야 하며,
+installer 실행만으로 primary를 재활성화하지 않습니다.
+
 browser handoff, proactive 제안, drain state, skill/recipe learning queue도 `config.yaml.example`의 `~/.simpleclaw-agent/default` 경로를 유지한다.
 
 ### 페르소나

@@ -38,7 +38,9 @@ def _asset(
     freshness_sensitive: bool = False,
     domains: tuple[str, ...] = (),
     intents: tuple[str, ...] = (),
+    connected_contract: bool = True,
 ) -> PlannerAsset:
+    owner = f"{asset_type}:{name}" if connected_contract else None
     return PlannerAsset(
         asset_type=asset_type,
         name=name,
@@ -55,6 +57,13 @@ def _asset(
         coverage="full_coverage",
         input_contract="query.v1",
         output_contract="asset_result.v1",
+        contract_owner=owner,
+        input_contract_ref=(f"{asset_type}.{name}.input@1" if owner else None),
+        output_contract_ref=(f"{asset_type}.{name}.output@1" if owner else None),
+        input_schema_hash=("i" * 64 if owner else None),
+        output_schema_hash=("o" * 64 if owner else None),
+        binding_identity=("binding:" + "b" * 64 if owner else None),
+        definition_fingerprint=("d" * 64 if owner else None),
     )
 
 
@@ -417,6 +426,49 @@ def test_unscoped_evidence_plan_repairs_unique_typed_exact_asset() -> None:
     assert result.effective_plan.execution.allowed_tools == ()
 
 
+def test_unscoped_evidence_plan_rejects_shorthand_only_exact_asset() -> None:
+    sports = _asset(
+        "sports-live",
+        asset_type="recipe",
+        freshness_sensitive=True,
+        domains=("sports",),
+        intents=("current_result",),
+        connected_contract=False,
+    )
+    plan = replace(
+        _plan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            fact_required=True,
+            owner=EvidenceOwner.PLANNER,
+            search_query="bounded sports query",
+            intents=("current_result",),
+        ),
+        domains=("sports",),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="bounded sports query",
+            intents=("current_result",),
+            reference_date="2026-08-02",
+            required_claims=("score",),
+            freshness_required=True,
+        ),
+    )
+
+    result = PlanGate().evaluate(
+        plan,
+        candidates=_candidates(),
+        catalog=_catalog(sports),
+    )
+
+    assert result.status is GateStatus.REPAIR
+    assert "fact_check.exact_asset_not_unique" in {
+        item.code for item in result.violations
+    }
+
+
 @pytest.mark.parametrize("asset_count", (0, 2))
 def test_unscoped_evidence_plan_without_unique_exact_asset_repairs(
     asset_count: int,
@@ -689,7 +741,8 @@ def test_safe_declared_direct_asset_passes() -> None:
     )
 
     assert result.status is GateStatus.PASS
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_side_effecting_direct_asset_requires_confirmation() -> None:
@@ -718,7 +771,8 @@ def test_side_effecting_direct_asset_requires_confirmation() -> None:
     assert [item.code for item in result.violations] == [
         "asset.confirmation_required"
     ]
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_reminder_mutation_stops_for_confirmation_before_dispatch() -> None:
@@ -746,7 +800,8 @@ def test_reminder_mutation_stops_for_confirmation_before_dispatch() -> None:
     )
 
     assert result.status is GateStatus.CONFIRMATION_REQUIRED
-    assert result.effective_plan is plan
+    assert result.effective_plan is not None
+    assert result.effective_plan.approved_asset_fingerprint == "d" * 64
 
 
 def test_missing_side_effect_confirmation_flag_requests_repair() -> None:

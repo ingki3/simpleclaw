@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.install_naver_sports_skill import SKILL_NAME, install
+from scripts.install_naver_sports_skill import (
+    CANONICAL_SKILL_MD,
+    SKILL_NAME,
+    install,
+    main,
+)
 from simpleclaw.skills.discovery import discover_skills
 
 
@@ -72,6 +77,55 @@ def test_installer_discovery_declares_safe_structured_sports_capability(
     assert capability.coverage == "full_coverage"
     assert capability.safe_for_auto_execution is True
     assert capability.eligible_for_fast_path is True
+    assert skill.input_contract is not None
+    assert skill.output_contract is not None
+    assert skill.argument_binding is not None
+    assert skill.input_contract.owner_name == SKILL_NAME
+    assert skill.output_contract.owner_name == SKILL_NAME
+    assert skill.argument_binding.owner_name == SKILL_NAME
+
+
+def test_installer_writes_canonical_skill_template_byte_for_byte(tmp_path: Path) -> None:
+    skill_dir = install(tmp_path / "global")
+
+    assert (skill_dir / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+
+
+def test_no_arg_installer_matches_global_discovery_default(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    assert main([]) == 0
+
+    installed = home / ".agents/skills/naver-sports-skill"
+    assert (installed / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+    output = capsys.readouterr().out
+    assert str(installed) in output
+    assert "source=" in output
+    assert "manifest_sha256=" in output
+
+
+def test_installer_repairs_skill_bytes_and_executable_mode(tmp_path: Path) -> None:
+    """skill payload와 wrapper 실행 권한 drift를 재설치로 함께 복구한다."""
+    global_dir = tmp_path / "global"
+    skill_dir = install(global_dir)
+    skill_md = skill_dir / "SKILL.md"
+    wrapper = skill_dir / "scripts/naver_sports.py"
+    wrapper_bytes = wrapper.read_bytes()
+
+    skill_md.write_bytes(b"drifted skill\n")
+    wrapper.chmod(0o644)
+    install(global_dir)
+
+    assert skill_md.read_bytes() == CANONICAL_SKILL_MD.read_bytes()
+    assert skill_md.stat().st_mode & 0o777 == 0o644
+    assert wrapper.read_bytes() == wrapper_bytes
+    assert wrapper.stat().st_mode & 0o777 == 0o755
 
 
 @pytest.mark.parametrize(
