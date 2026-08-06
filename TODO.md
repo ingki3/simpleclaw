@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — freshness-sensitive 실시간 조회 자산을 사용하는 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했으며 production freshness 경계는 변경하지 않았다. [PR #645](https://github.com/ingki3/simpleclaw/pull/645)의 fresh CI와 독립 Stage D 재검증 및 `dev` merge가 남아 있다. (진행: 2026-08-06)
+
 - [>] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 fail-closed하도록 구현한 [PR #643](https://github.com/ingki3/simpleclaw/pull/643)은 bookkeeping/provenance 보정 후 새 exact head의 fresh CI 3종과 독립 runtime safety 재리뷰를 기다린다. 리뷰 PASS와 squash merge 전까지 `in_review`/미완료를 유지하며 live config·deploy·restart·primary activation은 수행하지 않는다. (진행: 2026-08-06)
 
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
