@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -71,6 +72,57 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
     assert first.persistence_receipt is not None
     assert replay.persistence_receipt is not None
     assert reply_text.await_count == 1
+    messages = store.get_recent(session_key="telegram-session-1")
+    assert [(message.role.value, message.content) for message in messages] == [
+        ("assistant", "V4 primary answer")
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_concurrent_actual_telegram_replay_waits_and_persists_once(
+    tmp_path,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        delivery_lease_seconds=1.0,
+        delivery_poll_interval=0.001,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    sends = 0
+
+    async def reply_text(_content):
+        nonlocal sends
+        sends += 1
+        entered.set()
+        await release.wait()
+        return SimpleNamespace(message_id=777)
+
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+    bot = _bot(coordinator)
+    response = _response()
+
+    owner = asyncio.create_task(
+        bot._send_response(update, response, chat_id=42, user_id=1)
+    )
+    await entered.wait()
+    replay = asyncio.create_task(
+        bot._send_response(update, response, chat_id=42, user_id=1)
+    )
+    await asyncio.sleep(0)
+    assert not replay.done()
+
+    release.set()
+    first, second = await asyncio.gather(owner, replay)
+
+    assert first.delivery_receipt.status is DeliveryStatus.DELIVERED
+    assert second.delivery_receipt == first.delivery_receipt
+    assert first.persistence_receipt is not None
+    assert second.persistence_receipt is not None
+    assert sends == 1
     messages = store.get_recent(session_key="telegram-session-1")
     assert [(message.role.value, message.content) for message in messages] == [
         ("assistant", "V4 primary answer")

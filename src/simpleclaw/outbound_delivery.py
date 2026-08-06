@@ -62,9 +62,18 @@ class PrimaryDeliveryOutcomeV1:
 class PrimaryDeliveryCoordinator:
     """Actual Telegram send와 delivered assistant write를 한 identity로 직렬화한다."""
 
-    def __init__(self, *, journal_path: str | Path, conversation_store) -> None:
+    def __init__(
+        self,
+        *,
+        journal_path: str | Path,
+        conversation_store,
+        delivery_lease_seconds: float = 30.0,
+        delivery_poll_interval: float = 0.01,
+    ) -> None:
         self._delivery_journal = SQLiteDeliveryJournal(journal_path)
         self._store = conversation_store
+        self._delivery_lease_seconds = delivery_lease_seconds
+        self._delivery_poll_interval = delivery_poll_interval
 
     async def deliver_telegram(
         self,
@@ -96,6 +105,8 @@ class PrimaryDeliveryCoordinator:
         receipt = await DeliveryRuntime(
             journal=self._delivery_journal,
             adapters={"telegram": TelegramDeliveryAdapter(sender)},
+            lease_seconds=self._delivery_lease_seconds,
+            poll_interval=self._delivery_poll_interval,
         ).deliver(intent, str(response))
         if receipt.status is not DeliveryStatus.DELIVERED:
             return PrimaryDeliveryOutcomeV1(receipt, None)
