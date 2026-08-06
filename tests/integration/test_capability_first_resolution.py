@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -10,6 +9,7 @@ import pytest
 import yaml
 
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
+from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.capability_executor import CapabilityExecutor
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_investigation import EvidenceInvestigationController
@@ -54,15 +54,6 @@ from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills.models import SkillDefinition
 
 pytestmark = pytest.mark.offline
-
-SPORTS_RECIPE = (
-    Path(__file__).resolve().parents[1]
-    / "fixtures"
-    / "recipes"
-    / "sports-live"
-    / "recipe.yaml"
-)
-
 
 def _orchestrator_config(tmp_path: Path) -> Path:
     config = tmp_path / "config.yaml"
@@ -314,8 +305,9 @@ async def _run_connected_exact_recipe(
         tmp_path,
         capability_mutation=capability_mutation,
     )
-    installed_recipe_dir = tmp_path / "installed_recipes" / "sports-live"
-    shutil.copytree(SPORTS_RECIPE.parent, installed_recipe_dir)
+    installed_recipe_dir = install_sports_live_recipe(
+        tmp_path / "installed_recipes"
+    )
     recipe = load_recipe(installed_recipe_dir / "recipe.yaml")
     catalog = build_planner_catalog(
         skills=(helper,),
@@ -509,27 +501,38 @@ async def test_connected_exact_recipe_rejects_discovered_unsafe_helper(
     capability_mutation: str,
 ) -> None:
     """Planner의 read-only 주장은 discovered SkillDefinition을 우회하지 못한다."""
-    plan, outcome, orchestrator = await _run_connected_exact_recipe(
+    helper = _installed_sports_helper(
         tmp_path,
         capability_mutation=capability_mutation,
-        observation=_complete_sports_observation(),
+    )
+    recipe_dir = install_sports_live_recipe(tmp_path / "installed_recipes")
+    recipe = load_recipe(recipe_dir / "recipe.yaml")
+    catalog = build_planner_catalog(
+        skills=(helper,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    router = AsyncMock()
+    router.send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(_sports_planner_payload(), ensure_ascii=False)
+        )
+    )
+    candidates = ContextCandidateSet(candidates=(), total_chars=0, truncated=False)
+    plan = await plan_turn_with_llm(
+        "어제 프로야구 경기 결과 및 스코어",
+        candidates=candidates,
+        catalog=catalog,
+        router=router,
     )
 
-    assert plan.capability.primary_asset == AssetRef("recipe", "sports-live")
-    assert plan.execution.requires_confirmation is False
-    assert outcome.asset_result is not None
-    assert outcome.asset_result.status is AssetExecutionStatus.FAILED_TERMINAL
-    assert outcome.asset_result.status is not AssetExecutionStatus.COMPLETED
-    assert outcome.asset_result.resolved_claims == ()
-    assert outcome.asset_result.limitations == (
-        "typed_recipe_nested_error:ValueError",
-        "side_effect_status_unknown",
-    )
-    assert outcome.goal.status is not GoalStatus.RESOLVED
-    assert outcome.validation.allow_final is False
-    assert outcome.validation.supported_claims == ()
-    assert orchestrator._router.send.await_count == 0
-    orchestrator._dispatch_external_skill.assert_not_awaited()
+    gated = PlanGate().evaluate(plan, candidates=candidates, catalog=catalog)
+
+    assert gated.status is GateStatus.REPAIR
+    assert gated.effective_plan is None
+    assert {item.code for item in gated.violations} == {
+        "asset.connected_contract_incomplete"
+    }
 
 
 @pytest.mark.asyncio
@@ -733,6 +736,13 @@ async def test_kbo_completed_result_asset_zero_plan_repairs_to_exact_recipe(
                 coverage="full_coverage",
                 input_contract="query.v1",
                 fallback_modes=("answer_with_evidence",),
+                contract_owner="recipe:sports-live",
+                input_contract_ref="recipe.sports-live.input@1",
+                output_contract_ref="recipe.sports-live.output@1",
+                input_schema_hash="i" * 64,
+                output_schema_hash="o" * 64,
+                binding_identity="binding:" + "b" * 64,
+                definition_fingerprint="d" * 64,
             ),
         ),
         fingerprint="sports-results-catalog",
@@ -874,6 +884,13 @@ async def test_lpga_exact_asset_never_calls_generic_collector(
                 coverage="full_coverage",
                 input_contract="query.v1",
                 fallback_modes=("answer_with_evidence",),
+                contract_owner="recipe:sports-live",
+                input_contract_ref="recipe.sports-live.input@1",
+                output_contract_ref="recipe.sports-live.output@1",
+                input_schema_hash="i" * 64,
+                output_schema_hash="o" * 64,
+                binding_identity="binding:" + "b" * 64,
+                definition_fingerprint="d" * 64,
             ),
         ),
         fingerprint="sports-live-catalog",

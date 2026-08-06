@@ -26,11 +26,16 @@ from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
+from simpleclaw.production_assets import (
+    install_naver_sports_skill,
+    install_sports_live_recipe,
+)
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_NAMES = {"contract-fixture-workflow", "contract-fixture-step"}
+INCIDENT_PROMPT = "Kbo 순위 상위 3팀 알려줘"
 
 
 @dataclass(frozen=True, order=True)
@@ -142,7 +147,14 @@ class _HermeticPlannerRouter:
 
     async def send(self, request):
         prompt = json.loads(request.user_message)["current_user_message"]
-        if "contract-fixture-workflow" in prompt:
+        incident = prompt == INCIDENT_PROMPT
+        if incident:
+            asset_type = "none"
+            asset_name = "__none__"
+            mode = "direct_answer"
+            fact_required = True
+            complexity_signals = []
+        elif "contract-fixture-workflow" in prompt:
             asset_type = "recipe"
             asset_name = "contract-fixture-workflow"
             mode = "direct_answer"
@@ -174,27 +186,27 @@ class _HermeticPlannerRouter:
                 "options": [],
                 "reason": "",
             },
-            "domains": ["fixture"] if fact_required else [],
-            "intents": ["verify"] if fact_required else [],
+            "domains": ["sports" if incident else "fixture"] if fact_required else [],
+            "intents": ["standings" if incident else "verify"] if fact_required else [],
             "fact_check": {
                 "required": fact_required,
-                "owner": "asset" if fact_required else "none",
-                "domain": "fixture" if fact_required else "none",
+                "owner": "planner" if incident else ("asset" if fact_required else "none"),
+                "domain": "sports" if incident else ("fixture" if fact_required else "none"),
                 "entities": [],
                 "reference_date": "",
                 "search_query": prompt if fact_required else "",
-                "required_claims": ["contract validation status"]
-                if fact_required
-                else [],
-                "freshness_required": False,
-                "reason": "hermetic contract fixture",
+                "required_claims": ["standings"] if incident else (
+                    ["contract validation status"] if fact_required else []
+                ),
+                "freshness_required": incident,
+                "reason": "hermetic incident fixture" if incident else "hermetic contract fixture",
             },
             "capability": {
-                "coverage": "full_coverage",
+                "coverage": "no_match" if incident else "full_coverage",
                 "primary_asset": asset,
                 "supporting_assets": [],
                 "fallback_modes": [],
-                "reason": "hermetic exact fixture",
+                "reason": "incident asset-zero fixture" if incident else "hermetic exact fixture",
             },
             "execution": {
                 "mode": mode,
@@ -319,6 +331,30 @@ def _definitions():
     )
 
 
+def _incident_definitions():
+    """Canonical installer output으로 production owned-contract shape를 만든다."""
+    with tempfile.TemporaryDirectory(prefix="simpleclaw-kbo-assets-") as temp_dir:
+        root = Path(temp_dir)
+        recipes_dir = root / "recipes"
+        global_skills = root / "skills"
+        install_sports_live_recipe(recipes_dir)
+        install_naver_sports_skill(global_skills)
+        recipe = next(
+            item
+            for item in discover_recipes(recipes_dir)
+            if item.name == "sports-live"
+        )
+        skill = next(
+            item
+            for item in discover_skills(
+                Path("/__missing_local_skills__"),
+                global_skills,
+            )
+            if item.name == "naver-sports-skill"
+        )
+        return recipe, skill
+
+
 def _planner_native_specs():
     """PlanGate factual-route 계약에 필요한 production web collector만 노출한다."""
     return tuple(
@@ -341,6 +377,7 @@ async def _skill_executor(_definition, _argv):
 
 async def _run(args: argparse.Namespace) -> int:
     """Actual provider exact plan을 bounded no-send graph에서 실행한다."""
+    incident_kbo = bool(getattr(args, "incident_kbo", False))
     if args.architecture != "langgraph_v4":
         raise ValueError("--architecture must be langgraph_v4")
     if args.repeat <= 0:
@@ -352,7 +389,7 @@ async def _run(args: argparse.Namespace) -> int:
     if not args.hermetic and not args.config.is_file():
         raise FileNotFoundError(f"config not found: {args.config}")
 
-    definitions = _definitions()
+    definitions = _incident_definitions() if incident_kbo else _definitions()
     catalog = build_planner_catalog(
         skills=tuple(item for item in definitions if item.contract_asset_type == "skill"),
         recipes=tuple(item for item in definitions if item.contract_asset_type == "recipe"),
@@ -367,7 +404,7 @@ async def _run(args: argparse.Namespace) -> int:
         max_calls=args.max_provider_calls,
         deadline_seconds=args.deadline_seconds,
     )
-    cases = (
+    cases = ((INCIDENT_PROMPT, "recipe"),) if incident_kbo else (
         (
             (
                 "Use the exact full-coverage recipe contract-fixture-workflow, which "
@@ -396,6 +433,7 @@ async def _run(args: argparse.Namespace) -> int:
         ),
     )
     results = []
+    attributions: list[dict[str, object]] = []
     backend = model = "hermetic" if args.hermetic else "configured-router"
     with tempfile.TemporaryDirectory(prefix="simpleclaw-v4-shadow-") as tmp:
         isolated = Path(tmp).resolve()
@@ -458,6 +496,25 @@ async def _run(args: argparse.Namespace) -> int:
                         "actual planner plan did not pass PlanGate "
                         f"(case={index} status={gate.status.value} codes={codes})"
                     )
+                original_asset = plan.capability.primary_asset
+                effective_asset = gate.effective_plan.capability.primary_asset
+                attributions.append(
+                    {
+                        "original_mode": plan.execution.mode.value,
+                        "original_asset": (
+                            None
+                            if original_asset is None
+                            else f"{original_asset.asset_type}:{original_asset.name}"
+                        ),
+                        "effective_mode": gate.effective_plan.execution.mode.value,
+                        "effective_asset": (
+                            None
+                            if effective_asset is None
+                            else f"{effective_asset.asset_type}:{effective_asset.name}"
+                        ),
+                        "gate_status": gate.status.value,
+                    }
+                )
                 result = await runner.run(
                     plan=gate.effective_plan,
                     legacy=(
@@ -502,8 +559,11 @@ async def _run(args: argparse.Namespace) -> int:
             result.telemetry.output_contract_ref,
         )
     }
-    contract_violations = _contract_set_violations(contracts)
-    _assert_contract_set(contract_violations)
+    contract_violations = (
+        () if incident_kbo else _contract_set_violations(contracts)
+    )
+    if not incident_kbo:
+        _assert_contract_set(contract_violations)
     counts = tuple(result.side_effect_counts for result in results)
     telegram = sum(item.telegram_send for item in counts)
     notifier = sum(item.notifier for item in counts)
@@ -516,6 +576,10 @@ async def _run(args: argparse.Namespace) -> int:
     provider_kind = "HERMETIC_PLANNER" if args.hermetic else "ACTUAL_PLANNER_PROVIDER"
     print(f"{provider_kind}=PASS backend={backend} model={model}")
     print("ASSET_EXECUTOR=fixture")
+    print(
+        "ASSET_DEFINITIONS="
+        + ("production_installer_output" if incident_kbo else "contract_fixtures")
+    )
     print(f"PLANNER_CALLS={planner_router.calls}/{args.max_provider_calls}")
     print(f"EXTERNAL_PROVIDER_CALLS={0 if args.hermetic else planner_router.calls}")
     print(f"ROLLOUT_MODE={args.mode}")
@@ -524,7 +588,18 @@ async def _run(args: argparse.Namespace) -> int:
     print("RESULT_SOURCE=langgraph_v4")
     print("TARGET_DISPATCH_EXACTLY_ONCE=true")
     print("TYPED_FINAL=PASS")
-    print(f"ASSET_CONTRACT_CONTINUITY={len(contracts)}/{len(EXPECTED_CONTRACT_SET)}")
+    if incident_kbo:
+        print(
+            "INCIDENT_ATTRIBUTION="
+            + json.dumps(
+                attributions,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    expected_contract_count = len(contracts) if incident_kbo else len(EXPECTED_CONTRACT_SET)
+    print(f"ASSET_CONTRACT_CONTINUITY={len(contracts)}/{expected_contract_count}")
     print(f"CONTRACT_SET_VIOLATIONS={_violation_json(contract_violations)}")
     print(f"TELEGRAM_SEND_COUNT={telegram}")
     print(f"CRON_NOTIFIER_COUNT={notifier}")
@@ -559,6 +634,11 @@ def _parser() -> argparse.ArgumentParser:
         default=REPO_ROOT / "config.yaml",
     )
     parser.add_argument("--hermetic", action="store_true")
+    parser.add_argument(
+        "--incident-kbo",
+        action="store_true",
+        help="repeat the exact asset-zero KBO corrective regression",
+    )
     parser.set_defaults(
         assert_contract_set=True,
         assert_zero_delivery=True,

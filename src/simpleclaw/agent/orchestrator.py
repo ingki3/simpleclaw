@@ -102,7 +102,11 @@ from simpleclaw.agent.observation_claims import (
     materialize_validated_claims,
 )
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
-from simpleclaw.agent.planner_catalog import PlannerCatalog, build_planner_catalog
+from simpleclaw.agent.planner_catalog import (
+    PlannerCatalog,
+    build_planner_catalog,
+    connected_contract_complete,
+)
 from simpleclaw.agent.progress import ProgressCallback
 from simpleclaw.agent.resolution_controller import ResolutionController
 from simpleclaw.agent.resolution_ledger import ResolutionLedger
@@ -180,6 +184,7 @@ from simpleclaw.graph_runtime.runtime import (
     ShadowBudgetUsageV1,
 )
 from simpleclaw.graph_runtime.shadow import (
+    ConnectedExecutionError,
     ConnectedShadowResultV1,
     ConnectedShadowTurnRunner,
     DurableDispatchProvenanceV1,
@@ -331,6 +336,34 @@ def _canary_read_only_eligible(
         ):
             return False
     return True
+
+
+def _selected_asset_identity(plan: UnifiedTurnPlan) -> str:
+    """원문 없이 primary asset의 owner-qualified identity만 기록한다."""
+    selected = plan.capability.primary_asset
+    if selected is None:
+        return "none"
+    return f"{selected.asset_type}:{selected.name}"
+
+
+def _v4_connected_contract_eligible(
+    plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+) -> bool:
+    """PlanGate asset과 connected registry가 공유할 exact identity를 요구한다."""
+    selected = plan.capability.primary_asset
+    if selected is None:
+        return False
+    matches = tuple(
+        asset
+        for asset in catalog.assets
+        if (asset.asset_type, asset.name)
+        == (selected.asset_type, selected.name)
+    )
+    if len(matches) != 1:
+        return False
+    asset = matches[0]
+    return connected_contract_complete(asset)
 
 
 def _allow_v4_legacy_fallback(
@@ -1532,9 +1565,11 @@ class AgentOrchestrator:
             max_turns=candidate_limit,
             max_chars=int(config.get("context_candidate_max_chars", 6000)),
         ).build(recent_rows[-candidate_limit:])
+        planner_skills = tuple(self._exposable_skills())
+        planner_recipes = tuple(getattr(self, "_recipes", ()))
         catalog = build_planner_catalog(
-            skills=self._exposable_skills(),
-            recipes=getattr(self, "_recipes", ()),
+            skills=planner_skills,
+            recipes=planner_recipes,
             native_specs=_planner_native_specs(
                 cron_available=self._cron_scheduler is not None,
                 browser_handoff_available=bool(
@@ -1653,6 +1688,18 @@ class AgentOrchestrator:
             )
             turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+        logger.info(
+            "Unified TurnPlanner effective plan: request_id=%s "
+            "original_mode=%s original_asset=%s original_assets=%d "
+            "effective_mode=%s effective_asset=%s effective_assets=%d",
+            turn.turn_id,
+            plan.execution.mode.value,
+            _selected_asset_identity(plan),
+            len(plan.execution.allowed_assets),
+            effective_plan.execution.mode.value,
+            _selected_asset_identity(effective_plan),
+            len(effective_plan.execution.allowed_assets),
+        )
         architecture = str(config.get("architecture", "legacy_v2"))
         rollout_mode = str(config.get("mode", "primary"))
         run_v4 = architecture == "langgraph_v4" and (
@@ -1666,6 +1713,15 @@ class AgentOrchestrator:
             self._record_unified_rollout_path(
                 path="fail_closed",
                 reason="v4_read_only_ineligible_plan",
+                execution_mode=effective_plan.execution.mode.value,
+                gate_status=gate_result.status.value,
+            )
+            turn.transition(TurnPhase.REJECTED)
+            return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
+        if run_v4 and not _v4_connected_contract_eligible(effective_plan, catalog):
+            self._record_unified_rollout_path(
+                path="fail_closed",
+                reason="v4_connected_contract_incomplete",
                 execution_mode=effective_plan.execution.mode.value,
                 gate_status=gate_result.status.value,
             )
@@ -1707,8 +1763,8 @@ class AgentOrchestrator:
                     ),
                     request_id=turn.turn_id,
                     session_key=turn.session_key,
-                    skills=tuple(self._exposable_skills()),
-                    recipes=tuple(getattr(self, "_recipes", ())),
+                    skills=planner_skills,
+                    recipes=planner_recipes,
                     planner_model_calls=usage_router.response_count,
                     planner_tokens=usage_router.output_tokens,
                     on_progress=on_progress,
@@ -1719,10 +1775,47 @@ class AgentOrchestrator:
                 elif execution.final_content is None:
                     failure_reason = "typed_final_missing"
             except Exception as exc:
-                failure_reason = f"runtime_{type(exc).__name__}"
-                logger.warning(
-                    "LangGraph V4 primary isolated (error_type=%s)",
-                    type(exc).__name__,
+                if isinstance(exc, ConnectedExecutionError):
+                    diagnostic = exc
+                else:
+                    diagnostic = ConnectedExecutionError(
+                        getattr(exc, "connected_phase", "setup"),
+                        exc,
+                        selected_asset_identity=_selected_asset_identity(
+                            effective_plan
+                        ),
+                        catalog_fingerprint=catalog.fingerprint,
+                    )
+                failure_reason = diagnostic.code
+                logger.exception(
+                    "LangGraph V4 primary isolated: request_id=%s "
+                    "original_mode=%s effective_mode=%s original_asset=%s "
+                    "effective_asset=%s failure_phase=%s phase=%s code=%s "
+                    "error_type=%s "
+                    "selected_asset_identity=%s selected_asset_hash=%s "
+                    "catalog_fingerprint=%s registry_fingerprint=%s "
+                    "owned_input_contract_present=%s "
+                    "owned_output_contract_present=%s owned_binding_present=%s "
+                    "error_message=%s",
+                    turn.turn_id,
+                    plan.execution.mode.value,
+                    effective_plan.execution.mode.value,
+                    _selected_asset_identity(plan),
+                    _selected_asset_identity(effective_plan),
+                    diagnostic.phase,
+                    diagnostic.phase,
+                    diagnostic.code,
+                    diagnostic.error_type,
+                    diagnostic.selected_asset_identity
+                    or _selected_asset_identity(effective_plan),
+                    diagnostic.selected_asset_hash,
+                    diagnostic.catalog_fingerprint or catalog.fingerprint,
+                    diagnostic.registry_fingerprint,
+                    diagnostic.owned_input_contract_present,
+                    diagnostic.owned_output_contract_present,
+                    diagnostic.owned_binding_present,
+                    diagnostic.safe_message,
+                    exc_info=(type(diagnostic), diagnostic, exc.__traceback__),
                 )
 
             checkpoint = v4.get("checkpoint", {})
@@ -2625,28 +2718,31 @@ class AgentOrchestrator:
         checkpoint = v4.get("checkpoint", {})
         if not isinstance(raw_budget, dict) or not isinstance(checkpoint, dict):
             raise TypeError("langgraph_v4 budget/checkpoint configuration is required")
-        budget = ShadowBudgetUsageV1(
-            max_graph_steps=raw_budget.get("max_graph_steps"),
-            max_asset_calls=raw_budget.get("max_asset_calls"),
-            max_llm_calls=raw_budget.get("max_llm_calls"),
-            max_tokens=raw_budget.get("max_tokens"),
-            max_seconds=raw_budget.get("max_seconds"),
-            max_parallel_invocations=raw_budget.get("max_parallel_invocations"),
-            graph_steps=0,
-            asset_calls=0,
-            llm_calls=0,
-            tokens=0,
-            elapsed_seconds=0,
-            parallel_peak=0,
-            stop_condition="completed",
-        )
-        facade = LangGraphV4RolloutFacade(
-            architecture="langgraph_v4",
-            mode=mode,
-            shadow_no_send=bool(v4.get("shadow_no_send", False)),
-            budget=budget,
-            checkpoint_path=str(checkpoint.get("path") or ""),
-        )
+        try:
+            budget = ShadowBudgetUsageV1(
+                max_graph_steps=raw_budget.get("max_graph_steps"),
+                max_asset_calls=raw_budget.get("max_asset_calls"),
+                max_llm_calls=raw_budget.get("max_llm_calls"),
+                max_tokens=raw_budget.get("max_tokens"),
+                max_seconds=raw_budget.get("max_seconds"),
+                max_parallel_invocations=raw_budget.get("max_parallel_invocations"),
+                graph_steps=0,
+                asset_calls=0,
+                llm_calls=0,
+                tokens=0,
+                elapsed_seconds=0,
+                parallel_peak=0,
+                stop_condition="completed",
+            )
+            facade = LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode=mode,
+                shadow_no_send=bool(v4.get("shadow_no_send", False)),
+                budget=budget,
+                checkpoint_path=str(checkpoint.get("path") or ""),
+            )
+        except Exception as exc:
+            raise ConnectedExecutionError("setup", exc) from exc
 
         async def execute_skill(definition, argv):
             raw = await self._execute_skill(definition.name, shlex.join(argv))

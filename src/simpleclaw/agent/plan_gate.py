@@ -14,7 +14,11 @@ from enum import Enum
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.evidence_policy import approved_collectors_from_plan
 from simpleclaw.agent.freshness_policy import freshness_is_required
-from simpleclaw.agent.planner_catalog import PlannerAsset, PlannerCatalog
+from simpleclaw.agent.planner_catalog import (
+    PlannerAsset,
+    PlannerCatalog,
+    connected_contract_complete,
+)
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityCoverage,
@@ -74,6 +78,7 @@ def _eligible_exact_asset(
         and asset.coverage == "full_coverage"
         and asset.input_contract == "query.v1"
         and asset.output_contract == "asset_result.v1"
+        and connected_contract_complete(asset)
         and asset.read_only
         and not asset.side_effects
         and not asset.requires_confirmation
@@ -81,6 +86,33 @@ def _eligible_exact_asset(
         and bool(intents)
         and intents.issubset(asset.intents)
     )
+
+
+def _connected_dependencies_complete(
+    asset: PlannerAsset,
+    *,
+    catalog: PlannerCatalog,
+) -> bool:
+    """Recipe가 위임하는 skill도 동일 snapshot에서 executable인지 검증한다."""
+    if asset.asset_type != "recipe":
+        return True
+    for skill_name in asset.delegated_skills:
+        matches = tuple(
+            item
+            for item in catalog.assets
+            if (item.asset_type, item.name) == ("skill", skill_name)
+        )
+        if len(matches) != 1:
+            return False
+        dependency = matches[0]
+        if (
+            not connected_contract_complete(dependency)
+            or not dependency.read_only
+            or dependency.side_effects
+            or dependency.requires_confirmation
+        ):
+            return False
+    return True
 
 
 def _canonical_sports_result_claims(
@@ -206,6 +238,7 @@ def _canonicalize_exact_sports_plan(
         asset is None
         or domain != "sports"
         or not _eligible_exact_asset(asset, domain=domain, intents=intents)
+        or not _connected_dependencies_complete(asset, catalog=catalog)
     ):
         return plan
     required_claims = _canonical_sports_result_claims(
@@ -253,6 +286,20 @@ def _repair_unscoped_evidence_plan(
         asset
         for asset in catalog.assets
         if _eligible_exact_asset(asset, domain=domain, intents=intents)
+        and _connected_dependencies_complete(asset, catalog=catalog)
+    ]
+    delegated_skills = {
+        skill_name
+        for asset in catalog.assets
+        if asset.asset_type == "recipe"
+        for skill_name in asset.delegated_skills
+    }
+    candidates = [
+        asset
+        for asset in candidates
+        if not (
+            asset.asset_type == "skill" and asset.name in delegated_skills
+        )
     ]
     if len(candidates) != 1:
         return plan, True
@@ -747,6 +794,22 @@ class PlanGate:
             for identity in referenced
             if identity in runtime_assets
         ]
+        if any(
+            asset.declared
+            and asset.coverage == "full_coverage"
+            and (
+                not connected_contract_complete(asset)
+                or not _connected_dependencies_complete(asset, catalog=catalog)
+            )
+            for asset in known_referenced_assets
+        ):
+            violations.append(
+                _violation(
+                    "asset.connected_contract_incomplete",
+                    "capability.primary_asset",
+                    "Full-coverage assets require complete owner-qualified contracts and binding identity.",
+                )
+            )
         if (
             freshness_is_required(plan, assets=known_referenced_assets)
             and not plan.fact_check.freshness_required

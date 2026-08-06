@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.install_naver_sports_skill import SKILL_NAME, install
+from scripts.install_naver_sports_skill import (
+    CANONICAL_SKILL_MD,
+    SKILL_NAME,
+    install,
+)
 from simpleclaw.skills.discovery import discover_skills
 
 
@@ -72,6 +76,18 @@ def test_installer_discovery_declares_safe_structured_sports_capability(
     assert capability.coverage == "full_coverage"
     assert capability.safe_for_auto_execution is True
     assert capability.eligible_for_fast_path is True
+    assert skill.input_contract is not None
+    assert skill.output_contract is not None
+    assert skill.argument_binding is not None
+    assert skill.input_contract.owner_name == SKILL_NAME
+    assert skill.output_contract.owner_name == SKILL_NAME
+    assert skill.argument_binding.owner_name == SKILL_NAME
+
+
+def test_installer_writes_canonical_skill_template_byte_for_byte(tmp_path: Path) -> None:
+    skill_dir = install(tmp_path / "global")
+
+    assert (skill_dir / "SKILL.md").read_bytes() == CANONICAL_SKILL_MD.read_bytes()
 
 
 @pytest.mark.parametrize(
