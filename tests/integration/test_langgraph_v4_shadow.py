@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+import sqlite3
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -12,7 +14,11 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from simpleclaw.agent.context_candidates import ContextCandidateSet
-from simpleclaw.agent.orchestrator import AgentOrchestrator
+from simpleclaw.agent.orchestrator import (
+    AgentOrchestrator,
+    _allow_v4_legacy_fallback,
+    _is_direct_without_asset,
+)
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
@@ -28,6 +34,7 @@ from simpleclaw.agent.turn_plan import (
     UnifiedTurnPlan,
 )
 from simpleclaw.agent.turn_state import TurnExecutionState
+from simpleclaw.graph_runtime.adapters.base import AdapterResponse
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     SenderReceipt,
@@ -44,6 +51,10 @@ from simpleclaw.graph_runtime.contracts import (
     NormalizedAssetResultV1,
 )
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.runtime import (
     InMemoryDeliveryJournal,
     InMemoryPersistenceJournal,
@@ -61,6 +72,8 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowTurnRunner,
+    DurableDispatchProvenanceV1,
+    _DurableInvocationClaims,
     _ShadowBudgetStop,
     _ShadowRunBudget,
     _TargetDispatchGuard,
@@ -321,6 +334,7 @@ def test_target_dispatch_guard_blocks_second_attempt_before_execution() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     tmp_path,
 ) -> None:
@@ -361,7 +375,7 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     assert result.comparison is None
     assert result.canary is None
     assert result.execution.result_source == "langgraph_v4"
-    assert result.execution.final_content == '{"fixture_result":"primary-source"}'
+    assert result.execution.final_content == "primary-source"
     assert result.execution.provenance.startswith(
         "langgraph_v4:recipe:contract-fixture-workflow:"
     )
@@ -372,6 +386,900 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_primary_reentry_reuses_durable_terminal_without_dispatch(
+    tmp_path,
+) -> None:
+    calls = 0
+    checkpoint = tmp_path / "durable-checkpoint.sqlite3"
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "durable-result"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(tmp_path / "durable-conversation.db"),
+            recipe_executor=executor,
+        )
+
+    kwargs = {
+        "plan": _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        "legacy": None,
+        "request_id": "durable-request",
+        "session_key": "durable-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    resumed = await runner().run(**kwargs)
+
+    assert calls == 1
+    assert first.execution.final_content == "durable-result"
+    assert resumed.execution.final_content == "durable-result"
+    assert resumed.execution.dispatch_trace.exactly_once is True
+    assert resumed.execution.rollback_required is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_primary_concurrent_owner_waits_and_reuses_terminal(
+    tmp_path,
+) -> None:
+    calls = 0
+    checkpoint = tmp_path / "concurrent-checkpoint.sqlite3"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {"fixture_result": "concurrent-result"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(tmp_path / "concurrent.db"),
+            recipe_executor=executor,
+        )
+
+    kwargs = {
+        "plan": _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        "legacy": None,
+        "request_id": "concurrent-request",
+        "session_key": "concurrent-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    owner = asyncio.create_task(runner().run(**kwargs))
+    await started.wait()
+    waiter = asyncio.create_task(runner().run(**kwargs))
+    await asyncio.sleep(0.03)
+    assert calls == 1
+    release.set()
+    first, second = await asyncio.gather(owner, waiter)
+
+    assert calls == 1
+    assert first.execution.final_content == "concurrent-result"
+    assert second.execution.final_content == "concurrent-result"
+    assert second.execution.dispatch_trace.exactly_once is True
+
+
+def _request_drift_plan(axis: str) -> UnifiedTurnPlan:
+    if axis == "asset":
+        return _plan(
+            "skill",
+            "contract-fixture-step",
+            ExecutionMode.ANSWER_WITH_EVIDENCE,
+        )
+    plan = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    return replace(
+        plan,
+        context=replace(
+            plan.context,
+            standalone_question="connected-shadow-drifted-value",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("axis", ("asset", "payload"))
+async def test_connected_primary_request_claim_rejects_sequential_drift(
+    tmp_path,
+    axis: str,
+) -> None:
+    calls = {"recipe": 0, "skill": 0}
+    checkpoint = tmp_path / f"sequential-{axis}-claim.sqlite3"
+
+    async def recipe_executor(_definition, _bound_steps):
+        calls["recipe"] += 1
+        return {"fixture_result": "immutable-result"}
+
+    async def skill_executor(_definition, _argv):
+        calls["skill"] += 1
+        return {"operation_result": "must-not-run"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(
+                tmp_path / f"sequential-{axis}-conversation.db"
+            ),
+            recipe_executor=recipe_executor,
+            skill_executor=skill_executor,
+        )
+
+    first = await runner().run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="same-sequential-request",
+        session_key="same-sequential-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+    drifted = await runner().run(
+        plan=_request_drift_plan(axis),
+        legacy=None,
+        request_id="same-sequential-request",
+        session_key="same-sequential-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert calls == {"recipe": 1, "skill": 0}
+    assert first.execution.final_content == "immutable-result"
+    assert drifted.execution.final_artifact is None
+    assert drifted.execution.rollback_required is True
+    error_code = (
+        "request_identity_mismatch"
+        if axis == "asset"
+        else "invocation_identity_mismatch"
+    )
+    assert error_code in drifted.execution.rollback_reasons
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_request_claims"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_invocation_claims"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("axis", ("asset", "payload"))
+async def test_connected_primary_request_claim_rejects_concurrent_drift(
+    tmp_path,
+    axis: str,
+) -> None:
+    calls = {"recipe": 0, "skill": 0}
+    checkpoint = tmp_path / f"concurrent-{axis}-claim.sqlite3"
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def recipe_executor(_definition, _bound_steps):
+        calls["recipe"] += 1
+        started.set()
+        await release.wait()
+        return {"fixture_result": "immutable-result"}
+
+    async def skill_executor(_definition, _argv):
+        calls["skill"] += 1
+        return {"operation_result": "must-not-run"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(
+                tmp_path / f"concurrent-{axis}-conversation.db"
+            ),
+            recipe_executor=recipe_executor,
+            skill_executor=skill_executor,
+        )
+
+    owner = asyncio.create_task(
+        runner().run(
+            plan=_plan(
+                "recipe",
+                "contract-fixture-workflow",
+                ExecutionMode.DIRECT_ANSWER,
+            ),
+            legacy=None,
+            request_id="same-concurrent-request",
+            session_key="same-concurrent-session",
+            planner_model_calls=0,
+            planner_tokens=0,
+        )
+    )
+    await started.wait()
+    contender = asyncio.create_task(
+        runner().run(
+            plan=_request_drift_plan(axis),
+            legacy=None,
+            request_id="same-concurrent-request",
+            session_key="same-concurrent-session",
+            planner_model_calls=0,
+            planner_tokens=0,
+        )
+    )
+    await asyncio.sleep(0.03)
+    assert calls == {"recipe": 1, "skill": 0}
+    release.set()
+    first, drifted = await asyncio.gather(owner, contender)
+
+    assert calls == {"recipe": 1, "skill": 0}
+    assert first.execution.final_content == "immutable-result"
+    assert drifted.execution.final_artifact is None
+    assert drifted.execution.rollback_required is True
+    error_code = (
+        "request_identity_mismatch"
+        if axis == "asset"
+        else "invocation_identity_mismatch"
+    )
+    assert error_code in drifted.execution.rollback_reasons
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_request_claims"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM graph_invocation_claims"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_terminal_resume_uses_composition_guard_and_safe_renderer(
+    tmp_path,
+) -> None:
+    calls = 0
+    checkpoint = tmp_path / "guard-checkpoint.sqlite3"
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": '{"unsafe":true}'}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(tmp_path / "guard.db"),
+            recipe_executor=executor,
+        )
+
+    kwargs = {
+        "plan": _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        "legacy": None,
+        "request_id": "guard-request",
+        "session_key": "guard-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    resumed = await runner().run(**kwargs)
+
+    expected = "요청을 처리했지만 안전한 응답을 구성하지 못했습니다."
+    assert calls == 1
+    assert first.execution.final_content == expected
+    assert resumed.execution.final_content == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_corrupt_terminal_resume_promotes_no_artifact(tmp_path) -> None:
+    checkpoint = tmp_path / "corrupt-resume.sqlite3"
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "original"}
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=_definitions(),
+            conversation_store=ConversationStore(tmp_path / "corrupt-resume.db"),
+            recipe_executor=executor,
+        )
+
+    kwargs = {
+        "plan": _plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        "legacy": None,
+        "request_id": "corrupt-resume-request",
+        "session_key": "corrupt-resume-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    assert first.execution.final_content == "original"
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "UPDATE graph_invocation_claims SET response_json = ?",
+            ("{not-json",),
+        )
+
+    resumed = await runner().run(**kwargs)
+
+    assert calls == 1
+    assert resumed.execution.final_artifact is None
+    assert resumed.execution.rollback_required is True
+    assert "corrupt_terminal_response" in resumed.execution.rollback_reasons
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_durable_claimed_invocation_recovery_is_fenced(tmp_path) -> None:
+    invocation = _invocation(_registry())
+    checkpoint = tmp_path / "claim-checkpoint.sqlite3"
+    first = _DurableInvocationClaims(checkpoint, lease_seconds=0.01)
+    resumed = _DurableInvocationClaims(checkpoint, lease_seconds=0.01)
+
+    assert await first.claim("claim-request", invocation) is None
+    await asyncio.sleep(0.02)
+    assert await resumed.claim("claim-request", invocation) is None
+    with pytest.raises(_TargetDispatchInvariantError, match="claim_not_dispatchable"):
+        first.mark_executed(invocation.invocation_id)
+
+
+def _terminal_response(invocation: AssetInvocationV1) -> AdapterResponse:
+    payload = {"fixture_result": "durable-result"}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    result = NormalizedAssetResultV1(
+        invocation_id=invocation.invocation_id,
+        output_contract=invocation.output_contract,
+        status=AssetResultStatus.RESOLVED,
+        payload=payload,
+        payload_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+        effect_status=EffectStatus.NONE,
+    )
+    return AdapterResponse(
+        invocation_id=invocation.invocation_id,
+        status=AssetResultStatus.RESOLVED,
+        input_payload_hash=invocation.payload_hash,
+        effect_status=EffectStatus.NONE,
+        result=result,
+        dispatched=True,
+    )
+
+
+async def _seed_terminal(checkpoint: Path, invocation: AssetInvocationV1) -> None:
+    owner = _DurableInvocationClaims(checkpoint)
+    assert await owner.claim("claim-request", invocation) is None
+    owner.mark_executed(invocation.invocation_id)
+    owner.mark_terminal(invocation, _terminal_response(invocation))
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_durable_active_owner_waiter_reuses_terminal_without_ambiguity(
+    tmp_path,
+) -> None:
+    invocation = _invocation(_registry())
+    checkpoint = tmp_path / "active-owner.sqlite3"
+    owner = _DurableInvocationClaims(checkpoint, lease_seconds=0.03)
+    waiter = _DurableInvocationClaims(checkpoint, lease_seconds=0.03)
+    assert await owner.claim("claim-request", invocation) is None
+    owner.mark_executed(invocation.invocation_id)
+    heartbeat = asyncio.create_task(owner.renew_lease(invocation.invocation_id))
+
+    waiting = asyncio.create_task(waiter.claim("claim-request", invocation))
+    await asyncio.sleep(0.08)
+    assert waiting.done() is False
+    owner.mark_terminal(invocation, _terminal_response(invocation))
+    heartbeat.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await heartbeat
+
+    reused = await asyncio.wait_for(waiting, timeout=1)
+    assert reused is not None
+    assert reused.receipt_reused is True
+    assert waiter.provenance("claim-request").lifecycle == "terminal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_expired_executed_owner_becomes_ambiguous_and_stale_cas_fails(
+    tmp_path,
+) -> None:
+    invocation = _invocation(_registry())
+    checkpoint = tmp_path / "expired-owner.sqlite3"
+    owner = _DurableInvocationClaims(checkpoint, lease_seconds=0.01)
+    recovery = _DurableInvocationClaims(checkpoint, lease_seconds=0.01)
+    assert await owner.claim("claim-request", invocation) is None
+    owner.mark_executed(invocation.invocation_id)
+    await asyncio.sleep(0.02)
+
+    with pytest.raises(_TargetDispatchInvariantError, match="manual_recovery_required"):
+        await recovery.claim("claim-request", invocation)
+    with pytest.raises(_TargetDispatchInvariantError, match="claim_not_executed"):
+        owner.mark_terminal(invocation, _terminal_response(invocation))
+    assert recovery.provenance("claim-request").lifecycle == "ambiguous"
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_durable_terminal_corruption_is_rejected(tmp_path) -> None:
+    invocation = _invocation(_registry())
+    checkpoint = tmp_path / "corrupt-terminal.sqlite3"
+    await _seed_terminal(checkpoint, invocation)
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "UPDATE graph_invocation_claims SET response_json = ?",
+            ("{not-json",),
+        )
+
+    with pytest.raises(_TargetDispatchInvariantError, match="corrupt_terminal_response"):
+        _DurableInvocationClaims(checkpoint).terminal("claim-request", invocation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda value: value.__setitem__("invocation_id", "foreign"),
+        lambda value: value.__setitem__("input_payload_hash", "foreign"),
+        lambda value: value["result"].__setitem__("invocation_id", "foreign"),
+        lambda value: value["result"]["output_contract"].__setitem__(
+            "schema_hash", "foreign"
+        ),
+        lambda value: value["result"].__setitem__("payload_hash", "foreign"),
+        lambda value: value["result"].__setitem__("status", "failed"),
+        lambda value: value["result"].__setitem__("effect_status", "verified"),
+        lambda value: value.__setitem__("dispatched", False),
+    ),
+)
+async def test_durable_terminal_receipt_response_mismatch_is_rejected(
+    tmp_path,
+    mutation,
+) -> None:
+    invocation = _invocation(_registry())
+    checkpoint = tmp_path / "mismatch-terminal.sqlite3"
+    await _seed_terminal(checkpoint, invocation)
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        raw = conn.execute(
+            "SELECT response_json FROM graph_invocation_claims"
+        ).fetchone()[0]
+        value = json.loads(raw)
+        mutation(value)
+        conn.execute(
+            "UPDATE graph_invocation_claims SET response_json = ?",
+            (json.dumps(value, sort_keys=True, separators=(",", ":")),),
+        )
+
+    with pytest.raises(_TargetDispatchInvariantError):
+        _DurableInvocationClaims(checkpoint).terminal("claim-request", invocation)
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("axis", ("definition", "input", "output", "binding"))
+async def test_durable_invocation_signature_drift_is_rejected(
+    tmp_path,
+    axis: str,
+) -> None:
+    registry = _registry()
+    invocation = _invocation(registry)
+    entry = registry.asset(invocation.asset_ref)
+    assert entry is not None
+    binding = entry.snapshot.declared_binding
+    checkpoint = tmp_path / "signature-drift.sqlite3"
+    owner = _DurableInvocationClaims(checkpoint)
+    assert await owner.claim(
+        "claim-request", invocation, binding_ref=binding
+    ) is None
+    owner.mark_executed(invocation.invocation_id)
+    owner.mark_terminal(invocation, _terminal_response(invocation))
+
+    drifted = invocation
+    drifted_binding = binding
+    if axis == "definition":
+        drifted = invocation.model_copy(
+            update={"definition_fingerprint": "drifted"}
+        )
+    elif axis == "input":
+        drifted = invocation.model_copy(
+            update={
+                "input_contract": invocation.input_contract.model_copy(
+                    update={"schema_hash": "drifted"}
+                )
+            }
+        )
+    elif axis == "output":
+        drifted = invocation.model_copy(
+            update={
+                "output_contract": invocation.output_contract.model_copy(
+                    update={"schema_hash": "drifted"}
+                )
+            }
+        )
+    else:
+        assert binding is not None
+        drifted_binding = binding.model_copy(update={"binding_hash": "drifted"})
+
+    with pytest.raises(_TargetDispatchInvariantError, match="invocation_identity_mismatch"):
+        _DurableInvocationClaims(checkpoint).terminal(
+            "claim-request",
+            drifted,
+            binding_ref=drifted_binding,
+        )
+
+
+@pytest.mark.offline
+def test_legacy_fallback_is_blocked_after_v4_target_dispatch() -> None:
+    invocation = _invocation(_registry())
+    receipt = LangGraphV4ExecutionReceiptV1(
+        mode="primary",
+        request_id="fallback-request",
+        selected_route="recipe",
+        final_artifact=None,
+        dispatch_trace=TargetDispatchTraceV1(
+            target_asset_ref=invocation.asset_ref,
+            invocation_id=invocation.invocation_id,
+            attempted=1,
+            executed=1,
+            succeeded=0,
+        ),
+        budget_usage=_budget(),
+        side_effect_counts=ShadowSideEffectCountsV1(),
+        terminal_outcome=TerminalOutcome.FAILED,
+        rollback_required=True,
+        rollback_reasons=("post_dispatch_failure",),
+    )
+
+    not_started = DurableDispatchProvenanceV1(
+        request_id="fallback-request",
+        lifecycle="not_started",
+    )
+    executed = DurableDispatchProvenanceV1(
+        request_id="fallback-request",
+        lifecycle="executed",
+        invocation_id=invocation.invocation_id,
+    )
+
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, not_started
+    ) is True
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, None
+    ) is False
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, receipt, executed
+    ) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_orchestrator_receipt_loss_after_dispatch_never_runs_legacy(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    definitions = _definitions()
+    recipes = tuple(
+        item for item in definitions if item.contract_asset_type == "recipe"
+    )
+    skills = tuple(
+        item for item in definitions if item.contract_asset_type == "skill"
+    )
+    planned = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    planned = replace(
+        planned,
+        capability=replace(planned.capability, coverage=CapabilityCoverage.FULL),
+    )
+
+    async def fake_planner(_text, *, catalog, **_kwargs):
+        return replace(planned, catalog_fingerprint=catalog.fingerprint)
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        fake_planner,
+    )
+    checkpoint = tmp_path / "receipt-loss-checkpoint.sqlite3"
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._unified_turn_planner_config = {
+        "architecture": "langgraph_v4",
+        "mode": "primary",
+        "context_candidate_limit": 8,
+        "context_candidate_max_chars": 6000,
+        "selected_context_max_turns": 3,
+        "selected_context_max_chars": 2400,
+        "max_tokens": 2048,
+        "telemetry": {"enabled": False},
+        "langgraph_v4": {
+            "budget_valid": True,
+            "on_failure": "legacy",
+            "checkpoint": {"path": str(checkpoint)},
+        },
+    }
+    orchestrator._router = object()
+    orchestrator._cron_scheduler = None
+    orchestrator._browser_handoff_config = {"enabled": False}
+    orchestrator._recipes = recipes
+    orchestrator._store = ConversationStore(tmp_path / "receipt-loss.db")
+    orchestrator._structured_logger = None
+    orchestrator._exposable_skills = MethodType(
+        lambda self: list(skills), orchestrator
+    )
+    legacy_calls = 0
+
+    async def execute_then_lose_receipt(self, **kwargs):
+        invocation = _invocation(_registry())
+        claims = _DurableInvocationClaims(checkpoint)
+        assert await claims.claim(kwargs["request_id"], invocation) is None
+        claims.mark_executed(invocation.invocation_id)
+        claims.mark_ambiguous(invocation.invocation_id)
+        raise RuntimeError("receipt construction failed")
+
+    async def legacy_must_not_run(self, *_args, **_kwargs):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        raise AssertionError("post-dispatch legacy fallback must not run")
+
+    orchestrator._execute_langgraph_v4_connected = MethodType(
+        execute_then_lose_receipt,
+        orchestrator,
+    )
+    orchestrator._run_tool_loop_result = MethodType(
+        legacy_must_not_run,
+        orchestrator,
+    )
+    turn = TurnExecutionState.create(
+        session_key="receipt-loss-session",
+        original_text=planned.original_text,
+        turn_id="receipt-loss-request",
+    )
+
+    result = await orchestrator._run_unified_turn_planner_primary(
+        planned.original_text,
+        recent_rows=[],
+        attachments=None,
+        on_text_delta=None,
+        on_progress=None,
+        operator_tools=False,
+        turn=turn,
+    )
+
+    assert result.success is False
+    assert legacy_calls == 0
+    assert turn.phase.value == "rejected"
+    assert _DurableInvocationClaims(checkpoint).provenance(
+        turn.turn_id
+    ).lifecycle == "ambiguous"
+
+
+@pytest.mark.offline
+def test_execution_receipt_rejects_false_success_invariants() -> None:
+    invocation = _invocation(_registry())
+    with pytest.raises(ValueError, match="exactly-one dispatch"):
+        LangGraphV4ExecutionReceiptV1(
+            mode="primary",
+            request_id="false-success",
+            selected_route="recipe",
+            final_artifact=None,
+            dispatch_trace=TargetDispatchTraceV1(
+                target_asset_ref=invocation.asset_ref,
+                invocation_id=invocation.invocation_id,
+                attempted=0,
+                executed=0,
+                succeeded=0,
+            ),
+            budget_usage=_budget(),
+            side_effect_counts=ShadowSideEffectCountsV1(),
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            rollback_required=False,
+            rollback_reasons=(),
+        )
+
+
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "artifact_update",
+    [
+        {"artifact_id": "arbitrary-artifact"},
+        {"request_id": "stale-request"},
+        {"content": "stale content"},
+        {"content_hash": "stale-content-hash"},
+    ],
+)
+def test_execution_receipt_rejects_noncanonical_final_artifact(
+    artifact_update,
+) -> None:
+    request_id = "receipt-request"
+    content = "canonical answer"
+    invocation = _invocation(_registry())
+    final = FinalArtifactV1(
+        artifact_id=canonical_artifact_id(request_id, content),
+        request_id=request_id,
+        content=content,
+        outcome=TerminalOutcome.COMPLETED,
+        content_hash=canonical_artifact_content_hash(content),
+    ).model_copy(update=artifact_update)
+
+    with pytest.raises(ValueError, match="(identity|content hash) mismatch"):
+        LangGraphV4ExecutionReceiptV1(
+            mode="primary",
+            request_id=request_id,
+            selected_route="recipe",
+            final_artifact=final,
+            dispatch_trace=TargetDispatchTraceV1(
+                target_asset_ref=invocation.asset_ref,
+                invocation_id=invocation.invocation_id,
+                attempted=1,
+                executed=1,
+                succeeded=1,
+            ),
+            budget_usage=_budget(),
+            side_effect_counts=ShadowSideEffectCountsV1(),
+            terminal_outcome=TerminalOutcome.COMPLETED,
+            rollback_required=False,
+            rollback_reasons=(),
+        )
+
+
+@pytest.mark.offline
+def test_v4_primary_preserves_direct_no_asset_parity() -> None:
+    planned = _plan(
+        "recipe",
+        "contract-fixture-workflow",
+        ExecutionMode.DIRECT_ANSWER,
+    )
+    direct = replace(
+        planned,
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.NO_MATCH,
+            primary_asset=None,
+            supporting_assets=(),
+        ),
+        execution=replace(
+            planned.execution,
+            primary_asset=None,
+            allowed_assets=(),
+            allowed_tools=(),
+        ),
+    )
+
+    assert _is_direct_without_asset(direct) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_primary_unsafe_effect_never_promotes_final(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def unsafe_dispatch(_self, invocation, **_kwargs):
+        result = NormalizedAssetResultV1(
+            invocation_id=invocation.invocation_id,
+            output_contract=invocation.output_contract,
+            status=AssetResultStatus.RESOLVED,
+            payload={"answer": "must-not-promote"},
+            payload_hash=hashlib.sha256(b"unsafe").hexdigest(),
+            effect_status=EffectStatus.CONFIRMATION_REQUIRED,
+        )
+        return AdapterResponse(
+            invocation_id=invocation.invocation_id,
+            status=AssetResultStatus.RESOLVED,
+            input_payload_hash=invocation.payload_hash,
+            effect_status=EffectStatus.CONFIRMATION_REQUIRED,
+            result=result,
+            dispatched=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.graph_runtime.shadow.GenericRecipeAdapter.dispatch",
+        unsafe_dispatch,
+    )
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "unsafe-checkpoint.sqlite3",
+        ),
+        definitions=_definitions(),
+        conversation_store=ConversationStore(tmp_path / "unsafe-conversation.db"),
+    )
+    result = await runner.run(
+        plan=_plan(
+            "recipe",
+            "contract-fixture-workflow",
+            ExecutionMode.DIRECT_ANSWER,
+        ),
+        legacy=None,
+        request_id="unsafe-effect-request",
+        session_key="unsafe-effect-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.final_content is None
+    assert result.execution.rollback_required is True
+    assert "effect_not_safe" in result.execution.rollback_reasons
+    assert result.execution.dispatch_trace.succeeded == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
     tmp_path,
 ) -> None:
@@ -416,6 +1324,7 @@ async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_provider_failure_is_typed_before_delivery(
     tmp_path,
 ) -> None:
@@ -456,6 +1365,7 @@ async def test_connected_primary_provider_failure_is_typed_before_delivery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.offline
 async def test_orchestrator_primary_response_source_is_v4_receipt(
     tmp_path,
     monkeypatch,
@@ -521,11 +1431,15 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
             request_id=request_id,
             selected_route="recipe",
             final_artifact=FinalArtifactV1(
-                artifact_id="v4-artifact",
+                artifact_id=canonical_artifact_id(
+                    request_id, "V4가 만든 최종 응답"
+                ),
                 request_id=request_id,
                 content="V4가 만든 최종 응답",
                 outcome=TerminalOutcome.COMPLETED,
-                content_hash="v4-content-hash",
+                content_hash=canonical_artifact_content_hash(
+                    "V4가 만든 최종 응답"
+                ),
             ),
             dispatch_trace=TargetDispatchTraceV1(
                 target_asset_ref=AssetRefV1(
@@ -575,6 +1489,11 @@ async def test_orchestrator_primary_response_source_is_v4_receipt(
     assert result.text == "V4가 만든 최종 응답"
     assert result.success is True
     assert result.selected_route == "recipe"
+    assert result.primary_delivery is not None
+    assert result.primary_delivery.request_id == turn.turn_id
+    assert result.primary_delivery.artifact_hash == (
+        canonical_artifact_content_hash("V4가 만든 최종 응답")
+    )
     assert turn.final_text == result.text
     assert turn.phase.value == "completed"
 

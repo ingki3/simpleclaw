@@ -25,6 +25,7 @@ import os
 import random
 import shlex
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -167,7 +168,13 @@ from simpleclaw.daemon.drain import (
     DrainController,
 )
 from simpleclaw.daemon.models import CronActionResult, CronFailureKind
+from simpleclaw.graph_runtime.checkpoint import resolve_checkpoint_path
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.graph_runtime.runtime import (
+    LangGraphV4ExecutionReceiptV1,
     LangGraphV4RolloutFacade,
     LegacyRunTelemetryV1,
     ShadowBudgetUsageV1,
@@ -175,6 +182,8 @@ from simpleclaw.graph_runtime.runtime import (
 from simpleclaw.graph_runtime.shadow import (
     ConnectedShadowResultV1,
     ConnectedShadowTurnRunner,
+    DurableDispatchProvenanceV1,
+    load_durable_dispatch_provenance,
 )
 from simpleclaw.graph_runtime.status import TerminalOutcome
 from simpleclaw.llm.models import (
@@ -194,6 +203,12 @@ from simpleclaw.memory.models import (
     CHANNEL_RECIPE_PREFIX,
     ConversationMessage,
     MessageRole,
+)
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryCoordinator,
+    PrimaryDeliveryMetadataV1,
+    PrimaryDeliveryOutcomeV1,
+    PrimaryResponseText,
 )
 from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
@@ -316,6 +331,33 @@ def _canary_read_only_eligible(
         ):
             return False
     return True
+
+
+def _allow_v4_legacy_fallback(
+    v4: Mapping[str, object],
+    execution: LangGraphV4ExecutionReceiptV1 | None,
+    provenance: DurableDispatchProvenanceV1 | None = None,
+) -> bool:
+    """Target pre-dispatch 실패에서만 legacy executor 진입을 허용한다."""
+    if str(v4.get("on_failure", "fail_closed")) != "legacy":
+        return False
+    if provenance is None or not provenance.pre_dispatch_proven:
+        return False
+    return execution is None or (
+        execution.dispatch_trace.attempted == 0
+        and execution.dispatch_trace.executed == 0
+    )
+
+
+def _is_direct_without_asset(plan: UnifiedTurnPlan) -> bool:
+    """Connected exact-asset 경로 밖의 ordinary direct turn을 식별한다."""
+    return (
+        plan.execution.mode is ExecutionMode.DIRECT_ANSWER
+        and plan.capability.primary_asset is None
+        and not plan.capability.supporting_assets
+        and not plan.execution.allowed_assets
+        and not plan.execution.allowed_tools
+    )
 
 _ATTACHMENT_CONTEXT_HEADER = "Attachment context"
 
@@ -998,6 +1040,46 @@ class AgentOrchestrator:
     # Public API
     # ------------------------------------------------------------------
 
+    def deferred_primary_delivery_required(self) -> bool:
+        """V4 actual-response rollout은 durable send 전 streaming을 금지한다."""
+        return (
+            self._unified_turn_planner_config.get("architecture")
+            == "langgraph_v4"
+            and self._unified_turn_planner_config.get("mode")
+            in {"primary", "read_only_canary"}
+        )
+
+    async def deliver_primary_response(
+        self,
+        response: PrimaryResponseText,
+        destination_ref: str,
+        sender,
+    ) -> PrimaryDeliveryOutcomeV1:
+        """Telegram actual send receipt 뒤 delivered assistant만 저장한다."""
+        v4 = self._unified_turn_planner_config.get("langgraph_v4", {})
+        if not isinstance(v4, dict):
+            raise TypeError("langgraph_v4 delivery configuration is missing")
+        checkpoint = v4.get("checkpoint", {})
+        if not isinstance(checkpoint, dict):
+            raise TypeError("langgraph_v4 checkpoint configuration is missing")
+        raw_path = str(checkpoint.get("path") or "")
+        checkpoint_path = (
+            resolve_checkpoint_path(raw_path)
+            if raw_path
+            else resolve_checkpoint_path()
+        )
+        journal_path = checkpoint_path.with_name(
+            f"{checkpoint_path.name}.deliveries.sqlite3"
+        )
+        return await PrimaryDeliveryCoordinator(
+            journal_path=journal_path,
+            conversation_store=self._store,
+        ).deliver_telegram(
+            response,
+            destination_ref=destination_ref,
+            sender=sender,
+        )
+
     async def prewarm_embedding(self) -> bool:
         """Telegram intake 전에 RAG 모델을 worker thread에서 준비한다.
 
@@ -1110,6 +1192,7 @@ class AgentOrchestrator:
         on_text_delta: TextDeltaCallback | None = None,
         on_progress: ProgressCallback | None = None,
         operator_tools: bool = False,
+        request_id: str | None = None,
     ) -> str:
         """drain 게이트를 거쳐 메시지를 처리한다 (BIZ-442).
 
@@ -1135,6 +1218,7 @@ class AgentOrchestrator:
         turn = TurnExecutionState.create(
             session_key=session_key,
             original_text=text,
+            turn_id=request_id,
         )
         session_token = current_session_key_var.set(session_key)
         turn_token = current_turn_id_var.set(turn.turn_id)
@@ -1302,7 +1386,10 @@ class AgentOrchestrator:
                 # follow-up 정규화/clarify/intents/domains/route 를 LLM structured
                 # JSON 판단 하나로 결정한다. 분석 비활성 또는 provider 장애 시에만
                 # 기존 결정적(keyword) 경로(BIZ-425 TurnFrame + response_router)로
-                # 내려간다. DB 저장에는 아래 ``_save_turn(text, ...)`` 이 원문 유지.
+                # 내려간다. V4 actual-response ingress는 stable request identity가
+                # 정해진 이 경계에서 실행보다 먼저 user row를 durable 저장한다.
+                # replay된 현재 요청은 planner context에서 제외해 첫 실행과 동일한
+                # context 후보를 유지한다.
                 planner_candidate_limit = int(
                     self._unified_turn_planner_config.get(
                         "context_candidate_limit",
@@ -1313,6 +1400,23 @@ class AgentOrchestrator:
                     limit=max(self._history_limit, planner_candidate_limit),
                     session_key=turn.session_key,
                 )
+                if self.deferred_primary_delivery_required():
+                    recent_rows = [
+                        row
+                        for row in recent_rows
+                        if row[1].turn_id != turn.turn_id
+                    ]
+                    inbound_id, created = self._store.save_inbound_once(
+                        ConversationMessage(
+                            role=MessageRole.USER,
+                            content=text,
+                            channel="telegram",
+                        ),
+                        session_key=turn.session_key,
+                        request_id=turn.turn_id,
+                    )
+                    if created:
+                        self._schedule_embedding(inbound_id, text)
                 rollout_mode = str(
                     self._unified_turn_planner_config.get("mode", "primary")
                 )
@@ -1364,6 +1468,25 @@ class AgentOrchestrator:
                         request_id=turn.turn_id,
                         session_key=turn.session_key,
                     )
+
+                metadata = tool_loop_result.primary_delivery
+                if (
+                    metadata is None
+                    and self.deferred_primary_delivery_required()
+                ):
+                    metadata = PrimaryDeliveryMetadataV1(
+                        request_id=turn.turn_id,
+                        artifact_id=canonical_artifact_id(
+                            turn.turn_id,
+                            response_text,
+                        ),
+                        artifact_hash=canonical_artifact_content_hash(
+                            response_text
+                        ),
+                        session_key=turn.session_key,
+                    )
+                if metadata is not None:
+                    return PrimaryResponseText(response_text, metadata)
 
                 msg_ids = self._save_turn(text, response_text)
                 await self._capture_conversation_end_opportunity(
@@ -1535,6 +1658,10 @@ class AgentOrchestrator:
         run_v4 = architecture == "langgraph_v4" and (
             rollout_mode == "primary" or canary_read_only
         )
+        # V4 connected runner는 exact asset executor다. 일반 대화는 기존 direct
+        # 경로가 소유하며 primary rollout 때문에 사용자 실패로 바뀌지 않는다.
+        if run_v4 and _is_direct_without_asset(effective_plan):
+            run_v4 = False
         if run_v4 and not _canary_read_only_eligible(effective_plan, catalog):
             self._record_unified_rollout_path(
                 path="fail_closed",
@@ -1567,6 +1694,7 @@ class AgentOrchestrator:
                 turn.transition(TurnPhase.REJECTED)
                 return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
             execution = None
+            dispatch_provenance = None
             failure_reason = ""
             try:
                 connected = await self._execute_langgraph_v4_connected(
@@ -1597,8 +1725,26 @@ class AgentOrchestrator:
                     type(exc).__name__,
                 )
 
+            checkpoint = v4.get("checkpoint", {})
+            if isinstance(checkpoint, dict):
+                try:
+                    dispatch_provenance = load_durable_dispatch_provenance(
+                        str(checkpoint.get("path") or ""),
+                        turn.turn_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "LangGraph V4 dispatch provenance unavailable "
+                        "(error_type=%s)",
+                        type(exc).__name__,
+                    )
+
             if failure_reason:
-                if str(v4.get("on_failure", "fail_closed")) == "legacy":
+                if _allow_v4_legacy_fallback(
+                    v4,
+                    execution,
+                    dispatch_provenance,
+                ):
                     self._record_unified_rollout_path(
                         path="legacy_fallback",
                         reason=failure_reason,
@@ -1651,6 +1797,12 @@ class AgentOrchestrator:
                     selected_route=execution.selected_route,
                     model_calls=usage_router.response_count,
                     tokens=usage_router.output_tokens,
+                    primary_delivery=PrimaryDeliveryMetadataV1(
+                        request_id=execution.request_id,
+                        artifact_id=execution.final_artifact.artifact_id,
+                        artifact_hash=execution.final_artifact.content_hash,
+                        session_key=turn.session_key,
+                    ),
                 )
 
         self._record_unified_rollout_path(

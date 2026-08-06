@@ -28,7 +28,7 @@ from .contracts import (
     FinalArtifactV1,
     NormalizedAssetResultV1,
 )
-from .idempotency import delivery_id
+from .idempotency import delivery_id, validate_canonical_artifact_identity
 from .routing import (
     GeneralRoute,
     RecipeMatchOutcome,
@@ -147,6 +147,12 @@ def prepare_delivery_intent(
     shadow: bool = False,
 ) -> DeliveryIntentV1:
     """guard가 만든 final artifact에 결합된 delivery intent만 허용한다."""
+    validate_canonical_artifact_identity(
+        request_id=final.request_id,
+        content=final.content,
+        artifact_id=final.artifact_id,
+        content_hash=final.content_hash,
+    )
     return DeliveryIntentV1(
         delivery_id=delivery_id(
             final.request_id, final.content_hash, destination_ref

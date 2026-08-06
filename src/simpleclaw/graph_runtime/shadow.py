@@ -6,11 +6,14 @@ import asyncio
 import hashlib
 import inspect
 import json
+import secrets
+import sqlite3
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -26,8 +29,10 @@ from .adapters.native_tool import GenericNativeToolAdapter, NativeToolExecutor
 from .adapters.recipe import GenericRecipeAdapter, RecipeExecutor
 from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
+from .checkpoint import resolve_checkpoint_path
 from .composition import FinalCompositionRuntime
 from .contracts import (
+    AssetBindingRefV1,
     AssetInvocationV1,
     AssetRefV1,
     FinalArtifactV1,
@@ -97,6 +102,28 @@ class _TargetDispatchInvariantError(RuntimeError):
     """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
 
 
+DurableDispatchLifecycle = Literal[
+    "not_started",
+    "claimed",
+    "executed",
+    "terminal",
+    "ambiguous",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class DurableDispatchProvenanceV1:
+    """Receipt 소실 뒤에도 fallback 판단에 쓰는 durable dispatch 증거다."""
+
+    request_id: str
+    lifecycle: DurableDispatchLifecycle
+    invocation_id: str | None = None
+
+    @property
+    def pre_dispatch_proven(self) -> bool:
+        return self.lifecycle == "not_started"
+
+
 class _TargetDispatchGuard:
     """한 graph run에서 selected invocation을 정확히 한 번만 실행한다."""
 
@@ -120,6 +147,12 @@ class _TargetDispatchGuard:
         if succeeded:
             self.succeeded += 1
 
+    def reuse_terminal(self, *, succeeded: bool) -> None:
+        """Durable terminal receipt가 증명한 전역 dispatch 횟수를 반영한다."""
+        self.attempted = 1
+        self.executed = 1
+        self.succeeded = int(succeeded)
+
     def snapshot(self) -> TargetDispatchTraceV1:
         return TargetDispatchTraceV1(
             target_asset_ref=self._invocation.asset_ref,
@@ -129,6 +162,547 @@ class _TargetDispatchGuard:
             succeeded=self.succeeded,
             duplicate_blocked=self.duplicate_blocked,
         )
+
+
+class _DurableInvocationClaims:
+    """프로세스 재시작과 checkpoint resume를 가로지르는 dispatch claim journal."""
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        *,
+        lease_seconds: float = 30.0,
+        poll_seconds: float = 0.01,
+    ) -> None:
+        if lease_seconds <= 0 or poll_seconds <= 0:
+            raise ValueError("claim lease and poll intervals must be positive")
+        path = Path(checkpoint_path)
+        self._path = path.with_name(f"{path.name}.invocations.sqlite3")
+        self._owner_token = secrets.token_hex(16)
+        self._lease_seconds = lease_seconds
+        self._poll_seconds = poll_seconds
+        self._fencing_tokens: dict[str, int] = {}
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS graph_invocation_claims ("
+                "invocation_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, "
+                "asset_type TEXT NOT NULL, asset_name TEXT NOT NULL, "
+                "payload_hash TEXT NOT NULL, lifecycle TEXT NOT NULL, "
+                "response_json TEXT, signature_json TEXT, owner_token TEXT, "
+                "lease_expires_at REAL, fencing_token INTEGER NOT NULL DEFAULT 0)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS graph_request_claims ("
+                "request_id TEXT PRIMARY KEY, invocation_id TEXT NOT NULL, "
+                "signature_json TEXT NOT NULL)"
+            )
+            columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(graph_invocation_claims)")
+            }
+            migrations = {
+                "signature_json": "TEXT",
+                "owner_token": "TEXT",
+                "lease_expires_at": "REAL",
+                "fencing_token": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for column, declaration in migrations.items():
+                if column not in columns:
+                    conn.execute(
+                        f"ALTER TABLE graph_invocation_claims "
+                        f"ADD COLUMN {column} {declaration}"
+                    )
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._path, timeout=30)
+
+    @staticmethod
+    def _response_json(response: AdapterResponse) -> str:
+        return json.dumps(
+            {
+                "invocation_id": response.invocation_id,
+                "status": response.status.value,
+                "input_payload_hash": response.input_payload_hash,
+                "effect_status": response.effect_status.value,
+                "result": (
+                    response.result.model_dump(mode="json", by_alias=True)
+                    if response.result is not None
+                    else None
+                ),
+                "dispatched": response.dispatched,
+                "error_code": response.error_code,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _signature_json(
+        invocation: AssetInvocationV1,
+        binding_ref: AssetBindingRefV1 | None,
+    ) -> str:
+        return json.dumps(
+            {
+                "asset_ref": invocation.asset_ref.model_dump(mode="json"),
+                "definition_fingerprint": invocation.definition_fingerprint,
+                "input_contract": invocation.input_contract.model_dump(mode="json"),
+                "output_contract": invocation.output_contract.model_dump(mode="json"),
+                "binding_ref": (
+                    binding_ref.model_dump(mode="json")
+                    if binding_ref is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _request_signature_json(
+        cls,
+        invocation: AssetInvocationV1,
+        binding_ref: AssetBindingRefV1 | None,
+    ) -> str:
+        return json.dumps(
+            {
+                "invocation_id": invocation.invocation_id,
+                "asset_ref": invocation.asset_ref.model_dump(mode="json"),
+                "definition_fingerprint": invocation.definition_fingerprint,
+                "input_payload": invocation.payload,
+                "input_payload_hash": invocation.payload_hash,
+                "input_contract": invocation.input_contract.model_dump(mode="json"),
+                "output_contract": invocation.output_contract.model_dump(mode="json"),
+                "binding_ref": (
+                    binding_ref.model_dump(mode="json")
+                    if binding_ref is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _ensure_request_claim(
+        cls,
+        conn: sqlite3.Connection,
+        request_id: str,
+        invocation: AssetInvocationV1,
+        binding_ref: AssetBindingRefV1 | None,
+        *,
+        create: bool,
+    ) -> bool:
+        """request 전체의 최초 execution signature를 immutable하게 고정한다."""
+        signature_json = cls._request_signature_json(invocation, binding_ref)
+        row = conn.execute(
+            "SELECT invocation_id, signature_json FROM graph_request_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is not None:
+            if tuple(row) != (invocation.invocation_id, signature_json):
+                error_code = (
+                    "invocation_identity_mismatch"
+                    if str(row[0]) == invocation.invocation_id
+                    else "request_identity_mismatch"
+                )
+                raise _TargetDispatchInvariantError(error_code)
+            return True
+
+        invocation_signature_json = cls._signature_json(invocation, binding_ref)
+        historical = conn.execute(
+            "SELECT invocation_id, request_id, asset_type, asset_name, "
+            "payload_hash, signature_json FROM graph_invocation_claims "
+            "WHERE request_id = ? ORDER BY invocation_id",
+            (request_id,),
+        ).fetchall()
+        identity = cls._identity(request_id, invocation)
+        if historical:
+            same_invocation = (
+                len(historical) == 1
+                and str(historical[0][0]) == invocation.invocation_id
+            )
+            if (
+                not same_invocation
+                or tuple(historical[0][1:5]) != identity
+                or historical[0][5] != invocation_signature_json
+            ):
+                error_code = (
+                    "invocation_identity_mismatch"
+                    if same_invocation
+                    else "request_identity_mismatch"
+                )
+                raise _TargetDispatchInvariantError(error_code)
+        elif not create:
+            return False
+
+        conn.execute(
+            "INSERT INTO graph_request_claims "
+            "(request_id, invocation_id, signature_json) VALUES (?, ?, ?)",
+            (request_id, invocation.invocation_id, signature_json),
+        )
+        return True
+
+    @staticmethod
+    def _validate_response(
+        invocation: AssetInvocationV1,
+        response: AdapterResponse,
+    ) -> AdapterResponse:
+        if response.invocation_id != invocation.invocation_id:
+            raise _TargetDispatchInvariantError("response_invocation_mismatch")
+        if response.input_payload_hash != invocation.payload_hash:
+            raise _TargetDispatchInvariantError("response_input_hash_mismatch")
+        result = response.result
+        if result is not None:
+            if result.invocation_id != invocation.invocation_id:
+                raise _TargetDispatchInvariantError("result_invocation_mismatch")
+            if result.output_contract != invocation.output_contract:
+                raise _TargetDispatchInvariantError("result_contract_mismatch")
+            if result.status is not response.status:
+                raise _TargetDispatchInvariantError("result_status_mismatch")
+            if result.effect_status is not response.effect_status:
+                raise _TargetDispatchInvariantError("result_effect_mismatch")
+            canonical = json.dumps(
+                result.payload,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != (
+                result.payload_hash
+            ):
+                raise _TargetDispatchInvariantError("result_payload_hash_mismatch")
+        if response.status is AssetResultStatus.RESOLVED:
+            if result is None or not response.dispatched:
+                raise _TargetDispatchInvariantError("response_provenance_mismatch")
+        elif result is not None and result.status is AssetResultStatus.RESOLVED:
+            raise _TargetDispatchInvariantError("response_status_mismatch")
+        return response
+
+    @classmethod
+    def _response(
+        cls,
+        raw: str,
+        invocation: AssetInvocationV1,
+    ) -> AdapterResponse:
+        try:
+            value = json.loads(raw)
+            if not isinstance(value, dict) or set(value) != {
+                "invocation_id",
+                "status",
+                "input_payload_hash",
+                "effect_status",
+                "result",
+                "dispatched",
+                "error_code",
+            }:
+                raise ValueError("non-canonical response shape")
+            result = value["result"]
+            response = AdapterResponse(
+                invocation_id=value["invocation_id"],
+                status=AssetResultStatus(value["status"]),
+                input_payload_hash=value["input_payload_hash"],
+                effect_status=EffectStatus(value["effect_status"]),
+                result=(
+                    NormalizedAssetResultV1.model_validate_json(
+                        json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    )
+                    if result is not None
+                    else None
+                ),
+                dispatched=value["dispatched"],
+                receipt_reused=True,
+                error_code=value["error_code"],
+            )
+            if not isinstance(response.dispatched, bool):
+                raise TypeError("dispatched must be boolean")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise _TargetDispatchInvariantError("corrupt_terminal_response") from exc
+        return cls._validate_response(invocation, response)
+
+    @staticmethod
+    def _identity(request_id: str, invocation: AssetInvocationV1) -> tuple[str, ...]:
+        return (
+            request_id,
+            invocation.asset_ref.type,
+            invocation.asset_ref.name,
+            invocation.payload_hash,
+        )
+
+    async def claim(
+        self,
+        request_id: str,
+        invocation: AssetInvocationV1,
+        *,
+        binding_ref: AssetBindingRefV1 | None = None,
+    ) -> AdapterResponse | None:
+        identity = self._identity(request_id, invocation)
+        signature_json = self._signature_json(invocation, binding_ref)
+        while True:
+            now = time.time()
+            expired_executed = False
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._ensure_request_claim(
+                    conn,
+                    request_id,
+                    invocation,
+                    binding_ref,
+                    create=True,
+                )
+                row = conn.execute(
+                    "SELECT request_id, asset_type, asset_name, payload_hash, "
+                    "lifecycle, response_json, signature_json, owner_token, "
+                    "lease_expires_at, fencing_token FROM graph_invocation_claims "
+                    "WHERE invocation_id = ?",
+                    (invocation.invocation_id,),
+                ).fetchone()
+                if row is None:
+                    fencing_token = 1
+                    conn.execute(
+                        "INSERT INTO graph_invocation_claims "
+                        "(invocation_id, request_id, asset_type, asset_name, "
+                        "payload_hash, lifecycle, response_json, signature_json, "
+                        "owner_token, lease_expires_at, fencing_token) "
+                        "VALUES (?, ?, ?, ?, ?, 'claimed', NULL, ?, ?, ?, ?)",
+                        (
+                            invocation.invocation_id,
+                            *identity,
+                            signature_json,
+                            self._owner_token,
+                            now + self._lease_seconds,
+                            fencing_token,
+                        ),
+                    )
+                    self._fencing_tokens[invocation.invocation_id] = fencing_token
+                    return None
+                if tuple(row[:4]) != identity or row[6] != signature_json:
+                    raise _TargetDispatchInvariantError("invocation_identity_mismatch")
+                lifecycle, response_json = str(row[4]), row[5]
+                if lifecycle == "terminal" and isinstance(response_json, str):
+                    return self._response(response_json, invocation)
+                if lifecycle == "ambiguous":
+                    raise _TargetDispatchInvariantError("manual_recovery_required")
+                lease_expires_at = float(row[8] or 0.0)
+                fencing_token = int(row[9])
+                if row[7] == self._owner_token:
+                    raise _TargetDispatchInvariantError("claim_already_owned")
+                if lease_expires_at <= now:
+                    if lifecycle != "claimed":
+                        cursor = conn.execute(
+                            "UPDATE graph_invocation_claims SET lifecycle = 'ambiguous', "
+                            "owner_token = NULL, lease_expires_at = NULL, "
+                            "fencing_token = fencing_token + 1 "
+                            "WHERE invocation_id = ? AND lifecycle = ? "
+                            "AND fencing_token = ? AND lease_expires_at <= ?",
+                            (
+                                invocation.invocation_id,
+                                lifecycle,
+                                fencing_token,
+                                now,
+                            ),
+                        )
+                        if cursor.rowcount == 1:
+                            expired_executed = True
+                    else:
+                        cursor = conn.execute(
+                            "UPDATE graph_invocation_claims SET owner_token = ?, "
+                            "lease_expires_at = ?, fencing_token = fencing_token + 1 "
+                            "WHERE invocation_id = ? AND lifecycle = 'claimed' "
+                            "AND fencing_token = ? AND lease_expires_at <= ?",
+                            (
+                                self._owner_token,
+                                now + self._lease_seconds,
+                                invocation.invocation_id,
+                                fencing_token,
+                                now,
+                            ),
+                        )
+                        if cursor.rowcount == 1:
+                            self._fencing_tokens[invocation.invocation_id] = (
+                                fencing_token + 1
+                            )
+                            return None
+            if expired_executed:
+                raise _TargetDispatchInvariantError("manual_recovery_required")
+            await asyncio.sleep(self._poll_seconds)
+
+    def terminal(
+        self,
+        request_id: str,
+        invocation: AssetInvocationV1,
+        *,
+        binding_ref: AssetBindingRefV1 | None = None,
+    ) -> AdapterResponse | None:
+        """Checkpoint가 callback을 생략한 resume에서 terminal receipt를 읽는다."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not self._ensure_request_claim(
+                conn,
+                request_id,
+                invocation,
+                binding_ref,
+                create=False,
+            ):
+                return None
+            row = conn.execute(
+                "SELECT request_id, asset_type, asset_name, payload_hash, "
+                "lifecycle, response_json, signature_json FROM graph_invocation_claims "
+                "WHERE invocation_id = ?",
+                (invocation.invocation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        identity = self._identity(request_id, invocation)
+        if tuple(row[:4]) != identity:
+            raise _TargetDispatchInvariantError("invocation_identity_mismatch")
+        if row[6] != self._signature_json(invocation, binding_ref):
+            raise _TargetDispatchInvariantError("invocation_identity_mismatch")
+        if row[4] == "terminal" and isinstance(row[5], str):
+            return self._response(row[5], invocation)
+        return None
+
+    def mark_executed(self, invocation_id: str) -> None:
+        fencing_token = self._fencing_tokens.get(invocation_id)
+        if fencing_token is None:
+            raise _TargetDispatchInvariantError("claim_not_owned")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE graph_invocation_claims SET lifecycle = 'executed', "
+                "lease_expires_at = ? WHERE invocation_id = ? "
+                "AND lifecycle = 'claimed' AND owner_token = ? "
+                "AND fencing_token = ?",
+                (
+                    time.time() + self._lease_seconds,
+                    invocation_id,
+                    self._owner_token,
+                    fencing_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise _TargetDispatchInvariantError("claim_not_dispatchable")
+
+    async def renew_lease(self, invocation_id: str) -> None:
+        """실행 owner가 끝날 때까지 같은 fencing token의 lease만 갱신한다."""
+        fencing_token = self._fencing_tokens.get(invocation_id)
+        if fencing_token is None:
+            raise _TargetDispatchInvariantError("claim_not_owned")
+        interval = max(0.001, self._lease_seconds / 3)
+        while True:
+            await asyncio.sleep(interval)
+            now = time.time()
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "UPDATE graph_invocation_claims SET lease_expires_at = ? "
+                    "WHERE invocation_id = ? AND lifecycle = 'executed' "
+                    "AND owner_token = ? AND fencing_token = ? "
+                    "AND lease_expires_at > ?",
+                    (
+                        now + self._lease_seconds,
+                        invocation_id,
+                        self._owner_token,
+                        fencing_token,
+                        now,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise _TargetDispatchInvariantError("claim_lease_lost")
+
+    def mark_terminal(
+        self,
+        invocation: AssetInvocationV1,
+        response: AdapterResponse,
+    ) -> None:
+        self._validate_response(invocation, response)
+        fencing_token = self._fencing_tokens.get(invocation.invocation_id)
+        if fencing_token is None:
+            raise _TargetDispatchInvariantError("claim_not_owned")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE graph_invocation_claims SET lifecycle = 'terminal', "
+                "response_json = ?, lease_expires_at = NULL "
+                "WHERE invocation_id = ? AND lifecycle = 'executed' "
+                "AND owner_token = ? AND fencing_token = ?",
+                (
+                    self._response_json(response),
+                    response.invocation_id,
+                    self._owner_token,
+                    fencing_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise _TargetDispatchInvariantError("claim_not_executed")
+
+    def mark_ambiguous(self, invocation_id: str) -> None:
+        fencing_token = self._fencing_tokens.get(invocation_id)
+        if fencing_token is None:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE graph_invocation_claims SET lifecycle = 'ambiguous', "
+                "lease_expires_at = NULL WHERE invocation_id = ? "
+                "AND lifecycle != 'terminal' AND owner_token = ? "
+                "AND fencing_token = ?",
+                (
+                    invocation_id,
+                    self._owner_token,
+                    fencing_token,
+                ),
+            )
+
+    def provenance(self, request_id: str) -> DurableDispatchProvenanceV1:
+        """request의 durable claim 상태를 receipt와 독립적으로 반환한다."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT invocation_id, lifecycle FROM graph_invocation_claims "
+                "WHERE request_id = ? ORDER BY invocation_id",
+                (request_id,),
+            ).fetchall()
+        if not rows:
+            return DurableDispatchProvenanceV1(
+                request_id=request_id,
+                lifecycle="not_started",
+            )
+        if len(rows) != 1:
+            return DurableDispatchProvenanceV1(
+                request_id=request_id,
+                lifecycle="ambiguous",
+            )
+        invocation_id, lifecycle = str(rows[0][0]), str(rows[0][1])
+        if lifecycle not in {
+            "claimed",
+            "executed",
+            "terminal",
+            "ambiguous",
+        }:
+            lifecycle = "ambiguous"
+        return DurableDispatchProvenanceV1(
+            request_id=request_id,
+            lifecycle=cast(DurableDispatchLifecycle, lifecycle),
+            invocation_id=invocation_id,
+        )
+
+
+def load_durable_dispatch_provenance(
+    checkpoint_path: str | Path,
+    request_id: str,
+) -> DurableDispatchProvenanceV1:
+    """Production orchestrator가 receipt-loss 예외 뒤 journal을 직접 조회한다."""
+    if not str(checkpoint_path):
+        raise ValueError("checkpoint path is required for dispatch provenance")
+    return _DurableInvocationClaims(
+        resolve_checkpoint_path(checkpoint_path)
+    ).provenance(request_id)
 
 
 class _ShadowRunBudget:
@@ -343,6 +917,27 @@ def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
     return "react"
 
 
+def _compose_user_facing_result(result: NormalizedAssetResultV1) -> str:
+    """Opaque contract JSON을 그대로 노출하지 않는 bounded deterministic renderer."""
+    payload = result.payload
+    preferred = ("answer", "result", "content", "text", "message", "summary")
+    for key in preferred:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    strings = [value.strip() for value in payload.values() if isinstance(value, str) and value.strip()]
+    if len(strings) == 1:
+        return strings[0]
+    lines = [
+        f"- {key}: {value}"
+        for key, value in sorted(payload.items())
+        if isinstance(value, (str, int, float, bool))
+    ]
+    if lines:
+        return "처리 결과입니다.\n" + "\n".join(lines)
+    return "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+
+
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:
     if response.status is AssetResultStatus.RESOLVED and response.result is not None:
         return InvocationStatus.SUCCEEDED
@@ -434,7 +1029,10 @@ class ConnectedShadowTurnRunner:
             )
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
+        durable_terminal_reused = False
         dispatch_guard = _TargetDispatchGuard(invocation)
+        durable_claims = _DurableInvocationClaims(self._facade.checkpoint_path)
+        binding_ref = entry.snapshot.declared_binding
         budget_controller = _ShadowRunBudget(
             self._facade.budget,
             planner_model_calls=planner_model_calls,
@@ -442,20 +1040,53 @@ class ConnectedShadowTurnRunner:
         )
 
         async def dispatch(_state: Mapping[str, object]) -> dict[str, object]:
-            nonlocal response
+            nonlocal durable_terminal_reused, response
             dispatch_guard.begin()
             budget_controller.reserve_asset_call()
-            dispatch_guard.mark_executed()
             try:
-                response = await adapter.dispatch(invocation)
+                reused = await durable_claims.claim(
+                    request_id,
+                    invocation,
+                    binding_ref=binding_ref,
+                )
+                if reused is not None:
+                    assert reused.result is not None
+                    if reused.status is AssetResultStatus.RESOLVED:
+                        canonical_result = self._registry.validate_canonical(
+                            entry.output_descriptor,
+                            reused.result.payload,
+                        )
+                        if canonical_result.payload_hash != reused.result.payload_hash:
+                            raise _TargetDispatchInvariantError(
+                                "result_payload_hash_mismatch"
+                            )
+                    response = reused
+                    durable_terminal_reused = True
+                    dispatch_guard.reuse_terminal(
+                        succeeded=(
+                            response.status is AssetResultStatus.RESOLVED
+                            and response.result is not None
+                            and response.effect_status
+                            in {EffectStatus.NONE, EffectStatus.VERIFIED}
+                        )
+                    )
+                else:
+                    durable_claims.mark_executed(invocation.invocation_id)
+                    dispatch_guard.mark_executed()
+                    heartbeat = asyncio.create_task(
+                        durable_claims.renew_lease(invocation.invocation_id)
+                    )
+                    try:
+                        response = await adapter.dispatch(invocation)
+                    except BaseException:
+                        durable_claims.mark_ambiguous(invocation.invocation_id)
+                        raise
+                    finally:
+                        heartbeat.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await heartbeat
             finally:
                 budget_controller.release_asset_call()
-            dispatch_guard.complete(
-                succeeded=(
-                    response.status is AssetResultStatus.RESOLVED
-                    and response.result is not None
-                )
-            )
             if response.result is None:
                 failed_result = NormalizedAssetResultV1(
                     invocation_id=invocation.invocation_id,
@@ -466,6 +1097,26 @@ class ConnectedShadowTurnRunner:
                     effect_status=response.effect_status,
                 )
                 response = replace(response, result=failed_result)
+            if not response.receipt_reused:
+                assert response.result is not None
+                if response.status is AssetResultStatus.RESOLVED:
+                    canonical_result = self._registry.validate_canonical(
+                        entry.output_descriptor,
+                        response.result.payload,
+                    )
+                    if canonical_result.payload_hash != response.result.payload_hash:
+                        raise _TargetDispatchInvariantError(
+                            "result_payload_hash_mismatch"
+                        )
+                durable_claims.mark_terminal(invocation, response)
+                dispatch_guard.complete(
+                    succeeded=(
+                        response.status is AssetResultStatus.RESOLVED
+                        and response.result is not None
+                        and response.effect_status
+                        in {EffectStatus.NONE, EffectStatus.VERIFIED}
+                    )
+                )
             update: dict[str, object] = {
                 "invocation": invocation,
                 "invocation_status": _invocation_status(response),
@@ -477,16 +1128,20 @@ class ConnectedShadowTurnRunner:
 
         def assess(_state: Mapping[str, object]) -> dict[str, object]:
             assert response is not None
+            safe_result = (
+                response.status is AssetResultStatus.RESOLVED
+                and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+            )
             if route == "recipe":
                 outcome = (
                     RecipeResultOutcome.RESOLVED
-                    if response.status is AssetResultStatus.RESOLVED
+                    if safe_result
                     else RecipeResultOutcome.UNKNOWN_EFFECT
                 )
                 return {"recipe_result": outcome}
             outcome = (
                 SolverOutcome.RESOLVED
-                if response.status is AssetResultStatus.RESOLVED
+                if safe_result
                 else SolverOutcome.FAILED
             )
             return {"solver_outcome": outcome}
@@ -528,6 +1183,8 @@ class ConnectedShadowTurnRunner:
                     TerminalOutcome.COMPLETED
                     if response is not None
                     and response.status is AssetResultStatus.RESOLVED
+                    and response.effect_status
+                    in {EffectStatus.NONE, EffectStatus.VERIFIED}
                     else TerminalOutcome.FAILED
                 ),
             },
@@ -580,17 +1237,16 @@ class ConnectedShadowTurnRunner:
                 raw_callbacks.resume_user_input, budget_controller
             ),
         )
-        completion = GraphCompletionRuntime(
-            composition=FinalCompositionRuntime(
-                compose=lambda result: json.dumps(
-                    result.payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                guard=lambda _content: True,
-                safe_render=lambda _result: "shadow-result-unavailable",
+        composition = FinalCompositionRuntime(
+            compose=_compose_user_facing_result,
+            guard=lambda content: bool(content.strip())
+            and not content.lstrip().startswith(("{", "[")),
+            safe_render=lambda _result: (
+                "요청을 처리했지만 안전한 응답을 구성하지 못했습니다."
             ),
+        )
+        completion = GraphCompletionRuntime(
+            composition=composition,
             delivery=self._facade.shadow_delivery_runtime(
                 InMemoryDeliveryJournal()
             ),
@@ -664,6 +1320,70 @@ class ConnectedShadowTurnRunner:
                 except Exception as exc:  # noqa: BLE001 - typed rollback boundary
                     stop_condition = "failed"
                     failure_code = f"graph_{type(exc).__name__}"
+        if response is None:
+            try:
+                response = durable_claims.terminal(
+                    request_id,
+                    invocation,
+                    binding_ref=binding_ref,
+                )
+                if response is not None:
+                    assert response.result is not None
+                    if response.status is AssetResultStatus.RESOLVED:
+                        canonical_result = self._registry.validate_canonical(
+                            entry.output_descriptor,
+                            response.result.payload,
+                        )
+                        if canonical_result.payload_hash != response.result.payload_hash:
+                            raise _TargetDispatchInvariantError(
+                                "result_payload_hash_mismatch"
+                            )
+                    durable_terminal_reused = True
+            except (ContractRegistryError, _TargetDispatchInvariantError) as exc:
+                stop_condition = "blocked"
+                failure_code = str(exc)
+                response = None
+                state = {
+                    key: value
+                    for key, value in state.items()
+                    if key
+                    not in {
+                        "final_artifact",
+                        "delivery_intent",
+                        "delivery_receipt",
+                        "persistence_receipt",
+                    }
+                }
+                state = {
+                    **state,
+                    "terminal_outcome": TerminalOutcome.BLOCKED,
+                }
+        if durable_terminal_reused and response is not None:
+            safe_terminal = (
+                response.status is AssetResultStatus.RESOLVED
+                and response.result is not None
+                and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+            )
+            dispatch_guard.reuse_terminal(succeeded=safe_terminal)
+            if safe_terminal:
+                # 이미 durable terminal인 호출은 checkpoint serializer/resume 오류로
+                # 완료 판정을 뒤집거나 target을 재실행하지 않는다.
+                stop_condition = "completed"
+                failure_code = None
+                final_artifact = await composition.finalize(
+                    request_id=request_id,
+                    normalized_result=response.result,
+                    outcome=TerminalOutcome.COMPLETED,
+                )
+                if final_artifact is None:
+                    stop_condition = "blocked"
+                    failure_code = "final_composition_rejected"
+                else:
+                    state = {
+                        **state,
+                        "final_artifact": final_artifact,
+                        "terminal_outcome": TerminalOutcome.COMPLETED,
+                    }
         if stop_condition != "completed" and response is None:
             stopped_status = (
                 AssetResultStatus.FAILED
@@ -690,10 +1410,14 @@ class ConnectedShadowTurnRunner:
         if response is None or response.result is None:
             raise RuntimeError("connected shadow graph did not produce a typed result")
         delivery_receipt = state.get("delivery_receipt")
-        delivery_status = getattr(
-            delivery_receipt,
-            "status",
-            DeliveryStatus.NOT_READY,
+        delivery_status = (
+            DeliveryStatus.SHADOWED
+            if durable_terminal_reused
+            else getattr(
+                delivery_receipt,
+                "status",
+                DeliveryStatus.NOT_READY,
+            )
         )
         budget = budget_controller.usage(stop_condition)
         dispatch_trace = dispatch_guard.snapshot()
@@ -758,6 +1482,8 @@ class ConnectedShadowTurnRunner:
             rollback_reasons.append("invocation_not_succeeded")
         if response.status is not AssetResultStatus.RESOLVED:
             rollback_reasons.append("asset_result_not_resolved")
+        if response.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}:
+            rollback_reasons.append("effect_not_safe")
         if terminal_outcome is not TerminalOutcome.COMPLETED:
             rollback_reasons.append("graph_not_completed")
         if final_artifact is None:
@@ -778,6 +1504,7 @@ class ConnectedShadowTurnRunner:
             terminal_outcome=terminal_outcome,
             rollback_required=bool(unique_reasons),
             rollback_reasons=unique_reasons,
+            effect_status=response.effect_status,
         )
         return ConnectedShadowResultV1(
             telemetry,

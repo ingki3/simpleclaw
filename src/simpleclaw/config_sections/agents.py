@@ -371,7 +371,8 @@ def _agent_with_defaults(agent: dict) -> dict:
     try:
         unified_mode = UnifiedTurnPlannerMode(raw_mode)
     except ValueError:
-        unified_mode = UnifiedTurnPlannerMode.PRIMARY
+        # 오타가 아직 검증되지 않은 primary 경로를 활성화하지 않게 한다.
+        unified_mode = UnifiedTurnPlannerMode.OFF
     unified_reasoning = unified_turn_planner.get("reasoning", {})
     if not isinstance(unified_reasoning, dict):
         unified_reasoning = {}

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import inspect
 import logging
 import re
 import time
@@ -40,7 +41,9 @@ from simpleclaw.agent.progress import (
     format_progress_line,
 )
 from simpleclaw.channels.models import AccessAttempt
+from simpleclaw.graph_runtime.adapters.delivery import SenderReceipt
 from simpleclaw.llm.models import MultimodalAttachment
+from simpleclaw.outbound_delivery import PrimaryResponseText
 from simpleclaw.proactive.presenter import (
     build_proactive_callback_data,
     parse_proactive_callback_data,
@@ -591,6 +594,8 @@ class TelegramBot:
         proactive_callback_handler: Callable[..., Awaitable[str]] | None = None,
         attachment_dir: str | Path | None = None,
         drain_notice_provider: Callable[[], str | None] | None = None,
+        primary_delivery_handler: Callable[..., Awaitable[object]] | None = None,
+        deferred_delivery_required: Callable[[], bool] | None = None,
     ) -> None:
         self._bot_token = bot_token
         self._whitelist_user_ids = set(whitelist_user_ids or [])
@@ -620,7 +625,20 @@ class TelegramBot:
         # ``DrainController.maintenance_notice`` 를 그대로 주입하면 된다. None 이면
         # 채널 레벨 게이트는 꺼지고 오케스트레이터 진입 게이트만 동작한다.
         self._drain_notice_provider = drain_notice_provider
+        self._primary_delivery_handler = primary_delivery_handler
+        self._deferred_delivery_required = deferred_delivery_required
 
+    def _streaming_enabled_for_current_rollout(self) -> bool:
+        """Return whether a response may use the non-durable streaming sink."""
+        if not bool(self._streaming_config.get("enabled", False)):
+            return False
+        if self._deferred_delivery_required is None:
+            return True
+        try:
+            return not bool(self._deferred_delivery_required())
+        except Exception:
+            logger.exception("deferred delivery gate failed; disabling streaming")
+            return False
 
     def set_proactive_callback_handler(
         self, handler: Callable[..., Awaitable[str]] | None
@@ -716,6 +734,7 @@ class TelegramBot:
         attachments: list[MultimodalAttachment] | None = None,
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
         on_progress: ProgressCallback | None = None,
+        request_id: str | None = None,
     ) -> str | None:
         """수신 메시지를 인증 후 처리한다.
 
@@ -763,6 +782,19 @@ class TelegramBot:
                     kwargs["on_text_delta"] = on_text_delta
                 if on_progress is not None:
                     kwargs["on_progress"] = on_progress
+                if request_id is not None:
+                    try:
+                        signature = inspect.signature(self._message_handler)
+                    except (TypeError, ValueError):
+                        signature = None
+                    if signature is None or (
+                        "request_id" in signature.parameters
+                        or any(
+                            parameter.kind is inspect.Parameter.VAR_KEYWORD
+                            for parameter in signature.parameters.values()
+                        )
+                    ):
+                        kwargs["request_id"] = request_id
                 if kwargs:
                     return await self._message_handler(
                         text, user_id, chat_id, **kwargs,
@@ -896,6 +928,34 @@ class TelegramBot:
 
         if not response:
             return
+        if isinstance(response, PrimaryResponseText):
+            if self._primary_delivery_handler is None:
+                logger.error(
+                    "V4 primary response blocked: durable delivery handler is missing"
+                )
+                return
+
+            destination_ref = (
+                f"telegram:{chat_id}:{'' if thread_id is None else thread_id}"
+            )
+
+            async def sender(_destination_ref: str, content: str) -> SenderReceipt:
+                message_ids: list[str] = []
+                for part in split_for_telegram(content):
+                    sent = await update.message.reply_text(part)
+                    message_id = getattr(sent, "message_id", None)
+                    if message_id is None:
+                        return SenderReceipt(
+                            detail="Telegram reply has no verifiable message id"
+                        )
+                    message_ids.append(str(message_id))
+                return SenderReceipt(external_message_id=",".join(message_ids))
+
+            return await self._primary_delivery_handler(
+                response,
+                destination_ref,
+                sender,
+            )
         for part in split_for_telegram(response):
             await update.message.reply_text(part)
 
@@ -1006,27 +1066,25 @@ class TelegramBot:
         if self._message_handler is None:
             return
 
+        callback_query_id = str(getattr(query, "id", "") or "missing")
+        request_id = (
+            f"telegram:callback:{callback_query_id}:{chat_id}:"
+            f"{message_id}:{option_index}"
+        )
+
         try:
             if self._clarify_consumer is not None:
                 try:
                     self._clarify_consumer(user_id, chat_id, thread_id)
                 except TypeError:
                     self._clarify_consumer(chat_id)
-            if thread_id is None:
-                response = await self._message_handler(
-                    option.body,
-                    user_id,
-                    chat_id,
-                )
-            else:
-                response = await self._message_handler(
-                    option.body,
-                    user_id,
-                    chat_id,
-                    thread_id=thread_id,
-                )
-        except TypeError:
-            response = await self._message_handler(option.body, user_id, chat_id)
+            response = await self.handle_message(
+                option.body,
+                user_id,
+                chat_id,
+                thread_id=thread_id,
+                request_id=request_id,
+            )
         except Exception:
             logger.exception("clarify callback message handler error")
             response = "An error occurred while processing your selection."
@@ -1202,8 +1260,9 @@ class TelegramBot:
                     # BIZ-259 — streaming.enabled 일 때 인증 후 sink 생성.
                     # 인증 실패는 handle_message 가 None 을 반환하므로 sink 누설 없음
                     # (먼저 인증 체크).
-                    streaming_enabled = bool(
-                        self._streaming_config.get("enabled", False)
+                    streaming_enabled = self._streaming_enabled_for_current_rollout()
+                    request_id = (
+                        f"telegram:{chat_id}:{update.message.message_id}"
                     )
                     if streaming_enabled and authorized:
                         sink = TelegramStreamSink(
@@ -1233,6 +1292,7 @@ class TelegramBot:
                                 if bool(self._streaming_config.get("tool_progress", True))
                                 else None
                             ),
+                            request_id=request_id,
                         )
                         # BIZ-260 + BIZ-259 통합 — clarify 가 pending 이면 sink 의
                         # placeholder/스트리밍 결과를 버리고 인라인 키보드 경로로 전환.
@@ -1291,6 +1351,7 @@ class TelegramBot:
                         chat_id,
                         thread_id=thread_id,
                         attachments=attachments,
+                        request_id=request_id,
                     )
                     if response is None:
                         return

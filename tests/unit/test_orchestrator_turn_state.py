@@ -5,15 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from simpleclaw.agent.orchestrator import (
+    _UNIFIED_PLAN_REJECTED_MESSAGE,
     _UNIFIED_PLAN_UNAVAILABLE_MESSAGE,
     AgentOrchestrator,
 )
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ComplexitySignal
 from simpleclaw.agent.session_state import SessionIdentity
+from simpleclaw.agent.tool_loop import ToolLoopResult
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
@@ -29,9 +34,19 @@ from simpleclaw.agent.turn_plan import (
 )
 from simpleclaw.agent.turn_planner import PlannerUnavailable
 from simpleclaw.capability import CapabilityMetadata
+from simpleclaw.channels.telegram_bot import TelegramBot
+from simpleclaw.graph_runtime.status import DeliveryStatus
 from simpleclaw.llm.models import LLMResponse
 from simpleclaw.memory.models import ConversationMessage, MessageRole
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryCoordinator,
+    PrimaryDeliveryMetadataV1,
+    PrimaryResponseText,
+)
+from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.models import SkillDefinition
+
+REPO_ROOT = Path(__file__).parents[2]
 
 
 @pytest.fixture
@@ -153,6 +168,242 @@ async def test_process_message_uses_one_primary_plan_and_scoped_store(
             session_key=session_key
         )
     ] == ["hello", "typed answer"]
+
+
+@pytest.mark.asyncio
+async def test_v4_planner_failure_is_delivered_without_pre_send_assistant_row(
+    config_file,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+    orchestrator._unified_turn_planner_config.update(
+        {"architecture": "langgraph_v4", "mode": "primary"}
+    )
+    request_id = "telegram:20:planner-crash"
+    session_key = SessionIdentity("telegram", "10", "20").stable_key()
+
+    async def planner_crash(*_args, **_kwargs):
+        raise RuntimeError("injected planner crash")
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        planner_crash,
+    )
+
+    response = await orchestrator.process_message(
+        "must survive",
+        10,
+        20,
+        request_id=request_id,
+    )
+    replay_response = await orchestrator.process_message(
+        "must survive",
+        10,
+        20,
+        request_id=request_id,
+    )
+
+    assert isinstance(response, PrimaryResponseText)
+    assert isinstance(replay_response, PrimaryResponseText)
+    assert str(response) == _UNIFIED_PLAN_UNAVAILABLE_MESSAGE
+    assert replay_response.metadata == response.metadata
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, "must survive", request_id)]
+
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "planner-failure-delivery.db",
+        conversation_store=orchestrator._store,
+    )
+
+    async def deliver(primary_response, destination_ref, sender):
+        return await coordinator.deliver_telegram(
+            primary_response,
+            destination_ref=destination_ref,
+            sender=sender,
+        )
+
+    bot = TelegramBot(
+        "token",
+        whitelist_user_ids=[10],
+        primary_delivery_handler=deliver,
+    )
+    update = SimpleNamespace(
+        message=SimpleNamespace(
+            reply_text=AsyncMock(side_effect=RuntimeError("send failed"))
+        )
+    )
+
+    outcome = await bot._send_response(
+        update,
+        response,
+        chat_id=20,
+        user_id=10,
+    )
+    replay_outcome = await bot._send_response(
+        update,
+        replay_response,
+        chat_id=20,
+        user_id=10,
+    )
+
+    assert outcome.delivery_receipt.status is DeliveryStatus.UNKNOWN
+    assert replay_outcome.delivery_receipt == outcome.delivery_receipt
+    assert outcome.persistence_receipt is None
+    assert replay_outcome.persistence_receipt is None
+    assert update.message.reply_text.await_count == 1
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, "must survive", request_id)]
+
+
+@pytest.mark.asyncio
+async def test_v4_connected_asset_failure_uses_delivery_boundary_without_assistant(
+    config_file,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+    v4 = dict(orchestrator._unified_turn_planner_config.get("langgraph_v4", {}))
+    v4.update(
+        {
+            "budget_valid": True,
+            "on_failure": "fail_closed",
+            "checkpoint": {"path": str(tmp_path / "asset-crash.db")},
+        }
+    )
+    orchestrator._unified_turn_planner_config.update(
+        {
+            "architecture": "langgraph_v4",
+            "mode": "primary",
+            "langgraph_v4": v4,
+        }
+    )
+    orchestrator._recipes = tuple(
+        discover_recipes(REPO_ROOT / "tests/fixtures/recipes")
+    )
+    request_id = "telegram:20:asset-crash"
+    session_key = SessionIdentity("telegram", "10", "20").stable_key()
+    asset = AssetRef("recipe", "contract-fixture-workflow")
+
+    async def planned_asset(text, *, catalog, **_kwargs):
+        return replace(
+            _plan(text, catalog.fingerprint),
+            execution=ExecutionPlan(
+                mode=ExecutionMode.DIRECT_ANSWER,
+                primary_asset=asset,
+                allowed_assets=(asset,),
+                reason="asset crash fixture",
+            ),
+            capability=CapabilityPlan(
+                coverage=CapabilityCoverage.FULL,
+                primary_asset=asset,
+                supporting_assets=(asset,),
+                reason="asset crash fixture",
+            ),
+        )
+
+    async def connected_asset_crash(**_kwargs):
+        raise RuntimeError("injected connected asset crash")
+
+    monkeypatch.setattr(
+        "simpleclaw.agent.orchestrator.plan_turn_with_llm",
+        planned_asset,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_execute_langgraph_v4_connected",
+        connected_asset_crash,
+    )
+
+    response = await orchestrator.process_message(
+        "asset must fail closed",
+        10,
+        20,
+        request_id=request_id,
+    )
+    replay_response = await orchestrator.process_message(
+        "asset must fail closed",
+        10,
+        20,
+        request_id=request_id,
+    )
+
+    assert isinstance(response, PrimaryResponseText)
+    assert isinstance(replay_response, PrimaryResponseText)
+    assert str(response) == _UNIFIED_PLAN_REJECTED_MESSAGE
+    assert replay_response.metadata == response.metadata
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, "asset must fail closed", request_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_id", "request_text"),
+    [
+        ("telegram:20:stable-ordinary", "stable ordinary request"),
+        (
+            "telegram:callback:callback-id:20:1001:0",
+            "stable callback option",
+        ),
+    ],
+)
+async def test_v4_telegram_replay_excludes_current_inbound_and_keeps_one_user_row(
+    config_file,
+    monkeypatch,
+    request_id,
+    request_text,
+) -> None:
+    orchestrator = AgentOrchestrator(config_file)
+    orchestrator._unified_turn_planner_config.update(
+        {"architecture": "langgraph_v4", "mode": "primary"}
+    )
+    session_key = SessionIdentity("telegram", "10", "20").stable_key()
+    candidate_batches = []
+
+    async def primary_result(_text, *, recent_rows, turn, **_kwargs):
+        candidate_batches.append(list(recent_rows))
+        return ToolLoopResult(
+            "durable response",
+            primary_delivery=PrimaryDeliveryMetadataV1(
+                request_id=turn.turn_id,
+                artifact_id="artifact-stable-ordinary",
+                artifact_hash="hash-stable-ordinary",
+                session_key=turn.session_key,
+            ),
+        )
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_unified_turn_planner_primary",
+        primary_result,
+    )
+
+    first = await orchestrator.process_message(
+        request_text,
+        10,
+        20,
+        request_id=request_id,
+    )
+    replay = await orchestrator.process_message(
+        request_text,
+        10,
+        20,
+        request_id=request_id,
+    )
+
+    assert isinstance(first, PrimaryResponseText)
+    assert isinstance(replay, PrimaryResponseText)
+    assert candidate_batches == [[], []]
+    assert [
+        (message.role, message.content, message.turn_id)
+        for message in orchestrator._store.get_recent(session_key=session_key)
+    ] == [(MessageRole.USER, request_text, request_id)]
 
 
 async def _async_response(text: str) -> LLMResponse:
