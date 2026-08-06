@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 fail-closed하도록 구현한 [PR #643](https://github.com/ingki3/simpleclaw/pull/643)은 bookkeeping/provenance 보정 후 새 exact head의 fresh CI 3종과 독립 runtime safety 재리뷰를 기다린다. 리뷰 PASS와 squash merge 전까지 `in_review`/미완료를 유지하며 live config·deploy·restart·primary activation은 수행하지 않는다. (진행: 2026-08-06)
-
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
@@ -218,6 +216,8 @@
 ## Done
 
 ### 2026-08-06
+
+- [x] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 `approved_asset_fingerprint_mismatch`로 fail-closed했다. combined BIZ-610 redaction 경계를 보존한 exact head `c9650db5087ba8e7c52c45a7889781937d7e7ce7`에서 독립 집중 회귀 `123 passed`, Ruff, diff check 및 fresh CI 3종을 통과했고, [PR #643](https://github.com/ingki3/simpleclaw/pull/643)을 `dev`에 squash merge(SHA `eeea899d763fe47f92cce4a6085587894ae8a4e7`)했다. BIZ-613은 별도 lifecycle로 추적하며 live config·deploy·restart·primary activation은 수행하지 않았다. (완료: 2026-08-06)
 
 - [x] **[BIZ-613](mention://issue/e478ecd4-5c1a-43a7-80af-631e2461b6b6): dev의 drama follow-up freshness 기준선 회귀를 복구** — production freshness 경계 변경 없이 drama follow-up fixture를 현행 PlanGate 계약에 맞춰 `freshness_required=True`로 보정했다. fresh CI 3종과 독립 Stage D exact-head 리뷰를 통과한 [PR #645](https://github.com/ingki3/simpleclaw/pull/645)을 `dev`에 squash merge(SHA `74da3d90e50f6def34e852610bfd5d79ec697c50`)했다. deploy·restart·live activation은 수행하지 않았다. (완료: 2026-08-06)
 
