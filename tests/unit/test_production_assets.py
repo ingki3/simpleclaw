@@ -145,6 +145,68 @@ def test_invalid_asset_fails_before_destination_change(
     assert not (tmp_path / "installed/escape").exists()
 
 
+@pytest.mark.parametrize("invalid", ["false", 0, 1, None])
+def test_non_boolean_executable_fails_before_destination_change(
+    tmp_path: Path,
+    invalid: object,
+) -> None:
+    asset = _asset_tree(tmp_path)
+    manifest_path = asset / "runtime-asset.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"][0]["executable"] = invalid
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "installed/comet"
+    destination.mkdir(parents=True)
+    sentinel = destination / "sentinel"
+    sentinel.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(TypeError, match=r"files\[0\]\.executable must be a boolean"):
+        install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert not (destination / "nested/payload.txt").exists()
+
+
+def test_catalog_manifest_symlink_escape_fails_before_destination_change(
+    tmp_path: Path,
+) -> None:
+    asset = _asset_tree(tmp_path)
+    manifest_path = asset / "runtime-asset.yaml"
+    external_manifest = tmp_path / "external-manifest.yaml"
+    external_manifest.write_bytes(manifest_path.read_bytes())
+    manifest_path.unlink()
+    manifest_path.symlink_to(external_manifest)
+    destination = tmp_path / "installed/comet"
+    destination.mkdir(parents=True)
+    sentinel = destination / "sentinel"
+    sentinel.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime asset manifest"):
+        install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert not (destination / "nested/payload.txt").exists()
+
+
+def test_explicit_external_manifest_regular_file_remains_supported(
+    tmp_path: Path,
+) -> None:
+    external_asset = _asset_tree(tmp_path / "external-catalog")
+    destination_parent = tmp_path / "explicit-install"
+
+    destination, resolved = install_runtime_asset(
+        external_asset / "runtime-asset.yaml",
+        destination_parent=destination_parent,
+    )
+
+    assert resolved.manifest.ref == "widget:comet"
+    assert resolved.provenance.startswith("manifest:")
+    assert (destination / "nested/payload.txt").read_bytes() == b"verified payload\n"
+
+
 def test_source_symlink_escape_fails_before_destination_change(tmp_path: Path) -> None:
     asset = _asset_tree(tmp_path)
     outside = asset.parent / "outside-secret"

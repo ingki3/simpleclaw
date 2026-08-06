@@ -13,4 +13,3 @@ expected:
   telegram_send: 0
   notifier: 0
   persistence: 0
-

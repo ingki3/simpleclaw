@@ -96,9 +96,8 @@ def _mapping(value: object, *, field: str) -> dict[str, Any]:
     return value
 
 
-def _load_manifest(resource: AssetResource) -> RuntimeAssetManifest:
-    """resource의 manifest를 읽고 설치 전에 전체 schema를 검증한다."""
-    raw_bytes = resource.read_bytes()
+def _load_manifest(raw_bytes: bytes) -> RuntimeAssetManifest:
+    """검증을 마친 manifest bytes의 전체 schema를 파싱한다."""
     raw = _mapping(yaml.safe_load(raw_bytes), field="manifest")
     if raw.get("schema_version") != 1:
         raise ValueError("unsupported runtime asset manifest schema")
@@ -153,12 +152,15 @@ def _load_manifest(resource: AssetResource) -> RuntimeAssetManifest:
         if target in destinations:
             raise ValueError(f"duplicate destination: {target}")
         destinations.add(target)
+        executable = item.get("executable", False)
+        if type(executable) is not bool:
+            raise TypeError(f"files[{index}].executable must be a boolean")
         declared.append(
             RuntimeAssetFile(
                 source=source,
                 destination=target,
                 sha256=digest,
-                executable=bool(item.get("executable", False)),
+                executable=executable,
             )
         )
     return RuntimeAssetManifest(
@@ -183,6 +185,8 @@ def _asset_root() -> tuple[AssetResource, str]:
 def _read_regular_asset_file(
     root: AssetResource,
     relative: PurePosixPath,
+    *,
+    kind: str = "source",
 ) -> bytes:
     """symlink를 따르지 않고 asset root 내부의 일반 파일만 읽는다."""
     source = root.joinpath(*relative.parts)
@@ -194,19 +198,21 @@ def _read_regular_asset_file(
             source_resolved.relative_to(root_resolved)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise ValueError(
-                f"runtime asset source escapes asset root: {relative}"
+                f"runtime asset {kind} escapes asset root: {relative}"
             ) from exc
         expected = root_resolved.joinpath(*relative.parts)
         if source_resolved != expected or not stat.S_ISREG(source_stat.st_mode):
             raise ValueError(
-                f"runtime asset source must be a contained regular file: {relative}"
+                f"runtime asset {kind} must be a contained regular file: {relative}"
             )
     else:
         is_symlink = getattr(source, "is_symlink", None)
         if callable(is_symlink) and is_symlink():
-            raise ValueError(f"runtime asset source must not be a symlink: {relative}")
+            raise ValueError(
+                f"runtime asset {kind} must not be a symlink: {relative}"
+            )
         if not source.is_file():
-            raise FileNotFoundError(f"runtime asset source missing: {relative}")
+            raise FileNotFoundError(f"runtime asset {kind} missing: {relative}")
     return source.read_bytes()
 
 
@@ -217,9 +223,10 @@ def resolve_runtime_asset(
 ) -> ResolvedRuntimeAsset:
     """asset ref 또는 manifest를 해석하고 모든 source digest를 검증한다."""
     if isinstance(asset, Path) or ":" not in str(asset):
-        manifest_path = Path(asset).expanduser().resolve()
-        resource: AssetResource = manifest_path
-        root: AssetResource = manifest_path.parent
+        manifest_input = Path(asset).expanduser()
+        root = manifest_input.parent.resolve(strict=True)
+        manifest_relative = PurePosixPath(manifest_input.name)
+        manifest_path = root / manifest_input.name
         provenance = f"manifest:{manifest_path}"
     else:
         asset_type, name = str(asset).split(":", maxsplit=1)
@@ -231,10 +238,16 @@ def resolve_runtime_asset(
             catalog_root = assets_root.expanduser().resolve()
             provenance = f"source:{catalog_root}"
         root = catalog_root.joinpath(f"{asset_type}s", name)
-        resource = root.joinpath(MANIFEST_NAME)
-    if not resource.is_file():
-        raise FileNotFoundError(f"runtime asset manifest not found: {asset}")
-    manifest = _load_manifest(resource)
+        manifest_relative = PurePosixPath(MANIFEST_NAME)
+    try:
+        manifest_bytes = _read_regular_asset_file(
+            root,
+            manifest_relative,
+            kind="manifest",
+        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"runtime asset manifest not found: {asset}") from exc
+    manifest = _load_manifest(manifest_bytes)
     if ":" in str(asset) and manifest.ref != str(asset):
         raise ValueError(
             f"runtime asset ref mismatch: expected {asset!s}, got {manifest.ref}"
