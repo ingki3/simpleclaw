@@ -986,9 +986,11 @@ async def test_cli_skill_without_declared_fallback_fails_closed(
         item for item in catalog.assets if item.name == skill.name
     )
     try:
-        with capture_shadow_side_effects() as side_effects:
-            with pytest.raises(ConnectedExecutionError) as captured:
-                await probe(load_scenarios(FIXTURE)[9], plan, selected_assets)
+        with (
+            capture_shadow_side_effects() as side_effects,
+            pytest.raises(ConnectedExecutionError) as captured,
+        ):
+            await probe(load_scenarios(FIXTURE)[9], plan, selected_assets)
         assert captured.value.phase == "binding"
         assert captured.value.code == "connected_binding_failed"
         assert captured.value.error_type == "ContractRegistryError"
