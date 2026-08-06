@@ -51,6 +51,44 @@ def test_arbitrary_manifest_asset_installs_without_core_registration(
     assert (destination / "nested/payload.txt").read_bytes() == b"verified payload\n"
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        pytest.param(True, id="boolean"),
+        pytest.param(1.0, id="float"),
+        pytest.param("1", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param(0, id="unsupported-zero"),
+        pytest.param(2, id="unsupported-two"),
+    ],
+)
+def test_non_canonical_schema_version_fails_before_destination_change(
+    tmp_path: Path,
+    invalid: object,
+) -> None:
+    asset = _asset_tree(tmp_path)
+    manifest_path = asset / "runtime-asset.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_version"] = invalid
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "installed/comet"
+    destination.mkdir(parents=True)
+    sentinel = destination / "sentinel"
+    sentinel.write_text("preserve", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="unsupported runtime asset manifest schema",
+    ):
+        install_runtime_asset("widget:comet", assets_root=tmp_path)
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert not (destination / "nested/payload.txt").exists()
+
+
 def test_install_is_idempotent_and_custom_destination_is_exact(tmp_path: Path) -> None:
     _asset_tree(tmp_path)
     parent = tmp_path / "custom"

@@ -99,7 +99,8 @@ def _mapping(value: object, *, field: str) -> dict[str, Any]:
 def _load_manifest(raw_bytes: bytes) -> RuntimeAssetManifest:
     """검증을 마친 manifest bytes의 전체 schema를 파싱한다."""
     raw = _mapping(yaml.safe_load(raw_bytes), field="manifest")
-    if raw.get("schema_version") != 1:
+    schema_version = raw.get("schema_version")
+    if type(schema_version) is not int or schema_version != 1:
         raise ValueError("unsupported runtime asset manifest schema")
     asset = _mapping(raw.get("asset"), field="asset")
     asset_type = asset.get("type")
