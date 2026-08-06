@@ -4,6 +4,21 @@ import inspect
 
 import pytest
 
+from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.plan_gate import GateStatus, PlanGate
+from simpleclaw.agent.planner_catalog import build_planner_catalog
+from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.turn_plan import (
+    AssetRef,
+    CapabilityPlan,
+    ClarificationPlan,
+    ContextRelation,
+    ContextSelection,
+    EvidenceOwner,
+    ExecutionPlan,
+    FactCheckPlan,
+    UnifiedTurnPlan,
+)
 from simpleclaw.capability import (
     CapabilityMetadata,
     parse_owned_binding_metadata,
@@ -58,8 +73,7 @@ def _binding(*, owner_type: str, owner_name: str, binding_id: str, value):
     return parsed
 
 
-@pytest.mark.asyncio
-async def test_planner_canonical_bytes_reach_recipe_binding_unchanged() -> None:
+def _definitions() -> tuple[RecipeDefinition, SkillDefinition]:
     child = SkillDefinition(
         name="unseen-child",
         capability=CapabilityMetadata(declared=True, read_only=True, side_effects=False),
@@ -97,6 +111,74 @@ async def test_planner_canonical_bytes_reach_recipe_binding_unchanged() -> None:
             ),
         ),
     )
+    return definition, child
+
+
+def test_plan_gate_seals_exact_catalog_definition_for_registry_continuity() -> None:
+    definition, child = _definitions()
+    catalog = build_planner_catalog(
+        skills=(child,),
+        recipes=(definition,),
+        native_specs=(),
+    )
+    owner = AssetRef(asset_type="recipe", name=definition.name)
+    plan = UnifiedTurnPlan(
+        original_text="opaque request",
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question="opaque request",
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=(),
+        intents=(),
+        fact_check=FactCheckPlan(
+            required=False,
+            owner=EvidenceOwner.NONE,
+            domain="none",
+            entities=(),
+            search_query="",
+        ),
+        execution=ExecutionPlan(
+            mode=ExecutionMode.DIRECT_ANSWER,
+            primary_asset=owner,
+            allowed_assets=(owner,),
+        ),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.PARTIAL,
+            primary_asset=owner,
+            supporting_assets=(owner,),
+        ),
+        confidence=1.0,
+        decision_summary="contract continuity",
+        catalog_fingerprint=catalog.fingerprint,
+    )
+
+    gate = PlanGate().evaluate(
+        plan,
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    registry = build_contract_registry((definition, child))
+    entry = registry.asset(AssetRefV1(type="recipe", name=definition.name))
+    catalog_asset = catalog.exact_asset("recipe", definition.name)
+
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    assert entry is not None
+    assert catalog_asset is not None
+    assert (
+        gate.effective_plan.approved_asset_fingerprint
+        == catalog_asset.definition_fingerprint
+        == entry.snapshot.definition_fingerprint
+        == definition.definition_fingerprint
+    )
+
+
+@pytest.mark.asyncio
+async def test_planner_canonical_bytes_reach_recipe_binding_unchanged() -> None:
+    definition, child = _definitions()
     registry = build_contract_registry([definition, child])
     owner = AssetRefV1(type="recipe", name="unseen-recipe")
     entry = registry.asset(owner)

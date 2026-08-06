@@ -217,6 +217,11 @@ def test_connected_validation_discovers_planner_visible_contract_fixtures() -> N
 
 def _plan(asset_type: str, name: str, mode: ExecutionMode) -> UnifiedTurnPlan:
     asset = AssetRef(asset_type=asset_type, name=name)
+    definition = next(
+        item
+        for item in _definitions()
+        if (item.contract_asset_type, item.name) == (asset_type, name)
+    )
     return UnifiedTurnPlan(
         original_text="connected shadow fixture",
         context=ContextSelection(
@@ -247,6 +252,7 @@ def _plan(asset_type: str, name: str, mode: ExecutionMode) -> UnifiedTurnPlan:
         ),
         confidence=1.0,
         decision_summary="connected fixture",
+        approved_asset_fingerprint=definition.definition_fingerprint,
     )
 
 
@@ -1556,6 +1562,112 @@ async def test_connected_registry_failure_preserves_phase_cause_and_redacts_prom
     assert captured.value.owned_binding_present is False
     assert "KBO" not in captured.value.safe_message
     assert isinstance(captured.value.__cause__, ValueError)
+
+
+@pytest.mark.parametrize("drift_axis", ("definition", "binding", "executor"))
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_runner_blocks_catalog_registry_snapshot_drift_before_dispatch(
+    tmp_path,
+    drift_axis,
+) -> None:
+    definitions = _definitions()
+    recipe = next(
+        item for item in definitions if item.name == "contract-fixture-workflow"
+    )
+    catalog = build_planner_catalog(
+        skills=tuple(
+            item for item in definitions if item.contract_asset_type == "skill"
+        ),
+        recipes=tuple(
+            item for item in definitions if item.contract_asset_type == "recipe"
+        ),
+        native_specs=(),
+    )
+    planned = replace(
+        _plan("recipe", recipe.name, ExecutionMode.DIRECT_ANSWER),
+        catalog_fingerprint=catalog.fingerprint,
+        approved_asset_fingerprint="",
+    )
+    gate = PlanGate().evaluate(
+        planned,
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    approved = gate.effective_plan
+    assert approved.approved_asset_fingerprint == recipe.definition_fingerprint
+
+    if drift_axis == "definition":
+        drifted_recipe = replace(recipe, description=f"{recipe.description} drift")
+    elif drift_axis == "binding":
+        drifted_recipe = replace(
+            recipe,
+            step_bindings=(
+                replace(recipe.step_bindings[0], binding_id="fixture-step.v2"),
+            ),
+        )
+    else:
+        drifted_recipe = replace(recipe, instructions="changed executor definition")
+    drifted_definitions = tuple(
+        drifted_recipe if item is recipe else item for item in definitions
+    )
+    original_registry = build_contract_registry(definitions)
+    drifted_registry = build_contract_registry(drifted_definitions)
+    owner = AssetRefV1(type="recipe", name=recipe.name)
+    original_entry = original_registry.asset(owner)
+    drifted_entry = drifted_registry.asset(owner)
+    assert original_entry is not None
+    assert drifted_entry is not None
+    assert original_entry.input_descriptor.ref == drifted_entry.input_descriptor.ref
+    assert original_entry.output_descriptor.ref == drifted_entry.output_descriptor.ref
+    assert (
+        original_entry.snapshot.definition_fingerprint
+        != drifted_entry.snapshot.definition_fingerprint
+    )
+
+    calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal calls
+        calls += 1
+        return {"fixture_result": "must-not-run"}
+
+    store = ConversationStore(tmp_path / f"{drift_axis}-conversation.db")
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / f"{drift_axis}-checkpoint.sqlite3",
+        ),
+        definitions=drifted_definitions,
+        conversation_store=store,
+        recipe_executor=executor,
+    )
+
+    with pytest.raises(ConnectedExecutionError) as captured:
+        await runner.run(
+            plan=approved,
+            legacy=None,
+            request_id=f"toctou-{drift_axis}",
+            session_key="toctou-session",
+            planner_model_calls=1,
+            planner_tokens=10,
+        )
+
+    assert captured.value.phase == "registry_lookup"
+    assert captured.value.code == "approved_asset_fingerprint_mismatch"
+    assert captured.value.selected_asset_identity == f"recipe:{recipe.name}"
+    assert captured.value.approved_asset_hash == recipe.definition_fingerprint
+    assert captured.value.selected_asset_hash == drifted_recipe.definition_fingerprint
+    assert calls == 0
+    assert store.get_recent() == []
+    assert _allow_v4_legacy_fallback(
+        {"on_failure": "legacy"}, None, None
+    ) is False
 
 
 @pytest.mark.asyncio
