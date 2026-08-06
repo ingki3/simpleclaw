@@ -17,8 +17,6 @@
 
 - [>] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 fail-closed하도록 구현한 [PR #643](https://github.com/ingki3/simpleclaw/pull/643)은 bookkeeping/provenance 보정 후 새 exact head의 fresh CI 3종과 독립 runtime safety 재리뷰를 기다린다. 리뷰 PASS와 squash merge 전까지 `in_review`/미완료를 유지하며 live config·deploy·restart·primary activation은 수행하지 않는다. (진행: 2026-08-06)
 
-- [>] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — 예외 원문과 chained traceback을 stable code/type/hash 진단으로 투영하는 구현을 완료했다. [PR #641](https://github.com/ingki3/simpleclaw/pull/641)은 exact-head 독립 security review PASS 후 repository bookkeeping·Graphify provenance를 보완 중이며, 새 exact head의 fresh CI와 재리뷰 전에는 merge하지 않는다. (진행: 2026-08-06)
-
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
@@ -220,6 +218,8 @@
 ## Done
 
 ### 2026-08-06
+
+- [x] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — 예외 원문과 chained traceback을 stable code/type/hash 진단으로 투영하고 formatter-level raw prompt·credential·chained-cause 누출을 차단했다. fail-closed·legacy 재실행 0·final promotion 0 회귀, fresh CI 3종 및 exact-head 독립 security review를 통과한 [PR #641](https://github.com/ingki3/simpleclaw/pull/641)을 `dev`에 squash merge(SHA `a9f942c90ffc4bc21515d75d280f2bff96b5627f`)했다. deploy·restart·live activation은 수행하지 않았다. (완료: 2026-08-06)
 
 - [x] **[BIZ-600](mention://issue/d70de3cc-6f7f-441a-a8d7-d6cddb6e64b5): LangGraph V4 true primary/canary wiring을 완성** — `off|shadow|read_only_canary|primary` rollout, V4 typed final/provenance, durable exactly-once target dispatch·delivery·persistence와 unsafe effect/invalid mode/post-dispatch fallback의 fail-closed 경계를 구현했다. 원 기능 [PR #634](https://github.com/ingki3/simpleclaw/pull/634)를 `dev`에 squash merge(SHA `130ead41fc157c417f2fd4f86964ac02b70a4552`)한 뒤, 필수 안전 리뷰 finding은 [BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b)의 [PR #636](https://github.com/ingki3/simpleclaw/pull/636)으로 보정해 squash merge(SHA `f230b7b533eedd6cc8468792ab901ef67a4c2fda`)했다. Corrective exact head `36ee712bea4d6b14cf6fd0376771a3349bad7fea`에서 구조·안전성 gate, operator detached focused `219 passed`, hermetic contract `4/4`, Ruff/diff와 CI 3종을 통과했고 external provider 및 Telegram/Cron/ConversationStore 호출은 `0/0/0/0`, rollback false였다. Live config 변경·release·restart·사용자-visible send와 post-restart primary smoke는 별도 후속 [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c)이 단독 소유한다. (완료: 2026-08-06)
 
