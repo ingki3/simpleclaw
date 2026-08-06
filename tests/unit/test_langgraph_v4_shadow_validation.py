@@ -228,6 +228,42 @@ async def test_hermetic_validator_avoids_provider_and_conversation_store(
     assert "CONVERSATION_WRITE_COUNT=0" in output
 
 
+@pytest.mark.asyncio
+async def test_kbo_incident_mode_repeats_asset_zero_effective_plan_no_send(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("external boundary must not be constructed")
+
+    monkeypatch.setattr(validation, "create_router", forbidden)
+    monkeypatch.setattr(validation, "ConversationStore", forbidden)
+    args = argparse.Namespace(
+        architecture="langgraph_v4",
+        mode="primary",
+        repeat=3,
+        max_provider_calls=3,
+        deadline_seconds=30.0,
+        backend="",
+        config=ROOT / "does-not-exist.yaml",
+        hermetic=True,
+        incident_kbo=True,
+        assert_contract_set=True,
+        assert_zero_delivery=True,
+        assert_zero_persistence=True,
+    )
+
+    assert await _run(args) == 0
+    output = capsys.readouterr().out
+    assert output.count('"original_asset":null') == 3
+    assert output.count('"effective_asset":"recipe:sports-live"') == 3
+    assert "TARGET_DISPATCH_EXACTLY_ONCE=true" in output
+    assert "TYPED_FINAL=PASS" in output
+    assert "TELEGRAM_SEND_COUNT=0" in output
+    assert "CRON_NOTIFIER_COUNT=0" in output
+    assert "CONVERSATION_WRITE_COUNT=0" in output
+
+
 def test_offline_workflow_runs_hermetic_validator_with_all_assertions() -> None:
     workflow = (ROOT / ".github/workflows/offline-integration.yml").read_text()
 

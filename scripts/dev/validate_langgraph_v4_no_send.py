@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LangGraph V4 connected shadow validator thin wrapper."""
+"""LangGraph V4 connected/no-send 및 KBO corrective validator thin wrapper."""
 
 from __future__ import annotations
 

@@ -6,11 +6,12 @@ import asyncio
 import hashlib
 import inspect
 import json
+import re
 import secrets
 import sqlite3
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -100,6 +101,81 @@ class _ShadowBudgetStop(RuntimeError):
 
 class _TargetDispatchInvariantError(RuntimeError):
     """두 번째 target helper dispatch를 실제 adapter 호출 전에 차단한다."""
+
+
+ConnectedFailurePhase = Literal["setup", "registry", "binding", "dispatch", "receipt"]
+
+
+def _sanitized_exception_message(exc: BaseException) -> str:
+    """원문·credential을 보존하지 않는 bounded exception diagnostic을 만든다."""
+    message = " ".join(str(exc).split())
+    if not message:
+        return "empty_message"
+    message = re.sub(r"https?://\S+", "[redacted-url]", message, flags=re.IGNORECASE)
+    message = re.sub(
+        r"(?i)(authorization|api[_-]?key|token|secret|password)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        message,
+    )
+    # 자연어 prompt/provider payload는 phase diagnostic에 필요하지 않다. 내부
+    # validation message는 ASCII로 작성하므로 비 ASCII message는 hash만 남긴다.
+    if any(ord(char) > 127 for char in message):
+        digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+        return f"redacted_non_ascii_message_sha256={digest}"
+    return message[:240]
+
+
+class ConnectedExecutionError(RuntimeError):
+    """Connected 경계의 실패 phase와 sanitized cause를 보존한다."""
+
+    def __init__(self, phase: ConnectedFailurePhase, cause: BaseException) -> None:
+        self.phase = phase
+        self.error_type = type(cause).__name__
+        self.safe_message = _sanitized_exception_message(cause)
+        super().__init__(f"{phase}:{self.error_type}:{self.safe_message}")
+
+
+def _connected_error(
+    phase: ConnectedFailurePhase,
+    exc: BaseException,
+) -> ConnectedExecutionError:
+    if isinstance(exc, ConnectedExecutionError):
+        return exc
+    return ConnectedExecutionError(phase, exc)
+
+
+def _tag_connected_error(
+    phase: ConnectedFailurePhase,
+    exc: BaseException,
+) -> BaseException:
+    """기존 public exception type을 깨지 않고 phase diagnostic을 부착한다."""
+    setattr(exc, "connected_phase", phase)
+    setattr(exc, "connected_error_type", type(exc).__name__)
+    setattr(exc, "connected_safe_message", _sanitized_exception_message(exc))
+    return exc
+
+
+@asynccontextmanager
+async def _connected_checkpointer(path: str | Path):
+    """SQLite setup/teardown 실패를 connected setup phase로 고정한다."""
+    try:
+        async with AsyncSqliteSaver.from_conn_string(str(path)) as checkpointer:
+            yield checkpointer
+    except ConnectedExecutionError:
+        raise
+    except Exception as exc:
+        raise _connected_error("setup", exc) from exc
+
+
+def _compile_connected_graph(callbacks, completion_callbacks, *, checkpointer):
+    try:
+        return compile_core_graph(
+            callbacks,
+            completion_callbacks,
+            checkpointer=checkpointer,
+        )
+    except Exception as exc:
+        raise _connected_error("setup", exc) from exc
 
 
 DurableDispatchLifecycle = Literal[
@@ -963,7 +1039,13 @@ class ConnectedShadowTurnRunner:
     ) -> None:
         self._facade = facade
         self._definitions = tuple(definitions)
-        self._registry = build_contract_registry(self._definitions)
+        try:
+            self._registry = build_contract_registry(self._definitions)
+        except ContractRegistryError as exc:
+            _tag_connected_error("registry", exc)
+            raise
+        except Exception as exc:
+            raise _connected_error("registry", exc) from exc
         self._conversation_store = conversation_store
         self._recipe_executor = recipe_executor
         self._skill_executor = skill_executor
@@ -982,17 +1064,40 @@ class ConnectedShadowTurnRunner:
         """PlanGate가 승인한 exact asset을 graph completion 끝까지 no-send 실행한다."""
         selected = plan.capability.primary_asset
         if selected is None:
-            raise ValueError("connected shadow requires a planner-selected asset")
+            exc = ValueError("connected shadow requires a planner-selected asset")
+            raise _connected_error("registry", exc) from exc
         asset_ref = AssetRefV1(type=selected.asset_type, name=selected.name)
         entry = self._registry.asset(asset_ref)
         if entry is None or not entry.snapshot.read_only or entry.snapshot.side_effects:
-            raise ValueError("connected shadow asset must be registered read-only")
-        payload = _question_payload(
-            self._registry,
-            entry,
-            plan.context.standalone_question,
-        )
-        canonical = self._registry.validate_canonical(entry.input_descriptor, payload)
+            exc = ValueError("connected shadow asset must be registered read-only")
+            raise _connected_error("registry", exc) from exc
+        try:
+            definition_matches = tuple(
+                item
+                for item in self._definitions
+                if item.contract_asset_type == asset_ref.type
+                and item.name == asset_ref.name
+            )
+            if len(definition_matches) != 1:
+                raise ValueError("connected definition identity must resolve exactly once")
+            definition = definition_matches[0]
+            if (
+                definition.definition_fingerprint
+                != entry.snapshot.definition_fingerprint
+            ):
+                raise ValueError("connected definition fingerprint mismatch")
+            if entry.snapshot.declared_binding is None:
+                raise ValueError("connected definition binding is missing")
+            payload = _question_payload(
+                self._registry,
+                entry,
+                plan.context.standalone_question,
+            )
+            canonical = self._registry.validate_canonical(
+                entry.input_descriptor, payload
+            )
+        except Exception as exc:
+            raise _connected_error("binding", exc) from exc
         invocation = AssetInvocationV1(
             invocation_id=hashlib.sha256(
                 f"{request_id}:{asset_ref.type}:{asset_ref.name}".encode()
@@ -1003,11 +1108,6 @@ class ConnectedShadowTurnRunner:
             payload=canonical.payload,
             payload_hash=canonical.payload_hash,
             output_contract=entry.output_descriptor.ref,
-        )
-        definition = next(
-            item
-            for item in self._definitions
-            if item.contract_asset_type == asset_ref.type and item.name == asset_ref.name
         )
         if asset_ref.type == "recipe":
             adapter = GenericRecipeAdapter(
@@ -1283,10 +1383,8 @@ class ConnectedShadowTurnRunner:
         state: Mapping[str, object] = {}
         stop_condition = "completed"
         failure_code: str | None = None
-        async with AsyncSqliteSaver.from_conn_string(
-            str(self._facade.checkpoint_path)
-        ) as checkpointer:
-            graph = compile_core_graph(
+        async with _connected_checkpointer(self._facade.checkpoint_path) as checkpointer:
+            graph = _compile_connected_graph(
                 callbacks,
                 completion_callbacks,
                 checkpointer=checkpointer,
@@ -1319,7 +1417,7 @@ class ConnectedShadowTurnRunner:
                     failure_code = str(exc)
                 except Exception as exc:  # noqa: BLE001 - typed rollback boundary
                     stop_condition = "failed"
-                    failure_code = f"graph_{type(exc).__name__}"
+                    failure_code = str(_connected_error("dispatch", exc))
         if response is None:
             try:
                 response = durable_claims.terminal(
@@ -1493,19 +1591,22 @@ class ConnectedShadowTurnRunner:
         if counts.total:
             rollback_reasons.append("external_side_effect")
         unique_reasons = tuple(dict.fromkeys(rollback_reasons))
-        execution = LangGraphV4ExecutionReceiptV1(
-            mode=self._facade.mode,
-            request_id=request_id,
-            selected_route=route,
-            final_artifact=final_artifact,
-            dispatch_trace=dispatch_trace,
-            budget_usage=budget,
-            side_effect_counts=counts,
-            terminal_outcome=terminal_outcome,
-            rollback_required=bool(unique_reasons),
-            rollback_reasons=unique_reasons,
-            effect_status=response.effect_status,
-        )
+        try:
+            execution = LangGraphV4ExecutionReceiptV1(
+                mode=self._facade.mode,
+                request_id=request_id,
+                selected_route=route,
+                final_artifact=final_artifact,
+                dispatch_trace=dispatch_trace,
+                budget_usage=budget,
+                side_effect_counts=counts,
+                terminal_outcome=terminal_outcome,
+                rollback_required=bool(unique_reasons),
+                rollback_reasons=unique_reasons,
+                effect_status=response.effect_status,
+            )
+        except Exception as exc:
+            raise _connected_error("receipt", exc) from exc
         return ConnectedShadowResultV1(
             telemetry,
             comparison,
