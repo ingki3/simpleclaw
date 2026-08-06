@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -17,10 +19,47 @@ from simpleclaw.langgraph_v4_shadow_validation import (
     _contract_identity,
     _contract_set_violations,
     _definitions,
+    _parser,
     _run,
 )
 
 ROOT = Path(__file__).parents[2]
+
+
+_VALIDATOR_SUBPROCESS = r"""
+import sys
+from dataclasses import replace
+
+sys.path.insert(0, "src")
+import simpleclaw.langgraph_v4_shadow_validation as validation
+
+mode, violation = sys.argv[1:]
+validation.create_router = lambda _config: validation._HermeticPlannerRouter()
+
+if violation == "contract":
+    wanted = min(validation.EXPECTED_CONTRACT_SET)
+    validation._contract_set_violations = lambda *_args, **_kwargs: (
+        validation.ContractSetViolation(kind="missing", expected=wanted),
+    )
+elif violation in {"delivery", "persistence"}:
+    original_run = validation.ConnectedShadowTurnRunner.run
+
+    async def run_with_violation(self, *args, **kwargs):
+        result = await original_run(self, *args, **kwargs)
+        field = "telegram_send" if violation == "delivery" else "conversation_write"
+        counts = replace(result.side_effect_counts, **{field: 1})
+        return replace(result, side_effect_counts=counts)
+
+    validation.ConnectedShadowTurnRunner.run = run_with_violation
+
+cli_args = ["validator"]
+if mode == "hermetic":
+    cli_args.append("--hermetic")
+else:
+    cli_args.extend(("--config", "pyproject.toml"))
+sys.argv = cli_args
+raise SystemExit(validation.main())
+"""
 
 
 def _fixture_contract_set() -> frozenset[ContractIdentity]:
@@ -111,6 +150,50 @@ def test_owner_contract_version_and_schema_drift_are_structured(
         _assert_contract_set(violations)
 
 
+@pytest.mark.parametrize("argv", [[], ["--hermetic"]])
+def test_parser_enables_all_safety_assertions_by_default(argv: list[str]) -> None:
+    args = _parser().parse_args(argv)
+
+    assert args.assert_contract_set is True
+    assert args.assert_zero_delivery is True
+    assert args.assert_zero_persistence is True
+
+
+@pytest.mark.parametrize("mode", ["default", "hermetic"])
+@pytest.mark.parametrize("violation", ["contract", "delivery", "persistence"])
+def test_cli_exits_nonzero_for_measured_safety_violation(
+    mode: str,
+    violation: str,
+) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", _VALIDATOR_SUBPROCESS, mode, violation],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert f"{violation} " in completed.stderr.lower()
+
+
+@pytest.mark.parametrize("mode", ["default", "hermetic"])
+def test_cli_safe_fixture_exits_zero(mode: str) -> None:
+    completed = subprocess.run(
+        [sys.executable, "-c", _VALIDATOR_SUBPROCESS, mode, "safe"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "CONTRACT_SET_VIOLATIONS=[]" in completed.stdout
+    assert "TELEGRAM_SEND_COUNT=0" in completed.stdout
+    assert "CRON_NOTIFIER_COUNT=0" in completed.stdout
+    assert "CONVERSATION_WRITE_COUNT=0" in completed.stdout
+
+
 @pytest.mark.asyncio
 async def test_hermetic_validator_avoids_provider_and_conversation_store(
     monkeypatch: pytest.MonkeyPatch,
@@ -150,6 +233,7 @@ def test_offline_workflow_runs_hermetic_validator_with_all_assertions() -> None:
 
     assert "python scripts/dev/validate_langgraph_v4_no_send.py" in workflow
     assert "--hermetic" in workflow
-    assert "--assert-contract-set" in workflow
-    assert "--assert-zero-delivery" in workflow
-    assert "--assert-zero-persistence" in workflow
+    assert "--unsafe" not in workflow
+    assert "--assert-contract-set" not in workflow
+    assert "--assert-zero-delivery" not in workflow
+    assert "--assert-zero-persistence" not in workflow

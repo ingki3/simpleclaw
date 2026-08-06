@@ -503,15 +503,14 @@ async def _run(args: argparse.Namespace) -> int:
         )
     }
     contract_violations = _contract_set_violations(contracts)
-    if args.assert_contract_set:
-        _assert_contract_set(contract_violations)
+    _assert_contract_set(contract_violations)
     counts = tuple(result.side_effect_counts for result in results)
     telegram = sum(item.telegram_send for item in counts)
     notifier = sum(item.notifier for item in counts)
     persistence = sum(item.conversation_write for item in counts)
-    if args.assert_zero_delivery and (telegram or notifier):
+    if telegram or notifier:
         raise RuntimeError("delivery side-effect assertion failed")
-    if args.assert_zero_persistence and (persistence or stored_messages):
+    if persistence or stored_messages:
         raise RuntimeError("persistence side-effect assertion failed")
     stop_conditions = {result.telemetry.budget_usage.stop_condition for result in results}
     provider_kind = "HERMETIC_PLANNER" if args.hermetic else "ACTUAL_PLANNER_PROVIDER"
@@ -560,9 +559,11 @@ def _parser() -> argparse.ArgumentParser:
         default=REPO_ROOT / "config.yaml",
     )
     parser.add_argument("--hermetic", action="store_true")
-    parser.add_argument("--assert-contract-set", action="store_true")
-    parser.add_argument("--assert-zero-delivery", action="store_true")
-    parser.add_argument("--assert-zero-persistence", action="store_true")
+    parser.set_defaults(
+        assert_contract_set=True,
+        assert_zero_delivery=True,
+        assert_zero_persistence=True,
+    )
     return parser
 
 
