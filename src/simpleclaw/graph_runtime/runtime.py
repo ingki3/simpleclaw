@@ -325,7 +325,7 @@ class LangGraphV4ExecutionReceiptV1:
             if self.final_artifact.outcome is not self.terminal_outcome:
                 raise ValueError("final artifact outcome mismatch")
             expected_hash = hashlib.sha256(
-                f"content.v1\x1f{self.final_artifact.content}".encode("utf-8")
+                f"content.v1\x1f{self.final_artifact.content}".encode()
             ).hexdigest()
             if self.final_artifact.content_hash != expected_hash:
                 raise ValueError("final artifact content hash mismatch")

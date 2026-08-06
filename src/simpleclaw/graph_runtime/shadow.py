@@ -891,7 +891,7 @@ class ConnectedShadowTurnRunner:
                 assert response.result is not None
                 content = _compose_user_facing_result(response.result)
                 artifact_id = hashlib.sha256(
-                    f"artifact.v1\x1f{request_id}\x1f{content}".encode("utf-8")
+                    f"artifact.v1\x1f{request_id}\x1f{content}".encode()
                 ).hexdigest()
                 final_artifact = FinalArtifactV1(
                     artifact_id=artifact_id,
@@ -899,7 +899,7 @@ class ConnectedShadowTurnRunner:
                     content=content,
                     outcome=TerminalOutcome.COMPLETED,
                     content_hash=hashlib.sha256(
-                        f"content.v1\x1f{content}".encode("utf-8")
+                        f"content.v1\x1f{content}".encode()
                     ).hexdigest(),
                 )
                 state = {
