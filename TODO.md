@@ -15,10 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-614](mention://issue/9a5c9aec-d569-4753-9730-d3dee0f57a05): V4 structured asset identity 로그 누출을 차단** — user-managed recipe/skill name을 original/effective/diagnostic formatter에서 제거하고 closed asset kind와 canonical definition hash로 대체한다. formatter-level 독립 marker 회귀, fail-closed·exactly-once 검증, fresh CI와 exact-head security review가 완료될 때까지 부모 BIZ-610을 재개 상태로 유지한다. (진행: 2026-08-06)
-
-- [>] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — PR #641 merge 후 필수 security review에서 structured original/effective/diagnostic asset identity가 user-managed catalog text를 formatter로 다시 노출하는 후속 finding이 확인됐다. corrective child BIZ-614의 fresh CI·exact-head security review·squash merge 후에만 전체 DoD를 재평가한다. (재개: 2026-08-06)
-
 - [>] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — PR #639는 `dev`에 squash merge됐으나 late mandatory review에서 catalog→registry TOCTOU(P0), formatter raw payload leak(P1), installer/runtime/package 및 domain-neutrality drift(P1)가 확인됐다. corrective children BIZ-610/BIZ-611/BIZ-612의 fresh CI·exact-head review·squash merge와 combined 최신 `dev` 검증 전까지 `in_review`/미완료를 유지한다. 부모 BIZ-573은 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (진행: 2026-08-06)
 
 - [>] **[BIZ-611](mention://issue/968d342f-5794-4fd3-b1d8-bfe2d085f348): Runtime asset installer 경로와 package artifact를 domain-neutral하게 정렬** — generic manifest/resource resolver와 installer를 canonical 경로로 두고 sports-named CLI는 asset ref만 전달하는 thin compatibility wrapper로 유지한다. Stage D에서 확인된 source/destination symlink containment, post-swap cleanup rollback, 선언 executable mode drift 복구와 task-owned 한국어 docstring 정책을 보완했으며, [PR #642](https://github.com/ingki3/simpleclaw/pull/642)는 complete regular-tree/bytes/mode/fault-injection 회귀, fresh CI와 새 exact-head 독립 deployment/architecture review 전에는 merge하지 않는다. (진행: 2026-08-06)
@@ -222,6 +218,10 @@
 ## Done
 
 ### 2026-08-06
+
+- [x] **[BIZ-614](mention://issue/9a5c9aec-d569-4753-9730-d3dee0f57a05): V4 structured asset identity 로그 누출을 차단** — user-managed original/effective/diagnostic asset identity와 invalid definition/catalog fingerprint를 production formatter 경계에서 canonical SHA-256 또는 closed surrogate로 fail-closed했다. exact head `026709dc7546e5a4245de8ed72a4d1df860c1e4e`에서 전체 unit `3510 passed, 3 xfailed`, 관련 contracts/integration `101 passed`, 독립 focused `92 passed`, Ruff와 fresh CI 3종을 통과했으며 marker 0과 canonical provenance 보존을 확인했다. [PR #648](https://github.com/ingki3/simpleclaw/pull/648)을 `dev`에 squash merge(SHA `e0dd62a460b94bfb0b7edcacc67dc6d704e38715`)했고 deploy·restart·live activation·사용자-visible 전송은 수행하지 않았다. (완료: 2026-08-06)
+
+- [x] **[BIZ-610](mention://issue/a6f05858-c411-43a4-af66-d1570da12b05): V4 connected 오류 로그의 raw payload 누출을 차단** — connected 오류 로그의 raw exception/cause와 prompt/provider payload/credential을 digest·closed provenance로 대체한 [PR #641](https://github.com/ingki3/simpleclaw/pull/641)을 squash merge(SHA `a9f942c90ffc4bc21515d75d280f2bff96b5627f`)한 뒤, late review에서 발견된 structured asset identity와 fingerprint fallback 누출을 corrective [BIZ-614](mention://issue/9a5c9aec-d569-4753-9730-d3dee0f57a05)의 [PR #648](https://github.com/ingki3/simpleclaw/pull/648)로 보정해 squash merge(SHA `e0dd62a460b94bfb0b7edcacc67dc6d704e38715`)했다. 두 경로의 fresh CI와 exact-head 독립 security review를 통과했으며 fail-closed promotion·legacy fallback·side-effect 0과 성공 exactly-once를 유지했다. (완료: 2026-08-06)
 
 - [x] **[BIZ-612](mention://issue/736fe0e0-5f12-4b5d-a87a-89c6e53a3b6f): V4 catalog-registry fingerprint TOCTOU dispatch를 차단** — exact selected asset definition fingerprint를 effective plan에 봉인하고 definition/binding/executor-definition drift를 adapter 호출 전에 `approved_asset_fingerprint_mismatch`로 fail-closed했다. combined BIZ-610 redaction 경계를 보존한 exact head `c9650db5087ba8e7c52c45a7889781937d7e7ce7`에서 독립 집중 회귀 `123 passed`, Ruff, diff check 및 fresh CI 3종을 통과했고, [PR #643](https://github.com/ingki3/simpleclaw/pull/643)을 `dev`에 squash merge(SHA `eeea899d763fe47f92cce4a6085587894ae8a4e7`)했다. BIZ-613은 별도 lifecycle로 추적하며 live config·deploy·restart·primary activation은 수행하지 않았다. (완료: 2026-08-06)
 
