@@ -127,6 +127,29 @@ _CONNECTED_ERROR_TYPES = frozenset(
         "ValueError",
     }
 )
+_CONNECTED_ERROR_CODES = frozenset(
+    {
+        "approved_asset_fingerprint_mismatch",
+        "asset_identity_missing",
+        "asset_not_registered_read_only",
+    }
+)
+_CONNECTED_ASSET_KINDS = frozenset({"recipe", "skill", "native_tool"})
+
+
+def _closed_asset_kind(value: str) -> str:
+    """User-managed asset identity를 closed kind로만 투영한다."""
+    return value if value in _CONNECTED_ASSET_KINDS else "unknown"
+
+
+def _closed_fingerprint(value: str) -> str:
+    """Canonical SHA-256만 diagnostic formatter로 전달한다."""
+    normalized = value.lower()
+    if len(normalized) != 64:
+        return ""
+    if any(character not in "0123456789abcdef" for character in normalized):
+        return ""
+    return normalized
 
 
 def _sanitized_exception_message(exc: BaseException) -> str:
@@ -145,7 +168,7 @@ class ConnectedExecutionError(RuntimeError):
         cause: BaseException,
         *,
         code: str | None = None,
-        selected_asset_identity: str = "none",
+        selected_asset_kind: str = "none",
         selected_asset_hash: str = "",
         approved_asset_hash: str = "",
         catalog_fingerprint: str = "",
@@ -159,17 +182,25 @@ class ConnectedExecutionError(RuntimeError):
         )
         # Provider가 임의 ``code`` attribute에 payload를 담을 수 있으므로 자동
         # 승격하지 않는다. 호출자가 정적으로 지정한 code 또는 phase code만 쓴다.
-        self.code = code or f"connected_{self.phase}_failed"
+        self.code = (
+            code
+            if code in _CONNECTED_ERROR_CODES
+            else f"connected_{self.phase}_failed"
+        )
         cause_type = type(cause).__name__
         self.error_type = (
             cause_type if cause_type in _CONNECTED_ERROR_TYPES else "ExternalError"
         )
         self.safe_message = _sanitized_exception_message(cause)
-        self.selected_asset_identity = selected_asset_identity
-        self.selected_asset_hash = selected_asset_hash
-        self.approved_asset_hash = approved_asset_hash
-        self.catalog_fingerprint = catalog_fingerprint
-        self.registry_fingerprint = registry_fingerprint
+        self.selected_asset_kind = (
+            "none"
+            if selected_asset_kind == "none"
+            else _closed_asset_kind(selected_asset_kind)
+        )
+        self.selected_asset_hash = _closed_fingerprint(selected_asset_hash)
+        self.approved_asset_hash = _closed_fingerprint(approved_asset_hash)
+        self.catalog_fingerprint = _closed_fingerprint(catalog_fingerprint)
+        self.registry_fingerprint = _closed_fingerprint(registry_fingerprint)
         self.owned_input_contract_present = owned_input_contract_present
         self.owned_output_contract_present = owned_output_contract_present
         self.owned_binding_present = owned_binding_present
@@ -1140,7 +1171,7 @@ class ConnectedShadowTurnRunner:
             definition.definition_fingerprint if definition is not None else ""
         )
         diagnostic = {
-            "selected_asset_identity": f"{asset_ref.type}:{asset_ref.name}",
+            "selected_asset_kind": asset_ref.type,
             "selected_asset_hash": definition_fingerprint,
             "approved_asset_hash": plan.approved_asset_fingerprint,
             "catalog_fingerprint": plan.catalog_fingerprint,

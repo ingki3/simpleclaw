@@ -338,12 +338,113 @@ def _canary_read_only_eligible(
     return True
 
 
-def _selected_asset_identity(plan: UnifiedTurnPlan) -> str:
-    """원문 없이 primary asset의 owner-qualified identity만 기록한다."""
+def _selected_asset_kind(plan: UnifiedTurnPlan) -> str:
+    """User-managed name 없이 primary asset의 closed kind만 기록한다."""
     selected = plan.capability.primary_asset
     if selected is None:
         return "none"
-    return f"{selected.asset_type}:{selected.name}"
+    if selected.asset_type in {"recipe", "skill", "native_tool"}:
+        return selected.asset_type
+    return "unknown"
+
+
+def _closed_fingerprint(value: str | None) -> str:
+    """Canonical lowercase SHA-256 fingerprint만 formatter 경계에 허용한다."""
+    fingerprint = value or ""
+    if len(fingerprint) != 64:
+        return ""
+    if any(character not in "0123456789abcdef" for character in fingerprint):
+        return ""
+    return fingerprint
+
+
+def _selected_asset_hash(
+    plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+) -> str:
+    """Exact catalog match의 canonical definition fingerprint만 기록한다."""
+    selected = plan.capability.primary_asset
+    if selected is None:
+        return ""
+    matches = tuple(
+        asset
+        for asset in catalog.assets
+        if (asset.asset_type, asset.name)
+        == (selected.asset_type, selected.name)
+    )
+    if len(matches) != 1:
+        return ""
+    return _closed_fingerprint(matches[0].definition_fingerprint)
+
+
+def _log_unified_turn_planner_effective(
+    *,
+    request_id: str,
+    original_plan: UnifiedTurnPlan,
+    effective_plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+) -> None:
+    """Gate 전후 plan을 closed/hash provenance만으로 직렬화한다."""
+    logger.info(
+        "Unified TurnPlanner effective plan: request_id=%s "
+        "original_mode=%s original_asset_kind=%s original_asset_hash=%s "
+        "original_assets=%d effective_mode=%s effective_asset_kind=%s "
+        "effective_asset_hash=%s effective_assets=%d",
+        request_id,
+        original_plan.execution.mode.value,
+        _selected_asset_kind(original_plan),
+        _selected_asset_hash(original_plan, catalog),
+        len(original_plan.execution.allowed_assets),
+        effective_plan.execution.mode.value,
+        _selected_asset_kind(effective_plan),
+        _selected_asset_hash(effective_plan, catalog),
+        len(effective_plan.execution.allowed_assets),
+    )
+
+
+def _log_langgraph_v4_primary_isolated(
+    *,
+    request_id: str,
+    original_plan: UnifiedTurnPlan,
+    effective_plan: UnifiedTurnPlan,
+    catalog: PlannerCatalog,
+    diagnostic: ConnectedExecutionError,
+) -> None:
+    """Connected 실패를 closed/hash provenance만으로 직렬화한다."""
+    logger.error(
+        "LangGraph V4 primary isolated: request_id=%s "
+        "original_mode=%s effective_mode=%s original_asset_kind=%s "
+        "original_asset_hash=%s effective_asset_kind=%s "
+        "effective_asset_hash=%s failure_phase=%s phase=%s code=%s "
+        "error_type=%s selected_asset_kind=%s selected_asset_hash=%s "
+        "approved_asset_hash=%s "
+        "catalog_fingerprint=%s registry_fingerprint=%s "
+        "owned_input_contract_present=%s "
+        "owned_output_contract_present=%s owned_binding_present=%s "
+        "error_message=%s",
+        request_id,
+        original_plan.execution.mode.value,
+        effective_plan.execution.mode.value,
+        _selected_asset_kind(original_plan),
+        _selected_asset_hash(original_plan, catalog),
+        _selected_asset_kind(effective_plan),
+        _selected_asset_hash(effective_plan, catalog),
+        diagnostic.phase,
+        diagnostic.phase,
+        diagnostic.code,
+        diagnostic.error_type,
+        diagnostic.selected_asset_kind,
+        diagnostic.selected_asset_hash,
+        diagnostic.approved_asset_hash,
+        _closed_fingerprint(
+            diagnostic.catalog_fingerprint or catalog.fingerprint
+        ),
+        diagnostic.registry_fingerprint,
+        diagnostic.owned_input_contract_present,
+        diagnostic.owned_output_contract_present,
+        diagnostic.owned_binding_present,
+        diagnostic.safe_message,
+    )
 
 
 def _v4_connected_contract_eligible(
@@ -1688,17 +1789,11 @@ class AgentOrchestrator:
             )
             turn.transition(TurnPhase.REJECTED)
             return ToolLoopResult(_UNIFIED_PLAN_REJECTED_MESSAGE, success=False)
-        logger.info(
-            "Unified TurnPlanner effective plan: request_id=%s "
-            "original_mode=%s original_asset=%s original_assets=%d "
-            "effective_mode=%s effective_asset=%s effective_assets=%d",
-            turn.turn_id,
-            plan.execution.mode.value,
-            _selected_asset_identity(plan),
-            len(plan.execution.allowed_assets),
-            effective_plan.execution.mode.value,
-            _selected_asset_identity(effective_plan),
-            len(effective_plan.execution.allowed_assets),
+        _log_unified_turn_planner_effective(
+            request_id=turn.turn_id,
+            original_plan=plan,
+            effective_plan=effective_plan,
+            catalog=catalog,
         )
         architecture = str(config.get("architecture", "legacy_v2"))
         rollout_mode = str(config.get("mode", "primary"))
@@ -1781,8 +1876,12 @@ class AgentOrchestrator:
                     diagnostic = ConnectedExecutionError(
                         getattr(exc, "connected_phase", "setup"),
                         exc,
-                        selected_asset_identity=_selected_asset_identity(
-                            effective_plan
+                        selected_asset_kind=_selected_asset_kind(effective_plan),
+                        selected_asset_hash=_selected_asset_hash(
+                            effective_plan, catalog
+                        ),
+                        approved_asset_hash=(
+                            effective_plan.approved_asset_fingerprint
                         ),
                         catalog_fingerprint=catalog.fingerprint,
                     )
@@ -1790,36 +1889,12 @@ class AgentOrchestrator:
                 # ConnectedExecutionError의 cause/traceback에는 provider payload와
                 # 사용자 prompt가 남아 있을 수 있다. Formatter로 exc_info를 넘기지
                 # 않고 allowlisted structured diagnostic만 기록한다.
-                logger.error(
-                    "LangGraph V4 primary isolated: request_id=%s "
-                    "original_mode=%s effective_mode=%s original_asset=%s "
-                    "effective_asset=%s failure_phase=%s phase=%s code=%s "
-                    "error_type=%s "
-                    "selected_asset_identity=%s selected_asset_hash=%s "
-                    "approved_asset_hash=%s "
-                    "catalog_fingerprint=%s registry_fingerprint=%s "
-                    "owned_input_contract_present=%s "
-                    "owned_output_contract_present=%s owned_binding_present=%s "
-                    "error_message=%s",
-                    turn.turn_id,
-                    plan.execution.mode.value,
-                    effective_plan.execution.mode.value,
-                    _selected_asset_identity(plan),
-                    _selected_asset_identity(effective_plan),
-                    diagnostic.phase,
-                    diagnostic.phase,
-                    diagnostic.code,
-                    diagnostic.error_type,
-                    diagnostic.selected_asset_identity
-                    or _selected_asset_identity(effective_plan),
-                    diagnostic.selected_asset_hash,
-                    diagnostic.approved_asset_hash,
-                    diagnostic.catalog_fingerprint or catalog.fingerprint,
-                    diagnostic.registry_fingerprint,
-                    diagnostic.owned_input_contract_present,
-                    diagnostic.owned_output_contract_present,
-                    diagnostic.owned_binding_present,
-                    diagnostic.safe_message,
+                _log_langgraph_v4_primary_isolated(
+                    request_id=turn.turn_id,
+                    original_plan=plan,
+                    effective_plan=effective_plan,
+                    catalog=catalog,
+                    diagnostic=diagnostic,
                 )
 
             checkpoint = v4.get("checkpoint", {})
