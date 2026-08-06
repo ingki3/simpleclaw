@@ -26,3 +26,11 @@ jobs:
 
       - name: Run offline integration tests
         run: pytest tests/integration/ -m "offline" -v
+
+      - name: Run hermetic LangGraph V4 contract validator
+        run: >-
+          python scripts/dev/validate_langgraph_v4_no_send.py
+          --hermetic
+          --assert-contract-set
+          --assert-zero-delivery
+          --assert-zero-persistence
