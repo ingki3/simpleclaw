@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-import simpleclaw.production_assets as production_assets
+from simpleclaw import production_assets
 from simpleclaw.production_assets import install_runtime_asset, resolve_runtime_asset
 
 
