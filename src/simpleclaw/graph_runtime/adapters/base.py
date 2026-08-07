@@ -33,6 +33,8 @@ class BoundSkillPayload:
     payload_hash: str
     source_payload_json: str
     source_payload_hash: str
+    constraints_json: str = "{}"
+    constraints_hash: str = ""
 
     @property
     def payload(self) -> dict[str, JsonValue]:
@@ -42,6 +44,16 @@ class BoundSkillPayload:
         value = json.loads(self.payload_json)
         if not isinstance(value, dict):  # pragma: no cover - 생성자 불변식
             raise TypeError("bound payload must decode to an object")
+        return value
+
+    @property
+    def constraints(self) -> dict[str, JsonValue]:
+        """Recipe-owned query constraint의 결정적 sidecar 복사본을 반환한다."""
+        import json
+
+        value = json.loads(self.constraints_json)
+        if not isinstance(value, dict):  # pragma: no cover - 생성자 불변식
+            raise TypeError("bound constraints must decode to an object")
         return value
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from simpleclaw.agent.tool_gate import (
+    ToolArgumentConstraint,
     ToolCallRejected,
     ToolExecutionScope,
     ToolGate,
@@ -180,6 +181,87 @@ def test_exact_skill_scope_authorizes_matching_trusted_read_only_safety() -> Non
             max_tool_calls=1,
             trusted_asset_safety=(
                 TrustedAssetSafety.from_skill(skill),
+            ),
+        ),
+        resolved_skill=skill,
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        "--mode standings --limit 10 --json",
+        "--mode standings --json",
+        "--mode standings --limit 3 --limit 10 --json",
+        "--mode standings --limit 3 --limit=10 --json",
+        "--mode standings --limit 3 --lim 10 --json",
+        "--mode standings --limit=3 --json",
+        "--mode standings --lim 3 --json",
+        "--mode standings --limit nope --json",
+    ),
+)
+def test_exact_skill_scope_rejects_recipe_argument_constraint_drift(
+    args: str,
+) -> None:
+    skill = _skill()
+    scope = ToolExecutionScope(
+        allowed_tools=frozenset({"execute_skill"}),
+        allowed_assets=frozenset({("skill", "weather")}),
+        operator_tools=False,
+        allow_cron_mutation=False,
+        max_tool_calls=1,
+        trusted_asset_safety=(TrustedAssetSafety.from_skill(skill),),
+        argument_constraints=(
+            ToolArgumentConstraint(
+                asset_type="skill",
+                asset_name="weather",
+                argument_name="args",
+                flag="--limit",
+                expected_value="3",
+            ),
+        ),
+    )
+
+    with pytest.raises(ToolCallRejected) as exc:
+        ToolGate(native_specs=[]).authorize(
+            ToolCall(
+                id="1",
+                name="execute_skill",
+                arguments={"skill_name": "weather", "args": args},
+            ),
+            scope,
+            resolved_skill=skill,
+        )
+
+    assert exc.value.code == "skill_argument_constraint_mismatch"
+
+
+def test_exact_skill_scope_accepts_recipe_argument_constraint() -> None:
+    skill = _skill()
+    ToolGate(native_specs=[]).authorize(
+        ToolCall(
+            id="1",
+            name="execute_skill",
+            arguments={
+                "skill_name": "weather",
+                "args": "--mode standings --limit 3 --json",
+            },
+        ),
+        ToolExecutionScope(
+            allowed_tools=frozenset({"execute_skill"}),
+            allowed_assets=frozenset({("skill", "weather")}),
+            operator_tools=False,
+            allow_cron_mutation=False,
+            max_tool_calls=1,
+            trusted_asset_safety=(TrustedAssetSafety.from_skill(skill),),
+            argument_constraints=(
+                ToolArgumentConstraint(
+                    asset_type="skill",
+                    asset_name="weather",
+                    argument_name="args",
+                    flag="--limit",
+                    expected_value="3",
+                ),
             ),
         ),
         resolved_skill=skill,

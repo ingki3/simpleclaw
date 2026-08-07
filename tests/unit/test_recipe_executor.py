@@ -45,6 +45,19 @@ class TestRecipeExecutor:
         assert "Return exactly one JSON object" in rendered
         assert "Telegram" not in rendered
 
+    def test_exact_recipe_renderer_injects_bound_top_n_over_default(self):
+        recipe = load_recipe(FIXTURES / "sports-live" / "recipe.yaml")
+
+        rendered = render_exact_recipe_instructions(
+            recipe,
+            query="현재 KBO 순위 상위 3팀만 알려줘",
+            bound_variables={"limit": "3"},
+        )
+
+        assert "canonical `limit=3`" in rendered
+        assert "`--limit 3`" in rendered
+        assert "limit=10" not in rendered
+
     def test_exact_recipe_renderer_requires_delegate_allowlist(self):
         recipe = RecipeDefinition(name="unsafe", instructions="run {{ query }}")
 

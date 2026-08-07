@@ -63,11 +63,15 @@ def _delegate_trace(
     skill_name: str = "naver-sports-skill",
     *,
     success: bool = True,
+    limit: int = 10,
 ) -> list[ToolTraceStep]:
     return [
         ToolTraceStep(
             tool_name="execute_skill",
-            arguments={"skill_name": skill_name},
+            arguments={
+                "skill_name": skill_name,
+                "args": f"--mode standings --limit {limit} --json",
+            },
             observation_preview='{"ok": true}',
             success=success,
         )
@@ -356,7 +360,7 @@ async def test_smoke_003_recipe_accepts_exactly_one_successful_delegate(
                     "unresolved_claims": [],
                 }
             ),
-            trace=_delegate_trace(),
+            trace=_delegate_trace(limit=3),
             success=True,
         )
     )

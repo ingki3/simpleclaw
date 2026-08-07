@@ -1148,7 +1148,10 @@ async def test_exact_recipe_accepts_runtime_preserved_typed_observation(
             trace=[
                 ToolTraceStep(
                     tool_name="execute_skill",
-                    arguments={"skill_name": "naver-sports-skill"},
+                    arguments={
+                        "skill_name": "naver-sports-skill",
+                        "args": "--mode results --limit 10 --json",
+                    },
                     observation_preview="typed observation",
                     success=True,
                 )

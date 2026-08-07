@@ -38,6 +38,13 @@ def test_installer_materializes_version_controlled_wrapper(tmp_path):
     ).startswith("#!/usr/bin/env python3\nfrom simpleclaw.skills.naver_sports import main")
 
 
+def test_helper_parser_rejects_abbreviated_limit_flag():
+    with pytest.raises(SystemExit):
+        naver_sports.build_parser().parse_args(
+            ["--limit", "3", "--lim", "10"]
+        )
+
+
 def sports_response(*games):
     return {
         "code": 200,
@@ -637,6 +644,63 @@ def test_production_asset_gate_fails_when_helper_rejects_season_auto(
     ) as captured:
         validate_production_asset(skill_dir)
     assert "mutation fixture" not in str(captured.value)
+
+
+def test_production_asset_gate_enforces_requested_top_three(tmp_path):
+    from scripts.install_naver_sports_skill import install
+
+    skill_dir = install(tmp_path / "global")
+    argv = (
+        "--mode",
+        "standings",
+        "--category",
+        "kbo",
+        "--date",
+        "today",
+        "--season",
+        "auto",
+        "--limit",
+        "3",
+        "--json",
+    )
+
+    result = validate_production_asset(
+        skill_dir,
+        argv=argv,
+        expected_result_limit=3,
+    )
+
+    assert result.evidence.requested_limit == 3
+    assert result.evidence.item_count == 3
+    assert len(result.payload["items"]) == 3
+    assert result.payload["answer"].count("\n- ") == 3
+    assert "순위: 4" not in result.payload["answer"]
+
+
+def test_production_asset_gate_rejects_bound_limit_drift_before_execution(tmp_path):
+    from scripts.install_naver_sports_skill import install
+
+    skill_dir = install(tmp_path / "global")
+    argv = (
+        "--mode",
+        "standings",
+        "--category",
+        "kbo",
+        "--date",
+        "today",
+        "--limit",
+        "10",
+        "--json",
+    )
+
+    with pytest.raises(ProductionAssetValidationError) as captured:
+        validate_production_asset(
+            skill_dir,
+            argv=argv,
+            expected_result_limit=3,
+        )
+
+    assert captured.value.code == "result_limit_drift"
 
 
 def test_golf_player_standings_projection():
