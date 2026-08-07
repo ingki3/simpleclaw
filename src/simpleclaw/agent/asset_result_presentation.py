@@ -6,10 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 SAFE_EMPTY_RESULT = "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
-MAX_TYPED_PRESENTATION_CHARS = 3_500
 _PREFERRED_TEXT_KEYS = ("answer", "result", "content", "text", "message", "summary")
-_SAFE_TYPED_STATUSES = frozenset({"completed", "resolved"})
-_SAFE_EFFECT_STATUSES = frozenset({"none", "verified"})
 
 
 def _preferred_text(payload: Mapping[str, Any]) -> str | None:
@@ -20,41 +17,21 @@ def _preferred_text(payload: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _bounded_typed_text(value: str) -> str:
-    if len(value) <= MAX_TYPED_PRESENTATION_CHARS:
-        return value
-    return value[: MAX_TYPED_PRESENTATION_CHARS - 1].rstrip() + "…"
-
-
 def compose_user_facing_asset_result(
     *,
     payload: Mapping[str, Any],
     result_status: str,
     effect_status: str,
 ) -> str:
-    """Typed safety gate 뒤 asset-owned preferred text만 bounded하게 반환한다.
+    """Legacy scalar presentation만 유지하고 typed final ownership은 거부한다.
 
-    ``data``의 업무별 구조는 해석하지 않는다. 자산이 만든 presentation text가
-    있으면 그 값만 사용하고, typed 안전 조건이 하나라도 불명확하면 fail-closed한다.
-    legacy payload는 기존 scalar fallback 동작을 유지한다.
+    V4 ``asset_result.v1``은 중앙 composer가 contract-declared projection으로만
+    발화해야 한다. 이 compatibility 함수가 typed ``answer/content/text``를 다시
+    최종 문장으로 승격하지 못하게 항상 fail-closed한다.
     """
+    del result_status, effect_status
     if payload.get("schema") == "asset_result.v1":
-        if (
-            result_status != "resolved"
-            or effect_status not in _SAFE_EFFECT_STATUSES
-            or payload.get("status") not in _SAFE_TYPED_STATUSES
-            or payload.get("side_effect") is not False
-        ):
-            return SAFE_EMPTY_RESULT
-        preferred = _preferred_text(payload)
-        data = payload.get("data")
-        if preferred is None and isinstance(data, Mapping):
-            preferred = _preferred_text(data)
-        return (
-            _bounded_typed_text(preferred)
-            if preferred is not None
-            else SAFE_EMPTY_RESULT
-        )
+        return SAFE_EMPTY_RESULT
 
     preferred = _preferred_text(payload)
     if preferred is not None:

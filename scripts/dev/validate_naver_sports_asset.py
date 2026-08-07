@@ -72,7 +72,7 @@ class ProductionAssetEvidence:
     external_write_count: int
     requested_limit: int
     item_count: int
-    answer_chars: int
+    asset_text_chars: int
     argv_sha256: str
     helper_source: str
     helper_source_sha256: str
@@ -374,15 +374,9 @@ def _validate_payload(
     items = payload.get("items")
     if not isinstance(items, list) or len(items) != requested_limit:
         _fail("items_contract_failed")
-    answer = payload.get("answer")
-    if (
-        not isinstance(answer, str)
-        or not answer
-        or len(answer) > naver_sports.MAX_PRESENTATION_CHARS
-    ):
-        _fail("answer_contract_failed")
-    if answer.count("\n- ") != requested_limit:
-        _fail("answer_limit_drift")
+    for field in ("answer", "content", "text", "summary"):
+        if field in payload:
+            _fail("asset_text_ownership_failed")
     if any(
         not isinstance(item, dict)
         or not isinstance(item.get("rank"), int)
@@ -449,7 +443,6 @@ def validate_production_asset(
             requested_limit=requested_limit,
         )
         items = payload["items"]
-        answer = payload["answer"]
         argv_sha256 = hashlib.sha256(
             "\0".join(argv).encode("utf-8")
         ).hexdigest()
@@ -464,7 +457,7 @@ def validate_production_asset(
                 external_write_count=sum(write_counts),
                 requested_limit=requested_limit,
                 item_count=len(items),
-                answer_chars=len(answer),
+                asset_text_chars=0,
                 argv_sha256=argv_sha256,
                 helper_source="exact_checkout",
                 helper_source_sha256=provenance.sha256,
@@ -493,7 +486,7 @@ def _parser() -> argparse.ArgumentParser:
         "--result-limit",
         type=int,
         default=10,
-        help="Expected KBO standings item/answer count (1..20).",
+        help="Expected KBO standings typed item count (1..20).",
     )
     return parser
 
@@ -517,7 +510,7 @@ def _print_pass(result: ProductionAssetGateResult) -> None:
     print(f"EXTERNAL_WRITE_COUNT={evidence.external_write_count}")
     print(f"REQUESTED_LIMIT={evidence.requested_limit}")
     print(f"ITEM_COUNT={evidence.item_count}")
-    print(f"ANSWER_CHARS={evidence.answer_chars}")
+    print(f"ASSET_TEXT_CHARS={evidence.asset_text_chars}")
     print("PRODUCTION_ASSET_EXECUTION=PASS")
 
 

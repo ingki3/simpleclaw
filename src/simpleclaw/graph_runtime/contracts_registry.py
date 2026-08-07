@@ -23,12 +23,14 @@ from simpleclaw.capability import (
 )
 
 from .contracts import (
+    COMPOSITION_FIELDS_EXTENSION,
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
     AssetRefV1,
     ContractDescriptorV1,
     ContractRefV1,
     RetryPolicyV1,
+    validate_composition_fields,
 )
 
 
@@ -352,6 +354,7 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "allOf",
         "anyOf",
         "oneOf",
+        COMPOSITION_FIELDS_EXTENSION,
     }
 )
 _SUPPORTED_SCHEMA_TYPES = frozenset(
@@ -365,6 +368,10 @@ def _validate_schema_definition(schema: object) -> None:
         raise ContractRegistryError("schema.invalid")
     if set(schema) - _SUPPORTED_SCHEMA_KEYWORDS:
         raise ContractRegistryError("schema.unsupported_keyword")
+    try:
+        validate_composition_fields(schema.get(COMPOSITION_FIELDS_EXTENSION))
+    except ValueError as exc:
+        raise ContractRegistryError("schema.invalid_composition_fields") from exc
 
     for keyword in ("$id", "$schema", "title", "description"):
         if keyword in schema and not isinstance(schema[keyword], str):

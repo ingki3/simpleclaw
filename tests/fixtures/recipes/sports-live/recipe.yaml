@@ -42,6 +42,35 @@ output_contract:
     name: sports-live
   json_schema:
     type: object
+    x-simpleclaw-composition-fields:
+      - data.mode
+      - data.category
+      - data.season.code
+      - data.season.title
+      - data.date
+      - data.fetched_at
+      - data.freshness.as_of
+      - data.items[*].rank
+      - data.items[*].team
+      - data.items[*].name
+      - data.items[*].wins
+      - data.items[*].losses
+      - data.items[*].draws
+      - data.items[*].games_behind
+      - data.items[*].title
+      - data.items[*].status
+      - data.items[*].event_state
+      - data.items[*].status_code
+      - data.items[*].participants.away.name
+      - data.items[*].participants.home.name
+      - data.items[*].score.away
+      - data.items[*].score.home
+      - data.items[*].winner
+      - data.items[*].date
+      - data.items[*].fetched_at
+      - data.items[*].source_url
+      - data.warnings[*]
+      - data.source.urls[*]
 
 step_bindings:
   - binding_id: naver-sports-query.v1
@@ -161,5 +190,6 @@ instructions: |
   가능성도 limitation으로 남긴다. 정상 empty/not_found를 실패나 사실 단정으로
   바꾸지 않는다.
 
-  수동 실행(`query.v1` 비어 있음)은 기존 결론 우선 한국어 브리핑을 유지하되 helper
-  JSON 밖의 점수·순위·시즌 값을 만들지 않고 source.urls와 fetched_at KST를 밝힌다.
+  query 유무와 무관하게 Recipe는 typed state·fact·provenance만 반환한다. 최종 문장,
+  말투, Markdown, persona 적용은 중앙 composer가 담당하며 `answer/content/text/summary`
+  필드를 만들지 않는다.

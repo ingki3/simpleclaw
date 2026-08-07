@@ -96,6 +96,7 @@ from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
+from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.observation_claims import (
     declared_claim_bindings,
@@ -2870,12 +2871,38 @@ class AgentOrchestrator:
                 raise TypeError("connected recipe output must be a JSON object")
             return raw
 
+        composition_config = v4.get("composition", {})
+        if not isinstance(composition_config, dict):
+            raise TypeError("langgraph_v4 composition configuration is required")
+        composition_mode = str(
+            composition_config.get("mode", "asset_text_compat")
+        )
+        response_composer = None
+        composer_fingerprint = "asset_text_compat_v1"
+        if composition_mode == "central_persona_v1":
+            composer = FinalResponseComposer(
+                send=self._router.send,
+                persona_prompt=self._persona_prompt,
+                max_tokens=int(composition_config.get("max_tokens", 1200)),
+                max_output_chars=int(
+                    composition_config.get("max_output_chars", 3500)
+                ),
+                # Explicit backend selection is the Router's no-retry path, so one
+                # composer send cannot silently become two provider calls.
+                backend_name=self._router.get_default_backend(),
+            )
+            response_composer = composer.compose
+            composer_fingerprint = composer.fingerprint
+
         result = await ConnectedShadowTurnRunner(
             facade=facade,
             definitions=(*recipes, *skills),
             conversation_store=self._store,
             recipe_executor=execute_recipe,
             skill_executor=execute_skill,
+            composition_mode=composition_mode,
+            response_composer=response_composer,
+            composer_fingerprint=composer_fingerprint,
         ).run(
             plan=plan,
             legacy=legacy,

@@ -211,6 +211,11 @@ agent:
       delivery:
         mode: live
         max_attempts: 2
+      composition:
+        mode: central_persona_v1
+        max_tokens: 900
+        max_output_chars: 2400
+        max_attempts: 9
       shadow_no_send: false
 """,
         encoding="utf-8",
@@ -235,6 +240,12 @@ agent:
             "max_rows": 2000,
         },
         "delivery": {"mode": "no_send", "max_attempts": 2},
+        "composition": {
+            "mode": "central_persona_v1",
+            "max_tokens": 900,
+            "max_output_chars": 2400,
+            "max_attempts": 1,
+        },
         "on_failure": "fail_closed",
         "shadow_no_send": True,
         "telemetry_fields": (

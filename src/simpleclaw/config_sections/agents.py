@@ -204,6 +204,12 @@ _LANGGRAPH_V4_DEFAULTS: dict = {
         "mode": "no_send",
         "max_attempts": 1,
     },
+    "composition": {
+        "mode": "asset_text_compat",
+        "max_tokens": 1200,
+        "max_output_chars": 3500,
+        "max_attempts": 1,
+    },
     "on_failure": "fail_closed",
     "shadow_no_send": True,
 }
@@ -441,6 +447,15 @@ def _agent_with_defaults(agent: dict) -> dict:
         # V4 graph는 transport를 직접 소유하지 않는다. primary final은 기존
         # orchestrator의 exactly-once return/store 경계로만 승격한다.
         delivery_mode = "deferred"
+    v4_composition = langgraph_v4.get("composition", {})
+    if not isinstance(v4_composition, dict):
+        v4_composition = {}
+    composition_defaults = _LANGGRAPH_V4_DEFAULTS["composition"]
+    composition_mode = str(
+        v4_composition.get("mode", composition_defaults["mode"])
+    ).strip().lower()
+    if composition_mode not in {"asset_text_compat", "central_persona_v1"}:
+        composition_mode = composition_defaults["mode"]
     shadow_no_send = bool(
         langgraph_v4.get(
             "shadow_no_send", _LANGGRAPH_V4_DEFAULTS["shadow_no_send"]
@@ -804,6 +819,26 @@ def _agent_with_defaults(agent: dict) -> dict:
                                 delivery_defaults["max_attempts"],
                                 minimum=1,
                             ),
+                        },
+                        "composition": {
+                            "mode": composition_mode,
+                            "max_tokens": _coerce_int_config(
+                                v4_composition.get(
+                                    "max_tokens", composition_defaults["max_tokens"]
+                                ),
+                                composition_defaults["max_tokens"],
+                                minimum=64,
+                            ),
+                            "max_output_chars": _coerce_int_config(
+                                v4_composition.get(
+                                    "max_output_chars",
+                                    composition_defaults["max_output_chars"],
+                                ),
+                                composition_defaults["max_output_chars"],
+                                minimum=256,
+                            ),
+                            # 중앙 composer는 provider/parse 실패에도 재시도하지 않는다.
+                            "max_attempts": composition_defaults["max_attempts"],
                         },
                         "on_failure": v4_on_failure,
                         # V4 graph는 transport/persistence callback을 직접 소유하지

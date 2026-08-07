@@ -217,6 +217,13 @@ agent:
         # orchestrator return/store 경계로만 exactly-once 전달·저장된다.
         mode: no_send  # no_send | deferred (legacy live 입력은 deferred로 정규화)
         max_attempts: 1
+      composition:
+        # 초기 배포는 compatibility를 유지하고 no-send 검증 뒤 별도 승인으로
+        # central_persona_v1을 활성화한다.
+        mode: asset_text_compat  # asset_text_compat | central_persona_v1
+        max_tokens: 1200
+        max_output_chars: 3500
+        max_attempts: 1  # 다른 값을 넣어도 1로 fail-closed 정규화
       # graph/provider/contract/dispatch 불변식 실패 시 기본은 사용자 전송 전 차단.
       # legacy fallback은 target executor 진입 전 실패에만 허용된다. dispatch가
       # attempted/executed/ambiguous이면 이 값과 무관하게 fail-closed한다.

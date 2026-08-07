@@ -524,9 +524,7 @@ def test_team_standings_select_last_enabled_season_and_project_fields():
             "games_behind": 0,
         }
     ]
-    assert result["answer"] == (
-        "확인된 결과입니다.\n- 순위: 1 · 팀: 삼성 · 승: 55"
-    )
+    assert "answer" not in result
     assert len(naver_sports.dumps_bounded(result)) <= 7000
 
 
@@ -616,7 +614,7 @@ def test_exact_production_cli_season_auto_selects_active_season(
     assert payload["side_effect"] is False
     assert payload["season"]["code"] == "2026"
     assert len(payload["items"]) == 3
-    assert payload["answer"].count("\n- ") == 3
+    assert "answer" not in payload
 
 
 def test_production_asset_gate_fails_when_helper_rejects_season_auto(
@@ -673,8 +671,8 @@ def test_production_asset_gate_enforces_requested_top_three(tmp_path):
     assert result.evidence.requested_limit == 3
     assert result.evidence.item_count == 3
     assert len(result.payload["items"]) == 3
-    assert result.payload["answer"].count("\n- ") == 3
-    assert "순위: 4" not in result.payload["answer"]
+    assert "answer" not in result.payload
+    assert all(item["rank"] <= 3 for item in result.payload["items"])
 
 
 def test_production_asset_gate_rejects_bound_limit_drift_before_execution(tmp_path):
