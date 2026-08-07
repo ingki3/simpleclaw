@@ -102,7 +102,13 @@ from simpleclaw.graph_runtime.status import (
 )
 from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
 from simpleclaw.llm.router import LLMRouter
-from simpleclaw.memory import ConversationStore
+from simpleclaw.memory import ConversationMessage, ConversationStore, MessageRole
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryCoordinator,
+    PrimaryDeliveryMetadataV1,
+    PrimaryPersistenceStatus,
+    PrimaryResponseText,
+)
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
@@ -422,6 +428,17 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
 ) -> None:
     calls = 0
     store = ConversationStore(tmp_path / "primary-conversation.db")
+    request_id = "telegram:6233568410:5270"
+    session_key = "primary-session"
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="production-shaped recipe request",
+            channel="telegram",
+        ),
+        session_key=session_key,
+        request_id=request_id,
+    )
 
     async def executor(_definition, _bound_steps):
         nonlocal calls
@@ -447,8 +464,8 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
             ExecutionMode.DIRECT_ANSWER,
         ),
         legacy=None,
-        request_id="primary-result-source",
-        session_key="primary-session",
+        request_id=request_id,
+        session_key=session_key,
         planner_model_calls=1,
         planner_tokens=10,
     )
@@ -464,7 +481,50 @@ async def test_connected_primary_returns_v4_typed_final_and_exact_dispatch(
     assert result.execution.dispatch_trace.exactly_once is True
     assert result.execution.side_effect_counts.total == 0
     assert result.execution.rollback_required is False
-    assert store.get_recent() == []
+
+    sends = 0
+
+    async def sender(_destination_ref, _content):
+        nonlocal sends
+        sends += 1
+        return SenderReceipt(external_message_id="telegram-message-5270")
+
+    final = result.execution.final_artifact
+    response = PrimaryResponseText(
+        result.execution.final_content,
+        PrimaryDeliveryMetadataV1(
+            request_id=request_id,
+            artifact_id=final.artifact_id,
+            artifact_hash=final.content_hash,
+            session_key=session_key,
+        ),
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "primary-delivery.sqlite3",
+        conversation_store=store,
+    )
+    delivered = await coordinator.deliver_telegram(
+        response,
+        destination_ref="telegram:6233568410:",
+        sender=sender,
+    )
+    replay = await coordinator.deliver_telegram(
+        response,
+        destination_ref="telegram:6233568410:",
+        sender=sender,
+    )
+
+    assert delivered.persistence_status is PrimaryPersistenceStatus.PERSISTED
+    assert replay.complete_success is True
+    assert calls == 1
+    assert sends == 1
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=session_key)
+    ] == [
+        (MessageRole.USER, request_id),
+        (MessageRole.ASSISTANT, request_id),
+    ]
 
 
 @pytest.mark.asyncio
