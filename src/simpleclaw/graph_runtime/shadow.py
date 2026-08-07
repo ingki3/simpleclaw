@@ -17,10 +17,10 @@ from typing import Any, Literal, cast
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.asset_result_presentation import (
     compose_user_facing_asset_result,
 )
+from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 from simpleclaw.graph_runtime.adapters.persistence import (
     ConversationStorePersistenceAdapter,
