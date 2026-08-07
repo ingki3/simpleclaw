@@ -1,4 +1,4 @@
-"""Actual planner와 connected V4 shadow graph를 검증하는 개발용 harness."""
+"""Planner/PlanGate와 stub dispatch 계약을 검증하는 개발용 harness."""
 
 from __future__ import annotations
 
@@ -204,12 +204,12 @@ def _planner_native_specs():
 
 
 async def _recipe_executor(_definition, _bound_steps):
-    """검증 harness에서 외부 동작 없이 recipe 결과를 반환한다."""
+    """contract-only harness에서 Recipe 실행을 대체한 fixture를 반환한다."""
     return {"fixture_result": "connected"}
 
 
 async def _skill_executor(_definition, _argv):
-    """검증 harness에서 외부 동작 없이 skill 결과를 반환한다."""
+    """contract-only harness에서 Skill 실행을 대체한 fixture를 반환한다."""
     return {"operation_result": "connected"}
 
 
@@ -222,8 +222,9 @@ async def _run(
     expected_contract_set: frozenset[ContractIdentity] | None = None,
     expected_effective_assets: tuple[str | None, ...] | None = None,
     definitions_label: str = "contract_fixtures",
+    planner_mode_label: str | None = None,
 ) -> int:
-    """Actual provider exact plan을 bounded no-send graph에서 실행한다."""
+    """Planner plan과 stubbed asset dispatch를 bounded no-send graph에서 검증한다."""
     if args.architecture != "langgraph_v4":
         raise ValueError("--architecture must be langgraph_v4")
     if args.repeat <= 0:
@@ -411,6 +412,15 @@ async def _run(
     stop_conditions = {result.telemetry.budget_usage.stop_condition for result in results}
     provider_kind = "HERMETIC_PLANNER" if args.hermetic else "ACTUAL_PLANNER_PROVIDER"
     print(f"{provider_kind}=PASS backend={backend} model={model}")
+    print("VALIDATION_SCOPE=contract_plan_dispatch_stub")
+    print(
+        "PLANNER_MODE="
+        + (planner_mode_label or ("stubbed" if args.hermetic else "actual_provider"))
+    )
+    print("RECIPE_EXECUTOR_MODE=stubbed")
+    print("SKILL_EXECUTOR_MODE=stubbed")
+    print("HELPER_CLI_EXECUTED=false")
+    print("PRODUCTION_ASSET_EXECUTION=NOT_RUN")
     print("ASSET_EXECUTOR=fixture")
     print(
         "ASSET_DEFINITIONS="
@@ -443,6 +453,7 @@ async def _run(
     print(f"TELEGRAM_SEND_COUNT={telegram}")
     print(f"CRON_NOTIFIER_COUNT={notifier}")
     print(f"CONVERSATION_WRITE_COUNT={persistence}")
+    print(f"EXTERNAL_WRITE_COUNT={telegram + notifier + persistence}")
     print(f"STOP_CONDITION={','.join(sorted(stop_conditions))}")
     print(
         "ROLLBACK_REQUIRED="

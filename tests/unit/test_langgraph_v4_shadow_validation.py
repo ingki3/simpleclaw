@@ -203,6 +203,12 @@ def test_cli_safe_fixture_exits_zero(mode: str) -> None:
     assert "TELEGRAM_SEND_COUNT=0" in completed.stdout
     assert "CRON_NOTIFIER_COUNT=0" in completed.stdout
     assert "CONVERSATION_WRITE_COUNT=0" in completed.stdout
+    assert "VALIDATION_SCOPE=contract_plan_dispatch_stub" in completed.stdout
+    assert "RECIPE_EXECUTOR_MODE=stubbed" in completed.stdout
+    assert "SKILL_EXECUTOR_MODE=stubbed" in completed.stdout
+    assert "HELPER_CLI_EXECUTED=false" in completed.stdout
+    assert "PRODUCTION_ASSET_EXECUTION=NOT_RUN" in completed.stdout
+    assert "EXTERNAL_WRITE_COUNT=0" in completed.stdout
 
 
 @pytest.mark.asyncio
@@ -270,6 +276,38 @@ def test_kbo_scenario_repeats_asset_zero_effective_plan_no_send() -> None:
     assert "TELEGRAM_SEND_COUNT=0" in output
     assert "CRON_NOTIFIER_COUNT=0" in output
     assert "CONVERSATION_WRITE_COUNT=0" in output
+    assert "PLANNER_MODE=scenario_stub" in output
+    assert "RECIPE_EXECUTOR_MODE=stubbed" in output
+    assert "SKILL_EXECUTOR_MODE=stubbed" in output
+    assert "HELPER_CLI_EXECUTED=false" in output
+    assert "PRODUCTION_ASSET_EXECUTION=NOT_RUN" in output
+    assert "PRODUCTION_ASSET_EXECUTION=PASS" not in output
+
+
+def test_installed_naver_sports_asset_gate_executes_exact_helper_cli() -> None:
+    completed = subprocess.run(
+        [sys.executable, "scripts/dev/validate_naver_sports_asset.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    output = completed.stdout
+    assert "VALIDATION_SCOPE=production_asset_execution" in output
+    assert "PLANNER_MODE=not_run" in output
+    assert "RECIPE_EXECUTOR_MODE=not_run" in output
+    assert "SKILL_EXECUTOR_MODE=installed_helper_cli" in output
+    assert "SOURCE_MODE=deterministic_fixture" in output
+    assert "HELPER_CLI_EXECUTED=true" in output
+    assert "DOCUMENTED_SENTINEL=season_auto" in output
+    assert "SIDE_EFFECT=false" in output
+    assert "TELEGRAM_SEND_COUNT=0" in output
+    assert "CRON_NOTIFIER_COUNT=0" in output
+    assert "CONVERSATION_WRITE_COUNT=0" in output
+    assert "EXTERNAL_WRITE_COUNT=0" in output
+    assert "PRODUCTION_ASSET_EXECUTION=PASS" in output
 
 
 def test_offline_workflow_runs_hermetic_validator_with_all_assertions() -> None:

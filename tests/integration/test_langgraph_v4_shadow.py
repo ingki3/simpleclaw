@@ -16,6 +16,7 @@ import pytest
 from scripts.dev.validate_langgraph_v4_no_send import (
     definitions as _connected_validation_definitions,
 )
+from scripts.dev.validate_naver_sports_asset import validate_production_asset
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.context_candidates import ContextCandidateSet
@@ -98,7 +99,6 @@ from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMRespon
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills import naver_sports
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -477,53 +477,11 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     async def executor(_definition, _bound_steps):
         nonlocal calls
         calls += 1
-        client = SimpleNamespace(
-            urls=[],
-            get_json=None,
-        )
-        responses = iter(
-            (
-                {
-                    "code": 200,
-                    "success": True,
-                    "result": {
-                        "seasons": [
-                            {
-                                "seasonCode": "2026",
-                                "title": "2026 KBO",
-                                "startDate": "20260328",
-                                "endDate": "20261011",
-                                "isEnable": "Y",
-                            }
-                        ]
-                    },
-                },
-                {
-                    "code": 200,
-                    "success": True,
-                    "result": {
-                        "seasonTeamStats": [
-                            {"ranking": 1, "teamName": "LG", "winGameCount": 60},
-                            {"ranking": 2, "teamName": "한화", "winGameCount": 58},
-                            {"ranking": 3, "teamName": "롯데", "winGameCount": 55},
-                        ]
-                    },
-                },
-            )
-        )
-
-        def get_json(url):
-            client.urls.append(url)
-            return next(responses)
-
-        client.get_json = get_json
-        helper_payload = naver_sports.run(
-            mode="standings",
-            category="kbo",
-            season="auto",
-            limit=3,
-            client=client,
-        )
+        assert "season을 trim한 뒤 `auto`" in recipe.instructions
+        gate_result = validate_production_asset(Path(skill.skill_dir))
+        helper_payload = gate_result.payload
+        assert gate_result.evidence.helper_cli_executed is True
+        assert gate_result.evidence.external_write_count == 0
         assert helper_payload["ok"] is True
         assert helper_payload["season"]["code"] == "2026"
         assert helper_payload["items"]

@@ -4,6 +4,10 @@ import json
 
 import pytest
 
+from scripts.dev.validate_naver_sports_asset import (
+    ProductionAssetValidationError,
+    validate_production_asset,
+)
 from simpleclaw.skills import naver_sports
 
 
@@ -606,6 +610,33 @@ def test_exact_production_cli_season_auto_selects_active_season(
     assert payload["season"]["code"] == "2026"
     assert len(payload["items"]) == 3
     assert payload["answer"].count("\n- ") == 3
+
+
+def test_production_asset_gate_fails_when_helper_rejects_season_auto(
+    tmp_path,
+    monkeypatch,
+):
+    from scripts.install_naver_sports_skill import install
+
+    skill_dir = install(tmp_path / "global")
+    original = naver_sports._select_season
+
+    def reject_auto(seasons, requested):
+        if str(requested or "").strip().casefold() == "auto":
+            raise naver_sports.SportsError(
+                "INVALID_ARGUMENT",
+                "mutation fixture rejects the documented sentinel",
+            )
+        return original(seasons, requested)
+
+    monkeypatch.setattr(naver_sports, "_select_season", reject_auto)
+
+    with pytest.raises(
+        ProductionAssetValidationError,
+        match="helper_not_ok",
+    ) as captured:
+        validate_production_asset(skill_dir)
+    assert "mutation fixture" not in str(captured.value)
 
 
 def test_golf_player_standings_projection():
