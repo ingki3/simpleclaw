@@ -18,6 +18,7 @@ from .status import AssetResultStatus, EffectStatus, TerminalOutcome
 ComposeCallback = Callable[[object], object | Awaitable[object]]
 GuardCallback = Callable[..., object | Awaitable[object]]
 SafeRenderCallback = Callable[..., str]
+ControlledDeadlineExpired = Callable[[], bool]
 
 
 async def _await_if_needed(value):
@@ -38,6 +39,7 @@ class FinalCompositionRuntime:
         journal: FinalArtifactJournal | None = None,
         composer_fingerprint: str = "asset_text_compat_v1",
         claim_wait_seconds: float | None = None,
+        controlled_deadline_expired: ControlledDeadlineExpired | None = None,
     ) -> None:
         if not composer_fingerprint.strip():
             raise ValueError("composer_fingerprint is required")
@@ -47,6 +49,7 @@ class FinalCompositionRuntime:
         self._journal = journal
         self._composer_fingerprint = composer_fingerprint
         self._claim_wait_seconds = claim_wait_seconds
+        self._controlled_deadline_expired = controlled_deadline_expired
         self._finals: dict[str, tuple[str, FinalArtifactV1]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -58,6 +61,25 @@ class FinalCompositionRuntime:
                 return shared_lock(request_id)
         return self._locks.setdefault(request_id, asyncio.Lock())
 
+    def _controlled_deadline_owns_cancellation(
+        self,
+        *,
+        cancellation_baseline: int,
+    ) -> bool:
+        """현재 task에 deadline 취소 외의 새 취소 요청이 없는지 판별한다."""
+        if self._controlled_deadline_expired is None:
+            return False
+        try:
+            deadline_expired = self._controlled_deadline_expired()
+        except Exception:  # noqa: BLE001 - cancellation 보존이 우선
+            return False
+        task = asyncio.current_task()
+        return (
+            deadline_expired
+            and task is not None
+            and task.cancelling() == cancellation_baseline + 1
+        )
+
     async def finalize(
         self,
         *,
@@ -67,6 +89,8 @@ class FinalCompositionRuntime:
         composition_input: object | None = None,
     ) -> FinalArtifactV1 | None:
         """Accepted final을 durable하게 기록한 뒤에만 delivery 경계로 반환한다."""
+        task = asyncio.current_task()
+        cancellation_baseline = task.cancelling() if task is not None else 0
         if composition_input is not None:
             if getattr(composition_input, "request_id", None) != request_id:
                 raise FinalArtifactInvariantError("composition request_id mismatch")
@@ -85,6 +109,38 @@ class FinalCompositionRuntime:
                 return None
 
         payload_hash = normalized_result.payload_hash
+
+        def render_fallback() -> str | None:
+            try:
+                safe_content = (
+                    self._safe_render(normalized_result)
+                    if composition_input is None
+                    else self._safe_render()
+                )
+            except Exception:  # noqa: BLE001 - fallback 부재 시 delivery 억제
+                return None
+            if not isinstance(safe_content, str) or not safe_content.strip():
+                return None
+            return safe_content.strip()
+
+        def build_final(content: str) -> FinalArtifactV1:
+            artifact_id = canonical_artifact_id(request_id, content)
+            draft_artifact = DraftArtifactV1(
+                artifact_id=artifact_id,
+                request_id=request_id,
+                content=content,
+                outcome=outcome,
+            )
+            return FinalArtifactV1(
+                artifact_id=draft_artifact.artifact_id,
+                request_id=draft_artifact.request_id,
+                content=draft_artifact.content,
+                outcome=draft_artifact.outcome,
+                content_hash=canonical_artifact_content_hash(
+                    draft_artifact.content
+                ),
+            )
+
         async with self._lock_for(request_id):
             if self._journal is not None:
                 existing = await self._journal.load(
@@ -136,6 +192,13 @@ class FinalCompositionRuntime:
                     and isinstance(getattr(candidate, "content", None), str)
                 ):
                     draft = candidate
+            except asyncio.CancelledError:
+                if not self._controlled_deadline_owns_cancellation(
+                    cancellation_baseline=cancellation_baseline
+                ):
+                    raise
+                content = None
+                draft = None
             except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
                 content = None
                 draft = None
@@ -144,6 +207,12 @@ class FinalCompositionRuntime:
             if composition_input is None and content is not None:
                 try:
                     guarded = bool(await _await_if_needed(self._guard(content)))
+                except asyncio.CancelledError:
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
+                        raise
+                    guarded = False
                 except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
                     guarded = False
             elif composition_input is not None and draft is not None:
@@ -156,43 +225,43 @@ class FinalCompositionRuntime:
                     )
                     if guarded:
                         content = draft.content.strip()
+                except asyncio.CancelledError:
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
+                        raise
+                    guarded = False
                 except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
                     guarded = False
 
             if not guarded:
-                try:
-                    safe_content = (
-                        self._safe_render(normalized_result)
-                        if composition_input is None
-                        else self._safe_render()
-                    )
-                except Exception:  # noqa: BLE001 - fallback 부재 시 delivery 억제
+                content = render_fallback()
+                if content is None:
                     return None
-                if not isinstance(safe_content, str) or not safe_content.strip():
-                    return None
-                content = safe_content.strip()
             assert content is not None
 
-            artifact_id = canonical_artifact_id(request_id, content)
-            draft_artifact = DraftArtifactV1(
-                artifact_id=artifact_id,
-                request_id=request_id,
-                content=content,
-                outcome=outcome,
-            )
-            final = FinalArtifactV1(
-                artifact_id=draft_artifact.artifact_id,
-                request_id=draft_artifact.request_id,
-                content=draft_artifact.content,
-                outcome=draft_artifact.outcome,
-                content_hash=canonical_artifact_content_hash(draft_artifact.content),
-            )
+            final = build_final(content)
             if self._journal is not None:
-                final = await self._journal.record_or_reuse(
-                    request_id=request_id,
-                    normalized_payload_hash=payload_hash,
-                    composer_fingerprint=self._composer_fingerprint,
-                    artifact=final,
-                )
+                try:
+                    final = await self._journal.record_or_reuse(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                        artifact=final,
+                    )
+                except asyncio.CancelledError:
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
+                        raise
+                    fallback_content = render_fallback()
+                    if fallback_content is None:
+                        return None
+                    final = await self._journal.record_or_reuse(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                        artifact=build_final(fallback_content),
+                    )
             self._finals[request_id] = (payload_hash, final)
             return final
