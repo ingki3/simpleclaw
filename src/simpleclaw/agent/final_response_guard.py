@@ -269,6 +269,8 @@ def _cited_literal_order_error(
             return "cited_value_order_mismatch"
         if previous_end is not None:
             separator = content[previous_end : match.start()]
+            if not separator:
+                return "cited_value_order_mismatch"
             separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
             if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
                 return "cited_value_order_mismatch"

@@ -522,3 +522,34 @@ def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
     )
 
     assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("teams", "content"),
+    [(("K", "T"), "KT입니다."), (("KT", "LG"), "KTLG입니다.")],
+)
+def test_guard_requires_separator_between_cited_literals(
+    teams: tuple[str, str],
+    content: str,
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "현재 상위 2팀",
+            "public_facts_json": (
+                '{"items":['
+                f'{{"team":"{teams[0]}"}},'
+                f'{{"team":"{teams[1]}"}}'
+                "]}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=("items[0].team", "items[1].team"),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
