@@ -52,6 +52,18 @@ step_bindings:
       target_skill: naver-sports-skill
       map:
         query: args
+      argument_constraints:
+        - name: limit
+          source: query
+          strategy: bounded_integer_between_markers
+          prefixes: ["상위", "top", "앞"]
+          prefix_optional: true
+          suffixes: ["개 팀", "팀", "teams", "team"]
+          default: 10
+          minimum: 1
+          maximum: 20
+          argument_name: args
+          flag: "--limit"
 
 parameters:
   - name: query
@@ -90,6 +102,11 @@ instructions: |
   해석한다. 이 경우 수동 입력의 기본값 `kbo/auto/today/auto/10`은 사용자가 직접
   말한 값으로 간주하지 않는다. 질문에 없는 값만 안전한 helper 기본값으로 둔다.
   `query.v1`이 비어 있으면 기존 수동 parameter 경로를 그대로 사용한다.
+
+  Recipe binding이 해석한 canonical `limit={{ limit }}`은 helper argv의 exact
+  `--limit {{ limit }}`로 반드시 보존한다. 질문에 `상위 3팀`, `3팀만`, `top 3 teams`
+  같은 명시 count가 있으면 그 값을 사용하고, 명시 count가 없을 때만 기본값 10을
+  사용한다. 1..20 밖의 값이나 서로 다른 count가 함께 있으면 실행하지 않는다.
 
   허용된 `naver-sports-skill`을 정확히 한 번 실행한다. 처음 사용해도 별도
   `skill_docs`, web/search/browser, generic realtime/KBO collector, command를
