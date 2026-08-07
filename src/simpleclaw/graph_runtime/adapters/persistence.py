@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 
 from ..side_effect_monitor import record_shadow_side_effect
@@ -29,6 +31,15 @@ class ConversationStorePersistenceAdapter:
         content: str,
     ) -> None:
         record_shadow_side_effect("conversation_write")
+        self._save(session_key, persistence_id, payload_hash, content)
+
+    def _save(
+        self,
+        session_key: str,
+        persistence_id: str,
+        payload_hash: str,
+        content: str,
+    ) -> None:
         self._store.save_outbound_once(
             ConversationMessage(
                 role=MessageRole.ASSISTANT,
@@ -39,4 +50,21 @@ class ConversationStorePersistenceAdapter:
             persistence_id=persistence_id,
             payload_hash=payload_hash,
             turn_id=self._request_id,
+        )
+
+    async def persist_async(
+        self,
+        session_key: str,
+        persistence_id: str,
+        payload_hash: str,
+        content: str,
+    ) -> None:
+        """동기 ConversationStore write를 호출 중인 event loop 밖에서 실행한다."""
+        record_shadow_side_effect("conversation_write")
+        await asyncio.to_thread(
+            self._save,
+            session_key,
+            persistence_id,
+            payload_hash,
+            content,
         )

@@ -159,11 +159,14 @@ class PrimaryDeliveryCoordinator:
         payload_hash = hashlib.sha256(str(response).encode()).hexdigest()
         for attempt in range(1, self._persistence_max_attempts + 1):
             try:
-                if self._store.get_outbound_persistence(
+                existing = await asyncio.to_thread(
+                    self._store.get_outbound_persistence,
                     persistence_identity,
                     payload_hash=payload_hash,
-                ) is not None:
-                    self._store.bind_outbound_to_turn(
+                )
+                if existing is not None:
+                    await asyncio.to_thread(
+                        self._store.bind_outbound_to_turn,
                         persistence_identity,
                         payload_hash=payload_hash,
                         turn_id=metadata.request_id,
@@ -174,13 +177,14 @@ class PrimaryDeliveryCoordinator:
                         True,
                     )
                 else:
+                    writer = ConversationStorePersistenceAdapter(
+                        self._store,
+                        channel="telegram",
+                        request_id=metadata.request_id,
+                    )
                     persisted = await PersistenceRuntime(
                         journal=InMemoryPersistenceJournal(),
-                        writer=ConversationStorePersistenceAdapter(
-                            self._store,
-                            channel="telegram",
-                            request_id=metadata.request_id,
-                        ),
+                        writer=writer.persist_async,
                     ).persist_delivered(
                         session_key=metadata.session_key,
                         request_id=metadata.request_id,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,7 +11,10 @@ import pytest
 from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
-from simpleclaw.graph_runtime.adapters.delivery import SendNotStartedError
+from simpleclaw.graph_runtime.adapters.delivery import (
+    SendNotStartedError,
+    SenderReceipt,
+)
 from simpleclaw.graph_runtime.idempotency import (
     IdempotencyInvariantError,
     canonical_artifact_content_hash,
@@ -95,6 +100,103 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
         ("user", "production-shaped request", "telegram:42:1001"),
         ("assistant", "V4 primary answer", "telegram:42:1001"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_sqlite_write_lock_does_not_block_telegram_event_loop(
+    tmp_path,
+) -> None:
+    database_path = tmp_path / "conversation.db"
+    store = ConversationStore(database_path)
+    response = _response()
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="production-shaped request",
+            channel="telegram",
+        ),
+        session_key=response.metadata.session_key,
+        request_id=response.metadata.request_id,
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        persistence_max_attempts=1,
+    )
+    lock_ready = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_write_lock() -> None:
+        connection = sqlite3.connect(database_path)
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            lock_ready.set()
+            if not release_lock.wait(timeout=2):
+                raise TimeoutError("test did not release SQLite write lock")
+            connection.commit()
+        finally:
+            connection.close()
+
+    lock_task = asyncio.create_task(asyncio.to_thread(hold_write_lock))
+    assert await asyncio.to_thread(lock_ready.wait, 1)
+
+    sender = AsyncMock(
+        return_value=SenderReceipt(external_message_id="telegram-message-777")
+    )
+    loop = asyncio.get_running_loop()
+    heartbeat_times: list[float] = []
+    heartbeat_done = asyncio.Event()
+
+    async def heartbeat() -> None:
+        while not heartbeat_done.is_set():
+            heartbeat_times.append(loop.time())
+            await asyncio.sleep(0.01)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    delivery_task = asyncio.create_task(
+        coordinator.deliver_telegram(
+            response,
+            destination_ref="42",
+            sender=sender,
+        )
+    )
+    try:
+        await asyncio.sleep(0.15)
+        assert delivery_task.done() is False
+        assert len(heartbeat_times) >= 8
+        assert max(
+            later - earlier
+            for earlier, later in zip(heartbeat_times, heartbeat_times[1:])
+        ) < 0.06
+    finally:
+        release_lock.set()
+
+    outcome = await asyncio.wait_for(delivery_task, timeout=1)
+    replay = await coordinator.deliver_telegram(
+        response,
+        destination_ref="42",
+        sender=sender,
+    )
+    heartbeat_done.set()
+    await heartbeat_task
+    await lock_task
+
+    assert outcome.complete_success is True
+    assert replay.complete_success is True
+    assert sender.await_count == 1
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=response.metadata.session_key)
+    ] == [
+        (MessageRole.USER, response.metadata.request_id),
+        (MessageRole.ASSISTANT, response.metadata.request_id),
+    ]
+    with sqlite3.connect(database_path) as connection:
+        marker_count = connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0]
+    assert marker_count == 1
 
 
 @pytest.mark.asyncio
@@ -291,6 +393,52 @@ async def test_exhausted_persistence_retry_is_not_a_normal_channel_terminal(
 
     assert reply_text.await_count == 1
     assert persistence_attempts == 2
+    assert store.get_recent(session_key="telegram-session-1") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_exhausted_persistence_replay_is_typed_and_does_not_resend(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        persistence_max_attempts=2,
+        persistence_retry_interval=0,
+    )
+    persistence_attempts = 0
+
+    def fail_persistence(*_args, **_kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        raise RuntimeError("persistent storage outage")
+
+    monkeypatch.setattr(store, "save_outbound_once", fail_persistence)
+    sender = AsyncMock(
+        return_value=SenderReceipt(external_message_id="telegram-message-777")
+    )
+
+    first = await coordinator.deliver_telegram(
+        _response(),
+        destination_ref="42",
+        sender=sender,
+    )
+    replay = await coordinator.deliver_telegram(
+        _response(),
+        destination_ref="42",
+        sender=sender,
+    )
+
+    assert first.persistence_status is PrimaryPersistenceStatus.FAILED
+    assert replay.persistence_status is PrimaryPersistenceStatus.FAILED
+    assert first.persistence_error_type == "RuntimeError"
+    assert first.complete_success is False
+    assert replay.complete_success is False
+    assert sender.await_count == 1
+    assert persistence_attempts == 4
     assert store.get_recent(session_key="telegram-session-1") == []
 
 
