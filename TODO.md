@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-626](mention://issue/4b4b7058-ba45-45f7-92a5-86996d3a38a1): Telegram persistence SQLite 호출을 event loop에서 격리** — ConversationStore read/bind/write를 worker thread로 격리하고 실제 SQLite write lock 중 heartbeat 지속, 복구 뒤 exactly-once, retry 소진 fail-closed를 검증한다. fresh CI·독립 Stage D 승인·merge 전까지 BIZ-624 재평가와 BIZ-573 release/deploy/smoke를 HOLD한다. (진행: 2026-08-07)
-
 - [>] **[BIZ-624](mention://issue/56fb8f9b-d22d-4c55-b183-2de3022cb9b7): V4 primary Telegram delivery 후 assistant persistence를 exactly-once 보장** — [PR #675](https://github.com/ingki3/simpleclaw/pull/675) exact-head Stage D HOLD에서 production polling 경계가 persistence 실패 outcome을 정상 종료로 버리는 결함을 보정한다. delivery receipt를 재사용하는 bounded persistence-only retry와 실패 소진 시 non-terminal 승격, 단일 `_on_message` send 1 / assistant row 1 connected 회귀, fresh CI·재검토·merge/release gate가 남아 있어 진행 중으로 유지한다. (진행: 2026-08-07)
 
 - [>] **[BIZ-619](mention://issue/676488c0-4e71-4474-a585-ae564192206b): Payload-origin architecture guard의 wrapper·비제어식 우회를 차단** — BIZ-618 PR #663 merge 직전 late finding을 corrective lifecycle로 분리했다. opaque payload identity를 보존하는 `dict`·`cast`·method/module copy wrapper를 추적하고, protected Core 전체에서 return·assignment·formatting을 포함한 static-key read를 architecture violation으로 차단한다. 현재 Core false positive 0, 전체 contracts/unit/Ruff, deterministic full Graphify와 corrective PR exact-head CI·독립 Stage D PASS 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
@@ -225,6 +223,8 @@
 
 
 ### 2026-08-07
+
+- [x] **[BIZ-626](mention://issue/4b4b7058-ba45-45f7-92a5-86996d3a38a1): Telegram persistence SQLite 호출을 event loop에서 격리** — ConversationStore read/bind/write를 `asyncio.to_thread()`로 event-loop 밖에 격리하고 실제 SQLite write lock 중 heartbeat 지속, lock 해제 뒤 send/user/assistant/outbound marker exactly-once, replay duplicate 0과 retry 소진 fail-closed를 검증했다. focused `16 passed`, changed-file Ruff·diff check와 fresh exact-head CI 3종 및 독립 Stage D를 통과한 [PR #678](https://github.com/ingki3/simpleclaw/pull/678)을 squash merge(SHA `84f597e005338d1357707b771e70f24615ed5c5d`)했다. 부모 [BIZ-624](mention://issue/56fb8f9b-d22d-4c55-b183-2de3022cb9b7)는 fresh 재평가 전까지 `in_review`, [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c) release/deploy/smoke는 HOLD를 유지하며 실제 Telegram 전송·live config·restart/deploy는 수행하지 않았다. (완료: 2026-08-07)
 
 - [x] **[BIZ-623](mention://issue/c908d032-3e2c-4b51-8ce0-047bca3391e1): Sports Live explicit top-N bound를 production argument path에 보존** — 사용자 질의의 explicit top-N을 Recipe bound payload, canonical helper argv, typed result와 renderer까지 보존하고 parser-equivalent `--limit=…` 및 abbreviation override를 dispatch 전과 trace 사후에 fail-closed했다. production parser의 abbreviation을 비활성화하고 connected adversarial 회귀, 관련 unit `84 passed`, exact-head CI 3종과 독립 Stage D를 통과한 [PR #676](https://github.com/ingki3/simpleclaw/pull/676)을 squash merge(SHA `9ba0e5b27bd9a09fe9018a39c95ea1082e2942ea`)했다. 본 이슈는 code/offline corrective만 완료했으며 release·install·live no-send·Telegram smoke는 수행하지 않았고, 해당 운영 lifecycle은 부모 [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c)이 소유한다. (완료: 2026-08-07)
 
