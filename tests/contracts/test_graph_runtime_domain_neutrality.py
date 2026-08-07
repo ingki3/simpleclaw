@@ -69,15 +69,43 @@ def _payload_origin(
         derived, origin = _payload_origin(node.value, aliases)
         if derived:
             return True, _static_string(node.slice) or origin
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-        derived, origin = _payload_origin(node.func.value, aliases)
-        if derived:
-            key = (
-                _static_string(node.args[0])
-                if node.func.attr == "get" and node.args
-                else None
+    if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "dict"
+            and node.args
+        ):
+            return _payload_origin(node.args[0], aliases)
+        if (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "cast"
             )
-            return True, key or origin
+            or (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "typing"
+                and node.func.attr == "cast"
+            )
+        ) and len(node.args) >= 2:
+            return _payload_origin(node.args[1], aliases)
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "copy"
+            and node.func.attr in {"copy", "deepcopy"}
+            and node.args
+        ):
+            return _payload_origin(node.args[0], aliases)
+        if isinstance(node.func, ast.Attribute):
+            derived, origin = _payload_origin(node.func.value, aliases)
+            if derived:
+                key = (
+                    _static_string(node.args[0])
+                    if node.func.attr == "get" and node.args
+                    else None
+                )
+                return True, key or origin
     return False, None
 
 
@@ -125,53 +153,37 @@ def _payload_aliases(
 
 
 def _payload_key_accesses(
-    expression: ast.AST,
+    node: ast.AST,
     aliases: dict[str, str | None],
 ) -> list[tuple[int, str]]:
-    """제어식에서 opaque payload의 정적 key 해석을 찾는다."""
+    """단일 AST node에서 opaque payload의 정적 key 해석을 찾는다."""
     accesses: list[tuple[int, str]] = []
-    for node in ast.walk(expression):
-        if (
-            isinstance(node, ast.Subscript)
-            and _payload_origin(node.value, aliases)[0]
-            and (key := _static_string(node.slice)) is not None
-        ):
-            accesses.append((node.lineno, key))
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get"
-            and _payload_origin(node.func.value, aliases)[0]
-            and node.args
-            and (key := _static_string(node.args[0])) is not None
-        ):
-            accesses.append((node.lineno, key))
-        if isinstance(node, ast.Compare):
-            operands = (node.left, *node.comparators)
-            for index, operator in enumerate(node.ops):
-                left, right = operands[index : index + 2]
-                if (
-                    isinstance(operator, (ast.In, ast.NotIn))
-                    and _payload_origin(right, aliases)[0]
-                    and (key := _static_string(left)) is not None
-                ):
-                    accesses.append((node.lineno, key))
+    if (
+        isinstance(node, ast.Subscript)
+        and _payload_origin(node.value, aliases)[0]
+        and (key := _static_string(node.slice)) is not None
+    ):
+        accesses.append((node.lineno, key))
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and _payload_origin(node.func.value, aliases)[0]
+        and node.args
+        and (key := _static_string(node.args[0])) is not None
+    ):
+        accesses.append((node.lineno, key))
+    if isinstance(node, ast.Compare):
+        operands = (node.left, *node.comparators)
+        for index, operator in enumerate(node.ops):
+            left, right = operands[index : index + 2]
+            if (
+                isinstance(operator, (ast.In, ast.NotIn))
+                and _payload_origin(right, aliases)[0]
+                and (key := _static_string(left)) is not None
+            ):
+                accesses.append((node.lineno, key))
     return list(dict.fromkeys(accesses))
-
-
-def _control_flow_expressions(node: ast.AST) -> tuple[ast.AST, ...]:
-    """분기 여부를 결정하는 expression만 반환한다."""
-    if isinstance(node, (ast.If, ast.IfExp, ast.While)):
-        return (node.test,)
-    if isinstance(node, (ast.For, ast.AsyncFor)):
-        return (node.iter,)
-    if isinstance(node, ast.Match):
-        return (node.subject,)
-    if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
-        return tuple(condition for generator in node.generators for condition in generator.ifs)
-    if isinstance(node, ast.match_case) and node.guard is not None:
-        return (node.guard,)
-    return ()
 
 
 def _imported_modules(node: ast.Import | ast.ImportFrom) -> tuple[str, ...]:
@@ -240,9 +252,8 @@ def _architecture_violations(
         for scope in scopes:
             aliases = _payload_aliases(scope)
             for node in _scope_nodes(scope):
-                for expression in _control_flow_expressions(node):
-                    for lineno, key in _payload_key_accesses(expression, aliases):
-                        violations.append(f"{label}:{lineno}:payload-key-branch:{key}")
+                for lineno, key in _payload_key_accesses(node, aliases):
+                    violations.append(f"{label}:{lineno}:payload-key-branch:{key}")
     return violations
 
 
@@ -314,7 +325,7 @@ def test_architecture_guard_kills_payload_key_branch_mutation() -> None:
 
 
 def test_architecture_guard_kills_payload_alias_branch_mutation() -> None:
-    """result.payload alias rename과 nested data alias도 payload branch로 탐지한다."""
+    """payload alias의 모든 nested static-key read를 탐지한다."""
     mutated = {
         "nodes.py": (
             "def dispatch(result):\n"
@@ -326,8 +337,84 @@ def test_architecture_guard_kills_payload_alias_branch_mutation() -> None:
     }
 
     assert _architecture_violations(mutated) == [
+        "nodes.py:3:payload-key-branch:data",
         "nodes.py:4:payload-key-branch:schema",
         "nodes.py:5:payload-key-branch:ok",
+        "nodes.py:5:payload-key-branch:items",
+    ]
+
+
+def test_architecture_guard_kills_payload_dict_wrapper_mutation() -> None:
+    """dict copy가 opaque payload origin을 지우지 못하게 한다."""
+    mutated = {
+        "nodes.py": (
+            "def dispatch(result):\n"
+            "    envelope = dict(result.payload)\n"
+            "    return envelope.get('schema')\n"
+        )
+    }
+
+    assert _architecture_violations(mutated) == [
+        "nodes.py:3:payload-key-branch:schema"
+    ]
+
+
+def test_architecture_guard_kills_payload_cast_wrapper_mutations() -> None:
+    """cast와 typing.cast가 opaque payload origin을 지우지 못하게 한다."""
+    mutated = {
+        "cast.py": (
+            "def dispatch(result):\n"
+            "    envelope = cast(dict, result.payload)\n"
+            "    return envelope.get('schema')\n"
+        ),
+        "typing_cast.py": (
+            "def dispatch(result):\n"
+            "    envelope = typing.cast(dict, result.payload)\n"
+            "    return envelope['schema']\n"
+        ),
+    }
+
+    assert _architecture_violations(mutated) == [
+        "cast.py:3:payload-key-branch:schema",
+        "typing_cast.py:3:payload-key-branch:schema",
+    ]
+
+
+def test_architecture_guard_kills_payload_direct_return_mutation() -> None:
+    """제어식 밖 direct return도 opaque payload key read로 탐지한다."""
+    mutated = {
+        "nodes.py": (
+            "def dispatch(result):\n"
+            "    envelope = result.payload\n"
+            "    return envelope.get('items')\n"
+        )
+    }
+
+    assert _architecture_violations(mutated) == [
+        "nodes.py:3:payload-key-branch:items"
+    ]
+
+
+def test_architecture_guard_kills_payload_copy_assignment_and_format_mutations() -> None:
+    """copy 변형과 assignment/formatting의 static-key read를 함께 탐지한다."""
+    mutated = {
+        "copy_reads.py": (
+            "def dispatch(result):\n"
+            "    method_copy = result.payload.copy()\n"
+            "    shallow_copy = copy.copy(result.payload)\n"
+            "    deep_copy = copy.deepcopy(result.payload)\n"
+            "    schema = method_copy.get('schema')\n"
+            "    has_effect = 'effect' in method_copy\n"
+            "    message = f\"{shallow_copy['status']}\"\n"
+            "    return '{}'.format(deep_copy.get('items'))\n"
+        )
+    }
+
+    assert _architecture_violations(mutated) == [
+        "copy_reads.py:5:payload-key-branch:schema",
+        "copy_reads.py:6:payload-key-branch:effect",
+        "copy_reads.py:7:payload-key-branch:status",
+        "copy_reads.py:8:payload-key-branch:items",
     ]
 
 

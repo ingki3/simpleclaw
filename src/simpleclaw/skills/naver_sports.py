@@ -1224,8 +1224,10 @@ def _select_season(seasons: list[Any], requested: str | None) -> dict[str, Any]:
             "사용 가능한 시즌 정보가 없습니다.",
             retryable=False,
         )
-    if requested:
-        requested_text = str(requested)
+    requested_text = str(requested or "").strip()
+    if requested_text.casefold() == "auto":
+        requested_text = ""
+    if requested_text:
         matches = [
             season
             for season in valid
@@ -1397,9 +1399,12 @@ def _lck_standings(
     client: Any,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     current_year = datetime.now(KST).year
+    requested_text = str(requested_season or "").strip()
+    if requested_text.casefold() == "auto":
+        requested_text = ""
     candidates = (
-        [str(requested_season)]
-        if requested_season
+        [requested_text]
+        if requested_text
         else [str(current_year), str(current_year - 1)]
     )
     last_error: SportsError | None = None
@@ -1412,7 +1417,7 @@ def _lck_standings(
             rows = _esports_content(client.get_json(url))
         except SportsError as exc:
             last_error = exc
-            if requested_season:
+            if requested_text:
                 raise
             continue
         valid_rows = [
@@ -1428,7 +1433,7 @@ def _lck_standings(
                 f"{league_id} 순위 응답의 leagueId가 일치하지 않습니다.",
                 retryable=False,
             )
-            if requested_season:
+            if requested_text:
                 raise last_error
             continue
         items = [

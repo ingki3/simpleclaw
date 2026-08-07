@@ -29,3 +29,6 @@ jobs:
 
       - name: Run hermetic LangGraph V4 contract validator
         run: python scripts/dev/validate_langgraph_v4_no_send.py --hermetic
+
+      - name: Run installed Naver Sports production asset gate
+        run: python scripts/dev/validate_naver_sports_asset.py

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""data로 선언한 production asset scenario를 generic harness에서 실행한다."""
+"""설치 asset의 planner/PlanGate/stub dispatch 계약 scenario를 검증한다."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def _load_scenario(path: Path) -> dict[str, object]:
 
 
 async def _main() -> int:
-    """격리 경로에 asset을 설치하고 no-send 검증 harness를 실행한다."""
+    """격리 설치 asset의 contract-only no-send harness를 실행한다."""
     parser = _parser()
     parser.add_argument("--scenario", type=Path, default=DEFAULT_SCENARIO)
     args = parser.parse_args()
@@ -136,6 +136,7 @@ async def _main() -> int:
             expected_contract_set=None,
             expected_effective_assets=(str(expected["effective_asset"]),),
             definitions_label="scenario_installer_output",
+            planner_mode_label="scenario_stub",
         )
 
 

@@ -190,6 +190,7 @@ async def run(args) -> int:
         cases=cases(),
         router_override=HermeticPlannerRouter() if args.hermetic else None,
         expected_contract_set=EXPECTED_CONTRACT_SET,
+        planner_mode_label="stubbed" if args.hermetic else "actual_provider",
     )
 
 
