@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
@@ -95,11 +96,19 @@ class PrimaryDeliveryCoordinator:
         conversation_store,
         delivery_lease_seconds: float = 30.0,
         delivery_poll_interval: float = 0.01,
+        persistence_max_attempts: int = 3,
+        persistence_retry_interval: float = 0.05,
     ) -> None:
+        if persistence_max_attempts < 1:
+            raise ValueError("persistence_max_attempts must be at least 1")
+        if persistence_retry_interval < 0:
+            raise ValueError("persistence_retry_interval must be non-negative")
         self._delivery_journal = SQLiteDeliveryJournal(journal_path)
         self._store = conversation_store
         self._delivery_lease_seconds = delivery_lease_seconds
         self._delivery_poll_interval = delivery_poll_interval
+        self._persistence_max_attempts = persistence_max_attempts
+        self._persistence_retry_interval = persistence_retry_interval
 
     async def deliver_telegram(
         self,
@@ -148,50 +157,68 @@ class PrimaryDeliveryCoordinator:
             metadata.artifact_hash,
         )
         payload_hash = hashlib.sha256(str(response).encode()).hexdigest()
-        try:
-            if self._store.get_outbound_persistence(
-                persistence_identity,
-                payload_hash=payload_hash,
-            ) is not None:
-                self._store.bind_outbound_to_turn(
+        for attempt in range(1, self._persistence_max_attempts + 1):
+            try:
+                if self._store.get_outbound_persistence(
                     persistence_identity,
                     payload_hash=payload_hash,
-                    turn_id=metadata.request_id,
-                )
-                persisted = PersistenceReceiptV1(
-                    persistence_identity,
-                    payload_hash,
-                    True,
-                )
-            else:
-                persisted = await PersistenceRuntime(
-                    journal=InMemoryPersistenceJournal(),
-                    writer=ConversationStorePersistenceAdapter(
-                        self._store,
-                        channel="telegram",
+                ) is not None:
+                    self._store.bind_outbound_to_turn(
+                        persistence_identity,
+                        payload_hash=payload_hash,
+                        turn_id=metadata.request_id,
+                    )
+                    persisted = PersistenceReceiptV1(
+                        persistence_identity,
+                        payload_hash,
+                        True,
+                    )
+                else:
+                    persisted = await PersistenceRuntime(
+                        journal=InMemoryPersistenceJournal(),
+                        writer=ConversationStorePersistenceAdapter(
+                            self._store,
+                            channel="telegram",
+                            request_id=metadata.request_id,
+                        ),
+                    ).persist_delivered(
+                        session_key=metadata.session_key,
                         request_id=metadata.request_id,
-                    ),
-                ).persist_delivered(
-                    session_key=metadata.session_key,
-                    request_id=metadata.request_id,
-                    artifact_hash=metadata.artifact_hash,
-                    content=str(response),
-                    delivery_receipt=receipt,
+                        artifact_hash=metadata.artifact_hash,
+                        content=str(response),
+                        delivery_receipt=receipt,
+                    )
+                break
+            except Exception as exc:
+                if attempt >= self._persistence_max_attempts:
+                    logger.exception(
+                        "V4 primary assistant persistence exhausted after Telegram "
+                        "delivery: request_id=%s delivery_id=%s attempts=%d "
+                        "error_type=%s",
+                        metadata.request_id,
+                        receipt.delivery_id,
+                        attempt,
+                        type(exc).__name__,
+                    )
+                    return PrimaryDeliveryOutcomeV1(
+                        receipt,
+                        None,
+                        PrimaryPersistenceStatus.FAILED,
+                        type(exc).__name__,
+                    )
+                logger.warning(
+                    "V4 primary assistant persistence retrying after Telegram "
+                    "delivery: request_id=%s delivery_id=%s attempt=%d/%d "
+                    "error_type=%s",
+                    metadata.request_id,
+                    receipt.delivery_id,
+                    attempt,
+                    self._persistence_max_attempts,
+                    type(exc).__name__,
                 )
-        except Exception as exc:
-            logger.exception(
-                "V4 primary assistant persistence failed after Telegram delivery: "
-                "request_id=%s delivery_id=%s error_type=%s",
-                metadata.request_id,
-                receipt.delivery_id,
-                type(exc).__name__,
-            )
-            return PrimaryDeliveryOutcomeV1(
-                receipt,
-                None,
-                PrimaryPersistenceStatus.FAILED,
-                type(exc).__name__,
-            )
+                await asyncio.sleep(
+                    self._persistence_retry_interval * (2 ** (attempt - 1))
+                )
         return PrimaryDeliveryOutcomeV1(
             receipt,
             persisted,

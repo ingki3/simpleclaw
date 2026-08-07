@@ -99,7 +99,7 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
 
 @pytest.mark.asyncio
 @pytest.mark.offline
-async def test_send_success_persistence_failure_is_typed_and_replay_repairs_once(
+async def test_send_success_persistence_failure_retries_without_replay(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -117,6 +117,7 @@ async def test_send_success_persistence_failure_is_typed_and_replay_repairs_once
     coordinator = PrimaryDeliveryCoordinator(
         journal_path=tmp_path / "delivery.db",
         conversation_store=store,
+        persistence_retry_interval=0,
     )
     original_save = store.save_outbound_once
     persistence_attempts = 0
@@ -133,15 +134,11 @@ async def test_send_success_persistence_failure_is_typed_and_replay_repairs_once
     update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
     bot = _bot(coordinator)
 
-    failed = await bot._send_response(update, response, chat_id=42, user_id=1)
-    replay = await bot._send_response(update, response, chat_id=42, user_id=1)
+    repaired = await bot._send_response(update, response, chat_id=42, user_id=1)
 
-    assert failed.delivery_receipt.status is DeliveryStatus.DELIVERED
-    assert failed.persistence_status is PrimaryPersistenceStatus.FAILED
-    assert failed.persistence_error_type == "RuntimeError"
-    assert failed.complete_success is False
-    assert replay.persistence_status is PrimaryPersistenceStatus.PERSISTED
-    assert replay.complete_success is True
+    assert repaired.delivery_receipt.status is DeliveryStatus.DELIVERED
+    assert repaired.persistence_status is PrimaryPersistenceStatus.PERSISTED
+    assert repaired.complete_success is True
     assert reply_text.await_count == 1
     assert persistence_attempts == 2
     assert [
@@ -151,6 +148,150 @@ async def test_send_success_persistence_failure_is_typed_and_replay_repairs_once
         (MessageRole.USER, response.metadata.request_id),
         (MessageRole.ASSISTANT, response.metadata.request_id),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_single_polling_update_retries_persistence_without_resending(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    response = _response()
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        persistence_retry_interval=0,
+    )
+    original_save = store.save_outbound_once
+    persistence_attempts = 0
+
+    def fail_first_persistence(*args, **kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        if persistence_attempts == 1:
+            raise RuntimeError("injected persistence failure")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save_outbound_once", fail_first_persistence)
+
+    async def handler(_text, _user_id, _chat_id, *, request_id, **_kwargs):
+        store.save_inbound_once(
+            ConversationMessage(
+                role=MessageRole.USER,
+                content="production-shaped request",
+                channel="telegram",
+            ),
+            session_key=response.metadata.session_key,
+            request_id=request_id,
+        )
+        return response
+
+    async def deliver(primary_response, destination_ref, sender):
+        return await coordinator.deliver_telegram(
+            primary_response,
+            destination_ref=destination_ref,
+            sender=sender,
+        )
+
+    class FakeUpdater:
+        async def start_polling(self):
+            return None
+
+    class FakeApplication:
+        def __init__(self):
+            self.handlers = []
+            self.updater = FakeUpdater()
+
+        def add_handler(self, handler):
+            self.handlers.append(handler)
+
+        async def initialize(self):
+            return None
+
+        async def start(self):
+            return None
+
+    application = FakeApplication()
+
+    class FakeApplicationBuilder:
+        def token(self, _token):
+            return self
+
+        def build(self):
+            return application
+
+    monkeypatch.setattr(
+        "telegram.ext.ApplicationBuilder",
+        FakeApplicationBuilder,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    update = SimpleNamespace(
+        message=SimpleNamespace(
+            text="production-shaped request",
+            caption=None,
+            from_user=SimpleNamespace(id=1),
+            chat_id=42,
+            message_id=1001,
+            message_thread_id=None,
+            photo=[],
+            document=None,
+            reply_text=reply_text,
+        )
+    )
+    bot = TelegramBot(
+        "token",
+        whitelist_user_ids=[1],
+        message_handler=handler,
+        primary_delivery_handler=deliver,
+    )
+
+    await bot.start()
+    message_handler = application.handlers[0]
+    await message_handler.callback(update, SimpleNamespace(bot=SimpleNamespace()))
+
+    assert reply_text.await_count == 1
+    assert persistence_attempts == 2
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=response.metadata.session_key)
+    ] == [
+        (MessageRole.USER, response.metadata.request_id),
+        (MessageRole.ASSISTANT, response.metadata.request_id),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_exhausted_persistence_retry_is_not_a_normal_channel_terminal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        persistence_max_attempts=2,
+        persistence_retry_interval=0,
+    )
+    persistence_attempts = 0
+
+    def fail_persistence(*_args, **_kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        raise RuntimeError("persistent storage outage")
+
+    monkeypatch.setattr(store, "save_outbound_once", fail_persistence)
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+    bot = _bot(coordinator)
+
+    with pytest.raises(RuntimeError, match="assistant persistence did not"):
+        await bot._send_response(update, _response(), chat_id=42, user_id=1)
+
+    assert reply_text.await_count == 1
+    assert persistence_attempts == 2
+    assert store.get_recent(session_key="telegram-session-1") == []
 
 
 @pytest.mark.asyncio
