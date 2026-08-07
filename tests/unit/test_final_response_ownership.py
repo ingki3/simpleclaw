@@ -6,7 +6,7 @@ from simpleclaw.agent.asset_result_presentation import (
 )
 
 
-def test_typed_asset_answer_is_not_a_final_response_source() -> None:
+def test_compat_mode_preserves_safe_typed_asset_answer_during_rollout() -> None:
     payload = {
         "schema": "asset_result.v1",
         "status": "completed",
@@ -24,9 +24,24 @@ def test_typed_asset_answer_is_not_a_final_response_source() -> None:
         effect_status="none",
     )
 
-    assert rendered == SAFE_EMPTY_RESULT
-    assert "ASSET_OWNED" not in rendered
-    assert "NESTED_ASSET" not in rendered
+    assert rendered == "ASSET_OWNED_FINAL_MUST_NOT_RENDER"
+
+
+def test_compat_mode_renders_new_typed_facts_without_generic_failure() -> None:
+    rendered = compose_user_facing_asset_result(
+        payload={
+            "schema": "asset_result.v1",
+            "status": "completed",
+            "side_effect": False,
+            "data": {"items": [{"rank": 1, "team": "KT", "wins": 59}]},
+        },
+        result_status="resolved",
+        effect_status="none",
+    )
+
+    assert rendered != SAFE_EMPTY_RESULT
+    assert "items[0].team: KT" in rendered
+    assert "items[0].wins: 59" in rendered
 
 
 def test_non_typed_legacy_answer_remains_compatible() -> None:

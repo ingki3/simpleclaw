@@ -1651,19 +1651,34 @@ class ConnectedShadowTurnRunner:
                 # 완료 판정을 뒤집거나 target을 재실행하지 않는다.
                 stop_condition = "completed"
                 failure_code = None
-                final_artifact = await composition.finalize(
-                    request_id=request_id,
-                    normalized_result=response.result,
-                    outcome=TerminalOutcome.COMPLETED,
-                    composition_input=(
-                        composition_input_for(response.result)
-                        if self._composition_mode == "central_persona_v1"
-                        else None
-                    ),
-                )
+                try:
+                    with bind_runtime_llm_budget(budget_controller):
+                        async with asyncio.timeout(
+                            budget_controller.remaining_seconds
+                        ):
+                            final_artifact = await composition.finalize(
+                                request_id=request_id,
+                                normalized_result=response.result,
+                                outcome=TerminalOutcome.COMPLETED,
+                                composition_input=(
+                                    composition_input_for(response.result)
+                                    if self._composition_mode
+                                    == "central_persona_v1"
+                                    else None
+                                ),
+                            )
+                except TimeoutError:
+                    final_artifact = None
+                    stop_condition = "deadline"
+                    failure_code = "composition_deadline"
+                except _ShadowBudgetStop as exc:
+                    final_artifact = None
+                    stop_condition = exc.stop_condition
+                    failure_code = exc.stop_condition
                 if final_artifact is None:
-                    stop_condition = "blocked"
-                    failure_code = "final_composition_rejected"
+                    if stop_condition == "completed":
+                        stop_condition = "blocked"
+                        failure_code = "final_composition_rejected"
                 else:
                     state = {
                         **state,
@@ -1732,7 +1747,10 @@ class ConnectedShadowTurnRunner:
             terminal_outcome=terminal_outcome,
             delivery_status=delivery_status,
             budget_usage=budget,
-            model_call_attribution={"planner": planner_model_calls, "composer": 0},
+            model_call_attribution={
+                "planner": planner_model_calls,
+                "composer": max(0, budget.llm_calls - planner_model_calls),
+            },
             dispatch_trace=dispatch_trace,
         )
         counts = ShadowSideEffectCountsV1(

@@ -6,6 +6,7 @@ import asyncio
 import sqlite3
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Protocol
 
@@ -37,6 +38,23 @@ class FinalArtifactJournal(Protocol):
         artifact: FinalArtifactV1,
     ) -> FinalArtifactV1: ...
 
+    def lock_for(self, request_id: str) -> asyncio.Lock: ...
+
+
+_SCHEMA_LOCKS_GUARD = threading.Lock()
+_SCHEMA_LOCKS: dict[str, threading.Lock] = {}
+_LOOP_LOCKS_GUARD = threading.Lock()
+_LOOP_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[tuple[str, str], asyncio.Lock],
+] = weakref.WeakKeyDictionary()
+
+
+def _schema_lock(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _SCHEMA_LOCKS_GUARD:
+        return _SCHEMA_LOCKS.setdefault(key, threading.Lock())
+
 
 class SQLiteFinalArtifactJournal:
     """매 연산의 새 connection을 worker thread에서 열어 event loop를 보호한다."""
@@ -44,8 +62,16 @@ class SQLiteFinalArtifactJournal:
     def __init__(self, db_path: str | Path, *, timeout_seconds: float = 5.0) -> None:
         self._path = Path(db_path).expanduser()
         self._timeout_seconds = max(float(timeout_seconds), 0.1)
-        self._schema_lock = threading.Lock()
+        self._schema_lock = _schema_lock(self._path)
         self._initialized = False
+
+    def lock_for(self, request_id: str) -> asyncio.Lock:
+        """같은 loop/path/request의 모든 runtime 인스턴스가 공유하는 compose lock."""
+        loop = asyncio.get_running_loop()
+        key = (str(self._path.resolve()), request_id)
+        with _LOOP_LOCKS_GUARD:
+            locks = _LOOP_LOCKS.setdefault(loop, {})
+            return locks.setdefault(key, asyncio.Lock())
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(

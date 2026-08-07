@@ -32,6 +32,57 @@ output_contract:
   owner_ref: {type: skill, name: naver-sports-skill}
   json_schema:
     type: object
+    properties:
+      mode: {}
+      category: {}
+      season:
+        properties:
+          code: {}
+          title: {}
+      date: {}
+      fetched_at: {}
+      freshness:
+        properties:
+          as_of: {}
+      items:
+        type: array
+        items:
+          properties:
+            rank: {}
+            team: {}
+            name: {}
+            wins: {}
+            losses: {}
+            draws: {}
+            games_behind: {}
+            title: {}
+            status: {}
+            event_state: {}
+            status_code: {}
+            participants:
+              properties:
+                away:
+                  properties:
+                    name: {}
+                home:
+                  properties:
+                    name: {}
+            score:
+              properties:
+                away: {}
+                home: {}
+            winner: {}
+            date: {}
+            fetched_at: {}
+            source_url: {}
+      warnings:
+        type: array
+        items: {}
+      source:
+        properties:
+          urls:
+            type: array
+            items: {}
     x-simpleclaw-composition-fields:
       - mode
       - category

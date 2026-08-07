@@ -369,7 +369,10 @@ def _validate_schema_definition(schema: object) -> None:
     if set(schema) - _SUPPORTED_SCHEMA_KEYWORDS:
         raise ContractRegistryError("schema.unsupported_keyword")
     try:
-        validate_composition_fields(schema.get(COMPOSITION_FIELDS_EXTENSION))
+        validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
     except ValueError as exc:
         raise ContractRegistryError("schema.invalid_composition_fields") from exc
 

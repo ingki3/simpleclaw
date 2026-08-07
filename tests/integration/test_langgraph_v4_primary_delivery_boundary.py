@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
@@ -19,7 +24,19 @@ from simpleclaw.graph_runtime.idempotency import (
     canonical_artifact_content_hash,
     canonical_artifact_id,
 )
-from simpleclaw.graph_runtime.status import DeliveryStatus
+from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
+from simpleclaw.graph_runtime.composition_journal import SQLiteFinalArtifactJournal
+from simpleclaw.graph_runtime.contracts import (
+    AssetRefV1,
+    ContractRefV1,
+    NormalizedAssetResultV1,
+)
+from simpleclaw.graph_runtime.status import (
+    AssetResultStatus,
+    DeliveryStatus,
+    EffectStatus,
+    TerminalOutcome,
+)
 from simpleclaw.memory import ConversationMessage, ConversationStore, MessageRole
 from simpleclaw.outbound_delivery import (
     PrimaryDeliveryCoordinator,
@@ -55,6 +72,119 @@ def _bot(coordinator: PrimaryDeliveryCoordinator) -> TelegramBot:
         whitelist_user_ids=[1],
         primary_delivery_handler=deliver,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_central_final_delivery_persistence_and_replay_are_exactly_once(
+    tmp_path,
+) -> None:
+    request_id = "telegram:42:central-1001"
+    facts = {"data": {"items": [{"rank": 1, "team": "KT", "wins": 59}]}}
+    composition_input = CompositionInputV1(
+        request_id=request_id,
+        question="KBO 1위 팀과 승수를 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts=facts,
+    )
+    normalized_result = NormalizedAssetResultV1(
+        invocation_id="invocation-1",
+        output_contract=ContractRefV1(
+            contract_id="recipe.sports-live.output",
+            version="1",
+            owner_ref=composition_input.asset_ref,
+            schema_hash="schema-hash",
+        ),
+        status=AssetResultStatus.RESOLVED,
+        payload={"side_effect": False, **facts},
+        payload_hash="payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    compose = AsyncMock(
+        return_value=DraftResponseV1(
+            content="KBO 1위는 KT이며 59승입니다.",
+            cited_paths=("data.items[0].team", "data.items[0].wins"),
+        )
+    )
+    journal_path = tmp_path / "graph.db"
+
+    def runtime() -> FinalCompositionRuntime:
+        return FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(journal_path),
+            composer_fingerprint="composer-v1",
+        )
+
+    first = await runtime().finalize(
+        request_id=request_id,
+        normalized_result=normalized_result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=composition_input,
+    )
+    replay = await runtime().finalize(
+        request_id=request_id,
+        normalized_result=normalized_result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=composition_input,
+    )
+    assert first is not None
+    assert replay == first
+
+    store = ConversationStore(tmp_path / "conversation.db")
+    session_key = "telegram-session-central"
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="KBO 1위 팀과 승수를 알려줘",
+            channel="telegram",
+        ),
+        session_key=session_key,
+        request_id=request_id,
+    )
+    response = PrimaryResponseText(
+        first.content,
+        PrimaryDeliveryMetadataV1(
+            request_id=request_id,
+            artifact_id=first.artifact_id,
+            artifact_hash=first.content_hash,
+            session_key=session_key,
+        ),
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+    bot = _bot(coordinator)
+
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+
+    assert compose.await_count == 1
+    assert reply_text.await_count == 1
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=session_key)
+    ] == [
+        (MessageRole.USER, request_id),
+        (MessageRole.ASSISTANT, request_id),
+    ]
+    with sqlite3.connect(journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 1
+    with sqlite3.connect(tmp_path / "conversation.db") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio

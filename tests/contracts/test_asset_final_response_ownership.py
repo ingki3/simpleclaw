@@ -18,18 +18,26 @@ def _skill_frontmatter(path: Path) -> dict:
 
 
 def test_production_v4_assets_declare_only_typed_composition_fields() -> None:
-    definitions = (
-        _skill_frontmatter(
-            ROOT / "runtime_assets/skills/naver-sports-skill/SKILL.md"
+    definitions = [
+        *(
+            _skill_frontmatter(path)
+            for path in sorted((ROOT / "runtime_assets/skills").glob("*/SKILL.md"))
         ),
-        yaml.safe_load(
-            (ROOT / "runtime_assets/recipes/sports-live/recipe.yaml").read_text(
-                encoding="utf-8"
-            )
+        *(
+            yaml.safe_load(path.read_text(encoding="utf-8"))
+            for path in sorted((ROOT / "runtime_assets/recipes").glob("*/recipe.yaml"))
         ),
-    )
+    ]
+    v4_definitions = [
+        definition
+        for definition in definitions
+        if definition.get("capability", {}).get("output_contract")
+        == "asset_result.v1"
+    ]
 
-    for definition in definitions:
+    assert v4_definitions
+
+    for definition in v4_definitions:
         schema = definition["output_contract"]["json_schema"]
         visible = tuple(schema.get("x-simpleclaw-composition-fields") or ())
         assert visible
@@ -39,3 +47,17 @@ def test_production_v4_assets_declare_only_typed_composition_fields() -> None:
             for segment in path.split(".")
             for marker in FORBIDDEN
         )
+
+
+def test_central_composer_never_imports_compat_presentation() -> None:
+    central_sources = (
+        ROOT / "src/simpleclaw/agent/composition_projection.py",
+        ROOT / "src/simpleclaw/agent/final_response_composer.py",
+        ROOT / "src/simpleclaw/agent/final_response_guard.py",
+        ROOT / "src/simpleclaw/graph_runtime/composition.py",
+    )
+
+    assert all(
+        "asset_result_presentation" not in path.read_text(encoding="utf-8")
+        for path in central_sources
+    )

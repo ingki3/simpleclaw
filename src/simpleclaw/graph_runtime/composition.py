@@ -50,6 +50,10 @@ class FinalCompositionRuntime:
 
     def _lock_for(self, request_id: str) -> asyncio.Lock:
         """같은 process의 concurrent replay에서 provider 호출을 한 번으로 묶는다."""
+        if self._journal is not None:
+            shared_lock = getattr(self._journal, "lock_for", None)
+            if callable(shared_lock):
+                return shared_lock(request_id)
         return self._locks.setdefault(request_id, asyncio.Lock())
 
     async def finalize(
@@ -111,7 +115,12 @@ class FinalCompositionRuntime:
                     and isinstance(getattr(candidate, "content", None), str)
                 ):
                     draft = candidate
-            except Exception:  # noqa: BLE001 - deterministic fallback 대상
+            except Exception as exc:  # noqa: BLE001 - deterministic fallback 대상
+                if getattr(exc, "stop_condition", None) in {
+                    "deadline",
+                    "budget_exhausted",
+                }:
+                    raise
                 content = None
                 draft = None
 

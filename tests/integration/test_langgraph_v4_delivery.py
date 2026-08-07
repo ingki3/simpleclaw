@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     SenderReceipt,
@@ -41,6 +46,7 @@ from simpleclaw.graph_runtime.runtime import (
 from simpleclaw.graph_runtime.status import (
     AssetResultStatus,
     DeliveryStatus,
+    EffectStatus,
     TerminalOutcome,
 )
 from simpleclaw.memory import ConversationStore
@@ -66,6 +72,7 @@ def _core_callbacks(
     *,
     counters: dict[str, int],
     guard_state_observations: list[tuple[bool, bool]],
+    composition_candidate: object = "draft",
 ) -> CoreNodeCallbacks:
     def no_op(_state):
         return {}
@@ -79,7 +86,7 @@ def _core_callbacks(
             ("final_artifact" in state, "delivery_intent" in state)
         )
         return {
-            "composition_candidate": "draft",
+            "composition_candidate": composition_candidate,
             "terminal_outcome": TerminalOutcome.COMPLETED,
         }
 
@@ -103,6 +110,20 @@ def _core_callbacks(
         assess_deep_research_result=no_op,
         compose_candidate=compose_candidate,
         resume_user_input=lambda _state, _control: {},
+    )
+
+
+def _central_input() -> CompositionInputV1:
+    return CompositionInputV1(
+        request_id="request-1",
+        question="1위 팀과 승수를 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="generic"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts={"team": "KT", "wins": 59},
     )
 
 
@@ -286,6 +307,70 @@ async def test_guard_failure_uses_safe_renderer_once_without_redispatch() -> Non
         outcome=TerminalOutcome.COMPLETED,
     ) == final
     assert calls == {"compose": 1, "guard": 1, "safe": 1, "dispatch": 0}
+
+
+@pytest.mark.asyncio
+async def test_central_journal_failure_prevents_delivery_and_persistence(
+    tmp_path,
+) -> None:
+    class FailingJournal:
+        async def load(self, **_kwargs):
+            return None
+
+        async def record_or_reuse(self, **_kwargs):
+            raise RuntimeError("journal write failed")
+
+    sends = 0
+    writes = 0
+
+    async def sender(_destination, _content):
+        nonlocal sends
+        sends += 1
+        return SenderReceipt(external_message_id="message-1")
+
+    async def writer(_session_key, _persistence_id, _payload_hash, _content):
+        nonlocal writes
+        writes += 1
+
+    completion = GraphCompletionRuntime(
+        composition=FinalCompositionRuntime(
+            compose=lambda _value: DraftResponseV1(
+                content="1위는 KT이며 59승입니다.",
+                cited_paths=("team", "wins"),
+            ),
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=FailingJournal(),
+            composer_fingerprint="composer-v1",
+        ),
+        delivery=DeliveryRuntime(
+            journal=InMemoryDeliveryJournal(),
+            adapters={"telegram": TelegramDeliveryAdapter(sender)},
+        ),
+        persistence=PersistenceRuntime(
+            journal=InMemoryPersistenceJournal(),
+            writer=writer,
+        ),
+        resolve_context=lambda _state: GraphDeliveryContext(
+            channel="telegram",
+            destination_ref="chat-1",
+            session_key="session-1",
+        ),
+    )
+    graph = compile_core_graph(
+        _core_callbacks(
+            counters={"asset_dispatch": 0},
+            guard_state_observations=[],
+            composition_candidate=_central_input(),
+        ),
+        completion.callbacks(),
+    )
+
+    with pytest.raises(RuntimeError, match="journal write failed"):
+        await graph.ainvoke({"ingress": "hello"})
+
+    assert sends == 0
+    assert writes == 0
 
 
 def test_delivery_intent_rejects_noncanonical_final_artifact() -> None:

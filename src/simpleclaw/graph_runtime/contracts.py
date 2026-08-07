@@ -49,8 +49,38 @@ _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS = frozenset(
 )
 
 
-def validate_composition_fields(value: object) -> tuple[str, ...]:
-    """Contract extension을 bounded semantic JSON path tuple로 검증한다."""
+def _composition_path_is_declared(
+    schema: dict[str, object],
+    path: str,
+) -> bool:
+    """Composer path가 JSON Schema의 properties/items에 실제 선언됐는지 본다."""
+    current: object = schema
+    for raw_segment in path.split("."):
+        if not isinstance(current, dict):
+            return False
+        properties = current.get("properties")
+        if not isinstance(properties, dict):
+            return False
+        name = raw_segment.removesuffix("[*]")
+        child = properties.get(name)
+        if not isinstance(child, dict):
+            return False
+        if raw_segment.endswith("[*]"):
+            if child.get("type") != "array":
+                return False
+            child = child.get("items")
+            if not isinstance(child, dict):
+                return False
+        current = child
+    return True
+
+
+def validate_composition_fields(
+    value: object,
+    *,
+    json_schema: dict[str, object] | None = None,
+) -> tuple[str, ...]:
+    """Contract extension을 bounded·schema-declared path tuple로 검증한다."""
     if value is None:
         return ()
     if not isinstance(value, list):
@@ -80,6 +110,13 @@ def validate_composition_fields(value: object) -> tuple[str, ...]:
                     "composition field path contains a forbidden presentation "
                     f"or private field: {path}"
                 )
+        if json_schema is not None and not _composition_path_is_declared(
+            json_schema, path
+        ):
+            raise ValueError(
+                "composition field path is not declared by JSON Schema: "
+                f"{path}"
+            )
         paths.append(path)
     if len(set(paths)) != len(paths):
         raise ValueError("composition field paths must be unique")
@@ -233,7 +270,8 @@ class ContractDescriptorV1(ContractModel):
     def composition_fields(self) -> tuple[str, ...]:
         """중앙 composer에 노출하도록 계약이 선언한 semantic path만 반환한다."""
         return validate_composition_fields(
-            self.json_schema.get(COMPOSITION_FIELDS_EXTENSION)
+            self.json_schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=self.json_schema,
         )
 
     @model_validator(mode="after")
@@ -244,8 +282,10 @@ class ContractDescriptorV1(ContractModel):
             and self.binding_ref.owner_ref != self.ref.owner_ref
         ):
             raise ValueError("binding owner must match the contract owner")
+        schema = self.json_schema
         validate_composition_fields(
-            self.json_schema.get(COMPOSITION_FIELDS_EXTENSION)
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
         )
         return self
 

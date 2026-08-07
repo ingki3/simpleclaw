@@ -29,6 +29,23 @@ def _values():
         ref=ref,
         json_schema={
             "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "season": {"properties": {"code": {}}},
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "properties": {
+                                    "rank": {},
+                                    "team": {},
+                                    "wins": {},
+                                }
+                            },
+                        },
+                    }
+                }
+            },
             "x-simpleclaw-composition-fields": [
                 "data.season.code",
                 "data.items[*].rank",
@@ -139,6 +156,28 @@ def test_descriptor_rejects_presentation_and_private_paths(path: str) -> None:
             ),
             json_schema={
                 "type": "object",
+                "x-simpleclaw-composition-fields": [path],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["data.password", "data.apiKey", "data.email", "data.internalPrompt"],
+)
+def test_descriptor_rejects_paths_not_declared_by_schema(path: str) -> None:
+    owner = AssetRefV1(type="recipe", name="fixture")
+    with pytest.raises(ValueError, match="not declared by JSON Schema"):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="fixture.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {"data": {"properties": {"safe": {}}}},
                 "x-simpleclaw-composition-fields": [path],
             },
         )

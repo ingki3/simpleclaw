@@ -70,7 +70,7 @@ def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
 
 def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
     number = guard_final_response(
-        _input(),
+        _input().model_copy(update={"question": "KT 승수를 알려줘"}),
         DraftResponseV1(
             content="KT는 99승입니다.",
             cited_paths=("data.items[0].team",),
@@ -86,3 +86,73 @@ def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
 
     assert number.code == "ungrounded_number"
     assert scope.code == "citation_not_projected"
+
+
+def test_guard_rejects_partial_top_n_uncited_fact_and_private_identifier() -> None:
+    partial = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀 중 KT입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+    uncited = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT, 삼성, LG이며 삼성은 58승입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        ),
+    )
+    private = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT, 삼성, LG입니다. 주민번호는 ABCDEF입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        ),
+    )
+
+    assert partial.code == "requested_scope_not_fully_cited"
+    assert uncited.code == "ungrounded_number"
+    assert private.code == "raw_contract_exposed"
+
+
+def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
+    value = _input().model_copy(update={"unresolved_claims": ("동률 여부",)})
+    certain = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT, 삼성, LG로 확정입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+            limitation_paths=("unresolved_claims[0]",),
+        ),
+    )
+
+    assert certain.code == "limitation_not_rendered"
+
+
+def test_guard_rejects_provider_diagnostics() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT, 삼성, LG입니다. provider error: upstream timeout",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        ),
+    )
+
+    assert result.code == "raw_contract_exposed"

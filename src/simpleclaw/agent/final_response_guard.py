@@ -27,10 +27,34 @@ _RAW_MARKERS = (
     "provider_payload",
     "raw_payload",
     "diagnostic",
+    "provider error",
+    "provider_error",
+    "upstream error",
+    "upstream timeout",
+    "schema error",
+    "exception",
+    "trace id",
     "traceback",
     "secret",
     "token=",
+    "주민번호",
+    "개인정보",
 )
+_LIMITATION_MARKERS = (
+    "불확실",
+    "확인되지",
+    "확인할 수 없",
+    "알 수 없",
+    "제한",
+    "추정",
+    "unknown",
+    "uncertain",
+    "unverified",
+    "could not verify",
+    "cannot verify",
+)
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_IDENTIFIER_RE = re.compile(r"\b[A-Z0-9_-]{6,}\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +97,24 @@ def _requested_top_n(question: str) -> int | None:
     return None
 
 
+def _item_index(path: str) -> int | None:
+    match = re.search(r"(?:^|\.)items\[(\d+)\]", path)
+    return int(match.group(1)) if match else None
+
+
+def _required_item_indices(
+    concrete: dict[str, JsonValue],
+    top_n: int,
+) -> set[int]:
+    """실제 projection에 존재하는 top-N item index만 완전성 대상으로 삼는다."""
+    available = {
+        index
+        for path in concrete
+        if (index := _item_index(path)) is not None and index < top_n
+    }
+    return set(sorted(available)[:top_n])
+
+
 def guard_final_response(
     value: CompositionInputV1,
     draft: DraftResponseV1,
@@ -90,22 +132,60 @@ def guard_final_response(
         marker in lowered for marker in _RAW_MARKERS
     ):
         return _rejected("raw_contract_exposed")
+    identifier_source = _URL_RE.sub("", content)
+    if _EMAIL_RE.search(content) or _IDENTIFIER_RE.search(identifier_source):
+        # 긴 identifier는 projected scalar로 명시 인용된 경우에만 허용한다.
+        identifiers = set(_IDENTIFIER_RE.findall(identifier_source))
+        projected_identifiers = {
+            str(item)
+            for item in flatten_public_facts(value.public_facts).values()
+            if isinstance(item, str)
+        }
+        if _EMAIL_RE.search(content) or not identifiers <= projected_identifiers:
+            return _rejected("private_or_unprojected_identifier")
 
     concrete = flatten_public_facts(value.public_facts)
     if not draft.cited_paths:
         return _rejected("citations_required")
     top_n = _requested_top_n(value.question)
+    cited_values: dict[str, JsonValue] = {}
+    cited_item_indices: set[int] = set()
     for path in draft.cited_paths:
         if "[*]" in path or path not in concrete:
             return _rejected("citation_not_projected")
         if top_n is not None:
-            match = re.search(r"(?:^|\.)items\[(\d+)\]", path)
-            if match and int(match.group(1)) >= top_n:
+            index = _item_index(path)
+            if index is not None and index >= top_n:
                 return _rejected("citation_outside_requested_scope")
+            if index is not None:
+                cited_item_indices.add(index)
         cited = concrete[path]
+        cited_values[path] = cited
         if isinstance(cited, str) and len(cited.strip()) >= 2:
             if cited.strip().casefold() not in lowered:
                 return _rejected("cited_value_not_rendered")
+    if top_n is not None and cited_item_indices != _required_item_indices(
+        concrete, top_n
+    ):
+        return _rejected("requested_scope_not_fully_cited")
+
+    # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
+    # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
+    for path, projected in concrete.items():
+        if not isinstance(projected, str):
+            continue
+        rendered = str(projected).strip()
+        if len(rendered) < 2:
+            continue
+        if (
+            rendered.casefold() in lowered
+            and rendered.casefold() not in value.question.casefold()
+            and not any(
+                cited_value == projected
+                for cited_value in cited_values.values()
+            )
+        ):
+            return _rejected("rendered_value_not_cited")
 
     limitation_values = {
         f"unresolved_claims[{index}]": claim
@@ -115,10 +195,18 @@ def guard_final_response(
         return _rejected("unresolved_claim_not_limited")
     if any(path not in limitation_values for path in draft.limitation_paths):
         return _rejected("limitation_not_projected")
+    if value.unresolved_claims and set(draft.limitation_paths) != set(
+        limitation_values
+    ):
+        return _rejected("unresolved_claim_not_limited")
+    if value.unresolved_claims and not any(
+        marker in lowered for marker in _LIMITATION_MARKERS
+    ):
+        return _rejected("limitation_not_rendered")
 
     allowed_urls: set[str] = set()
     allowed_numbers: set[str] = _list_lengths(value.public_facts)
-    for projected in concrete.values():
+    for projected in cited_values.values():
         urls, numbers = _tokens(projected)
         allowed_urls.update(urls)
         allowed_numbers.update(numbers)

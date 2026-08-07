@@ -59,21 +59,17 @@ def _typed_payload(*, side_effect: object = False) -> dict[str, object]:
     }
 
 
-def test_typed_top_level_preferred_text_is_not_promoted() -> None:
+def test_typed_top_level_preferred_text_remains_in_compat_mode() -> None:
     payload = _typed_payload()
     payload["answer"] = "기존 preferred answer"
 
-    assert _compose_user_facing_result(_result(payload)) == (
-        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
-    )
+    assert _compose_user_facing_result(_result(payload)) == "기존 preferred answer"
 
 
-def test_verified_read_only_typed_result_requires_central_composer() -> None:
+def test_verified_read_only_typed_result_preserves_safe_nested_compat_text() -> None:
     rendered = _compose_user_facing_result(_result(_typed_payload()))
 
-    assert rendered == (
-        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
-    )
+    assert rendered.startswith("확인된 결과입니다.")
     assert "SECRET" not in rendered
     assert "schema" not in rendered
     assert "status" not in rendered
@@ -121,15 +117,14 @@ def test_unsafe_typed_preferred_text_fails_closed_without_raw_diagnostics(
     assert "RAW_" not in rendered
 
 
-def test_large_typed_preferred_output_is_not_promoted() -> None:
+def test_large_typed_preferred_output_is_bounded_in_compat_mode() -> None:
     payload = _typed_payload()
     payload["answer"] = "가" * 10_000
 
     rendered = _compose_user_facing_result(_result(payload))
 
-    assert rendered == (
-        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
-    )
+    assert len(rendered) == 3_500
+    assert rendered.endswith("…")
 
 
 def test_non_typed_legacy_preferred_text_remains_unbounded() -> None:

@@ -111,6 +111,41 @@ async def test_restart_reuses_first_accepted_final_without_recomposing(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_concurrent_runtime_instances_compose_exactly_once(tmp_path) -> None:
+    value, result = _values("shared-runtime-request")
+    compose = AsyncMock(return_value=_draft())
+    db_path = tmp_path / "invocations.sqlite3"
+
+    def runtime() -> FinalCompositionRuntime:
+        return FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(db_path),
+            composer_fingerprint="composer-v1",
+        )
+
+    finals = await asyncio.gather(
+        *(
+            runtime().finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+            for _ in range(32)
+        )
+    )
+
+    assert compose.await_count == 1
+    assert all(final == finals[0] for final in finals)
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
 async def test_same_request_with_different_payload_hash_conflicts(tmp_path) -> None:
     value, result = _values()
     journal = SQLiteFinalArtifactJournal(tmp_path / "invocations.sqlite3")
