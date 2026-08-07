@@ -9,7 +9,7 @@ import json
 import secrets
 import sqlite3
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -18,8 +18,21 @@ from typing import Any, Literal, cast
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from simpleclaw.agent.asset_result_presentation import (
+    SAFE_EMPTY_RESULT,
     compose_user_facing_asset_result,
+    compose_user_facing_projected_facts,
+    is_safe_typed_asset_result,
 )
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
+from simpleclaw.agent.composition_projection import (
+    CompositionProjectionError,
+    build_composition_input,
+    project_declared_paths,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 from simpleclaw.graph_runtime.adapters.persistence import (
@@ -34,10 +47,12 @@ from .adapters.skill import GenericSkillAdapter, SkillExecutor
 from .builder import compile_core_graph
 from .checkpoint import resolve_checkpoint_path
 from .composition import FinalCompositionRuntime
+from .composition_journal import SQLiteFinalArtifactJournal
 from .contracts import (
     AssetBindingRefV1,
     AssetInvocationV1,
     AssetRefV1,
+    ContractDescriptorV1,
     FinalArtifactV1,
     NormalizedAssetResultV1,
 )
@@ -1074,13 +1089,33 @@ def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
     return "react"
 
 
-def _compose_user_facing_result(result: NormalizedAssetResultV1) -> str:
+def _compose_user_facing_result(
+    result: NormalizedAssetResultV1,
+    *,
+    descriptor: ContractDescriptorV1 | None = None,
+) -> str:
     """Core 밖 generic presentation boundary의 text 결과만 소비한다."""
-    return compose_user_facing_asset_result(
+    if descriptor is not None and descriptor.composition_fields:
+        if not is_safe_typed_asset_result(
+            payload=result.payload,
+            result_status=result.status.value,
+            effect_status=result.effect_status.value,
+        ):
+            return SAFE_EMPTY_RESULT
+        try:
+            facts = project_declared_paths(
+                result.payload,
+                descriptor.composition_fields,
+            )
+        except (CompositionProjectionError, ValueError):
+            return SAFE_EMPTY_RESULT
+        return compose_user_facing_projected_facts(facts)
+    rendered = compose_user_facing_asset_result(
         payload=result.payload,
         result_status=result.status.value,
         effect_status=result.effect_status.value,
     )
+    return rendered
 
 
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:
@@ -1105,6 +1140,13 @@ class ConnectedShadowTurnRunner:
         recipe_executor: RecipeExecutor | None = None,
         skill_executor: SkillExecutor | None = None,
         native_tool_executor: NativeToolExecutor | None = None,
+        composition_mode: str = "asset_text_compat",
+        response_composer: Callable[
+            [CompositionInputV1], Awaitable[DraftResponseV1]
+        ]
+        | None = None,
+        composer_fingerprint: str = "central_persona_v1_unconfigured",
+        locale: str = "ko-KR",
     ) -> None:
         self._facade = facade
         self._definitions = tuple(definitions)
@@ -1119,6 +1161,12 @@ class ConnectedShadowTurnRunner:
         self._recipe_executor = recipe_executor
         self._skill_executor = skill_executor
         self._native_tool_executor = native_tool_executor
+        if composition_mode not in {"asset_text_compat", "central_persona_v1"}:
+            raise ValueError("unsupported composition mode")
+        self._composition_mode = composition_mode
+        self._response_composer = response_composer
+        self._composer_fingerprint = composer_fingerprint
+        self._locale = locale
 
     async def run(
         self,
@@ -1249,6 +1297,7 @@ class ConnectedShadowTurnRunner:
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
         durable_terminal_reused = False
+        durable_final_recovered = False
         dispatch_guard = _TargetDispatchGuard(invocation)
         durable_claims = _DurableInvocationClaims(self._facade.checkpoint_path)
         binding_ref = entry.snapshot.declared_binding
@@ -1368,6 +1417,41 @@ class ConnectedShadowTurnRunner:
         def no_op(_state: Mapping[str, object]) -> dict[str, object]:
             return {}
 
+        def composition_input_for(
+            result: NormalizedAssetResultV1,
+        ) -> CompositionInputV1:
+            """Exact output descriptor와 최신 질문에서 central input을 만든다."""
+            return build_composition_input(
+                request_id=request_id,
+                question=plan.context.standalone_question,
+                locale=self._locale,
+                selected_route=route,
+                normalized_result=result,
+                descriptor=entry.output_descriptor,
+            )
+
+        def compose_candidate(_state: Mapping[str, object]) -> dict[str, object]:
+            terminal_outcome = (
+                TerminalOutcome.COMPLETED
+                if response is not None
+                and response.status is AssetResultStatus.RESOLVED
+                and response.effect_status
+                in {EffectStatus.NONE, EffectStatus.VERIFIED}
+                else TerminalOutcome.FAILED
+            )
+            if self._composition_mode == "central_persona_v1":
+                if response is None or response.result is None:
+                    raise _TargetDispatchInvariantError(
+                        "composition_result_missing"
+                    )
+                candidate: object = composition_input_for(response.result)
+            else:
+                candidate = "shadow"
+            return {
+                "composition_candidate": candidate,
+                "terminal_outcome": terminal_outcome,
+            }
+
         raw_callbacks = CoreNodeCallbacks(
             normalize_ingress=lambda _state: {"request_id": request_id},
             load_existing_context=no_op,
@@ -1396,17 +1480,7 @@ class ConnectedShadowTurnRunner:
             assess_react_result=assess,
             deep_research_subgraph=dispatch,
             assess_deep_research_result=assess,
-            compose_candidate=lambda _state: {
-                "composition_candidate": "shadow",
-                "terminal_outcome": (
-                    TerminalOutcome.COMPLETED
-                    if response is not None
-                    and response.status is AssetResultStatus.RESOLVED
-                    and response.effect_status
-                    in {EffectStatus.NONE, EffectStatus.VERIFIED}
-                    else TerminalOutcome.FAILED
-                ),
-            },
+            compose_candidate=compose_candidate,
             resume_user_input=lambda _state, _control: {},
         )
         callbacks = CoreNodeCallbacks(
@@ -1456,14 +1530,51 @@ class ConnectedShadowTurnRunner:
                 raw_callbacks.resume_user_input, budget_controller
             ),
         )
-        composition = FinalCompositionRuntime(
-            compose=_compose_user_facing_result,
-            guard=lambda content: bool(content.strip())
-            and not content.lstrip().startswith(("{", "[")),
-            safe_render=lambda _result: (
-                "요청을 처리했지만 안전한 응답을 구성하지 못했습니다."
-            ),
-        )
+        composition_deadline: asyncio.Timeout | None = None
+
+        def controlled_composition_deadline_expired() -> bool:
+            return (
+                composition_deadline is not None
+                and composition_deadline.expired()
+            )
+
+        composition_journal: SQLiteFinalArtifactJournal | None = None
+        if self._composition_mode == "central_persona_v1":
+            async def central_compose(
+                value: CompositionInputV1,
+            ) -> DraftResponseV1:
+                if self._response_composer is None:
+                    raise RuntimeError("central response composer is not configured")
+                return await self._response_composer(value)
+
+            composition_journal = SQLiteFinalArtifactJournal(
+                self._facade.checkpoint_path
+            )
+            composition = FinalCompositionRuntime(
+                compose=central_compose,
+                guard=guard_final_response,
+                safe_render=lambda: (
+                    "결과는 확인했지만 지금은 안전하게 답변을 구성하지 못했습니다. "
+                    "잠시 후 다시 확인해 주세요."
+                ),
+                journal=composition_journal,
+                composer_fingerprint=self._composer_fingerprint,
+                controlled_deadline_expired=(
+                    controlled_composition_deadline_expired
+                ),
+            )
+        else:
+            composition = FinalCompositionRuntime(
+                compose=lambda result: _compose_user_facing_result(
+                    result,
+                    descriptor=entry.output_descriptor,
+                ),
+                guard=lambda content: bool(content.strip())
+                and not content.lstrip().startswith(("{", "[")),
+                safe_render=lambda _result: (
+                    "요청을 처리했지만 안전한 응답을 구성하지 못했습니다."
+                ),
+            )
         completion = GraphCompletionRuntime(
             composition=composition,
             delivery=self._facade.shadow_delivery_runtime(
@@ -1513,20 +1624,24 @@ class ConnectedShadowTurnRunner:
                 bind_runtime_llm_budget(budget_controller),
             ):
                 try:
-                    async with asyncio.timeout(
+                    composition_deadline = asyncio.timeout(
                         budget_controller.remaining_seconds
-                    ):
-                        state = await graph.ainvoke(
-                            {"ingress": plan.context.standalone_question},
-                            {
-                                "configurable": {
-                                    "thread_id": f"shadow:{request_id}"
+                    )
+                    try:
+                        async with composition_deadline:
+                            state = await graph.ainvoke(
+                                {"ingress": plan.context.standalone_question},
+                                {
+                                    "configurable": {
+                                        "thread_id": f"shadow:{request_id}"
+                                    },
+                                    "recursion_limit": (
+                                        self._facade.budget.max_graph_steps + 1
+                                    ),
                                 },
-                                "recursion_limit": (
-                                    self._facade.budget.max_graph_steps + 1
-                                ),
-                            },
-                        )
+                            )
+                    finally:
+                        composition_deadline = None
                 except TimeoutError:
                     stop_condition = "deadline"
                 except _ShadowBudgetStop as exc:
@@ -1575,26 +1690,73 @@ class ConnectedShadowTurnRunner:
                     **state,
                     "terminal_outcome": TerminalOutcome.BLOCKED,
                 }
-        if durable_terminal_reused and response is not None:
-            safe_terminal = (
-                response.status is AssetResultStatus.RESOLVED
-                and response.result is not None
-                and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+        safe_terminal = (
+            response is not None
+            and response.status is AssetResultStatus.RESOLVED
+            and response.result is not None
+            and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+        )
+        if (
+            safe_terminal
+            and composition_journal is not None
+            and state.get("final_artifact") is None
+        ):
+            assert response is not None
+            assert response.result is not None
+            recovered_final = await composition_journal.load(
+                request_id=request_id,
+                normalized_payload_hash=response.result.payload_hash,
+                composer_fingerprint=self._composer_fingerprint,
             )
+            if recovered_final is not None:
+                state = {
+                    **state,
+                    "final_artifact": recovered_final,
+                    "terminal_outcome": TerminalOutcome.COMPLETED,
+                }
+                stop_condition = "completed"
+                failure_code = None
+                durable_final_recovered = True
+        if durable_terminal_reused and response is not None:
             dispatch_guard.reuse_terminal(succeeded=safe_terminal)
-            if safe_terminal:
+            if safe_terminal and state.get("final_artifact") is None:
                 # 이미 durable terminal인 호출은 checkpoint serializer/resume 오류로
                 # 완료 판정을 뒤집거나 target을 재실행하지 않는다.
                 stop_condition = "completed"
                 failure_code = None
-                final_artifact = await composition.finalize(
-                    request_id=request_id,
-                    normalized_result=response.result,
-                    outcome=TerminalOutcome.COMPLETED,
-                )
+                final_artifact = None
+                try:
+                    with bind_runtime_llm_budget(budget_controller):
+                        composition_deadline = asyncio.timeout(
+                            budget_controller.remaining_seconds
+                        )
+                        try:
+                            async with composition_deadline:
+                                final_artifact = await composition.finalize(
+                                    request_id=request_id,
+                                    normalized_result=response.result,
+                                    outcome=TerminalOutcome.COMPLETED,
+                                    composition_input=(
+                                        composition_input_for(response.result)
+                                        if self._composition_mode
+                                        == "central_persona_v1"
+                                        else None
+                                    ),
+                                )
+                        finally:
+                            composition_deadline = None
+                except TimeoutError:
+                    final_artifact = None
+                    stop_condition = "deadline"
+                    failure_code = "composition_deadline"
+                except _ShadowBudgetStop as exc:
+                    final_artifact = None
+                    stop_condition = exc.stop_condition
+                    failure_code = exc.stop_condition
                 if final_artifact is None:
-                    stop_condition = "blocked"
-                    failure_code = "final_composition_rejected"
+                    if stop_condition == "completed":
+                        stop_condition = "blocked"
+                        failure_code = "final_composition_rejected"
                 else:
                     state = {
                         **state,
@@ -1629,7 +1791,7 @@ class ConnectedShadowTurnRunner:
         delivery_receipt = state.get("delivery_receipt")
         delivery_status = (
             DeliveryStatus.SHADOWED
-            if durable_terminal_reused
+            if durable_terminal_reused or durable_final_recovered
             else getattr(
                 delivery_receipt,
                 "status",
@@ -1663,7 +1825,10 @@ class ConnectedShadowTurnRunner:
             terminal_outcome=terminal_outcome,
             delivery_status=delivery_status,
             budget_usage=budget,
-            model_call_attribution={"planner": planner_model_calls, "composer": 0},
+            model_call_attribution={
+                "planner": planner_model_calls,
+                "composer": max(0, budget.llm_calls - planner_model_calls),
+            },
             dispatch_trace=dispatch_trace,
         )
         counts = ShadowSideEffectCountsV1(

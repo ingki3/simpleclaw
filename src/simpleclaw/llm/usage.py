@@ -25,6 +25,7 @@ USAGE_TASK_NAMES = frozenset(
         "dreaming_summary",
         "fact_answer",
         "goal_judge",
+        "langgraph_v4_composer",
         "recipe_suggestion",
         "skill_suggestion",
         "tool_loop",

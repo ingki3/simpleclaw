@@ -30,7 +30,88 @@ output_contract:
   contract_id: skill.naver-sports-skill.output
   version: "1"
   owner_ref: {type: skill, name: naver-sports-skill}
-  json_schema: {type: object}
+  json_schema:
+    type: object
+    properties:
+      mode: {}
+      category: {}
+      season:
+        properties:
+          code: {}
+          title: {}
+      date: {}
+      fetched_at: {}
+      freshness:
+        properties:
+          as_of: {}
+      items:
+        type: array
+        items:
+          properties:
+            rank: {}
+            team: {}
+            name: {}
+            wins: {}
+            losses: {}
+            draws: {}
+            games_behind: {}
+            title: {}
+            status: {}
+            event_state: {}
+            status_code: {}
+            participants:
+              properties:
+                away:
+                  properties:
+                    name: {}
+                home:
+                  properties:
+                    name: {}
+            score:
+              properties:
+                away: {}
+                home: {}
+            winner: {}
+            date: {}
+            fetched_at: {}
+            source_url: {}
+      warnings:
+        type: array
+        items: {}
+      source:
+        properties:
+          urls:
+            type: array
+            items: {}
+    x-simpleclaw-composition-fields:
+      - mode
+      - category
+      - season.code
+      - season.title
+      - date
+      - fetched_at
+      - freshness.as_of
+      - items[*].rank
+      - items[*].team
+      - items[*].name
+      - items[*].wins
+      - items[*].losses
+      - items[*].draws
+      - items[*].games_behind
+      - items[*].title
+      - items[*].status
+      - items[*].event_state
+      - items[*].status_code
+      - items[*].participants.away.name
+      - items[*].participants.home.name
+      - items[*].score.away
+      - items[*].score.home
+      - items[*].winner
+      - items[*].date
+      - items[*].fetched_at
+      - items[*].source_url
+      - warnings[*]
+      - source.urls[*]
 argument_binding:
   binding_id: shell-argv.v1
   owner_ref: {type: skill, name: naver-sports-skill}
@@ -73,13 +154,13 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
 ## Output contract
 
 The helper emits one JSON object with `ok`, `side_effect`, `source`, `mode`, `category`, `season`,
-`date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`. Non-empty results also
-include an asset-owned, deterministic, bounded `answer` for user-facing presentation.
+`date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`. It returns typed
+facts and provenance only; the central persona-aware composer owns final presentation.
 
 - Every success, normal-empty, error, and compact fallback result declares the
   read-only execution contract as top-level `side_effect=false`.
-- `answer` is derived only from allowlisted normalized sports fields, is capped at
-  3,500 characters, and never serializes nested raw provider objects.
+- `x-simpleclaw-composition-fields` exposes only typed public facts. It does not
+  declare wording, Markdown, persona, or an authoritative final answer.
 - Every result item preserves `event_state`, `status_code`, score, winner, date,
   `fetched_at`, and `source_url`.
 - Cancelled, suspended, postponed, unknown, or score-incomplete events are never

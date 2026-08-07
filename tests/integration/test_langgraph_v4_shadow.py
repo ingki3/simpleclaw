@@ -23,6 +23,10 @@ from scripts.dev.validate_naver_sports_asset import (
 )
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
@@ -649,8 +653,19 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert helper_payload["ok"] is True
         assert helper_payload["season"]["code"] == "2026"
         assert helper_payload["items"]
-        assert helper_payload["answer"].count("\n- ") == 3
+        assert "answer" not in helper_payload
         return result
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        assert len(value.public_facts["data"]["items"]) == 3
+        return DraftResponseV1(
+            content="LG, 한화, 롯데입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        )
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
     runner = ConnectedShadowTurnRunner(
@@ -666,6 +681,9 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         definitions=(recipe, skill),
         conversation_store=store,
         recipe_executor=executor,
+        composition_mode="central_persona_v1",
+        response_composer=compose,
+        composer_fingerprint="kbo-fixture-composer-v1",
     )
 
     for index in range(3):
@@ -678,12 +696,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
-        assert result.execution.final_content == (
-            "확인된 결과입니다.\n"
-            "- 순위: 1 · 팀: LG · 승: 60\n"
-            "- 순위: 2 · 팀: 한화 · 승: 58\n"
-            "- 순위: 3 · 팀: 롯데 · 승: 55"
-        )
+        assert result.execution.final_content == "LG, 한화, 롯데입니다."
         assert "asset_result.v1" not in result.execution.final_content
         assert "status" not in result.execution.final_content
         assert "error" not in result.execution.final_content
@@ -694,6 +707,127 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
 
     assert calls == 3
     assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_connected_composer_hard_deadline_records_and_replays_fallback(
+    tmp_path,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    gate = PlanGate().evaluate(
+        _kbo_incident_plan(catalog.fingerprint),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+
+    asset_calls = 0
+    composer_calls = 0
+    compose_started = asyncio.Event()
+    checkpoint = tmp_path / "hard-deadline-checkpoint.sqlite3"
+
+    async def executor(_definition, _bound_steps):
+        nonlocal asset_calls
+        asset_calls += 1
+        return {
+            "status": "completed",
+            "side_effect": False,
+            "data": {
+                "mode": "standings",
+                "category": "KBO",
+                "items": [{"rank": 1, "team": "KT", "wins": 59}],
+            },
+            "resolved_claims": ["standings"],
+            "unresolved_claims": [],
+        }
+
+    async def compose(_value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        compose_started.set()
+        await asyncio.Future()
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(max_seconds=0.2),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=(recipe, skill),
+            conversation_store=ConversationStore(
+                tmp_path / "hard-deadline-conversation.db"
+            ),
+            recipe_executor=executor,
+            composition_mode="central_persona_v1",
+            response_composer=compose,
+            composer_fingerprint="hard-deadline-composer-v1",
+        )
+
+    kwargs = {
+        "plan": gate.effective_plan,
+        "legacy": None,
+        "request_id": "hard-deadline-request",
+        "session_key": "hard-deadline-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    replay = await runner().run(**kwargs)
+
+    expected = (
+        "결과는 확인했지만 지금은 안전하게 답변을 구성하지 못했습니다. "
+        "잠시 후 다시 확인해 주세요."
+    )
+    assert first.execution.final_content == expected
+    assert replay.execution.final_content == expected
+    assert first.execution.rollback_required is False
+    assert replay.execution.rollback_required is False
+    assert asset_calls == 1
+    assert composer_calls == 1
+    assert all(
+        forbidden not in first.execution.final_content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    with sqlite3.connect(checkpoint) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (kwargs["request_id"],),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (kwargs["request_id"],),
+        ).fetchone()[0] == 0
+
+    compose_started.clear()
+    cancelled_kwargs = {
+        **kwargs,
+        "request_id": "hard-deadline-caller-cancel-request",
+        "session_key": "hard-deadline-caller-cancel-session",
+    }
+    cancelled_run = asyncio.create_task(runner().run(**cancelled_kwargs))
+    await compose_started.wait()
+    cancelled_run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_run
+
+    assert asset_calls == 2
+    assert composer_calls == 2
+    with sqlite3.connect(checkpoint) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (cancelled_kwargs["request_id"],),
+        ).fetchone()[0] == 0
 
 
 @pytest.mark.asyncio

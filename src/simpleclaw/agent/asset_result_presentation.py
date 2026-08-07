@@ -10,6 +10,23 @@ MAX_TYPED_PRESENTATION_CHARS = 3_500
 _PREFERRED_TEXT_KEYS = ("answer", "result", "content", "text", "message", "summary")
 _SAFE_TYPED_STATUSES = frozenset({"completed", "resolved"})
 _SAFE_EFFECT_STATUSES = frozenset({"none", "verified"})
+_TYPED_METADATA_KEYS = frozenset(
+    {"schema", "status", "side_effect", "resolved_claims", "unresolved_claims"}
+)
+_COMPAT_PRIVATE_KEY_MARKERS = (
+    "credential",
+    "diagnostic",
+    "email",
+    "error",
+    "internal",
+    "password",
+    "private",
+    "prompt",
+    "provider",
+    "raw",
+    "secret",
+    "token",
+)
 
 
 def _preferred_text(payload: Mapping[str, Any]) -> str | None:
@@ -26,35 +43,91 @@ def _bounded_typed_text(value: str) -> str:
     return value[: MAX_TYPED_PRESENTATION_CHARS - 1].rstrip() + "…"
 
 
+def _flatten_projected_facts(
+    value: Any,
+    *,
+    path: str = "",
+    lines: list[str] | None = None,
+) -> list[str]:
+    """Compat 전용으로 typed data를 bounded path/value 목록으로 렌더링한다."""
+    output = [] if lines is None else lines
+    if len(output) >= 100:
+        return output
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if (
+                not isinstance(key, str)
+                or key in _TYPED_METADATA_KEYS
+                or any(
+                    marker in key.casefold()
+                    for marker in _COMPAT_PRIVATE_KEY_MARKERS
+                )
+            ):
+                continue
+            child_path = f"{path}.{key}" if path else key
+            _flatten_projected_facts(item, path=child_path, lines=output)
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:20]):
+            _flatten_projected_facts(item, path=f"{path}[{index}]", lines=output)
+    elif value is None or isinstance(value, str | int | float | bool):
+        rendered = str(value).strip()
+        if path and rendered:
+            output.append(f"- {path}: {rendered}")
+    return output
+
+
+def compose_user_facing_projected_facts(
+    public_facts: Mapping[str, Any],
+) -> str:
+    """Contract allowlist projection만 compat path/value 텍스트로 만든다."""
+    lines = _flatten_projected_facts(public_facts)
+    if not lines:
+        return SAFE_EMPTY_RESULT
+    return _bounded_typed_text("처리 결과입니다.\n" + "\n".join(lines))
+
+
+def is_safe_typed_asset_result(
+    *,
+    payload: Mapping[str, Any],
+    result_status: str,
+    effect_status: str,
+) -> bool:
+    """Compat projection 전에 typed wrapper의 generic safety gate를 판정한다."""
+    return bool(
+        payload.get("schema") == "asset_result.v1"
+        and result_status == "resolved"
+        and effect_status in _SAFE_EFFECT_STATUSES
+        and payload.get("status") in _SAFE_TYPED_STATUSES
+        and payload.get("side_effect") is False
+    )
+
+
 def compose_user_facing_asset_result(
     *,
     payload: Mapping[str, Any],
     result_status: str,
     effect_status: str,
 ) -> str:
-    """Typed safety gate 뒤 asset-owned preferred text만 bounded하게 반환한다.
+    """Deprecated compatibility mode의 안전한 기존 asset presentation을 유지한다.
 
-    ``data``의 업무별 구조는 해석하지 않는다. 자산이 만든 presentation text가
-    있으면 그 값만 사용하고, typed 안전 조건이 하나라도 불명확하면 fail-closed한다.
-    legacy payload는 기존 scalar fallback 동작을 유지한다.
+    중앙 mode는 이 함수를 import하거나 호출하지 않는다. Rollout 승인 전 compat
+    mode만 기존 preferred text를 유지한다. Prose가 없는 신규 typed asset의 compat
+    fallback은 호출자가 contract projection을 만든 뒤 별도 renderer에 전달한다.
     """
     if payload.get("schema") == "asset_result.v1":
-        if (
-            result_status != "resolved"
-            or effect_status not in _SAFE_EFFECT_STATUSES
-            or payload.get("status") not in _SAFE_TYPED_STATUSES
-            or payload.get("side_effect") is not False
+        if not is_safe_typed_asset_result(
+            payload=payload,
+            result_status=result_status,
+            effect_status=effect_status,
         ):
             return SAFE_EMPTY_RESULT
         preferred = _preferred_text(payload)
         data = payload.get("data")
         if preferred is None and isinstance(data, Mapping):
             preferred = _preferred_text(data)
-        return (
-            _bounded_typed_text(preferred)
-            if preferred is not None
-            else SAFE_EMPTY_RESULT
-        )
+        if preferred is not None:
+            return _bounded_typed_text(preferred)
+        return SAFE_EMPTY_RESULT
 
     preferred = _preferred_text(payload)
     if preferred is not None:

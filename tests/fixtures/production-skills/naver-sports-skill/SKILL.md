@@ -30,7 +30,88 @@ output_contract:
   contract_id: skill.naver-sports-skill.output
   version: "1"
   owner_ref: {type: skill, name: naver-sports-skill}
-  json_schema: {type: object}
+  json_schema:
+    type: object
+    properties:
+      mode: {}
+      category: {}
+      season:
+        properties:
+          code: {}
+          title: {}
+      date: {}
+      fetched_at: {}
+      freshness:
+        properties:
+          as_of: {}
+      items:
+        type: array
+        items:
+          properties:
+            rank: {}
+            team: {}
+            name: {}
+            wins: {}
+            losses: {}
+            draws: {}
+            games_behind: {}
+            title: {}
+            status: {}
+            event_state: {}
+            status_code: {}
+            participants:
+              properties:
+                away:
+                  properties:
+                    name: {}
+                home:
+                  properties:
+                    name: {}
+            score:
+              properties:
+                away: {}
+                home: {}
+            winner: {}
+            date: {}
+            fetched_at: {}
+            source_url: {}
+      warnings:
+        type: array
+        items: {}
+      source:
+        properties:
+          urls:
+            type: array
+            items: {}
+    x-simpleclaw-composition-fields:
+      - mode
+      - category
+      - season.code
+      - season.title
+      - date
+      - fetched_at
+      - freshness.as_of
+      - items[*].rank
+      - items[*].team
+      - items[*].name
+      - items[*].wins
+      - items[*].losses
+      - items[*].draws
+      - items[*].games_behind
+      - items[*].title
+      - items[*].status
+      - items[*].event_state
+      - items[*].status_code
+      - items[*].participants.away.name
+      - items[*].participants.home.name
+      - items[*].score.away
+      - items[*].score.home
+      - items[*].winner
+      - items[*].date
+      - items[*].fetched_at
+      - items[*].source_url
+      - warnings[*]
+      - source.urls[*]
 argument_binding:
   binding_id: shell-argv.v1
   owner_ref: {type: skill, name: naver-sports-skill}

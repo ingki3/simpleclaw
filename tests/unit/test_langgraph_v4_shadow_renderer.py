@@ -6,6 +6,7 @@ import pytest
 
 from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
+    ContractDescriptorV1,
     ContractRefV1,
     NormalizedAssetResultV1,
 )
@@ -59,22 +60,47 @@ def _typed_payload(*, side_effect: object = False) -> dict[str, object]:
     }
 
 
-def test_safe_typed_top_level_preferred_text_wins() -> None:
+def _projected_descriptor(result: NormalizedAssetResultV1) -> ContractDescriptorV1:
+    return ContractDescriptorV1(
+        ref=result.output_contract,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "properties": {
+                                    "rank": {},
+                                    "team": {},
+                                    "wins": {},
+                                }
+                            },
+                        }
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.items[*].rank",
+                "data.items[*].team",
+                "data.items[*].wins",
+            ],
+        },
+    )
+
+
+def test_typed_top_level_preferred_text_remains_in_compat_mode() -> None:
     payload = _typed_payload()
     payload["answer"] = "기존 preferred answer"
 
     assert _compose_user_facing_result(_result(payload)) == "기존 preferred answer"
 
 
-def test_verified_read_only_typed_result_uses_asset_owned_presentation() -> None:
+def test_verified_read_only_typed_result_preserves_safe_nested_compat_text() -> None:
     rendered = _compose_user_facing_result(_result(_typed_payload()))
 
-    assert rendered == (
-        "확인된 결과입니다.\n"
-        "- 순위: 1 · 팀: LG · 승: 60\n"
-        "- 순위: 2 · 팀: 한화 · 승: 58\n"
-        "- 순위: 3 · 팀: 롯데 · 승: 55"
-    )
+    assert rendered.startswith("확인된 결과입니다.")
     assert "SECRET" not in rendered
     assert "schema" not in rendered
     assert "status" not in rendered
@@ -122,14 +148,57 @@ def test_unsafe_typed_preferred_text_fails_closed_without_raw_diagnostics(
     assert "RAW_" not in rendered
 
 
-def test_safe_typed_preferred_output_is_deterministically_bounded() -> None:
+def test_large_typed_preferred_output_is_bounded_in_compat_mode() -> None:
     payload = _typed_payload()
     payload["answer"] = "가" * 10_000
 
     rendered = _compose_user_facing_result(_result(payload))
 
-    assert len(rendered) <= 3_500
-    assert "…" in rendered
+    assert len(rendered) == 3_500
+    assert rendered.endswith("…")
+
+
+def test_compat_fact_fallback_uses_only_contract_projection() -> None:
+    payload = _typed_payload()
+    assert isinstance(payload["data"], dict)
+    payload["data"].pop("answer")
+    payload["data"]["metadata"] = {"value": "PRIVATE-API-KEY-123"}
+    payload["answer"] = "UNPROJECTED PRIVATE RAW PROSE"
+    result = _result(payload)
+    descriptor = _projected_descriptor(result)
+
+    rendered = _compose_user_facing_result(result, descriptor=descriptor)
+
+    assert "items[0].team: LG" in rendered
+    assert "PRIVATE-API-KEY-123" not in rendered
+    assert "metadata" not in rendered
+    assert "UNPROJECTED PRIVATE RAW PROSE" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("payload_mutation", "effect_status"),
+    [
+        ({"side_effect": True}, EffectStatus.NONE),
+        ({"status": "unknown_effect"}, EffectStatus.NONE),
+        ({}, EffectStatus.CONFIRMATION_REQUIRED),
+    ],
+)
+def test_compat_projection_never_bypasses_typed_safety_gate(
+    payload_mutation: dict[str, object],
+    effect_status: EffectStatus,
+) -> None:
+    payload = _typed_payload()
+    payload.update(payload_mutation)
+    result = _result(payload, effect_status=effect_status)
+
+    rendered = _compose_user_facing_result(
+        result,
+        descriptor=_projected_descriptor(result),
+    )
+
+    assert rendered == (
+        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    )
 
 
 def test_non_typed_legacy_preferred_text_remains_unbounded() -> None:
