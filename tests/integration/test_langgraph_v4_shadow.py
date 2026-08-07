@@ -23,11 +23,11 @@ from scripts.dev.validate_naver_sports_asset import (
 )
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
-from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
+from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
     _allow_v4_legacy_fallback,

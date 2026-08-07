@@ -91,7 +91,9 @@ def validate_composition_fields(
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise ValueError(f"{COMPOSITION_FIELDS_EXTENSION} must be an array")
+        raise ValueError(  # noqa: TRY004 - public contract validation API
+            f"{COMPOSITION_FIELDS_EXTENSION} must be an array"
+        )
     if not value or len(value) > MAX_COMPOSITION_FIELD_PATHS:
         raise ValueError(
             f"{COMPOSITION_FIELDS_EXTENSION} must contain 1.."

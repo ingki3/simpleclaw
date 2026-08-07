@@ -10,26 +10,26 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
-from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.graph_runtime.adapters.delivery import SendNotStartedError
-from simpleclaw.graph_runtime.idempotency import (
-    IdempotencyInvariantError,
-    canonical_artifact_content_hash,
-    canonical_artifact_id,
-)
 from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
 from simpleclaw.graph_runtime.composition_journal import SQLiteFinalArtifactJournal
 from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
     ContractRefV1,
     NormalizedAssetResultV1,
+)
+from simpleclaw.graph_runtime.idempotency import (
+    IdempotencyInvariantError,
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
 )
 from simpleclaw.graph_runtime.status import (
     AssetResultStatus,

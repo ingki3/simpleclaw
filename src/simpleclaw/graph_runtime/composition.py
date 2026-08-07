@@ -7,7 +7,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .composition_journal import FinalArtifactJournal, FinalArtifactInvariantError
+from .composition_journal import FinalArtifactInvariantError, FinalArtifactJournal
 from .contracts import DraftArtifactV1, FinalArtifactV1, NormalizedAssetResultV1
 from .idempotency import (
     canonical_artifact_content_hash,
@@ -136,7 +136,7 @@ class FinalCompositionRuntime:
                     and isinstance(getattr(candidate, "content", None), str)
                 ):
                     draft = candidate
-            except Exception as exc:  # noqa: BLE001 - deterministic fallback 대상
+            except Exception as exc:
                 if getattr(exc, "stop_condition", None) in {
                     "deadline",
                     "budget_exhausted",

@@ -333,9 +333,12 @@ def guard_final_response(
         cited_values[path] = cited
         if index is not None and isinstance(cited, str) and cited.strip():
             cited_item_string_indices.add(index)
-        if isinstance(cited, str) and len(cited.strip()) >= 2:
-            if cited.strip().casefold() not in lowered:
-                return _rejected("cited_value_not_rendered")
+        if (
+            isinstance(cited, str)
+            and len(cited.strip()) >= 2
+            and cited.strip().casefold() not in lowered
+        ):
+            return _rejected("cited_value_not_rendered")
     if top_n is not None and cited_item_indices != _required_item_indices(
         concrete, top_n
     ):
