@@ -361,7 +361,10 @@ async def _run_connected_exact_recipe(
                 ToolCall(
                     id="fake-helper-1",
                     name="execute_skill",
-                    arguments={"skill_name": helper.name, "command": "--json"},
+                    arguments={
+                        "skill_name": helper.name,
+                        "args": "--mode results --limit 10 --json",
+                    },
                 )
             ],
         )

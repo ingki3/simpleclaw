@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-625](mention://issue/3fad3191-80df-48cd-b2af-84f819dc0363): V4 primary persistence SQLite를 Telegram event loop에서 격리** — Telegram 전송 후 ConversationStore의 조회·turn binding·assistant write를 bounded worker thread 경계로 옮기고, 실제 SQLite write lock 중 heartbeat 응답성 및 send/user/assistant/marker exactly-once 회귀를 고정한다. 전체 unit·Ruff·Graphify·fresh CI와 독립 Stage D 검토 전에는 release·live 재배포·V4 primary 활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
+- [>] **[BIZ-623](mention://issue/c908d032-3e2c-4b51-8ce0-047bca3391e1): Sports Live explicit top-N bound를 production argument path에 보존** — 사용자 질의의 explicit top-N을 Recipe bound payload, canonical helper argv, typed result와 renderer까지 보존하고 parser-equivalent override를 dispatch 전과 trace 사후에 fail-closed한다. 본 이슈는 code/offline corrective만 소유하며 운영·release·Telegram smoke lifecycle은 별도 부모 [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c)이 소유한다. fresh exact-head CI와 독립 Stage D PASS 전에는 merge하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-624](mention://issue/56fb8f9b-d22d-4c55-b183-2de3022cb9b7): V4 primary Telegram delivery 후 assistant persistence를 exactly-once 보장** — [PR #675](https://github.com/ingki3/simpleclaw/pull/675) exact-head Stage D HOLD에서 production polling 경계가 persistence 실패 outcome을 정상 종료로 버리는 결함을 보정한다. delivery receipt를 재사용하는 bounded persistence-only retry와 실패 소진 시 non-terminal 승격, 단일 `_on_message` send 1 / assistant row 1 connected 회귀, fresh CI·재검토·merge/release gate가 남아 있어 진행 중으로 유지한다. (진행: 2026-08-07)
 

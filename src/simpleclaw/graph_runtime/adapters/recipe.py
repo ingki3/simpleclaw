@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from simpleclaw.recipes.bindings import (
+    constraint_values,
+    resolve_step_argument_constraints,
+)
 from simpleclaw.recipes.models import RecipeDefinition, RecipeResult
 
 from ..contracts import AssetInvocationV1, AssetRefV1, NormalizedAssetResultV1
@@ -215,6 +220,15 @@ class GenericRecipeAdapter:
                 target_entry.input_descriptor,
                 child,
             )
+            constraint_payload = constraint_values(
+                resolve_step_argument_constraints(metadata, payload)
+            )
+            constraints_json = json.dumps(
+                constraint_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
             bound.append(
                 BoundSkillPayload(
                     binding_id=metadata.binding_id,
@@ -228,6 +242,10 @@ class GenericRecipeAdapter:
                     payload_hash=validated.payload_hash,
                     source_payload_json=source_payload_json,
                     source_payload_hash=source_payload_hash,
+                    constraints_json=constraints_json,
+                    constraints_hash=hashlib.sha256(
+                        constraints_json.encode("utf-8")
+                    ).hexdigest(),
                 )
             )
         return tuple(bound)

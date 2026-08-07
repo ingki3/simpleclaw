@@ -1672,7 +1672,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Fetch bounded live scores, completed results, or standings from Naver."
-        )
+        ),
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--mode",

@@ -17,6 +17,7 @@ PRODUCTION_MODULES = (
 ASSET_ROOT = REPO_ROOT / "runtime_assets"
 GENERIC_ASSET_IMPORTS = frozenset(
     {
+        "simpleclaw.recipes.bindings",
         "simpleclaw.recipes.executor",
         "simpleclaw.recipes.models",
         "simpleclaw.skills.executor",

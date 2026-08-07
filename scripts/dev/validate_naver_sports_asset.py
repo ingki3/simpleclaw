@@ -70,6 +70,7 @@ class ProductionAssetEvidence:
     notifier_count: int
     conversation_write_count: int
     external_write_count: int
+    requested_limit: int
     item_count: int
     answer_chars: int
     argv_sha256: str
@@ -128,6 +129,13 @@ class _DeterministicKboClient:
                             {"ranking": 1, "teamName": "LG", "winGameCount": 60},
                             {"ranking": 2, "teamName": "한화", "winGameCount": 58},
                             {"ranking": 3, "teamName": "롯데", "winGameCount": 55},
+                            {"ranking": 4, "teamName": "KIA", "winGameCount": 53},
+                            {"ranking": 5, "teamName": "SSG", "winGameCount": 51},
+                            {"ranking": 6, "teamName": "KT", "winGameCount": 49},
+                            {"ranking": 7, "teamName": "NC", "winGameCount": 47},
+                            {"ranking": 8, "teamName": "삼성", "winGameCount": 45},
+                            {"ranking": 9, "teamName": "두산", "winGameCount": 43},
+                            {"ranking": 10, "teamName": "키움", "winGameCount": 40},
                         ]
                     },
                 },
@@ -353,6 +361,8 @@ def _execute_real_source_cli(
 def _validate_payload(
     payload: dict[str, Any],
     write_counts: tuple[int, int, int],
+    *,
+    requested_limit: int,
 ) -> None:
     """success/no-effect/bounded season-auto 결과를 fail-closed로 검증한다."""
     if payload.get("ok") is not True:
@@ -362,7 +372,7 @@ def _validate_payload(
     if sum(write_counts) != 0:
         _fail("external_write_detected")
     items = payload.get("items")
-    if not isinstance(items, list) or not 1 <= len(items) <= 10:
+    if not isinstance(items, list) or len(items) != requested_limit:
         _fail("items_contract_failed")
     answer = payload.get("answer")
     if (
@@ -371,6 +381,15 @@ def _validate_payload(
         or len(answer) > naver_sports.MAX_PRESENTATION_CHARS
     ):
         _fail("answer_contract_failed")
+    if answer.count("\n- ") != requested_limit:
+        _fail("answer_limit_drift")
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("rank"), int)
+        or item["rank"] > requested_limit
+        for item in items
+    ):
+        _fail("rank_limit_drift")
     season = payload.get("season")
     if not isinstance(season, dict) or str(season.get("code", "")).casefold() in {
         "",
@@ -393,10 +412,23 @@ def validate_production_asset(
     source_mode: SourceMode = "deterministic_fixture",
     argv: tuple[str, ...] = KBO_SEASON_AUTO_ARGV,
     client_factory: Callable[[], object] = _DeterministicKboClient,
+    expected_result_limit: int | None = None,
 ) -> ProductionAssetGateResult:
     """현재 installed helper CLI가 production gate를 충족하는지 검증한다."""
 
     def execute(selected_dir: Path) -> ProductionAssetGateResult:
+        try:
+            positions = [index for index, value in enumerate(argv) if value == "--limit"]
+            if len(positions) != 1 or positions[0] + 1 >= len(argv):
+                _fail("result_limit_missing")
+            requested_limit = int(argv[positions[0] + 1])
+        except ValueError:
+            _fail("result_limit_invalid")
+        if (
+            expected_result_limit is not None
+            and requested_limit != expected_result_limit
+        ):
+            _fail("result_limit_drift")
         helper = _assert_installed_asset(selected_dir)
         if source_mode == "deterministic_fixture":
             payload, write_counts, provenance = _execute_deterministic_cli(
@@ -411,7 +443,11 @@ def validate_production_asset(
             )
         else:
             _fail("source_mode_invalid")
-        _validate_payload(payload, write_counts)
+        _validate_payload(
+            payload,
+            write_counts,
+            requested_limit=requested_limit,
+        )
         items = payload["items"]
         answer = payload["answer"]
         argv_sha256 = hashlib.sha256(
@@ -426,6 +462,7 @@ def validate_production_asset(
                 notifier_count=write_counts[1],
                 conversation_write_count=write_counts[2],
                 external_write_count=sum(write_counts),
+                requested_limit=requested_limit,
                 item_count=len(items),
                 answer_chars=len(answer),
                 argv_sha256=argv_sha256,
@@ -452,6 +489,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=("deterministic_fixture", "real_read_only"),
         default="deterministic_fixture",
     )
+    parser.add_argument(
+        "--result-limit",
+        type=int,
+        default=10,
+        help="Expected KBO standings item/answer count (1..20).",
+    )
     return parser
 
 
@@ -472,6 +515,7 @@ def _print_pass(result: ProductionAssetGateResult) -> None:
     print(f"CRON_NOTIFIER_COUNT={evidence.notifier_count}")
     print(f"CONVERSATION_WRITE_COUNT={evidence.conversation_write_count}")
     print(f"EXTERNAL_WRITE_COUNT={evidence.external_write_count}")
+    print(f"REQUESTED_LIMIT={evidence.requested_limit}")
     print(f"ITEM_COUNT={evidence.item_count}")
     print(f"ANSWER_CHARS={evidence.answer_chars}")
     print("PRODUCTION_ASSET_EXECUTION=PASS")
@@ -479,10 +523,14 @@ def _print_pass(result: ProductionAssetGateResult) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    helper_argv = list(KBO_SEASON_AUTO_ARGV)
+    helper_argv[helper_argv.index("--limit") + 1] = str(args.result_limit)
     try:
         result = validate_production_asset(
             args.installed_skill_dir,
             source_mode=args.source_mode,
+            argv=tuple(helper_argv),
+            expected_result_limit=args.result_limit,
         )
     except ProductionAssetValidationError as exc:
         print(

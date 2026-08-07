@@ -300,6 +300,21 @@ def test_sports_recipe_contract_identity_is_continuous_across_discovery(
     assert recipe.step_bindings[0].binding == {
         "target_skill": "naver-sports-skill",
         "map": {"query": "args"},
+        "argument_constraints": [
+            {
+                "name": "limit",
+                "source": "query",
+                "strategy": "bounded_integer_between_markers",
+                "prefixes": ["상위", "top", "앞"],
+                "prefix_optional": True,
+                "suffixes": ["개 팀", "팀", "teams", "team"],
+                "default": 10,
+                "minimum": 1,
+                "maximum": 20,
+                "argument_name": "args",
+                "flag": "--limit",
+            }
+        ],
     }
 
     asset = next(item for item in catalog.assets if item.name == "sports-live")
