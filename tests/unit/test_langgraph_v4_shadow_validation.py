@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import subprocess
 import sys
 from dataclasses import replace
@@ -12,6 +14,14 @@ import pytest
 
 import simpleclaw.langgraph_v4_shadow_validation as validation
 from scripts.dev import validate_langgraph_v4_no_send as fixture_validation
+from scripts.dev.validate_naver_sports_asset import (
+    _PROVENANCE_PREFIX,
+    _assert_installed_asset,
+    _decode_subprocess_provenance,
+    _execute_real_source_cli,
+    ProductionAssetValidationError,
+)
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.dev.validate_langgraph_v4_no_send import (
     EXPECTED_CONTRACT_SET,
 )
@@ -302,12 +312,62 @@ def test_installed_naver_sports_asset_gate_executes_exact_helper_cli() -> None:
     assert "SOURCE_MODE=deterministic_fixture" in output
     assert "HELPER_CLI_EXECUTED=true" in output
     assert "DOCUMENTED_SENTINEL=season_auto" in output
+    assert "HELPER_SOURCE=exact_checkout" in output
+    assert "HELPER_SOURCE_SHA256=" in output
     assert "SIDE_EFFECT=false" in output
     assert "TELEGRAM_SEND_COUNT=0" in output
     assert "CRON_NOTIFIER_COUNT=0" in output
     assert "CONVERSATION_WRITE_COUNT=0" in output
     assert "EXTERNAL_WRITE_COUNT=0" in output
     assert "PRODUCTION_ASSET_EXECUTION=PASS" in output
+
+
+def test_real_source_launcher_ignores_ambient_pythonpath_and_uses_exact_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambient = tmp_path / "ambient"
+    fake_skill = ambient / "simpleclaw" / "skills" / "naver_sports.py"
+    fake_skill.parent.mkdir(parents=True)
+    fake_skill.write_text(
+        "raise RuntimeError('ambient helper must not be imported')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ambient))
+    skill_dir = install_naver_sports_skill(tmp_path / "installed")
+    helper = _assert_installed_asset(skill_dir)
+
+    payload, write_counts, provenance = _execute_real_source_cli(
+        helper,
+        argv=("--mode", "live", "--category", "unknown", "--json"),
+    )
+
+    expected = ROOT / "src" / "simpleclaw" / "skills" / "naver_sports.py"
+    assert provenance.path == expected.resolve()
+    assert provenance.sha256 == hashlib.sha256(expected.read_bytes()).hexdigest()
+    assert payload["ok"] is False
+    assert payload["side_effect"] is False
+    assert payload["error"]["code"] == "INVALID_ARGUMENT"
+    assert write_counts == (0, 0, 0)
+
+
+def test_real_source_gate_rejects_ambient_helper_provenance(
+    tmp_path: Path,
+) -> None:
+    ambient = tmp_path / "naver_sports.py"
+    ambient.write_text("# stale ambient helper\n", encoding="utf-8")
+    forged = json.dumps(
+        {
+            "path": str(ambient),
+            "sha256": hashlib.sha256(ambient.read_bytes()).hexdigest(),
+        }
+    )
+
+    with pytest.raises(
+        ProductionAssetValidationError,
+        match="helper_source_provenance_mismatch",
+    ):
+        _decode_subprocess_provenance(_PROVENANCE_PREFIX + forged)
 
 
 def test_offline_workflow_runs_hermetic_validator_with_all_assertions() -> None:

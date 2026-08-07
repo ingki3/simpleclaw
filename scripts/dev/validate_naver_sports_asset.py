@@ -28,6 +28,7 @@ from simpleclaw.production_assets import (
     install_runtime_asset,
     resolve_runtime_asset,
 )
+from simpleclaw.security import filter_env
 from simpleclaw.skills import naver_sports
 
 ASSET_REF = "skill:naver-sports-skill"
@@ -48,6 +49,7 @@ KBO_SEASON_AUTO_ARGV = (
 DOCUMENTED_SENTINEL = (
     "--mode standings --category kbo --date today --season auto --limit 10 --json"
 )
+_PROVENANCE_PREFIX = "__SIMPLECLAW_HELPER_PROVENANCE__="
 
 
 class ProductionAssetValidationError(RuntimeError):
@@ -71,6 +73,8 @@ class ProductionAssetEvidence:
     item_count: int
     answer_chars: int
     argv_sha256: str
+    helper_source: str
+    helper_source_sha256: str
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,14 @@ class ProductionAssetGateResult:
 
     payload: dict[str, Any]
     evidence: ProductionAssetEvidence
+
+
+@dataclass(frozen=True)
+class _HelperSourceProvenance:
+    """격리 subprocess가 실제 import한 canonical helper identity다."""
+
+    path: Path
+    sha256: str
 
 
 class _DeterministicKboClient:
@@ -176,12 +188,112 @@ def _decode_payload(stdout: str) -> dict[str, Any]:
     return payload
 
 
+def _expected_helper_source() -> tuple[Path, str]:
+    """이 validator checkout이 소유한 canonical helper path/hash를 반환한다."""
+    source_root = (REPO_ROOT / "src").resolve(strict=True)
+    source = (source_root / "simpleclaw" / "skills" / "naver_sports.py").resolve(
+        strict=True
+    )
+    try:
+        source.relative_to(source_root)
+    except ValueError:
+        _fail("helper_source_path_invalid")
+    return source, hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+def _assert_inprocess_helper_source() -> _HelperSourceProvenance:
+    """deterministic gate도 ambient import가 아닌 exact checkout module만 수용한다."""
+    expected_path, expected_sha256 = _expected_helper_source()
+    try:
+        actual_path = Path(naver_sports.__file__).resolve(strict=True)
+    except (AttributeError, FileNotFoundError, TypeError):
+        _fail("helper_source_provenance_missing")
+    actual_sha256 = hashlib.sha256(actual_path.read_bytes()).hexdigest()
+    if actual_path != expected_path or actual_sha256 != expected_sha256:
+        _fail("helper_source_provenance_mismatch")
+    return _HelperSourceProvenance(actual_path, actual_sha256)
+
+
+def _isolated_subprocess_env() -> dict[str, str]:
+    """credential과 ambient Python import 제어값을 제거한 자식 환경을 만든다."""
+    env = filter_env()
+    for key in tuple(env):
+        if key.casefold().startswith("python"):
+            env.pop(key)
+    return env
+
+
+def _isolated_helper_launcher(helper: Path, argv: tuple[str, ...]) -> str:
+    """-I/-S 환경에서 exact source를 선로딩하고 installed wrapper를 실행한다."""
+    source, _sha256 = _expected_helper_source()
+    simpleclaw_dir = source.parents[1]
+    skills_dir = source.parent
+    return f"""
+import hashlib
+import importlib.util
+import json
+import pathlib
+import runpy
+import sys
+import types
+
+source = pathlib.Path({str(source)!r}).resolve(strict=True)
+simpleclaw_package = types.ModuleType("simpleclaw")
+simpleclaw_package.__path__ = [{str(simpleclaw_dir)!r}]
+skills_package = types.ModuleType("simpleclaw.skills")
+skills_package.__path__ = [{str(skills_dir)!r}]
+sys.modules["simpleclaw"] = simpleclaw_package
+sys.modules["simpleclaw.skills"] = skills_package
+spec = importlib.util.spec_from_file_location(
+    "simpleclaw.skills.naver_sports",
+    source,
+)
+if spec is None or spec.loader is None:
+    raise RuntimeError("canonical helper loader unavailable")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+provenance = {{
+    "path": str(pathlib.Path(module.__file__).resolve(strict=True)),
+    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+}}
+sys.stderr.write({_PROVENANCE_PREFIX!r} + json.dumps(provenance) + "\\n")
+sys.argv = [{str(helper)!r}, *{list(argv)!r}]
+runpy.run_path({str(helper)!r}, run_name="__main__")
+"""
+
+
+def _decode_subprocess_provenance(stderr: str) -> _HelperSourceProvenance:
+    """자식 provenance를 exact checkout path/hash와 대조한다."""
+    encoded = next(
+        (
+            line.removeprefix(_PROVENANCE_PREFIX)
+            for line in stderr.splitlines()
+            if line.startswith(_PROVENANCE_PREFIX)
+        ),
+        None,
+    )
+    if encoded is None:
+        _fail("helper_source_provenance_missing")
+    try:
+        payload = json.loads(encoded)
+        actual_path = Path(payload["path"]).resolve(strict=True)
+        actual_sha256 = str(payload["sha256"])
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        _fail("helper_source_provenance_invalid")
+    expected_path, expected_sha256 = _expected_helper_source()
+    if actual_path != expected_path or actual_sha256 != expected_sha256:
+        _fail("helper_source_provenance_mismatch")
+    return _HelperSourceProvenance(actual_path, actual_sha256)
+
+
 def _execute_deterministic_cli(
     helper: Path,
     *,
     client_factory: Callable[[], object],
-) -> tuple[dict[str, Any], tuple[int, int, int]]:
+) -> tuple[dict[str, Any], tuple[int, int, int], _HelperSourceProvenance]:
     """설치 wrapper→argparse→canonical main을 exact argv로 실행한다."""
+    provenance = _assert_inprocess_helper_source()
     stdout = io.StringIO()
     stderr = io.StringIO()
     with (
@@ -196,27 +308,45 @@ def _execute_deterministic_cli(
         except SystemExit as exc:
             if exc.code not in (None, 0):
                 _fail("helper_cli_failed")
-    return _decode_payload(stdout.getvalue()), (
-        side_effects.telegram_send,
-        side_effects.notifier,
-        side_effects.conversation_write,
+    return (
+        _decode_payload(stdout.getvalue()),
+        (
+            side_effects.telegram_send,
+            side_effects.notifier,
+            side_effects.conversation_write,
+        ),
+        provenance,
     )
 
 
-def _execute_real_source_cli(helper: Path) -> tuple[dict[str, Any], tuple[int, int, int]]:
+def _execute_real_source_cli(
+    helper: Path,
+    *,
+    argv: tuple[str, ...] = KBO_SEASON_AUTO_ARGV,
+) -> tuple[dict[str, Any], tuple[int, int, int], _HelperSourceProvenance]:
     """운영자가 명시한 release preflight에서 실제 read-only source를 조회한다."""
     completed = subprocess.run(
-        [sys.executable, str(helper), *KBO_SEASON_AUTO_ARGV],
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            _isolated_helper_launcher(helper, argv),
+        ],
         capture_output=True,
         text=True,
         check=False,
         timeout=60,
+        cwd=REPO_ROOT,
+        env=_isolated_subprocess_env(),
     )
     if completed.returncode != 0:
         _fail("helper_cli_failed")
-    # exact manifest와 side_effect=false 계약을 함께 검증하므로 이 subprocess는
+    provenance = _decode_subprocess_provenance(completed.stderr)
+    # exact source 선로드와 side_effect=false 계약을 함께 검증하므로 이 subprocess는
     # 조회 외 callback을 갖지 않는다. Telegram/Notifier/ConversationStore는 미구성이다.
-    return _decode_payload(completed.stdout), (0, 0, 0)
+    return _decode_payload(completed.stdout), (0, 0, 0), provenance
 
 
 def _validate_payload(
@@ -267,12 +397,12 @@ def validate_production_asset(
     def execute(selected_dir: Path) -> ProductionAssetGateResult:
         helper = _assert_installed_asset(selected_dir)
         if source_mode == "deterministic_fixture":
-            payload, write_counts = _execute_deterministic_cli(
+            payload, write_counts, provenance = _execute_deterministic_cli(
                 helper,
                 client_factory=client_factory,
             )
         elif source_mode == "real_read_only":
-            payload, write_counts = _execute_real_source_cli(helper)
+            payload, write_counts, provenance = _execute_real_source_cli(helper)
         else:
             _fail("source_mode_invalid")
         _validate_payload(payload, write_counts)
@@ -293,6 +423,8 @@ def validate_production_asset(
                 item_count=len(items),
                 answer_chars=len(answer),
                 argv_sha256=argv_sha256,
+                helper_source="exact_checkout",
+                helper_source_sha256=provenance.sha256,
             ),
         )
 
@@ -327,6 +459,8 @@ def _print_pass(result: ProductionAssetGateResult) -> None:
     print(f"HELPER_CLI_EXECUTED={str(evidence.helper_cli_executed).lower()}")
     print("DOCUMENTED_SENTINEL=season_auto")
     print(f"HELPER_CLI_ARGV_SHA256={evidence.argv_sha256}")
+    print(f"HELPER_SOURCE={evidence.helper_source}")
+    print(f"HELPER_SOURCE_SHA256={evidence.helper_source_sha256}")
     print("SIDE_EFFECT=false")
     print(f"TELEGRAM_SEND_COUNT={evidence.telegram_send_count}")
     print(f"CRON_NOTIFIER_COUNT={evidence.notifier_count}")
