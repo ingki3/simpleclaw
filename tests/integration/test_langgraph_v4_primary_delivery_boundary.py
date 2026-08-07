@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,8 +13,8 @@ from simpleclaw.agent.clarify import encode_callback_data, normalize_options
 from simpleclaw.agent.orchestrator import AgentOrchestrator
 from simpleclaw.channels.telegram_bot import TelegramBot
 from simpleclaw.graph_runtime.adapters.delivery import (
-    SendNotStartedError,
     SenderReceipt,
+    SendNotStartedError,
 )
 from simpleclaw.graph_runtime.idempotency import (
     IdempotencyInvariantError,
@@ -167,7 +168,7 @@ async def test_sqlite_write_lock_does_not_block_telegram_event_loop(
         assert len(heartbeat_times) >= 8
         assert max(
             later - earlier
-            for earlier, later in zip(heartbeat_times, heartbeat_times[1:])
+            for earlier, later in pairwise(heartbeat_times)
         ) < 0.06
     finally:
         release_lock.set()
