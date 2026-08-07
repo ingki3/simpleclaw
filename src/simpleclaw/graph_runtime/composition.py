@@ -154,8 +154,7 @@ class FinalCompositionRuntime:
                 cancellation_baseline=cancellation_baseline
             ):
                 raise
-            controlled_deadline_interrupted = True
-            await request_lock.acquire()
+            return None
         try:
             if self._journal is not None:
                 try:

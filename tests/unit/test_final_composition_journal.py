@@ -407,6 +407,125 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
 
 
 @pytest.mark.asyncio
+async def test_request_lock_deadline_fails_closed_without_reacquiring_100_times(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "request-lock-deadline.sqlite3"
+    journal = SQLiteFinalArtifactJournal(db_path)
+    seed_value, seed_result = _values("request-lock-deadline-seed")
+    assert await journal.load(
+        request_id=seed_value.request_id,
+        normalized_payload_hash=seed_result.payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is None
+
+    async def run_with_deadline(runtime, deadline, value, result):
+        async with deadline:
+            return await runtime.finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+
+    for iteration in range(100):
+        value, result = _values(f"request-lock-deadline-{iteration}")
+        request_lock = journal.lock_for(value.request_id)
+        await request_lock.acquire()
+        deadline = asyncio.timeout(0.001)
+        compose = AsyncMock(return_value=_draft())
+        safe_render = Mock(return_value="must not render")
+        task = asyncio.create_task(
+            run_with_deadline(
+                FinalCompositionRuntime(
+                    compose=compose,
+                    guard=lambda *_args: Mock(accepted=True),
+                    safe_render=safe_render,
+                    journal=journal,
+                    composer_fingerprint="composer-v1",
+                    controlled_deadline_expired=deadline.expired,
+                ),
+                deadline,
+                value,
+                result,
+            )
+        )
+        try:
+            done, _ = await asyncio.wait({task}, timeout=0.1)
+            if not done:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                pytest.fail(
+                    "finalize did not return after the controlled lock deadline"
+                )
+            assert task.result() is None
+            assert compose.await_count == 0
+            assert safe_render.call_count == 0
+            assert request_lock.locked()
+        finally:
+            request_lock.release()
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims"
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_request_lock_caller_cancellation_is_repropagated(tmp_path) -> None:
+    value, result = _values("request-lock-caller-cancel")
+    db_path = tmp_path / "request-lock-caller-cancel.sqlite3"
+    journal = SQLiteFinalArtifactJournal(db_path)
+    assert await journal.load(
+        request_id=value.request_id,
+        normalized_payload_hash=result.payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is None
+    request_lock = journal.lock_for(value.request_id)
+    await request_lock.acquire()
+    compose = AsyncMock(return_value=_draft())
+    safe_render = Mock(return_value="must not render")
+    task = asyncio.create_task(
+        FinalCompositionRuntime(
+            compose=compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=safe_render,
+            journal=journal,
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=lambda: False,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    try:
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert compose.await_count == 0
+        assert safe_render.call_count == 0
+        assert request_lock.locked()
+    finally:
+        request_lock.release()
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims"
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_claim_timeout_without_confirmed_ownership_fails_closed(
     tmp_path,
 ) -> None:
