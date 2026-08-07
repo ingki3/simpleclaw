@@ -6,7 +6,7 @@ import time
 from contextlib import suppress
 from itertools import pairwise
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -72,6 +72,10 @@ def _bot(coordinator: PrimaryDeliveryCoordinator) -> TelegramBot:
         whitelist_user_ids=[1],
         primary_delivery_handler=deliver,
     )
+
+
+class _BudgetExhausted(RuntimeError):
+    stop_condition = "budget_exhausted"
 
 
 @pytest.mark.asyncio
@@ -191,6 +195,134 @@ async def test_central_final_delivery_persistence_and_replay_are_exactly_once(
             "SELECT COUNT(*) FROM graph_final_artifacts"
         ).fetchone()[0] == 1
     with sqlite3.connect(tmp_path / "conversation.db") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_budget_fallback_delivery_and_persistence_are_exactly_once(
+    tmp_path,
+) -> None:
+    request_id = "telegram:42:budget-fallback-1001"
+    facts = {
+        "data": {
+            "category": "KBO",
+            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+        }
+    }
+    composition_input = CompositionInputV1(
+        request_id=request_id,
+        question="KBO 1위 팀과 승수를 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="budget-fallback-payload-hash",
+        public_facts=facts,
+    )
+    normalized_result = NormalizedAssetResultV1(
+        invocation_id="budget-fallback-invocation",
+        output_contract=ContractRefV1(
+            contract_id="recipe.sports-live.output",
+            version="1",
+            owner_ref=composition_input.asset_ref,
+            schema_hash="schema-hash",
+        ),
+        status=AssetResultStatus.RESOLVED,
+        payload={"side_effect": False, **facts},
+        payload_hash="budget-fallback-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    compose = AsyncMock(
+        side_effect=_BudgetExhausted(
+            "provider raw diagnostic: KBO 1위 KT 59승"
+        )
+    )
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    final_journal_path = tmp_path / "graph.db"
+
+    def runtime() -> FinalCompositionRuntime:
+        return FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=safe_render,
+            journal=SQLiteFinalArtifactJournal(final_journal_path),
+            composer_fingerprint="composer-v1",
+        )
+
+    first = await runtime().finalize(
+        request_id=request_id,
+        normalized_result=normalized_result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=composition_input,
+    )
+    replay = await runtime().finalize(
+        request_id=request_id,
+        normalized_result=normalized_result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=composition_input,
+    )
+    assert first is not None
+    assert replay == first
+
+    conversation_path = tmp_path / "conversation.db"
+    store = ConversationStore(conversation_path)
+    session_key = "telegram-session-budget-fallback"
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="KBO 1위 팀과 승수를 알려줘",
+            channel="telegram",
+        ),
+        session_key=session_key,
+        request_id=request_id,
+    )
+    response = PrimaryResponseText(
+        first.content,
+        PrimaryDeliveryMetadataV1(
+            request_id=request_id,
+            artifact_id=first.artifact_id,
+            artifact_hash=first.content_hash,
+            session_key=session_key,
+        ),
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=778))
+    bot = _bot(coordinator)
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+
+    assert compose.await_count == 1
+    assert safe_render.call_count == 1
+    assert reply_text.await_count == 1
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=session_key)
+    ] == [
+        (MessageRole.USER, request_id),
+        (MessageRole.ASSISTANT, request_id),
+    ]
+    with sqlite3.connect(final_journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+    with sqlite3.connect(conversation_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM graph_outbound_persistence"
         ).fetchone()[0] == 1

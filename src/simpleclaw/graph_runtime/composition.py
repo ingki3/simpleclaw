@@ -136,12 +136,7 @@ class FinalCompositionRuntime:
                     and isinstance(getattr(candidate, "content", None), str)
                 ):
                     draft = candidate
-            except Exception as exc:
-                if getattr(exc, "stop_condition", None) in {
-                    "deadline",
-                    "budget_exhausted",
-                }:
-                    raise
+            except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
                 content = None
                 draft = None
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -73,6 +73,104 @@ def _draft() -> DraftResponseV1:
             "data.items[0].team",
             "data.items[0].wins",
         ),
+    )
+
+
+class _ComposerStop(RuntimeError):
+    def __init__(self, stop_condition: str) -> None:
+        self.stop_condition = stop_condition
+        super().__init__(
+            f"provider raw diagnostic: {stop_condition}; KBO 1위 KT 59승"
+        )
+
+
+async def _assert_stop_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+    *,
+    stop_condition: str,
+    request_id: str,
+) -> None:
+    value, result = _values(request_id)
+    db_path = tmp_path / f"{stop_condition}.sqlite3"
+    compose = AsyncMock(side_effect=_ComposerStop(stop_condition))
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    first = await FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=guard_final_response,
+        safe_render=Mock(return_value="replay must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert first is not None
+    assert replay == first
+    assert compose.await_count == 1
+    assert safe_render.call_count == 1
+    assert replay_compose.await_count == 0
+    assert all(
+        forbidden not in first.content
+        for forbidden in (
+            "provider",
+            "raw diagnostic",
+            stop_condition,
+            "KBO",
+            "KT",
+            "1위",
+            "59",
+        )
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    await _assert_stop_records_generic_fallback_and_replay_reuses_it(
+        tmp_path,
+        stop_condition="budget_exhausted",
+        request_id="budget-exhaustion-request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_deadline_signal_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    await _assert_stop_records_generic_fallback_and_replay_reuses_it(
+        tmp_path,
+        stop_condition="deadline",
+        request_id="deadline-request",
     )
 
 
