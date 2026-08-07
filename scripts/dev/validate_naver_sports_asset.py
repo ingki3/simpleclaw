@@ -350,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    except Exception:
+    # CLI boundary는 helper/installer의 예기치 않은 원문 예외도 redaction해야 한다.
+    except Exception:  # noqa: BLE001
         print(
             "PRODUCTION_ASSET_EXECUTION=FAIL code=unexpected_failure",
             file=sys.stderr,
