@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c): LangGraph V4 release·controlled live activation·rollback 검증** — [PR #659](https://github.com/ingki3/simpleclaw/pull/659)을 main merge(SHA `6da2db10607cf5034d419f9438ab763d079f2aa1`)해 release tag `v2026.08.06.1` 산출물을 확정했다. 아직 exact main의 live 배포와 controlled V4 activation, drain·restart, health/log 확인, no-send 검증 뒤 controlled Telegram delivery 및 ConversationStore exactly-once·중복 `0`, rollback readiness gate가 남아 있으므로 BIZ-573과 부모 BIZ-562는 진행 중으로 유지한다. 본 tracker 보정에서는 live deploy·restart·primary activation·Telegram send를 수행하지 않는다. (진행: 2026-08-07)
+- [>] **[BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c): LangGraph V4 release·controlled live activation·rollback 검증** — [PR #659](https://github.com/ingki3/simpleclaw/pull/659)을 main merge(SHA `6da2db10607cf5034d419f9438ab763d079f2aa1`)해 release tag `v2026.08.06.1` 산출물을 확정했다. exact main을 live checkout에 배포했고 release-deploy drain restart·health smoke·post-deploy no-send를 모두 PASS했다. 운영자 승인 후 V4 primary 전환, 승인 절차의 drain restart·health 확인, controlled Telegram query 1건의 response-source·delivery·ConversationStore exactly-once·중복 `0`, 실패 시 rollback·재기동 증거가 남아 있으므로 BIZ-573과 부모 BIZ-562는 진행 중으로 유지한다. 본 tracker 보정에서는 live config·restart·primary activation·Telegram send를 수행하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
 
