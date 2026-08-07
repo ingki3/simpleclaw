@@ -107,6 +107,11 @@ instructions: |
 
   `--mode <live|results|standings> --category <category> --date <today|YYYY-MM-DD> [--season <season>] --limit <1..20> --json`
 
+  season을 trim한 뒤 `auto`이면 active/latest enabled season 자동 선택을 뜻하므로 helper
+  args에서 `--season` 자체를 생략한다. `auto`가 아닌 값만 명시 provider season으로
+  `--season <season>`에 전달하며 unknown 명시값을 다른 시즌으로 대체하지 않는다.
+  방어적으로 helper 자체도 문서화된 `--season auto` sentinel을 동일하게 지원한다.
+
   category는 kbo/mlb/npb, kleague/epl 및 명시 리그 ID, basketball/kbl/nba/wkbl,
   volleyball/kovo/wkovo, general/atp/wta/ufc, golf/pga/lpga/kpga/klpga,
   esports/lol/lck 별칭을 해석한다. 어제/오늘은 실행 시각 KST 기준 날짜로 만든다.

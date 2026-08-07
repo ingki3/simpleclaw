@@ -520,9 +520,14 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         helper_payload = naver_sports.run(
             mode="standings",
             category="kbo",
+            season="auto",
             limit=3,
             client=client,
         )
+        assert helper_payload["ok"] is True
+        assert helper_payload["season"]["code"] == "2026"
+        assert helper_payload["items"]
+        assert helper_payload["answer"].count("\n- ") == 3
         return {
             "schema": "asset_result.v1",
             "status": "completed",

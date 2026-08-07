@@ -55,6 +55,8 @@ def test_sports_recipe_routes_completed_result_to_results_mode() -> None:
     assert "`claim_keys` 배열" in recipe.instructions
     assert "`STARTED` empty를 과거 종료 경기 부재로 해석" in recipe.instructions
     assert "--mode <live|results|standings>" in recipe.instructions
+    assert "`auto`이면 active/latest enabled season" in recipe.instructions
+    assert "`--season` 자체를 생략" in recipe.instructions
 
 
 def _delegate_trace(
@@ -330,6 +332,47 @@ async def test_exact_instructions_recipe_returns_one_typed_envelope(tmp_path) ->
     assert kwargs["forced_skill_names"] == frozenset({"naver-sports-skill"})
     assert kwargs["forced_tool_names"] == frozenset({"execute_skill"})
     assert kwargs["final_response_schema"] is ASSET_RESULT_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+async def test_smoke_003_recipe_accepts_exactly_one_successful_delegate(
+    tmp_path,
+) -> None:
+    orchestrator = AgentOrchestrator(_config(tmp_path))
+    orchestrator._recipes = [load_recipe(SPORTS_RECIPE)]
+    nested = AsyncMock(
+        return_value=ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "side_effect": False,
+                    "data": {
+                        "ok": True,
+                        "side_effect": False,
+                        "answer": "확인된 결과입니다.\n- 순위: 1 · 팀: LG",
+                    },
+                    "resolved_claims": ["standings"],
+                    "unresolved_claims": [],
+                }
+            ),
+            trace=_delegate_trace(),
+            success=True,
+        )
+    )
+    orchestrator._run_tool_loop_result = nested
+
+    result = await orchestrator._execute_exact_recipe_asset(
+        "sports-live",
+        {"query": "BIZ573-V4-SMOKE-003: 현재 KBO 순위 상위 3팀만 알려줘."},
+    )
+
+    assert result["schema"] == "asset_result.v1"
+    assert result["status"] == "completed"
+    assert result["side_effect"] is False
+    assert len(nested.return_value.trace) == 1
+    assert nested.return_value.trace[0].tool_name == "execute_skill"
+    assert nested.return_value.trace[0].success is True
 
 
 @pytest.mark.asyncio

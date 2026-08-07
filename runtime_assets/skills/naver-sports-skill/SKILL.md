@@ -51,6 +51,7 @@ Call the registered skill with `args`; do not put a bare subcommand in `command`
 execute_skill(skill_name="naver-sports-skill", args="--mode live --category kbo --date today --limit 10 --json")
 execute_skill(skill_name="naver-sports-skill", args="--mode results --category kbo --date 2026-08-02 --limit 10 --json")
 execute_skill(skill_name="naver-sports-skill", args="--mode standings --category epl --limit 10 --json")
+execute_skill(skill_name="naver-sports-skill", args="--mode standings --category kbo --date today --season auto --limit 10 --json")
 ```
 
 ## Inputs
@@ -63,7 +64,9 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
   general/tennis, golf, and eSports aliases documented by `--help`.
 - `--date today|YYYY-MM-DD`: KST reference date. `results` requires the requested
   result date; `live` immediately refreshes the same endpoint and uses the second result.
-- `--season`: optional standings season code/year/title.
+- `--season`: optional standings season code/year/title. Omit it or pass the
+  `auto` sentinel to select the latest enabled/active season. Any other value is
+  an explicit provider season and fails with `INVALID_ARGUMENT` when unknown.
 - `--limit`: 1 through 20.
 - `--json`: compatibility flag; stdout is always one bounded JSON document.
 
