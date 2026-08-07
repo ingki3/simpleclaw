@@ -51,6 +51,7 @@ dev = [
 "scripts/setup_admin_api.py" = ["E402"]
 "scripts/dev/validate_langgraph_v4_no_send.py" = ["E402"]
 "scripts/dev/validate_langgraph_v4_shadow.py" = ["E402"]
+"scripts/dev/validate_naver_sports_asset.py" = ["E402"]
 "src/simpleclaw/agent/builtin_tools.py" = ["BLE001", "DTZ005", "DTZ006", "S110"]
 "src/simpleclaw/agent/clarify.py" = ["TRY004"]
 "src/simpleclaw/agent/commands.py" = ["BLE001"]
