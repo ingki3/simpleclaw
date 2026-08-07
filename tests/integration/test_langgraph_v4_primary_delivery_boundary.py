@@ -371,9 +371,10 @@ async def test_hard_deadline_fallback_delivery_and_persistence_are_exactly_once(
         nonlocal composer_calls
         composer_calls += 1
         compose_started.set()
+        deadline.reschedule(asyncio.get_running_loop().time() + 0.01)
         await asyncio.Future()
 
-    deadline = asyncio.timeout(0.01)
+    deadline = asyncio.timeout(None)
     safe_render = Mock(
         return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
     )
@@ -482,11 +483,19 @@ async def test_hard_deadline_fallback_delivery_and_persistence_are_exactly_once(
         task = asyncio.current_task()
         assert task is not None
         loop = asyncio.get_running_loop()
-        race_deadline = asyncio.timeout(0.01)
-        assert race_deadline.when() is not None
-        loop.call_at(race_deadline.when(), task.cancel)
+        race_deadline = asyncio.timeout(None)
+
+        async def race_compose(_value):
+            nonlocal composer_calls
+            composer_calls += 1
+            compose_started.set()
+            deadline_at = loop.time() + 0.01
+            race_deadline.reschedule(deadline_at)
+            loop.call_at(deadline_at, task.cancel)
+            await asyncio.Future()
+
         race_runtime = FinalCompositionRuntime(
-            compose=compose,
+            compose=race_compose,
             guard=guard_final_response,
             safe_render=safe_render,
             journal=SQLiteFinalArtifactJournal(final_journal_path),
