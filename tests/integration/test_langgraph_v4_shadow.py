@@ -98,6 +98,7 @@ from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMRespon
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
+from simpleclaw.skills import naver_sports
 from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -476,10 +477,59 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     async def executor(_definition, _bound_steps):
         nonlocal calls
         calls += 1
+        client = SimpleNamespace(
+            urls=[],
+            get_json=None,
+        )
+        responses = iter(
+            (
+                {
+                    "code": 200,
+                    "success": True,
+                    "result": {
+                        "seasons": [
+                            {
+                                "seasonCode": "2026",
+                                "title": "2026 KBO",
+                                "startDate": "20260328",
+                                "endDate": "20261011",
+                                "isEnable": "Y",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "code": 200,
+                    "success": True,
+                    "result": {
+                        "seasonTeamStats": [
+                            {"ranking": 1, "teamName": "LG", "winGameCount": 60},
+                            {"ranking": 2, "teamName": "한화", "winGameCount": 58},
+                            {"ranking": 3, "teamName": "롯데", "winGameCount": 55},
+                        ]
+                    },
+                },
+            )
+        )
+
+        def get_json(url):
+            client.urls.append(url)
+            return next(responses)
+
+        client.get_json = get_json
+        helper_payload = naver_sports.run(
+            mode="standings",
+            category="kbo",
+            limit=3,
+            client=client,
+        )
         return {
             "schema": "asset_result.v1",
-            "status": "resolved",
-            "data": {"standings": ["team-1", "team-2", "team-3"]},
+            "status": "completed",
+            "side_effect": helper_payload["side_effect"],
+            "data": helper_payload,
+            "resolved_claims": ["standings"],
+            "unresolved_claims": [],
         }
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
@@ -508,6 +558,16 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
+        assert result.execution.final_content == (
+            "확인된 결과입니다.\n"
+            "- 순위: 1 · 팀: LG · 승: 60\n"
+            "- 순위: 2 · 팀: 한화 · 승: 58\n"
+            "- 순위: 3 · 팀: 롯데 · 승: 55"
+        )
+        assert "asset_result.v1" not in result.execution.final_content
+        assert "status" not in result.execution.final_content
+        assert "error" not in result.execution.final_content
+        assert "unknown_effect" not in result.execution.final_content
         assert result.execution.dispatch_trace.exactly_once is True
         assert result.execution.rollback_required is False
         assert result.execution.side_effect_counts.total == 0
@@ -1771,6 +1831,104 @@ async def test_connected_primary_unsafe_effect_never_promotes_final(
     assert result.execution.rollback_required is True
     assert "effect_not_safe" in result.execution.rollback_reasons
     assert result.execution.dispatch_trace.succeeded == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize(
+    "typed_payload",
+    [
+        {
+            "schema": "asset_result.v1",
+            "status": "unknown_effect",
+            "side_effect": True,
+            "answer": "UNSAFE_CONNECTED_PREFERRED",
+        },
+        {
+            "schema": "asset_result.v1",
+            "status": "completed",
+            "content": "UNSAFE_CONNECTED_MISSING_EFFECT",
+        },
+    ],
+    ids=("reported-effect", "missing-effect"),
+)
+async def test_connected_primary_unsafe_typed_preferred_is_fail_closed(
+    tmp_path,
+    monkeypatch,
+    typed_payload,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    gate = PlanGate().evaluate(
+        _kbo_incident_plan(catalog.fingerprint),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+
+    async def unsafe_dispatch(_self, invocation, **_kwargs):
+        payload_json = json.dumps(
+            typed_payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        normalized = NormalizedAssetResultV1(
+            invocation_id=invocation.invocation_id,
+            output_contract=invocation.output_contract,
+            status=AssetResultStatus.RESOLVED,
+            payload=typed_payload,
+            payload_hash=hashlib.sha256(payload_json.encode()).hexdigest(),
+            effect_status=EffectStatus.NONE,
+        )
+        return AdapterResponse(
+            invocation_id=invocation.invocation_id,
+            status=AssetResultStatus.RESOLVED,
+            input_payload_hash=invocation.payload_hash,
+            effect_status=EffectStatus.NONE,
+            result=normalized,
+            dispatched=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.graph_runtime.shadow.GenericRecipeAdapter.dispatch",
+        unsafe_dispatch,
+    )
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "unsafe-typed-checkpoint.sqlite3",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=ConversationStore(
+            tmp_path / "unsafe-typed-conversation.db"
+        ),
+    )
+
+    result = await runner.run(
+        plan=gate.effective_plan,
+        legacy=None,
+        request_id="unsafe-typed-preferred-request",
+        session_key="unsafe-typed-preferred-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.final_content == (
+        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    )
+    assert "UNSAFE_CONNECTED" not in result.execution.final_content
+    assert result.execution.dispatch_trace.exactly_once is True
+    assert result.execution.side_effect_counts.total == 0
 
 
 @pytest.mark.asyncio
