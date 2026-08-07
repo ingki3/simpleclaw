@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+import time
+from contextlib import suppress
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -95,6 +99,151 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
         ("user", "production-shaped request", "telegram:42:1001"),
         ("assistant", "V4 primary answer", "telegram:42:1001"),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_sqlite_write_lock_keeps_event_loop_responsive_and_replays_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "conversation.db"
+    store = ConversationStore(database)
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+        persistence_retry_interval=0.001,
+    )
+    response = _response()
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="production-shaped request",
+            channel="telegram",
+        ),
+        session_key=response.metadata.session_key,
+        request_id=response.metadata.request_id,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    update = SimpleNamespace(
+        message=SimpleNamespace(
+            text="production-shaped request",
+            caption=None,
+            from_user=SimpleNamespace(id=1),
+            chat_id=42,
+            message_id=1001,
+            message_thread_id=None,
+            photo=[],
+            document=None,
+            reply_text=reply_text,
+        )
+    )
+    outcomes = []
+
+    async def handler(_text, _user_id, _chat_id, **_kwargs):
+        return response
+
+    async def deliver(primary_response, destination_ref, sender):
+        outcome = await coordinator.deliver_telegram(
+            primary_response,
+            destination_ref=destination_ref,
+            sender=sender,
+        )
+        outcomes.append(outcome)
+        return outcome
+
+    class FakeUpdater:
+        async def start_polling(self):
+            return None
+
+    class FakeApplication:
+        def __init__(self):
+            self.handlers = []
+            self.updater = FakeUpdater()
+
+        def add_handler(self, registered_handler):
+            self.handlers.append(registered_handler)
+
+        async def initialize(self):
+            return None
+
+        async def start(self):
+            return None
+
+    application = FakeApplication()
+
+    class FakeApplicationBuilder:
+        def token(self, _token):
+            return self
+
+        def build(self):
+            return application
+
+    monkeypatch.setattr(
+        "telegram.ext.ApplicationBuilder",
+        FakeApplicationBuilder,
+    )
+    bot = TelegramBot(
+        "token",
+        whitelist_user_ids=[1],
+        message_handler=handler,
+        primary_delivery_handler=deliver,
+    )
+    await bot.start()
+    polling_callback = application.handlers[0].callback
+    heartbeat_times: list[float] = []
+    heartbeat_reached = asyncio.Event()
+
+    async def heartbeat() -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            heartbeat_times.append(loop.time())
+            if len(heartbeat_times) >= 5:
+                heartbeat_reached.set()
+            await asyncio.sleep(0.01)
+
+    lock = sqlite3.connect(database)
+    lock.execute("BEGIN IMMEDIATE")
+    heartbeat_task = asyncio.create_task(heartbeat())
+    delivery_task = asyncio.create_task(
+        polling_callback(update, SimpleNamespace(bot=SimpleNamespace()))
+    )
+    try:
+        await asyncio.wait_for(heartbeat_reached.wait(), timeout=1)
+        assert not delivery_task.done()
+        lock.commit()
+        await asyncio.wait_for(delivery_task, timeout=2)
+    finally:
+        with suppress(sqlite3.Error):
+            lock.rollback()
+        lock.close()
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
+
+    await polling_callback(update, SimpleNamespace(bot=SimpleNamespace()))
+
+    assert [outcome.persistence_status for outcome in outcomes] == [
+        PrimaryPersistenceStatus.PERSISTED,
+        PrimaryPersistenceStatus.PERSISTED,
+    ]
+    assert reply_text.await_count == 1
+    assert max(
+        later - earlier
+        for earlier, later in pairwise(heartbeat_times)
+    ) < 0.1
+    messages = store.get_recent(session_key=response.metadata.session_key)
+    assert [
+        (message.role, message.turn_id) for message in messages
+    ] == [
+        (MessageRole.USER, response.metadata.request_id),
+        (MessageRole.ASSISTANT, response.metadata.request_id),
+    ]
+    with sqlite3.connect(database) as connection:
+        marker_count = connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0]
+    assert marker_count == 1
 
 
 @pytest.mark.asyncio
@@ -275,22 +424,37 @@ async def test_exhausted_persistence_retry_is_not_a_normal_channel_terminal(
         persistence_retry_interval=0,
     )
     persistence_attempts = 0
+    heartbeat_ticks = 0
 
     def fail_persistence(*_args, **_kwargs):
         nonlocal persistence_attempts
         persistence_attempts += 1
+        time.sleep(0.05)
         raise RuntimeError("persistent storage outage")
+
+    async def heartbeat() -> None:
+        nonlocal heartbeat_ticks
+        while True:
+            heartbeat_ticks += 1
+            await asyncio.sleep(0.01)
 
     monkeypatch.setattr(store, "save_outbound_once", fail_persistence)
     reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
     update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
     bot = _bot(coordinator)
 
-    with pytest.raises(RuntimeError, match="assistant persistence did not"):
-        await bot._send_response(update, _response(), chat_id=42, user_id=1)
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        with pytest.raises(RuntimeError, match="assistant persistence did not"):
+            await bot._send_response(update, _response(), chat_id=42, user_id=1)
+    finally:
+        heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat_task
 
     assert reply_text.await_count == 1
     assert persistence_attempts == 2
+    assert heartbeat_ticks >= 5
     assert store.get_recent(session_key="telegram-session-1") == []
 
 
