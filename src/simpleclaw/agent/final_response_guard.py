@@ -18,7 +18,6 @@ _NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
 _TOP_N_PATTERNS = (
     re.compile(r"(?:상위|앞)\s*(\d+)", re.IGNORECASE),
     re.compile(r"\btop\s*(\d+)\b", re.IGNORECASE),
-    re.compile(r"(\d+)\s*(?:개\s*)?팀(?:만)?", re.IGNORECASE),
 )
 _RAW_MARKERS = (
     "```json",
@@ -216,14 +215,6 @@ def _word_stem(token: str) -> str:
     return token
 
 
-def _vocabulary(text: str) -> set[str]:
-    words: set[str] = set()
-    for token in _WORD_RE.findall(_URL_RE.sub("", text)):
-        words.add(token.casefold())
-        words.add(_word_stem(token).casefold())
-    return words
-
-
 def _remove_cited_literals(
     content: str,
     cited_values: dict[str, JsonValue],
@@ -241,20 +232,6 @@ def _remove_cited_literals(
     for literal in literals:
         residual = re.sub(re.escape(literal), "", residual, flags=re.IGNORECASE)
     return residual
-
-
-def _allowed_by_question(token: str, question_words: set[str]) -> bool:
-    folded = token.casefold()
-    stem = _word_stem(token).casefold()
-    if folded in question_words or stem in question_words:
-        return True
-    if re.fullmatch(r"[가-힣]+", stem):
-        return any(
-            question_word.startswith(stem) or stem.startswith(question_word)
-            for question_word in question_words
-            if re.fullmatch(r"[가-힣]+", question_word)
-        )
-    return False
 
 
 def guard_final_response(
@@ -327,14 +304,12 @@ def guard_final_response(
             return _rejected("rendered_value_not_cited")
 
     lexical_residual = _remove_cited_literals(content, cited_values)
-    question_words = _vocabulary(value.question)
     for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()
         if (
             folded not in _SAFE_CONNECTOR_WORDS
             and stem not in _SAFE_CONNECTOR_WORDS
-            and not _allowed_by_question(token, question_words)
         ):
             return _rejected("ungrounded_text")
     symbol_residual = _WORD_RE.sub(

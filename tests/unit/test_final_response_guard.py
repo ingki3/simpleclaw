@@ -40,10 +40,7 @@ def test_guard_accepts_grounded_natural_response() -> None:
     result = guard_final_response(
         _input(),
         DraftResponseV1(
-            content=(
-                "현재 KBO 상위 3팀은 KT, 삼성, LG입니다. "
-                "각각 59승, 58승, 57승입니다."
-            ),
+            content="KBO: KT 59, 삼성 58, LG 57입니다.",
             cited_paths=(
                 "data.category",
                 "data.items[0].team",
@@ -76,7 +73,7 @@ def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
     number = guard_final_response(
         _input().model_copy(update={"question": "KT 승수를 알려줘"}),
         DraftResponseV1(
-            content="KT는 99승입니다.",
+            content="KT는 99입니다.",
             cited_paths=("data.items[0].team",),
         ),
     )
@@ -103,7 +100,7 @@ def test_guard_rejects_partial_top_n_uncited_fact_and_private_identifier() -> No
     uncited = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="현재 상위 3팀은 KT, 삼성, LG이며 삼성은 58승입니다.",
+            content="KT, 삼성, LG이며 58입니다.",
             cited_paths=(
                 "data.items[0].team",
                 "data.items[1].team",
@@ -133,7 +130,7 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     certain = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 상위 3팀은 KT, 삼성, LG로 확정입니다.",
+            content="KT, 삼성, LG입니다.",
             cited_paths=(
                 "data.items[0].team",
                 "data.items[1].team",
@@ -197,7 +194,7 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="The current top team is New York Yankees.",
+            content="New York Yankees.",
             cited_paths=("items[0].team",),
         ),
     )
@@ -258,7 +255,7 @@ def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
     assert exclusion.code == "ungrounded_text"
 
 
-def test_guard_accepts_domain_neutral_question_vocabulary() -> None:
+def test_guard_accepts_domain_neutral_projected_literals() -> None:
     value = CompositionInputV1(
         request_id="request-stock",
         question="현재 Apple 주가는 얼마인가요?",
@@ -273,7 +270,7 @@ def test_guard_accepts_domain_neutral_question_vocabulary() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 Apple 주가는 200 USD입니다.",
+            content="현재 Apple 200 USD입니다.",
             cited_paths=("symbol", "price", "currency"),
         ),
     )
@@ -289,9 +286,69 @@ def test_guard_accepts_domain_neutral_question_vocabulary() -> None:
     status_result = guard_final_response(
         status_value,
         DraftResponseV1(
-            content="현재 상태는 정상입니다.",
+            content="현재 정상입니다.",
             cited_paths=("status",),
         ),
     )
 
     assert status_result.accepted is True
+
+
+@pytest.mark.parametrize(
+    ("question", "content", "cited_paths"),
+    [
+        (
+            "현재 주가는 얼마인가요?",
+            "현재 주가는 200 USD입니다. 주가하락입니다.",
+            ("price", "currency"),
+        ),
+        (
+            "현재 상태를 알려줘",
+            "현재 상태는 정상입니다. 상태불량입니다.",
+            ("status",),
+        ),
+    ],
+)
+def test_guard_rejects_question_prefix_fact_expansion(
+    question: str,
+    content: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = CompositionInputV1(
+        request_id="request-prefix-expansion",
+        question=question,
+        locale="ko-KR",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="generic-status"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts={
+            "price": 200,
+            "currency": "USD",
+            "status": "정상",
+        },
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=cited_paths),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
+    value = _input().model_copy(
+        update={"question": "KT가 순위 밖의 팀 맞나요?"}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT는 순위 밖의 팀입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
