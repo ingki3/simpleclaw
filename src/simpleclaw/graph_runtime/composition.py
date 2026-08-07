@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 from .composition_journal import FinalArtifactInvariantError, FinalArtifactJournal
@@ -142,6 +144,8 @@ class FinalCompositionRuntime:
             )
 
         controlled_deadline_interrupted = False
+        claim_owner_token = uuid.uuid4().hex
+        confirmed_owner = self._journal is None
         request_lock = self._lock_for(request_id)
         try:
             await request_lock.acquire()
@@ -178,23 +182,61 @@ class FinalCompositionRuntime:
                     )
                 return cached[1]
 
-            if self._journal is not None and not controlled_deadline_interrupted:
+            if controlled_deadline_interrupted:
+                return None
+
+            if self._journal is not None:
                 claim = getattr(self._journal, "claim_composition", None)
+                owns_claim = getattr(
+                    self._journal, "owns_composition_claim", None
+                )
                 wait_for_final = getattr(self._journal, "wait_for_final", None)
-                if callable(claim) and callable(wait_for_final):
-                    try:
-                        acquired = await claim(
+                if (
+                    callable(claim)
+                    and callable(owns_claim)
+                    and callable(wait_for_final)
+                ):
+                    claim_task = asyncio.create_task(
+                        claim(
                             request_id=request_id,
                             normalized_payload_hash=payload_hash,
                             composer_fingerprint=self._composer_fingerprint,
+                            owner_token=claim_owner_token,
                         )
+                    )
+                    try:
+                        acquired = await asyncio.shield(claim_task)
                     except asyncio.CancelledError:
                         if not self._controlled_deadline_owns_cancellation(
                             cancellation_baseline=cancellation_baseline
                         ):
+                            claim_task.cancel()
+                            with suppress(Exception, asyncio.CancelledError):
+                                await claim_task
                             raise
-                        acquired = True
+                        claim_task.cancel()
+                        with suppress(Exception, asyncio.CancelledError):
+                            await claim_task
                         controlled_deadline_interrupted = True
+                        acquired = await owns_claim(
+                            request_id=request_id,
+                            normalized_payload_hash=payload_hash,
+                            composer_fingerprint=self._composer_fingerprint,
+                            owner_token=claim_owner_token,
+                        )
+                        if not acquired:
+                            existing = await self._journal.load(
+                                request_id=request_id,
+                                normalized_payload_hash=payload_hash,
+                                composer_fingerprint=self._composer_fingerprint,
+                            )
+                            if existing is not None:
+                                self._finals[request_id] = (
+                                    payload_hash,
+                                    existing,
+                                )
+                            return existing
+                    confirmed_owner = acquired
                     if not acquired:
                         try:
                             existing = await wait_for_final(
@@ -208,11 +250,22 @@ class FinalCompositionRuntime:
                                 cancellation_baseline=cancellation_baseline
                             ):
                                 raise
-                            existing = None
                             controlled_deadline_interrupted = True
+                            existing = await self._journal.load(
+                                request_id=request_id,
+                                normalized_payload_hash=payload_hash,
+                                composer_fingerprint=self._composer_fingerprint,
+                            )
                         if existing is not None:
                             self._finals[request_id] = (payload_hash, existing)
                             return existing
+                        if controlled_deadline_interrupted:
+                            return None
+                else:
+                    confirmed_owner = True
+
+            if not confirmed_owner:
+                return None
 
             content: str | None = None
             draft: Any | None = None
@@ -279,27 +332,53 @@ class FinalCompositionRuntime:
 
             final = build_final(content)
             if self._journal is not None:
-                try:
-                    final = await self._journal.record_or_reuse(
+                record_task = asyncio.create_task(
+                    self._journal.record_or_reuse(
                         request_id=request_id,
                         normalized_payload_hash=payload_hash,
                         composer_fingerprint=self._composer_fingerprint,
                         artifact=final,
+                        owner_token=claim_owner_token,
                     )
+                )
+                try:
+                    final = await asyncio.shield(record_task)
                 except asyncio.CancelledError:
                     if not self._controlled_deadline_owns_cancellation(
                         cancellation_baseline=cancellation_baseline
                     ):
+                        record_task.cancel()
+                        with suppress(Exception, asyncio.CancelledError):
+                            await record_task
                         raise
-                    fallback_content = render_fallback()
-                    if fallback_content is None:
-                        return None
-                    final = await self._journal.record_or_reuse(
+                    record_task.cancel()
+                    with suppress(Exception, asyncio.CancelledError):
+                        await record_task
+                    existing = await self._journal.load(
                         request_id=request_id,
                         normalized_payload_hash=payload_hash,
                         composer_fingerprint=self._composer_fingerprint,
-                        artifact=build_final(fallback_content),
                     )
+                    if existing is not None:
+                        final = existing
+                    elif not await self._journal.owns_composition_claim(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                        owner_token=claim_owner_token,
+                    ):
+                        return None
+                    else:
+                        fallback_content = render_fallback()
+                        if fallback_content is None:
+                            return None
+                        final = await self._journal.record_or_reuse(
+                            request_id=request_id,
+                            normalized_payload_hash=payload_hash,
+                            composer_fingerprint=self._composer_fingerprint,
+                            artifact=build_final(fallback_content),
+                            owner_token=claim_owner_token,
+                        )
             self._finals[request_id] = (payload_hash, final)
             return final
         finally:

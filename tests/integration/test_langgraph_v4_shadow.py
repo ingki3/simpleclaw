@@ -799,6 +799,13 @@ async def test_connected_composer_hard_deadline_records_and_replays_fallback(
         for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
     )
     with sqlite3.connect(checkpoint) as connection:
+        claim_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(graph_final_composition_claims)"
+            )
+        }
+        assert "owner_token" in claim_columns
         assert connection.execute(
             "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
             (kwargs["request_id"],),

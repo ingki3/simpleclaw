@@ -202,6 +202,161 @@ async def test_central_final_delivery_persistence_and_replay_are_exactly_once(
 
 @pytest.mark.asyncio
 @pytest.mark.offline
+async def test_foreign_deadline_waiter_never_reaches_primary_delivery_boundary(
+    tmp_path,
+) -> None:
+    request_id = "telegram:42:foreign-deadline-1001"
+    composition_input = CompositionInputV1(
+        request_id=request_id,
+        question="KBO 1위 팀을 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="foreign-deadline-payload-hash",
+        public_facts={"data": {"team": "KT"}},
+    )
+    normalized_result = NormalizedAssetResultV1(
+        invocation_id="foreign-deadline-invocation",
+        output_contract=ContractRefV1(
+            contract_id="recipe.sports-live.output",
+            version="1",
+            owner_ref=composition_input.asset_ref,
+            schema_hash="schema-hash",
+        ),
+        status=AssetResultStatus.RESOLVED,
+        payload={"side_effect": False, "data": {"team": "KT"}},
+        payload_hash="foreign-deadline-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    journal_path = tmp_path / "foreign-deadline-graph.db"
+
+    class ProcessLocalJournal(SQLiteFinalArtifactJournal):
+        def __init__(self) -> None:
+            super().__init__(journal_path)
+            self._local_locks: dict[str, asyncio.Lock] = {}
+
+        def lock_for(self, key: str) -> asyncio.Lock:
+            return self._local_locks.setdefault(key, asyncio.Lock())
+
+    owner_started = asyncio.Event()
+    owner_release = asyncio.Event()
+
+    async def owner_compose(_value):
+        owner_started.set()
+        await owner_release.wait()
+        return DraftResponseV1(
+            content="KBO 1위는 KT입니다.",
+            cited_paths=("data.team",),
+        )
+
+    owner_task = asyncio.create_task(
+        FinalCompositionRuntime(
+            compose=owner_compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=lambda: "owner fallback must not render",
+            journal=ProcessLocalJournal(),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=request_id,
+            normalized_result=normalized_result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=composition_input,
+        )
+    )
+    await owner_started.wait()
+
+    deadline = asyncio.timeout(None)
+
+    class DeadlineWaiterJournal(ProcessLocalJournal):
+        async def wait_for_final(self, **_kwargs):
+            deadline.reschedule(asyncio.get_running_loop().time())
+            await asyncio.Future()
+
+    waiter_safe_render = Mock(return_value="foreign waiter fallback")
+    async with deadline:
+        waiter_final = await FinalCompositionRuntime(
+            compose=AsyncMock(return_value="must not compose"),
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=waiter_safe_render,
+            journal=DeadlineWaiterJournal(),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=deadline.expired,
+        ).finalize(
+            request_id=request_id,
+            normalized_result=normalized_result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=composition_input,
+        )
+
+    assert waiter_final is None
+    assert waiter_safe_render.call_count == 0
+    with sqlite3.connect(journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims"
+        ).fetchone()[0] == 1
+
+    owner_release.set()
+    owner_final = await owner_task
+    assert owner_final is not None
+
+    store = ConversationStore(tmp_path / "foreign-deadline-conversation.db")
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content=composition_input.question,
+            channel="telegram",
+        ),
+        session_key="foreign-deadline-session",
+        request_id=request_id,
+    )
+    response = PrimaryResponseText(
+        owner_final.content,
+        PrimaryDeliveryMetadataV1(
+            request_id=request_id,
+            artifact_id=owner_final.artifact_id,
+            artifact_hash=owner_final.content_hash,
+            session_key="foreign-deadline-session",
+        ),
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "foreign-deadline-delivery.db",
+        conversation_store=store,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=901))
+    await _bot(coordinator)._send_response(
+        SimpleNamespace(message=SimpleNamespace(reply_text=reply_text)),
+        response,
+        chat_id=42,
+        user_id=1,
+    )
+
+    assert reply_text.await_count == 1
+    assert [message.role for message in store.get_recent()] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    with sqlite3.connect(journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims"
+        ).fetchone()[0] == 0
+    with sqlite3.connect(
+        tmp_path / "foreign-deadline-conversation.db"
+    ) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
 async def test_budget_fallback_delivery_and_persistence_are_exactly_once(
     tmp_path,
 ) -> None:

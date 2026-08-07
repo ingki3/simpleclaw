@@ -407,7 +407,7 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
 
 
 @pytest.mark.asyncio
-async def test_actual_claim_timeout_records_generic_fallback_and_replay_reuses_it(
+async def test_claim_timeout_without_confirmed_ownership_fails_closed(
     tmp_path,
 ) -> None:
     value, result = _values("claim-deadline-request")
@@ -449,7 +449,7 @@ async def test_actual_claim_timeout_records_generic_fallback_and_replay_reuses_i
     replay_compose = AsyncMock(return_value=_draft())
     replay = await FinalCompositionRuntime(
         compose=replay_compose,
-        guard=guard_final_response,
+        guard=lambda *_args: Mock(accepted=True),
         safe_render=Mock(return_value="replay must not render"),
         journal=SQLiteFinalArtifactJournal(db_path),
         composer_fingerprint="composer-v1",
@@ -460,11 +460,58 @@ async def test_actual_claim_timeout_records_generic_fallback_and_replay_reuses_i
         composition_input=value,
     )
 
-    assert first is not None
-    assert replay == first
+    assert first is None
+    assert replay is not None
+    assert replay.content == _draft().content
     assert journal.claim_calls == 1
     assert compose.await_count == 0
-    assert replay_compose.await_count == 0
+    assert replay_compose.await_count == 1
+    assert safe_render.call_count == 0
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_timeout_requeries_durable_ownership_before_fallback(
+    tmp_path,
+) -> None:
+    value, result = _values("confirmed-claim-deadline-request")
+    db_path = tmp_path / "confirmed-claim-deadline.sqlite3"
+    deadline = asyncio.timeout(None)
+
+    class ClaimThenDeadlineJournal(SQLiteFinalArtifactJournal):
+        async def claim_composition(self, **kwargs):
+            acquired = await super().claim_composition(**kwargs)
+            assert acquired is True
+            deadline.reschedule(asyncio.get_running_loop().time())
+            await asyncio.Future()
+
+    safe_render = Mock(return_value="confirmed owner fallback")
+    async with deadline:
+        final = await FinalCompositionRuntime(
+            compose=AsyncMock(return_value=_draft()),
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=safe_render,
+            journal=ClaimThenDeadlineJournal(db_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=deadline.expired,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    assert final is not None
+    assert final.content == "confirmed owner fallback"
     assert safe_render.call_count == 1
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -475,6 +522,116 @@ async def test_actual_claim_timeout_records_generic_fallback_and_replay_reuses_i
             "SELECT COUNT(*) FROM graph_final_composition_claims "
             "WHERE request_id = ?",
             (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_foreign_waiter_deadline_preserves_active_owner_claim_100_times(
+    tmp_path,
+) -> None:
+    db_path = tmp_path / "active-owner.sqlite3"
+
+    class ProcessLocalJournal(SQLiteFinalArtifactJournal):
+        def __init__(self) -> None:
+            super().__init__(db_path)
+            self._local_locks: dict[str, asyncio.Lock] = {}
+
+        def lock_for(self, request_id: str) -> asyncio.Lock:
+            return self._local_locks.setdefault(request_id, asyncio.Lock())
+
+    for iteration in range(100):
+        value, result = _values(f"active-owner-{iteration}")
+        owner_started = asyncio.Event()
+        owner_release = asyncio.Event()
+
+        async def owner_compose(_value):
+            owner_started.set()
+            await owner_release.wait()
+            return _draft()
+
+        owner = FinalCompositionRuntime(
+            compose=owner_compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=lambda: "owner fallback must not render",
+            journal=ProcessLocalJournal(),
+            composer_fingerprint="composer-v1",
+        )
+        owner_task = asyncio.create_task(
+            owner.finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+        )
+        await owner_started.wait()
+
+        deadline = asyncio.timeout(None)
+
+        class DeadlineWaiterJournal(ProcessLocalJournal):
+            async def wait_for_final(self, **kwargs):
+                deadline.reschedule(asyncio.get_running_loop().time())
+                await asyncio.Future()
+
+        waiter_compose = AsyncMock(return_value=_draft())
+        waiter_safe_render = Mock(return_value="waiter fallback")
+        waiter = FinalCompositionRuntime(
+            compose=waiter_compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=waiter_safe_render,
+            journal=DeadlineWaiterJournal(),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=deadline.expired,
+        )
+        async with deadline:
+            waiter_final = await waiter.finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+
+        assert waiter_final is None
+        assert waiter_compose.await_count == 0
+        assert waiter_safe_render.call_count == 0
+        with sqlite3.connect(db_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+                (value.request_id,),
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM graph_final_composition_claims "
+                "WHERE request_id = ?",
+                (value.request_id,),
+            ).fetchone()[0] == 1
+
+        owner_release.set()
+        owner_final = await owner_task
+        assert owner_final is not None
+        assert owner_final.content == _draft().content
+
+        replay_compose = AsyncMock(return_value="must not compose")
+        replay = await FinalCompositionRuntime(
+            compose=replay_compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=lambda: "must not render",
+            journal=ProcessLocalJournal(),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+        assert replay == owner_final
+        assert replay_compose.await_count == 0
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 100
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims"
         ).fetchone()[0] == 0
 
 
@@ -709,6 +866,16 @@ async def test_abandoned_durable_claim_fails_closed_without_recomposition(
         )
 
     assert compose.await_count == 0
+    with sqlite3.connect(tmp_path / "abandoned.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio

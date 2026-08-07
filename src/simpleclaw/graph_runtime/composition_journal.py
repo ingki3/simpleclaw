@@ -36,6 +36,7 @@ class FinalArtifactJournal(Protocol):
         normalized_payload_hash: str,
         composer_fingerprint: str,
         artifact: FinalArtifactV1,
+        owner_token: str,
     ) -> FinalArtifactV1: ...
 
     def lock_for(self, request_id: str) -> asyncio.Lock: ...
@@ -46,6 +47,16 @@ class FinalArtifactJournal(Protocol):
         request_id: str,
         normalized_payload_hash: str,
         composer_fingerprint: str,
+        owner_token: str = "",
+    ) -> bool: ...
+
+    async def owns_composition_claim(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+        owner_token: str,
     ) -> bool: ...
 
     async def wait_for_final(
@@ -127,10 +138,22 @@ class SQLiteFinalArtifactJournal:
                         request_id TEXT PRIMARY KEY,
                         normalized_payload_hash TEXT NOT NULL,
                         composer_fingerprint TEXT NOT NULL,
+                        owner_token TEXT NOT NULL DEFAULT '',
                         claimed_at REAL NOT NULL
                     )
                     """
                 )
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(graph_final_composition_claims)"
+                    )
+                }
+                if "owner_token" not in columns:
+                    connection.execute(
+                        "ALTER TABLE graph_final_composition_claims "
+                        "ADD COLUMN owner_token TEXT NOT NULL DEFAULT ''"
+                    )
             finally:
                 connection.close()
             self._initialized = True
@@ -219,6 +242,7 @@ class SQLiteFinalArtifactJournal:
         request_id: str,
         normalized_payload_hash: str,
         composer_fingerprint: str,
+        owner_token: str,
     ) -> bool:
         """Provider 전에 durable claim을 잡아 process/loop 간 at-most-once를 만든다."""
         self._ensure_schema_sync()
@@ -236,14 +260,15 @@ class SQLiteFinalArtifactJournal:
                 """
                 INSERT INTO graph_final_composition_claims (
                     request_id, normalized_payload_hash,
-                    composer_fingerprint, claimed_at
-                ) VALUES (?, ?, ?, ?)
+                    composer_fingerprint, owner_token, claimed_at
+                ) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(request_id) DO NOTHING
                 """,
                 (
                     request_id,
                     normalized_payload_hash,
                     composer_fingerprint,
+                    owner_token,
                     time.time(),
                 ),
             )
@@ -278,6 +303,7 @@ class SQLiteFinalArtifactJournal:
         request_id: str,
         normalized_payload_hash: str,
         composer_fingerprint: str,
+        owner_token: str = "",
     ) -> bool:
         """첫 worker만 durable composition owner가 되게 한다."""
         return await asyncio.to_thread(
@@ -285,6 +311,55 @@ class SQLiteFinalArtifactJournal:
             request_id,
             normalized_payload_hash,
             composer_fingerprint,
+            owner_token,
+        )
+
+    def _owns_claim_sync(
+        self,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+        owner_token: str,
+    ) -> bool:
+        self._ensure_schema_sync()
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT normalized_payload_hash, composer_fingerprint, owner_token
+                FROM graph_final_composition_claims WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return False
+        if row[0] != normalized_payload_hash:
+            raise FinalArtifactInvariantError(
+                "composition claim reused with different normalized payload"
+            )
+        if row[1] != composer_fingerprint:
+            raise FinalArtifactInvariantError(
+                "composition claim reused with different composer fingerprint"
+            )
+        return bool(owner_token) and row[2] == owner_token
+
+    async def owns_composition_claim(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+        owner_token: str,
+    ) -> bool:
+        """호출별 token으로 durable composition claim 소유권을 재확인한다."""
+        return await asyncio.to_thread(
+            self._owns_claim_sync,
+            request_id,
+            normalized_payload_hash,
+            composer_fingerprint,
+            owner_token,
         )
 
     async def wait_for_final(
@@ -321,12 +396,29 @@ class SQLiteFinalArtifactJournal:
         normalized_payload_hash: str,
         composer_fingerprint: str,
         artifact: FinalArtifactV1,
+        owner_token: str,
     ) -> FinalArtifactV1:
         self._ensure_schema_sync()
         self._validate_artifact(artifact, request_id=request_id)
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT 1 FROM graph_final_artifacts WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if existing is None:
+                claim = connection.execute(
+                    """
+                    SELECT owner_token FROM graph_final_composition_claims
+                    WHERE request_id = ?
+                    """,
+                    (request_id,),
+                ).fetchone()
+                if claim is None or claim[0] != owner_token:
+                    raise FinalArtifactInvariantError(
+                        "final artifact record requires active claim ownership"
+                    )
             connection.execute(
                 """
                 INSERT INTO graph_final_artifacts (
@@ -351,8 +443,11 @@ class SQLiteFinalArtifactJournal:
                 (request_id,),
             ).fetchone()
             connection.execute(
-                "DELETE FROM graph_final_composition_claims WHERE request_id = ?",
-                (request_id,),
+                """
+                DELETE FROM graph_final_composition_claims
+                WHERE request_id = ? AND owner_token = ?
+                """,
+                (request_id, owner_token),
             )
             connection.commit()
         except BaseException:
@@ -376,6 +471,7 @@ class SQLiteFinalArtifactJournal:
         normalized_payload_hash: str,
         composer_fingerprint: str,
         artifact: FinalArtifactV1,
+        owner_token: str,
     ) -> FinalArtifactV1:
         """첫 artifact만 commit하고 경쟁자는 durable 최초 값을 재사용한다."""
         return await asyncio.to_thread(
@@ -384,4 +480,5 @@ class SQLiteFinalArtifactJournal:
             normalized_payload_hash,
             composer_fingerprint,
             artifact,
+            owner_token,
         )
