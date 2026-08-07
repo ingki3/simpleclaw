@@ -86,6 +86,22 @@ def compose_user_facing_projected_facts(
     return _bounded_typed_text("처리 결과입니다.\n" + "\n".join(lines))
 
 
+def is_safe_typed_asset_result(
+    *,
+    payload: Mapping[str, Any],
+    result_status: str,
+    effect_status: str,
+) -> bool:
+    """Compat projection 전에 typed wrapper의 generic safety gate를 판정한다."""
+    return bool(
+        payload.get("schema") == "asset_result.v1"
+        and result_status == "resolved"
+        and effect_status in _SAFE_EFFECT_STATUSES
+        and payload.get("status") in _SAFE_TYPED_STATUSES
+        and payload.get("side_effect") is False
+    )
+
+
 def compose_user_facing_asset_result(
     *,
     payload: Mapping[str, Any],
@@ -99,11 +115,10 @@ def compose_user_facing_asset_result(
     fallback은 호출자가 contract projection을 만든 뒤 별도 renderer에 전달한다.
     """
     if payload.get("schema") == "asset_result.v1":
-        if (
-            result_status != "resolved"
-            or effect_status not in _SAFE_EFFECT_STATUSES
-            or payload.get("status") not in _SAFE_TYPED_STATUSES
-            or payload.get("side_effect") is not False
+        if not is_safe_typed_asset_result(
+            payload=payload,
+            result_status=result_status,
+            effect_status=effect_status,
         ):
             return SAFE_EMPTY_RESULT
         preferred = _preferred_text(payload)

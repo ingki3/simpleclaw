@@ -54,6 +54,7 @@ class FinalArtifactJournal(Protocol):
         request_id: str,
         normalized_payload_hash: str,
         composer_fingerprint: str,
+        timeout_seconds: float | None = None,
     ) -> FinalArtifactV1: ...
 
 
@@ -292,9 +293,14 @@ class SQLiteFinalArtifactJournal:
         request_id: str,
         normalized_payload_hash: str,
         composer_fingerprint: str,
+        timeout_seconds: float | None = None,
     ) -> FinalArtifactV1:
-        """다른 owner의 final을 bounded wait하고 abandoned claim은 재실행하지 않는다."""
-        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        """다른 owner의 final을 caller deadline까지 기다리고 재실행하지 않는다."""
+        deadline = (
+            None
+            if timeout_seconds is None
+            else asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+        )
         while True:
             existing = await self.load(
                 request_id=request_id,
@@ -303,7 +309,7 @@ class SQLiteFinalArtifactJournal:
             )
             if existing is not None:
                 return existing
-            if asyncio.get_running_loop().time() >= deadline:
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 raise FinalArtifactInvariantError(
                     "composition is already claimed without a durable final"
                 )

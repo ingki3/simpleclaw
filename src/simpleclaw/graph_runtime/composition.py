@@ -37,6 +37,7 @@ class FinalCompositionRuntime:
         safe_render: SafeRenderCallback,
         journal: FinalArtifactJournal | None = None,
         composer_fingerprint: str = "asset_text_compat_v1",
+        claim_wait_seconds: float | None = None,
     ) -> None:
         if not composer_fingerprint.strip():
             raise ValueError("composer_fingerprint is required")
@@ -45,6 +46,7 @@ class FinalCompositionRuntime:
         self._safe_render = safe_render
         self._journal = journal
         self._composer_fingerprint = composer_fingerprint
+        self._claim_wait_seconds = claim_wait_seconds
         self._finals: dict[str, tuple[str, FinalArtifactV1]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -115,6 +117,7 @@ class FinalCompositionRuntime:
                             request_id=request_id,
                             normalized_payload_hash=payload_hash,
                             composer_fingerprint=self._composer_fingerprint,
+                            timeout_seconds=self._claim_wait_seconds,
                         )
                         self._finals[request_id] = (payload_hash, existing)
                         return existing

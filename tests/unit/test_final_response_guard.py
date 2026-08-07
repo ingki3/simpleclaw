@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -14,7 +16,7 @@ from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 def _input() -> CompositionInputV1:
     return CompositionInputV1(
         request_id="request-1",
-        question="현재 KBO 상위 3팀만 알려줘",
+        question="현재 KBO 상위 3팀과 승수만 알려줘",
         locale="ko-KR",
         selected_route="recipe",
         asset_ref=AssetRefV1(type="recipe", name="sports-live"),
@@ -195,7 +197,7 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="The current leader is New York Yankees.",
+            content="The current top team is New York Yankees.",
             cited_paths=("items[0].team",),
         ),
     )
@@ -217,3 +219,79 @@ def test_guard_requires_string_identity_for_each_top_n_item() -> None:
     )
 
     assert result.code == "requested_item_identity_not_cited"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["住所東京都新宿區", "секрет Москва", "سر القاهرة"],
+)
+def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
+    result = guard_final_response(
+        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        DraftResponseV1(
+            content=f"KT입니다. {suffix}",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
+    value = _input().model_copy(update={"question": "현재 상위 1팀"})
+    symbol = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT입니다. 🔐🏠",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+    exclusion = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT는 현재 순위 외 팀입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+
+    assert symbol.code == "ungrounded_symbol"
+    assert exclusion.code == "ungrounded_text"
+
+
+def test_guard_accepts_domain_neutral_question_vocabulary() -> None:
+    value = CompositionInputV1(
+        request_id="request-stock",
+        question="현재 Apple 주가는 얼마인가요?",
+        locale="ko-KR",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="stock-snapshot"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts={"symbol": "Apple", "price": 200, "currency": "USD"},
+    )
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="현재 Apple 주가는 200 USD입니다.",
+            cited_paths=("symbol", "price", "currency"),
+        ),
+    )
+
+    assert result.accepted is True
+
+    status_value = value.model_copy(
+        update={
+            "question": "현재 상태를 알려줘",
+            "public_facts_json": '{"status":"정상"}',
+        }
+    )
+    status_result = guard_final_response(
+        status_value,
+        DraftResponseV1(
+            content="현재 상태는 정상입니다.",
+            cited_paths=("status",),
+        ),
+    )
+
+    assert status_result.accepted is True

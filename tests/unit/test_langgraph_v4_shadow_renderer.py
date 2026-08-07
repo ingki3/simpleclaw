@@ -60,6 +60,36 @@ def _typed_payload(*, side_effect: object = False) -> dict[str, object]:
     }
 
 
+def _projected_descriptor(result: NormalizedAssetResultV1) -> ContractDescriptorV1:
+    return ContractDescriptorV1(
+        ref=result.output_contract,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "properties": {
+                                    "rank": {},
+                                    "team": {},
+                                    "wins": {},
+                                }
+                            },
+                        }
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.items[*].rank",
+                "data.items[*].team",
+                "data.items[*].wins",
+            ],
+        },
+    )
+
+
 def test_typed_top_level_preferred_text_remains_in_compat_mode() -> None:
     payload = _typed_payload()
     payload["answer"] = "기존 preferred answer"
@@ -133,40 +163,42 @@ def test_compat_fact_fallback_uses_only_contract_projection() -> None:
     assert isinstance(payload["data"], dict)
     payload["data"].pop("answer")
     payload["data"]["metadata"] = {"value": "PRIVATE-API-KEY-123"}
+    payload["answer"] = "UNPROJECTED PRIVATE RAW PROSE"
     result = _result(payload)
-    descriptor = ContractDescriptorV1(
-        ref=result.output_contract,
-        json_schema={
-            "type": "object",
-            "properties": {
-                "data": {
-                    "properties": {
-                        "items": {
-                            "type": "array",
-                            "items": {
-                                "properties": {
-                                    "rank": {},
-                                    "team": {},
-                                    "wins": {},
-                                }
-                            },
-                        }
-                    }
-                }
-            },
-            "x-simpleclaw-composition-fields": [
-                "data.items[*].rank",
-                "data.items[*].team",
-                "data.items[*].wins",
-            ],
-        },
-    )
+    descriptor = _projected_descriptor(result)
 
     rendered = _compose_user_facing_result(result, descriptor=descriptor)
 
     assert "items[0].team: LG" in rendered
     assert "PRIVATE-API-KEY-123" not in rendered
     assert "metadata" not in rendered
+    assert "UNPROJECTED PRIVATE RAW PROSE" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("payload_mutation", "effect_status"),
+    [
+        ({"side_effect": True}, EffectStatus.NONE),
+        ({"status": "unknown_effect"}, EffectStatus.NONE),
+        ({}, EffectStatus.CONFIRMATION_REQUIRED),
+    ],
+)
+def test_compat_projection_never_bypasses_typed_safety_gate(
+    payload_mutation: dict[str, object],
+    effect_status: EffectStatus,
+) -> None:
+    payload = _typed_payload()
+    payload.update(payload_mutation)
+    result = _result(payload, effect_status=effect_status)
+
+    rendered = _compose_user_facing_result(
+        result,
+        descriptor=_projected_descriptor(result),
+    )
+
+    assert rendered == (
+        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    )
 
 
 def test_non_typed_legacy_preferred_text_remains_unbounded() -> None:

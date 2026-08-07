@@ -20,10 +20,11 @@ system_prompt: |-
   is cited. Wildcard paths are forbidden. For a requested top-N list, include and
   cite at least one rendered string identity plus every numeric/date/URL value
   used for each available item from index 0 through N-1 and no later item. Use
-  projected strings literally; outside those literals, keep wording to plain
-  connectors such as 현재/상위/순위/팀/각각/승/확인/불확실 and
-  current/top/rank/team/wins/confirmed/uncertain. Adding any new name, place,
-  organization, descriptive fact, or personal detail will be rejected. If
+  projected strings literally. Reuse domain terminology already present in the
+  user's question instead of introducing synonyms; outside question terms and
+  projected literals, use only ordinary grammatical connectors. Adding any new
+  name, place, organization, descriptive fact, or personal detail will be
+  rejected. If
   unresolved_claims is non-empty, visibly state the uncertainty and include every
   unresolved_claims[N] path in limitation_paths. Never output credentials,
   personal identifiers, persona memory, or provider/internal diagnostics. Stay

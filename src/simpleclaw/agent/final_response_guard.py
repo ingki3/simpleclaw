@@ -54,7 +54,8 @@ _LIMITATION_MARKERS = (
     "cannot verify",
 )
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_WORD_RE = re.compile(r"[A-Za-z]+|[가-힣]+")
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+_SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/%+]*$")
 _KOREAN_SUFFIXES = (
     "이었습니다",
     "였습니다",
@@ -84,24 +85,20 @@ _KOREAN_SUFFIXES = (
     "의",
     "에",
 )
-_SAFE_RESPONSE_WORDS = frozenset(
+_SAFE_CONNECTOR_WORDS = frozenset(
     {
         "각각",
         "결과",
         "기준",
         "다음",
-        "상위",
         "순서",
-        "순위",
-        "승",
-        "위",
         "현재",
         "확인",
         "확인할",
         "확인했습니다",
+        "확인된",
         "확정",
         "포함",
-        "팀",
         "이며",
         "이고",
         "입니다",
@@ -118,7 +115,6 @@ _SAFE_RESPONSE_WORDS = frozenset(
         "로",
         "의",
         "에",
-        "외",
         "중",
         "불확실",
         "제한",
@@ -130,23 +126,12 @@ _SAFE_RESPONSE_WORDS = frozenset(
         "a",
         "an",
         "and",
-        "or",
         "is",
         "are",
         "was",
         "were",
         "current",
         "currently",
-        "top",
-        "leader",
-        "leaders",
-        "leads",
-        "rank",
-        "ranking",
-        "team",
-        "teams",
-        "win",
-        "wins",
         "with",
         "respectively",
         "result",
@@ -158,7 +143,6 @@ _SAFE_RESPONSE_WORDS = frozenset(
         "uncertain",
         "unverified",
         "could",
-        "not",
         "verify",
         "cannot",
     }
@@ -232,15 +216,45 @@ def _word_stem(token: str) -> str:
     return token
 
 
-def _grounded_words(values: dict[str, JsonValue]) -> set[str]:
+def _vocabulary(text: str) -> set[str]:
     words: set[str] = set()
-    for value in values.values():
-        if not isinstance(value, str):
-            continue
-        for token in _WORD_RE.findall(_URL_RE.sub("", value)):
-            words.add(token.casefold())
-            words.add(_word_stem(token).casefold())
+    for token in _WORD_RE.findall(_URL_RE.sub("", text)):
+        words.add(token.casefold())
+        words.add(_word_stem(token).casefold())
     return words
+
+
+def _remove_cited_literals(
+    content: str,
+    cited_values: dict[str, JsonValue],
+) -> str:
+    literals = sorted(
+        {
+            item.strip()
+            for item in cited_values.values()
+            if isinstance(item, str) and item.strip()
+        },
+        key=len,
+        reverse=True,
+    )
+    residual = content
+    for literal in literals:
+        residual = re.sub(re.escape(literal), "", residual, flags=re.IGNORECASE)
+    return residual
+
+
+def _allowed_by_question(token: str, question_words: set[str]) -> bool:
+    folded = token.casefold()
+    stem = _word_stem(token).casefold()
+    if folded in question_words or stem in question_words:
+        return True
+    if re.fullmatch(r"[가-힣]+", stem):
+        return any(
+            question_word.startswith(stem) or stem.startswith(question_word)
+            for question_word in question_words
+            if re.fullmatch(r"[가-힣]+", question_word)
+        )
+    return False
 
 
 def guard_final_response(
@@ -312,17 +326,23 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
-    grounded_words = _grounded_words(cited_values)
-    for token in _WORD_RE.findall(_URL_RE.sub("", content)):
+    lexical_residual = _remove_cited_literals(content, cited_values)
+    question_words = _vocabulary(value.question)
+    for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()
         if (
-            folded not in grounded_words
-            and stem not in grounded_words
-            and folded not in _SAFE_RESPONSE_WORDS
-            and stem not in _SAFE_RESPONSE_WORDS
+            folded not in _SAFE_CONNECTOR_WORDS
+            and stem not in _SAFE_CONNECTOR_WORDS
+            and not _allowed_by_question(token, question_words)
         ):
             return _rejected("ungrounded_text")
+    symbol_residual = _WORD_RE.sub(
+        "",
+        _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
+    )
+    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+        return _rejected("ungrounded_symbol")
 
     limitation_values = {
         f"unresolved_claims[{index}]": claim

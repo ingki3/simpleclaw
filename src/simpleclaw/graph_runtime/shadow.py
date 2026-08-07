@@ -21,6 +21,7 @@ from simpleclaw.agent.asset_result_presentation import (
     SAFE_EMPTY_RESULT,
     compose_user_facing_asset_result,
     compose_user_facing_projected_facts,
+    is_safe_typed_asset_result,
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
@@ -1094,21 +1095,27 @@ def _compose_user_facing_result(
     descriptor: ContractDescriptorV1 | None = None,
 ) -> str:
     """Core 밖 generic presentation boundary의 text 결과만 소비한다."""
+    if descriptor is not None and descriptor.composition_fields:
+        if not is_safe_typed_asset_result(
+            payload=result.payload,
+            result_status=result.status.value,
+            effect_status=result.effect_status.value,
+        ):
+            return SAFE_EMPTY_RESULT
+        try:
+            facts = project_declared_paths(
+                result.payload,
+                descriptor.composition_fields,
+            )
+        except (CompositionProjectionError, ValueError):
+            return SAFE_EMPTY_RESULT
+        return compose_user_facing_projected_facts(facts)
     rendered = compose_user_facing_asset_result(
         payload=result.payload,
         result_status=result.status.value,
         effect_status=result.effect_status.value,
     )
-    if rendered != SAFE_EMPTY_RESULT or descriptor is None:
-        return rendered
-    try:
-        facts = project_declared_paths(
-            result.payload,
-            descriptor.composition_fields,
-        )
-    except (CompositionProjectionError, ValueError):
-        return SAFE_EMPTY_RESULT
-    return compose_user_facing_projected_facts(facts)
+    return rendered
 
 
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:

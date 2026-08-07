@@ -215,6 +215,7 @@ async def test_abandoned_durable_claim_fails_closed_without_recomposition(
             safe_render=lambda: "generic fallback",
             journal=journal,
             composer_fingerprint="composer-v1",
+            claim_wait_seconds=0.1,
         ).finalize(
             request_id=value.request_id,
             normalized_result=result,
@@ -223,6 +224,46 @@ async def test_abandoned_durable_claim_fails_closed_without_recomposition(
         )
 
     assert compose.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_follower_wait_is_not_limited_by_sqlite_busy_timeout(tmp_path) -> None:
+    value, result = _values("slow-owner-request")
+    db_path = tmp_path / "slow-owner.sqlite3"
+    calls = 0
+    calls_lock = threading.Lock()
+
+    async def compose(_value):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        await asyncio.sleep(0.3)
+        return _draft()
+
+    async def finalize():
+        return await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(
+                db_path,
+                timeout_seconds=0.1,
+            ),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+    )
+
+    assert calls == 1
+    assert first == second
 
 
 @pytest.mark.asyncio
