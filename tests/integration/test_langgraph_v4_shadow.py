@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shlex
 import sqlite3
 import time
 from dataclasses import replace
@@ -16,7 +17,10 @@ import pytest
 from scripts.dev.validate_langgraph_v4_no_send import (
     definitions as _connected_validation_definitions,
 )
-from scripts.dev.validate_naver_sports_asset import validate_production_asset
+from scripts.dev.validate_naver_sports_asset import (
+    ProductionAssetValidationError,
+    validate_production_asset,
+)
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.context_candidates import ContextCandidateSet
@@ -29,6 +33,7 @@ from simpleclaw.agent.orchestrator import (
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.tool_loop import ToolLoopResult, ToolTraceStep
 from simpleclaw.agent.turn_plan import (
     AssetRef,
     CapabilityPlan,
@@ -152,8 +157,11 @@ def _production_sports_definitions(tmp_path: Path):
     return recipe, skill
 
 
-def _kbo_incident_plan(catalog_fingerprint: str) -> UnifiedTurnPlan:
-    prompt = "Kbo 순위 상위 3팀 알려줘"
+def _kbo_incident_plan(
+    catalog_fingerprint: str,
+    *,
+    prompt: str = "Kbo 순위 상위 3팀 알려줘",
+) -> UnifiedTurnPlan:
     return UnifiedTurnPlan(
         original_text=prompt,
         context=ContextSelection(
@@ -180,6 +188,18 @@ def _kbo_incident_plan(catalog_fingerprint: str) -> UnifiedTurnPlan:
         decision_summary="incident fixture",
         catalog_fingerprint=catalog_fingerprint,
     )
+
+
+def _bound_helper_argv(bound_steps) -> tuple[str, ...]:
+    """Recipe source payload와 mapped Skill args의 동일성을 검증해 argv로 만든다."""
+    assert len(bound_steps) == 1
+    bound = bound_steps[0]
+    source_payload = json.loads(bound.source_payload_json)
+    assert source_payload == {"query": source_payload["query"]}
+    assert bound.payload == {"args": source_payload["query"]}
+    argv = tuple(shlex.split(bound.payload["args"]))
+    assert argv
+    return argv
 
 
 def test_connected_validation_discovers_planner_visible_contract_fixtures() -> None:
@@ -458,7 +478,11 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         recipes=(recipe,),
         native_specs=(),
     )
-    original = _kbo_incident_plan(catalog.fingerprint)
+    helper_args = (
+        "--mode standings --category kbo --date today "
+        "--season auto --limit 3 --json"
+    )
+    original = _kbo_incident_plan(catalog.fingerprint, prompt=helper_args)
     gate = PlanGate().evaluate(
         original,
         candidates=ContextCandidateSet((), 0, False),
@@ -473,27 +497,69 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     assert _v4_connected_contract_eligible(gate.effective_plan, catalog) is True
 
     calls = 0
+    pending_argv: tuple[str, ...] | None = None
+    exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
+    exact_recipe._recipes = (recipe,)
 
-    async def executor(_definition, _bound_steps):
-        nonlocal calls
+    async def nested_recipe(rendered, **_kwargs):
+        assert pending_argv is not None
+        assert helper_args in rendered
+        gate_result = validate_production_asset(
+            Path(skill.skill_dir),
+            argv=pending_argv,
+        )
+        helper_payload = gate_result.payload
+        return ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "side_effect": helper_payload["side_effect"],
+                    "data": helper_payload,
+                    "resolved_claims": ["standings"],
+                    "unresolved_claims": [],
+                }
+            ),
+            trace=[
+                ToolTraceStep(
+                    tool_name="execute_skill",
+                    arguments={
+                        "skill_name": skill.name,
+                        "args": shlex.join(pending_argv),
+                    },
+                    observation_preview="bounded helper payload",
+                    success=True,
+                )
+            ],
+            success=True,
+        )
+
+    exact_recipe._run_tool_loop_result = nested_recipe
+
+    async def executor(_definition, bound_steps):
+        nonlocal calls, pending_argv
         calls += 1
         assert "season을 trim한 뒤 `auto`" in recipe.instructions
-        gate_result = validate_production_asset(Path(skill.skill_dir))
-        helper_payload = gate_result.payload
-        assert gate_result.evidence.helper_cli_executed is True
-        assert gate_result.evidence.external_write_count == 0
+        pending_argv = _bound_helper_argv(bound_steps)
+        source_payload = json.loads(bound_steps[0].source_payload_json)
+        result = await exact_recipe._execute_exact_recipe_asset(
+            recipe.name,
+            {
+                key: (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                )
+                for key, value in source_payload.items()
+            },
+        )
+        assert isinstance(result, dict)
+        helper_payload = result["data"]
         assert helper_payload["ok"] is True
         assert helper_payload["season"]["code"] == "2026"
         assert helper_payload["items"]
         assert helper_payload["answer"].count("\n- ") == 3
-        return {
-            "schema": "asset_result.v1",
-            "status": "completed",
-            "side_effect": helper_payload["side_effect"],
-            "data": helper_payload,
-            "resolved_claims": ["standings"],
-            "unresolved_claims": [],
-        }
+        return result
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
     runner = ConnectedShadowTurnRunner(
@@ -536,6 +602,106 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert result.execution.side_effect_counts.total == 0
 
     assert calls == 3
+    assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_kbo_connected_bound_helper_args_drift_fails_closed(
+    tmp_path,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    original = _kbo_incident_plan(
+        catalog.fingerprint,
+        prompt=(
+            "--mode standings --category kbo --date today "
+            "--season unavailable-season --limit 3 --json"
+        ),
+    )
+    gate = PlanGate().evaluate(
+        original,
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    calls = 0
+    gate_failures = 0
+    pending_argv: tuple[str, ...] | None = None
+    exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
+    exact_recipe._recipes = (recipe,)
+
+    async def nested_recipe(_rendered, **_kwargs):
+        nonlocal gate_failures
+        assert pending_argv is not None
+        try:
+            validate_production_asset(
+                Path(skill.skill_dir),
+                argv=pending_argv,
+            )
+        except ProductionAssetValidationError as exc:
+            gate_failures += 1
+            assert exc.code == "helper_not_ok"
+            raise
+        raise AssertionError("drifted bound args unexpectedly passed")
+
+    exact_recipe._run_tool_loop_result = nested_recipe
+
+    async def executor(_definition, bound_steps):
+        nonlocal calls, pending_argv
+        calls += 1
+        pending_argv = _bound_helper_argv(bound_steps)
+        source_payload = json.loads(bound_steps[0].source_payload_json)
+        return await exact_recipe._execute_exact_recipe_asset(
+            recipe.name,
+            {
+                key: (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                )
+                for key, value in source_payload.items()
+            },
+        )
+
+    store = ConversationStore(tmp_path / "kbo-drift-conversation.db")
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "kbo-drift-checkpoint.sqlite3",
+            daemon_db_path=tmp_path / "daemon.db",
+            conversations_db_path=tmp_path / "kbo-drift-conversation.db",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=store,
+        recipe_executor=executor,
+    )
+    result = await runner.run(
+        plan=gate.effective_plan,
+        legacy=None,
+        request_id="kbo-bound-drift",
+        session_key="isolated-kbo-drift-session",
+        planner_model_calls=1,
+        planner_tokens=100,
+    )
+
+    assert calls == 1
+    assert gate_failures == 1
+    assert result.execution.dispatch_trace.executed == 1
+    assert result.execution.dispatch_trace.succeeded == 1
+    assert result.execution.final_content == (
+        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    )
+    assert result.execution.side_effect_counts.total == 0
+    assert result.execution.rollback_required is False
     assert store.get_recent() == []
 
 

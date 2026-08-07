@@ -290,6 +290,7 @@ def _decode_subprocess_provenance(stderr: str) -> _HelperSourceProvenance:
 def _execute_deterministic_cli(
     helper: Path,
     *,
+    argv: tuple[str, ...],
     client_factory: Callable[[], object],
 ) -> tuple[dict[str, Any], tuple[int, int, int], _HelperSourceProvenance]:
     """설치 wrapper→argparse→canonical main을 exact argv로 실행한다."""
@@ -299,7 +300,7 @@ def _execute_deterministic_cli(
     with (
         capture_shadow_side_effects() as side_effects,
         patch.object(naver_sports, "SportsClient", client_factory),
-        patch.object(sys, "argv", [str(helper), *KBO_SEASON_AUTO_ARGV]),
+        patch.object(sys, "argv", [str(helper), *argv]),
         redirect_stdout(stdout),
         redirect_stderr(stderr),
     ):
@@ -390,6 +391,7 @@ def validate_production_asset(
     skill_dir: Path | None = None,
     *,
     source_mode: SourceMode = "deterministic_fixture",
+    argv: tuple[str, ...] = KBO_SEASON_AUTO_ARGV,
     client_factory: Callable[[], object] = _DeterministicKboClient,
 ) -> ProductionAssetGateResult:
     """현재 installed helper CLI가 production gate를 충족하는지 검증한다."""
@@ -399,17 +401,21 @@ def validate_production_asset(
         if source_mode == "deterministic_fixture":
             payload, write_counts, provenance = _execute_deterministic_cli(
                 helper,
+                argv=argv,
                 client_factory=client_factory,
             )
         elif source_mode == "real_read_only":
-            payload, write_counts, provenance = _execute_real_source_cli(helper)
+            payload, write_counts, provenance = _execute_real_source_cli(
+                helper,
+                argv=argv,
+            )
         else:
             _fail("source_mode_invalid")
         _validate_payload(payload, write_counts)
         items = payload["items"]
         answer = payload["answer"]
         argv_sha256 = hashlib.sha256(
-            "\0".join(KBO_SEASON_AUTO_ARGV).encode("utf-8")
+            "\0".join(argv).encode("utf-8")
         ).hexdigest()
         return ProductionAssetGateResult(
             payload=payload,
