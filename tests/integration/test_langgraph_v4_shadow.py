@@ -711,6 +711,105 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
 
 @pytest.mark.asyncio
 @pytest.mark.offline
+async def test_connected_composer_hard_deadline_records_and_replays_fallback(
+    tmp_path,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    gate = PlanGate().evaluate(
+        _kbo_incident_plan(catalog.fingerprint),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+
+    asset_calls = 0
+    composer_calls = 0
+    checkpoint = tmp_path / "hard-deadline-checkpoint.sqlite3"
+
+    async def executor(_definition, _bound_steps):
+        nonlocal asset_calls
+        asset_calls += 1
+        return {
+            "status": "completed",
+            "side_effect": False,
+            "data": {
+                "mode": "standings",
+                "category": "KBO",
+                "items": [{"rank": 1, "team": "KT", "wins": 59}],
+            },
+            "resolved_claims": ["standings"],
+            "unresolved_claims": [],
+        }
+
+    async def compose(_value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        await asyncio.Future()
+
+    def runner() -> ConnectedShadowTurnRunner:
+        return ConnectedShadowTurnRunner(
+            facade=LangGraphV4RolloutFacade(
+                architecture="langgraph_v4",
+                mode="primary",
+                shadow_no_send=True,
+                budget=_budget_with(max_seconds=0.2),
+                checkpoint_path=checkpoint,
+            ),
+            definitions=(recipe, skill),
+            conversation_store=ConversationStore(
+                tmp_path / "hard-deadline-conversation.db"
+            ),
+            recipe_executor=executor,
+            composition_mode="central_persona_v1",
+            response_composer=compose,
+            composer_fingerprint="hard-deadline-composer-v1",
+        )
+
+    kwargs = {
+        "plan": gate.effective_plan,
+        "legacy": None,
+        "request_id": "hard-deadline-request",
+        "session_key": "hard-deadline-session",
+        "planner_model_calls": 0,
+        "planner_tokens": 0,
+    }
+    first = await runner().run(**kwargs)
+    replay = await runner().run(**kwargs)
+
+    expected = (
+        "결과는 확인했지만 지금은 안전하게 답변을 구성하지 못했습니다. "
+        "잠시 후 다시 확인해 주세요."
+    )
+    assert first.execution.final_content == expected
+    assert replay.execution.final_content == expected
+    assert first.execution.rollback_required is False
+    assert replay.execution.rollback_required is False
+    assert asset_calls == 1
+    assert composer_calls == 1
+    assert all(
+        forbidden not in first.execution.final_content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    with sqlite3.connect(checkpoint) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (kwargs["request_id"],),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (kwargs["request_id"],),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
 async def test_kbo_connected_bound_helper_args_drift_fails_closed(
     tmp_path,
 ) -> None:

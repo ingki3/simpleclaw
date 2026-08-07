@@ -175,6 +175,110 @@ async def test_deadline_signal_records_generic_fallback_and_replay_reuses_it(
 
 
 @pytest.mark.asyncio
+async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    value, result = _values("actual-deadline-request")
+    db_path = tmp_path / "actual-deadline.sqlite3"
+    compose_started = asyncio.Event()
+
+    async def compose(_value):
+        compose_started.set()
+        await asyncio.Future()
+
+    deadline = asyncio.timeout(0.01)
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    runtime = FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+        controlled_deadline_expired=lambda: (
+            deadline.expired()
+        ),
+    )
+
+    async with deadline:
+        first = await runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=guard_final_response,
+        safe_render=Mock(return_value="replay must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert compose_started.is_set()
+    assert first is not None
+    assert replay == first
+    assert replay_compose.await_count == 0
+    assert safe_render.call_count == 1
+    assert all(
+        forbidden not in first.content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_is_not_treated_as_controlled_deadline(
+    tmp_path,
+) -> None:
+    value, result = _values("caller-cancel-request")
+    compose_started = asyncio.Event()
+
+    async def compose(_value):
+        compose_started.set()
+        await asyncio.Future()
+
+    runtime = FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=Mock(return_value="must not render"),
+        journal=SQLiteFinalArtifactJournal(tmp_path / "caller-cancel.sqlite3"),
+        composer_fingerprint="composer-v1",
+        controlled_deadline_expired=lambda: False,
+    )
+    task = asyncio.create_task(
+        runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    await compose_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_restart_reuses_first_accepted_final_without_recomposing(tmp_path) -> None:
     value, result = _values()
     compose = AsyncMock(return_value=_draft())

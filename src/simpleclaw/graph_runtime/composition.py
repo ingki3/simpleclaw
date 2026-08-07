@@ -18,6 +18,7 @@ from .status import AssetResultStatus, EffectStatus, TerminalOutcome
 ComposeCallback = Callable[[object], object | Awaitable[object]]
 GuardCallback = Callable[..., object | Awaitable[object]]
 SafeRenderCallback = Callable[..., str]
+ControlledDeadlineExpired = Callable[[], bool]
 
 
 async def _await_if_needed(value):
@@ -38,6 +39,7 @@ class FinalCompositionRuntime:
         journal: FinalArtifactJournal | None = None,
         composer_fingerprint: str = "asset_text_compat_v1",
         claim_wait_seconds: float | None = None,
+        controlled_deadline_expired: ControlledDeadlineExpired | None = None,
     ) -> None:
         if not composer_fingerprint.strip():
             raise ValueError("composer_fingerprint is required")
@@ -47,6 +49,7 @@ class FinalCompositionRuntime:
         self._journal = journal
         self._composer_fingerprint = composer_fingerprint
         self._claim_wait_seconds = claim_wait_seconds
+        self._controlled_deadline_expired = controlled_deadline_expired
         self._finals: dict[str, tuple[str, FinalArtifactV1]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -136,6 +139,17 @@ class FinalCompositionRuntime:
                     and isinstance(getattr(candidate, "content", None), str)
                 ):
                     draft = candidate
+            except asyncio.CancelledError:
+                deadline_expired = False
+                if self._controlled_deadline_expired is not None:
+                    try:
+                        deadline_expired = self._controlled_deadline_expired()
+                    except Exception:  # noqa: BLE001 - cancellation 보존이 우선
+                        deadline_expired = False
+                if not deadline_expired:
+                    raise
+                content = None
+                draft = None
             except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
                 content = None
                 draft = None
