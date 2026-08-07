@@ -69,9 +69,11 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
 
 ## Output contract
 
-The helper emits one JSON object with `ok`, `source`, `mode`, `category`, `season`,
+The helper emits one JSON object with `ok`, `side_effect`, `source`, `mode`, `category`, `season`,
 `date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`.
 
+- Every success, normal-empty, error, and compact fallback result declares the
+  read-only execution contract as top-level `side_effect=false`.
 - Every result item preserves `event_state`, `status_code`, score, winner, date,
   `fetched_at`, and `source_url`.
 - Cancelled, suspended, postponed, unknown, or score-incomplete events are never

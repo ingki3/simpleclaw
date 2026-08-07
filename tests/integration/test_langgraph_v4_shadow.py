@@ -99,6 +99,7 @@ from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
+from simpleclaw.skills import naver_sports
 
 REPO_ROOT = Path(__file__).parents[2]
 
@@ -476,10 +477,59 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     async def executor(_definition, _bound_steps):
         nonlocal calls
         calls += 1
+        client = SimpleNamespace(
+            urls=[],
+            get_json=None,
+        )
+        responses = iter(
+            (
+                {
+                    "code": 200,
+                    "success": True,
+                    "result": {
+                        "seasons": [
+                            {
+                                "seasonCode": "2026",
+                                "title": "2026 KBO",
+                                "startDate": "20260328",
+                                "endDate": "20261011",
+                                "isEnable": "Y",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "code": 200,
+                    "success": True,
+                    "result": {
+                        "seasonTeamStats": [
+                            {"ranking": 1, "teamName": "LG", "winGameCount": 60},
+                            {"ranking": 2, "teamName": "한화", "winGameCount": 58},
+                            {"ranking": 3, "teamName": "롯데", "winGameCount": 55},
+                        ]
+                    },
+                },
+            )
+        )
+
+        def get_json(url):
+            client.urls.append(url)
+            return next(responses)
+
+        client.get_json = get_json
+        helper_payload = naver_sports.run(
+            mode="standings",
+            category="kbo",
+            limit=3,
+            client=client,
+        )
         return {
             "schema": "asset_result.v1",
-            "status": "resolved",
-            "data": {"standings": ["team-1", "team-2", "team-3"]},
+            "status": "completed",
+            "side_effect": helper_payload["side_effect"],
+            "data": helper_payload,
+            "resolved_claims": ["standings"],
+            "unresolved_claims": [],
         }
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
@@ -508,6 +558,16 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
+        assert result.execution.final_content == (
+            "확인된 결과입니다.\n"
+            "- 순위: 1 · 팀: LG · 승: 60\n"
+            "- 순위: 2 · 팀: 한화 · 승: 58\n"
+            "- 순위: 3 · 팀: 롯데 · 승: 55"
+        )
+        assert "asset_result.v1" not in result.execution.final_content
+        assert "status" not in result.execution.final_content
+        assert "error" not in result.execution.final_content
+        assert "unknown_effect" not in result.execution.final_content
         assert result.execution.dispatch_trace.exactly_once is True
         assert result.execution.rollback_required is False
         assert result.execution.side_effect_counts.total == 0

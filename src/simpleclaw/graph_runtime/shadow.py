@@ -1073,23 +1073,112 @@ def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
 
 def _compose_user_facing_result(result: NormalizedAssetResultV1) -> str:
     """Opaque contract JSON을 그대로 노출하지 않는 bounded deterministic renderer."""
-    payload = result.payload
+    envelope = result.payload
     preferred = ("answer", "result", "content", "text", "message", "summary")
     for key in preferred:
-        value = payload.get(key)
+        value = envelope.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    strings = [value.strip() for value in payload.values() if isinstance(value, str) and value.strip()]
+    if envelope.get("schema") == "asset_result.v1":
+        structured = _render_user_facing_items(result)
+        if structured is not None:
+            return structured
+        return "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    strings = [
+        value.strip()
+        for value in envelope.values()
+        if isinstance(value, str) and value.strip()
+    ]
     if len(strings) == 1:
         return strings[0]
     lines = [
         f"- {key}: {value}"
-        for key, value in sorted(payload.items())
+        for key, value in sorted(envelope.items())
         if isinstance(value, (str, int, float, bool))
     ]
     if lines:
         return "처리 결과입니다.\n" + "\n".join(lines)
     return "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+
+
+_USER_FACING_ITEM_FIELDS = (
+    ("rank", "순위"),
+    ("team", "팀"),
+    ("name", "이름"),
+    ("title", "제목"),
+    ("label", "항목"),
+    ("value", "값"),
+    ("status", "상태"),
+    ("date", "날짜"),
+    ("score", "점수"),
+    ("played", "경기"),
+    ("wins", "승"),
+    ("draws", "무"),
+    ("losses", "패"),
+    ("points", "포인트"),
+    ("win_rate", "승률"),
+    ("games_behind", "게임차"),
+)
+_MAX_USER_FACING_ITEMS = 20
+_MAX_USER_FACING_FIELD_CHARS = 160
+_MAX_USER_FACING_RESULT_CHARS = 3_500
+
+
+def _bounded_user_facing_scalar(value: Any) -> str | None:
+    """Allowlisted item의 JSON scalar만 bounded user-facing text로 바꾼다."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        rendered = value.strip()
+    elif isinstance(value, int | float):
+        rendered = str(value)
+    else:
+        return None
+    if not rendered:
+        return None
+    if len(rendered) > _MAX_USER_FACING_FIELD_CHARS:
+        return rendered[: _MAX_USER_FACING_FIELD_CHARS - 1] + "…"
+    return rendered
+
+
+def _render_user_facing_items(result: NormalizedAssetResultV1) -> str | None:
+    """Verified read-only typed envelope의 allowlisted item scalar만 렌더링한다."""
+    envelope = result.payload
+    if (
+        result.status is not AssetResultStatus.RESOLVED
+        or result.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}
+        or envelope.get("status") not in {"completed", "resolved"}
+        or envelope.get("side_effect") is not False
+    ):
+        return None
+    data = envelope.get("data")
+    if not isinstance(data, Mapping) or data.get("ok") is not True:
+        return None
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+
+    header = "확인된 결과입니다."
+    lines: list[str] = []
+    rendered_chars = len(header)
+    for item in items[:_MAX_USER_FACING_ITEMS]:
+        if not isinstance(item, Mapping):
+            continue
+        parts = []
+        for key, label in _USER_FACING_ITEM_FIELDS:
+            rendered = _bounded_user_facing_scalar(item.get(key))
+            if rendered is not None:
+                parts.append(f"{label}: {rendered}")
+        if not parts:
+            continue
+        line = "- " + " · ".join(parts)
+        if rendered_chars + 1 + len(line) > _MAX_USER_FACING_RESULT_CHARS:
+            break
+        lines.append(line)
+        rendered_chars += 1 + len(line)
+    if not lines:
+        return None
+    return header + "\n" + "\n".join(lines)
 
 
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:

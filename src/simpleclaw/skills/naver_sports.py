@@ -315,6 +315,7 @@ def _base_payload(
     urls = list(dict.fromkeys(getattr(client, "urls", [])))
     return {
         "ok": ok,
+        "side_effect": False,
         "source": {
             "provider": "Naver Sports structured API",
             "urls": urls,
@@ -1562,6 +1563,7 @@ def dumps_bounded(payload: dict[str, Any]) -> str:
 
     compact = {
         "ok": False,
+        "side_effect": False,
         "source": {"provider": "Naver Sports structured API", "urls": []},
         "mode": data.get("mode"),
         "category": data.get("category"),
