@@ -526,6 +526,124 @@ async def test_claim_timeout_requeries_durable_ownership_before_fallback(
 
 
 @pytest.mark.asyncio
+async def test_claim_timeout_waits_for_delayed_worker_before_deciding_ownership(
+    tmp_path,
+) -> None:
+    value, result = _values("delayed-claim-deadline-request")
+    db_path = tmp_path / "delayed-claim-deadline.sqlite3"
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    deadline_expired = False
+
+    class DelayedClaimJournal(SQLiteFinalArtifactJournal):
+        def _claim_sync(self, *args):
+            worker_started.set()
+            assert release_worker.wait(timeout=1.0)
+            return super()._claim_sync(*args)
+
+    safe_render = Mock(return_value="confirmed delayed owner fallback")
+    finalize_task = asyncio.create_task(
+        FinalCompositionRuntime(
+            compose=AsyncMock(return_value=_draft()),
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=safe_render,
+            journal=DelayedClaimJournal(db_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=lambda: deadline_expired,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    assert await asyncio.to_thread(worker_started.wait, 1.0)
+    deadline_expired = True
+    finalize_task.cancel()
+    await asyncio.sleep(0.05)
+    assert not finalize_task.done()
+    release_worker.set()
+    final = await finalize_task
+
+    assert final is not None
+    assert final.content == "confirmed delayed owner fallback"
+    assert safe_render.call_count == 1
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_claim_timeout_waits_for_delayed_non_owner_and_preserves_claim(
+    tmp_path,
+) -> None:
+    value, result = _values("delayed-foreign-claim-deadline-request")
+    db_path = tmp_path / "delayed-foreign-claim-deadline.sqlite3"
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    deadline_expired = False
+    foreign_owner_token = "foreign-owner"
+
+    assert await SQLiteFinalArtifactJournal(db_path).claim_composition(
+        request_id=value.request_id,
+        normalized_payload_hash=result.payload_hash,
+        composer_fingerprint="composer-v1",
+        owner_token=foreign_owner_token,
+    )
+
+    class DelayedClaimJournal(SQLiteFinalArtifactJournal):
+        def _claim_sync(self, *args):
+            worker_started.set()
+            assert release_worker.wait(timeout=1.0)
+            return super()._claim_sync(*args)
+
+    compose = AsyncMock(return_value=_draft())
+    safe_render = Mock(return_value="must not render")
+    finalize_task = asyncio.create_task(
+        FinalCompositionRuntime(
+            compose=compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=safe_render,
+            journal=DelayedClaimJournal(db_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=lambda: deadline_expired,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    assert await asyncio.to_thread(worker_started.wait, 1.0)
+    deadline_expired = True
+    finalize_task.cancel()
+    await asyncio.sleep(0.05)
+    assert not finalize_task.done()
+    release_worker.set()
+
+    assert await finalize_task is None
+    assert compose.await_count == 0
+    assert safe_render.call_count == 0
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT owner_token FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone() == (foreign_owner_token,)
+
+
+@pytest.mark.asyncio
 async def test_foreign_waiter_deadline_preserves_active_owner_claim_100_times(
     tmp_path,
 ) -> None:

@@ -305,14 +305,20 @@ class SQLiteFinalArtifactJournal:
         composer_fingerprint: str,
         owner_token: str = "",
     ) -> bool:
-        """첫 worker만 durable composition owner가 되게 한다."""
-        return await asyncio.to_thread(
-            self._claim_sync,
-            request_id,
-            normalized_payload_hash,
-            composer_fingerprint,
-            owner_token,
+        """첫 worker만 owner가 되며 취소 뒤에도 worker 결과를 확정한다."""
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                self._claim_sync,
+                request_id,
+                normalized_payload_hash,
+                composer_fingerprint,
+                owner_token,
+            )
         )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            return await asyncio.shield(worker)
 
     def _owns_claim_sync(
         self,
