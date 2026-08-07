@@ -6,10 +6,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from simpleclaw.graph_runtime.adapters.delivery import SenderReceipt
 from simpleclaw.graph_runtime.adapters.persistence import (
     ConversationStorePersistenceAdapter,
 )
-from simpleclaw.graph_runtime.adapters.delivery import SenderReceipt
+from simpleclaw.graph_runtime.idempotency import (
+    canonical_artifact_content_hash,
+    canonical_artifact_id,
+)
 from simpleclaw.memory import ConversationStore
 from simpleclaw.memory.models import ConversationMessage, MessageRole
 from simpleclaw.outbound_delivery import (
@@ -17,10 +21,6 @@ from simpleclaw.outbound_delivery import (
     PrimaryDeliveryMetadataV1,
     PrimaryPersistenceStatus,
     PrimaryResponseText,
-)
-from simpleclaw.graph_runtime.idempotency import (
-    canonical_artifact_content_hash,
-    canonical_artifact_id,
 )
 
 

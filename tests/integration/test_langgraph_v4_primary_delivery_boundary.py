@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 import time
 from contextlib import suppress
+from itertools import pairwise
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -229,7 +230,7 @@ async def test_sqlite_write_lock_keeps_event_loop_responsive_and_replays_once(
     assert reply_text.await_count == 1
     assert max(
         later - earlier
-        for earlier, later in zip(heartbeat_times, heartbeat_times[1:])
+        for earlier, later in pairwise(heartbeat_times)
     ) < 0.1
     messages = store.get_recent(session_key=response.metadata.session_key)
     assert [

@@ -188,9 +188,10 @@ class PrimaryDeliveryCoordinator:
                         identity: str,
                         content_hash: str,
                         content: str,
+                        _store_writer=store_writer,
                     ) -> None:
                         await asyncio.to_thread(
-                            store_writer,
+                            _store_writer,
                             session_key,
                             identity,
                             content_hash,
