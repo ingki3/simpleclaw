@@ -61,14 +61,24 @@ class FinalCompositionRuntime:
                 return shared_lock(request_id)
         return self._locks.setdefault(request_id, asyncio.Lock())
 
-    def _controlled_deadline_did_expire(self) -> bool:
-        """현재 cancellation이 runner가 소유한 composition deadline인지 판별한다."""
+    def _controlled_deadline_owns_cancellation(
+        self,
+        *,
+        cancellation_baseline: int,
+    ) -> bool:
+        """현재 task에 deadline 취소 외의 새 취소 요청이 없는지 판별한다."""
         if self._controlled_deadline_expired is None:
             return False
         try:
-            return self._controlled_deadline_expired()
+            deadline_expired = self._controlled_deadline_expired()
         except Exception:  # noqa: BLE001 - cancellation 보존이 우선
             return False
+        task = asyncio.current_task()
+        return (
+            deadline_expired
+            and task is not None
+            and task.cancelling() == cancellation_baseline + 1
+        )
 
     async def finalize(
         self,
@@ -79,6 +89,8 @@ class FinalCompositionRuntime:
         composition_input: object | None = None,
     ) -> FinalArtifactV1 | None:
         """Accepted final을 durable하게 기록한 뒤에만 delivery 경계로 반환한다."""
+        task = asyncio.current_task()
+        cancellation_baseline = task.cancelling() if task is not None else 0
         if composition_input is not None:
             if getattr(composition_input, "request_id", None) != request_id:
                 raise FinalArtifactInvariantError("composition request_id mismatch")
@@ -181,7 +193,9 @@ class FinalCompositionRuntime:
                 ):
                     draft = candidate
             except asyncio.CancelledError:
-                if not self._controlled_deadline_did_expire():
+                if not self._controlled_deadline_owns_cancellation(
+                    cancellation_baseline=cancellation_baseline
+                ):
                     raise
                 content = None
                 draft = None
@@ -194,7 +208,9 @@ class FinalCompositionRuntime:
                 try:
                     guarded = bool(await _await_if_needed(self._guard(content)))
                 except asyncio.CancelledError:
-                    if not self._controlled_deadline_did_expire():
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
                         raise
                     guarded = False
                 except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
@@ -210,7 +226,9 @@ class FinalCompositionRuntime:
                     if guarded:
                         content = draft.content.strip()
                 except asyncio.CancelledError:
-                    if not self._controlled_deadline_did_expire():
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
                         raise
                     guarded = False
                 except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
@@ -232,7 +250,9 @@ class FinalCompositionRuntime:
                         artifact=final,
                     )
                 except asyncio.CancelledError:
-                    if not self._controlled_deadline_did_expire():
+                    if not self._controlled_deadline_owns_cancellation(
+                        cancellation_baseline=cancellation_baseline
+                    ):
                         raise
                     fallback_content = render_fallback()
                     if fallback_content is None:

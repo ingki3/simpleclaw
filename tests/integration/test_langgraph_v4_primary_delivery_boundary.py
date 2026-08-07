@@ -469,6 +469,56 @@ async def test_hard_deadline_fallback_delivery_and_persistence_are_exactly_once(
             "SELECT COUNT(*) FROM graph_outbound_persistence"
         ).fetchone()[0] == 1
 
+    race_request_id = "telegram:42:deadline-caller-cancel-race-1002"
+    race_input = composition_input.model_copy(
+        update={"request_id": race_request_id}
+    )
+    race_result = normalized_result.model_copy(
+        update={"invocation_id": "deadline-caller-cancel-race-invocation"}
+    )
+    compose_started.clear()
+
+    async def run_race() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        loop = asyncio.get_running_loop()
+        race_deadline = asyncio.timeout(0.01)
+        assert race_deadline.when() is not None
+        loop.call_at(race_deadline.when(), task.cancel)
+        race_runtime = FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=safe_render,
+            journal=SQLiteFinalArtifactJournal(final_journal_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=race_deadline.expired,
+        )
+        async with race_deadline:
+            await race_runtime.finalize(
+                request_id=race_request_id,
+                normalized_result=race_result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=race_input,
+            )
+
+    cancelled_composition = asyncio.create_task(run_race())
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_composition
+
+    assert compose_started.is_set()
+    assert composer_calls == 2
+    assert safe_render.call_count == 1
+    assert reply_text.await_count == 1
+    with sqlite3.connect(final_journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (race_request_id,),
+        ).fetchone()[0] == 0
+    with sqlite3.connect(conversation_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0] == 1
+
 
 @pytest.mark.asyncio
 @pytest.mark.offline

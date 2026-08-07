@@ -208,6 +208,9 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
             outcome=TerminalOutcome.COMPLETED,
             composition_input=value,
         )
+    current_task = asyncio.current_task()
+    assert current_task is not None
+    assert current_task.cancelling() == 0
 
     replay_compose = AsyncMock(return_value=_draft())
     replay = await FinalCompositionRuntime(
@@ -431,6 +434,55 @@ async def test_caller_cancellation_is_not_treated_as_controlled_deadline(
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_concurrent_deadline_and_caller_cancellation_is_not_swallowed(
+    tmp_path,
+) -> None:
+    value, result = _values("deadline-caller-cancel-race-request")
+    compose_started = asyncio.Event()
+    db_path = tmp_path / "deadline-caller-cancel-race.sqlite3"
+    safe_render = Mock(return_value="must not render")
+
+    async def compose(_value):
+        compose_started.set()
+        await asyncio.Future()
+
+    async def run_race() -> None:
+        task = asyncio.current_task()
+        assert task is not None
+        loop = asyncio.get_running_loop()
+        deadline = asyncio.timeout(0.01)
+        assert deadline.when() is not None
+        loop.call_at(deadline.when(), task.cancel)
+        runtime = FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=safe_render,
+            journal=SQLiteFinalArtifactJournal(db_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=deadline.expired,
+        )
+        async with deadline:
+            await runtime.finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+
+    task = asyncio.create_task(run_race())
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert compose_started.is_set()
+    assert safe_render.call_count == 0
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
 
 
 @pytest.mark.asyncio

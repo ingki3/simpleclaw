@@ -730,6 +730,7 @@ async def test_connected_composer_hard_deadline_records_and_replays_fallback(
 
     asset_calls = 0
     composer_calls = 0
+    compose_started = asyncio.Event()
     checkpoint = tmp_path / "hard-deadline-checkpoint.sqlite3"
 
     async def executor(_definition, _bound_steps):
@@ -750,6 +751,7 @@ async def test_connected_composer_hard_deadline_records_and_replays_fallback(
     async def compose(_value: CompositionInputV1) -> DraftResponseV1:
         nonlocal composer_calls
         composer_calls += 1
+        compose_started.set()
         await asyncio.Future()
 
     def runner() -> ConnectedShadowTurnRunner:
@@ -805,6 +807,26 @@ async def test_connected_composer_hard_deadline_records_and_replays_fallback(
             "SELECT COUNT(*) FROM graph_final_composition_claims "
             "WHERE request_id = ?",
             (kwargs["request_id"],),
+        ).fetchone()[0] == 0
+
+    compose_started.clear()
+    cancelled_kwargs = {
+        **kwargs,
+        "request_id": "hard-deadline-caller-cancel-request",
+        "session_key": "hard-deadline-caller-cancel-session",
+    }
+    cancelled_run = asyncio.create_task(runner().run(**cancelled_kwargs))
+    await compose_started.wait()
+    cancelled_run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_run
+
+    assert asset_calls == 2
+    assert composer_calls == 2
+    with sqlite3.connect(checkpoint) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (cancelled_kwargs["request_id"],),
         ).fetchone()[0] == 0
 
 
