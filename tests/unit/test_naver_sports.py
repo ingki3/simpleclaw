@@ -512,6 +512,9 @@ def test_team_standings_select_last_enabled_season_and_project_fields():
             "games_behind": 0,
         }
     ]
+    assert result["answer"] == (
+        "확인된 결과입니다.\n- 순위: 1 · 팀: 삼성 · 승: 55"
+    )
     assert len(naver_sports.dumps_bounded(result)) <= 7000
 
 

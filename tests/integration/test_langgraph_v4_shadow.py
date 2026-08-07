@@ -1835,6 +1835,104 @@ async def test_connected_primary_unsafe_effect_never_promotes_final(
 
 @pytest.mark.asyncio
 @pytest.mark.offline
+@pytest.mark.parametrize(
+    "typed_payload",
+    [
+        {
+            "schema": "asset_result.v1",
+            "status": "unknown_effect",
+            "side_effect": True,
+            "answer": "UNSAFE_CONNECTED_PREFERRED",
+        },
+        {
+            "schema": "asset_result.v1",
+            "status": "completed",
+            "content": "UNSAFE_CONNECTED_MISSING_EFFECT",
+        },
+    ],
+    ids=("reported-effect", "missing-effect"),
+)
+async def test_connected_primary_unsafe_typed_preferred_is_fail_closed(
+    tmp_path,
+    monkeypatch,
+    typed_payload,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    gate = PlanGate().evaluate(
+        _kbo_incident_plan(catalog.fingerprint),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+
+    async def unsafe_dispatch(_self, invocation, **_kwargs):
+        payload_json = json.dumps(
+            typed_payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        normalized = NormalizedAssetResultV1(
+            invocation_id=invocation.invocation_id,
+            output_contract=invocation.output_contract,
+            status=AssetResultStatus.RESOLVED,
+            payload=typed_payload,
+            payload_hash=hashlib.sha256(payload_json.encode()).hexdigest(),
+            effect_status=EffectStatus.NONE,
+        )
+        return AdapterResponse(
+            invocation_id=invocation.invocation_id,
+            status=AssetResultStatus.RESOLVED,
+            input_payload_hash=invocation.payload_hash,
+            effect_status=EffectStatus.NONE,
+            result=normalized,
+            dispatched=True,
+        )
+
+    monkeypatch.setattr(
+        "simpleclaw.graph_runtime.shadow.GenericRecipeAdapter.dispatch",
+        unsafe_dispatch,
+    )
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "unsafe-typed-checkpoint.sqlite3",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=ConversationStore(
+            tmp_path / "unsafe-typed-conversation.db"
+        ),
+    )
+
+    result = await runner.run(
+        plan=gate.effective_plan,
+        legacy=None,
+        request_id="unsafe-typed-preferred-request",
+        session_key="unsafe-typed-preferred-session",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.final_content == (
+        "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    )
+    assert "UNSAFE_CONNECTED" not in result.execution.final_content
+    assert result.execution.dispatch_trace.exactly_once is True
+    assert result.execution.side_effect_counts.total == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
 async def test_connected_primary_rejects_zero_dispatch_before_typed_final(
     tmp_path,
 ) -> None:

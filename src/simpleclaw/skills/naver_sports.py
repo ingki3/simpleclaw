@@ -30,6 +30,8 @@ ESPORTS_HOST = "esports-api.game.naver.com"
 ALLOWED_HOSTS = frozenset({SPORTS_HOST, ESPORTS_HOST})
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_OUTPUT_CHARS = 7_000
+MAX_PRESENTATION_CHARS = 3_500
+MAX_PRESENTATION_FIELD_CHARS = 160
 DEFAULT_TIMEOUT_SECONDS = 15
 USER_AGENT = "SimpleClaw-NaverSports/1.0"
 
@@ -1125,6 +1127,77 @@ def _ranking_category(category: str) -> str:
     return selected
 
 
+def _presentation_scalar(value: Any) -> str | None:
+    """Asset-owned presentation에 사용할 bounded JSON scalar를 정규화한다."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        rendered = value.strip()
+    elif isinstance(value, int | float):
+        rendered = str(value)
+    else:
+        return None
+    if not rendered:
+        return None
+    if len(rendered) > MAX_PRESENTATION_FIELD_CHARS:
+        return rendered[: MAX_PRESENTATION_FIELD_CHARS - 1] + "…"
+    return rendered
+
+
+def _sports_answer(mode: str, items: list[dict[str, Any]]) -> str | None:
+    """Naver Sports의 업무별 구조를 bounded user-facing text로 투영한다."""
+    header = "확인된 결과입니다."
+    lines: list[str] = []
+    rendered_chars = len(header)
+    for item in items[:20]:
+        parts: list[str] = []
+        if mode == "standings":
+            for key, label in (
+                ("rank", "순위"),
+                ("team", "팀"),
+                ("name", "이름"),
+                ("wins", "승"),
+            ):
+                rendered = _presentation_scalar(item.get(key))
+                if rendered is not None:
+                    parts.append(f"{label}: {rendered}")
+        else:
+            title = _presentation_scalar(item.get("title"))
+            status = _presentation_scalar(item.get("status"))
+            participants = item.get("participants")
+            score = item.get("score")
+            if title is not None:
+                parts.append(f"경기: {title}")
+            if isinstance(participants, dict):
+                for side, label in (("away", "원정"), ("home", "홈")):
+                    participant = participants.get(side)
+                    name = (
+                        _presentation_scalar(participant.get("name"))
+                        if isinstance(participant, dict)
+                        else None
+                    )
+                    side_score = (
+                        _presentation_scalar(score.get(side))
+                        if isinstance(score, dict)
+                        else None
+                    )
+                    if name is not None:
+                        rendered = name if side_score is None else f"{name} {side_score}"
+                        parts.append(f"{label}: {rendered}")
+            if status is not None:
+                parts.append(f"상태: {status}")
+        if not parts:
+            continue
+        line = "- " + " · ".join(parts)
+        if rendered_chars + 1 + len(line) > MAX_PRESENTATION_CHARS:
+            break
+        lines.append(line)
+        rendered_chars += 1 + len(line)
+    if not lines:
+        return None
+    return header + "\n" + "\n".join(lines)
+
+
 def _format_compact_date(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text:
@@ -1498,6 +1571,9 @@ def run(
                 payload["items"],
                 fetched_at=now,
             )
+        answer = _sports_answer(safe_mode, payload["items"])
+        if answer is not None:
+            payload["answer"] = answer
         return payload
     except SportsError as exc:
         return _error_payload(

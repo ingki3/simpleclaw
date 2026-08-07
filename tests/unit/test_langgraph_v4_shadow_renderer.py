@@ -42,6 +42,12 @@ def _typed_payload(*, side_effect: object = False) -> dict[str, object]:
         "side_effect": side_effect,
         "data": {
             "ok": True,
+            "answer": (
+                "확인된 결과입니다.\n"
+                "- 순위: 1 · 팀: LG · 승: 60\n"
+                "- 순위: 2 · 팀: 한화 · 승: 58\n"
+                "- 순위: 3 · 팀: 롯데 · 승: 55"
+            ),
             "items": [
                 {"rank": 1, "team": "LG", "wins": 60, "private": {"token": "SECRET"}},
                 {"rank": 2, "team": "한화", "wins": 58},
@@ -53,14 +59,14 @@ def _typed_payload(*, side_effect: object = False) -> dict[str, object]:
     }
 
 
-def test_preferred_text_path_wins_before_structured_items() -> None:
+def test_safe_typed_top_level_preferred_text_wins() -> None:
     payload = _typed_payload()
     payload["answer"] = "기존 preferred answer"
 
     assert _compose_user_facing_result(_result(payload)) == "기존 preferred answer"
 
 
-def test_verified_read_only_typed_items_render_allowlisted_scalars_only() -> None:
+def test_verified_read_only_typed_result_uses_asset_owned_presentation() -> None:
     rendered = _compose_user_facing_result(_result(_typed_payload()))
 
     assert rendered == (
@@ -85,11 +91,16 @@ def test_verified_read_only_typed_items_render_allowlisted_scalars_only() -> Non
     ],
     ids=("reported-effect", "missing-effect", "unsafe-status", "effect-gate"),
 )
-def test_unsafe_typed_items_fail_closed_without_raw_diagnostics(
+@pytest.mark.parametrize("preferred_key", ["answer", "content"])
+def test_unsafe_typed_preferred_text_fails_closed_without_raw_diagnostics(
     payload_mutation: dict[str, object],
     effect_status: EffectStatus,
+    preferred_key: str,
 ) -> None:
     payload = _typed_payload()
+    payload[preferred_key] = "UNSAFE_PREFERRED"
+    assert isinstance(payload["data"], dict)
+    payload["data"][preferred_key] = "UNSAFE_NESTED_PREFERRED"
     if (
         "side_effect" in payload_mutation
         and payload_mutation["side_effect"] is None
@@ -107,22 +118,21 @@ def test_unsafe_typed_items_fail_closed_without_raw_diagnostics(
     )
     assert "asset_result.v1" not in rendered
     assert "unknown_effect" not in rendered
+    assert "UNSAFE" not in rendered
     assert "RAW_" not in rendered
 
 
-def test_structured_item_output_is_deterministically_bounded() -> None:
+def test_safe_typed_preferred_output_is_deterministically_bounded() -> None:
     payload = _typed_payload()
-    payload["data"] = {
-        "ok": True,
-        "items": [
-            {"rank": index, "team": "가" * 500, "nested": {"secret": "SECRET"}}
-            for index in range(1, 40)
-        ],
-    }
+    payload["answer"] = "가" * 10_000
 
     rendered = _compose_user_facing_result(_result(payload))
 
     assert len(rendered) <= 3_500
-    assert rendered.count("\n-") <= 20
     assert "…" in rendered
-    assert "SECRET" not in rendered
+
+
+def test_non_typed_legacy_preferred_text_remains_unbounded() -> None:
+    legacy = "legacy" * 1_000
+
+    assert _compose_user_facing_result(_result({"answer": legacy})) == legacy
