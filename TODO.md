@@ -15,11 +15,7 @@
 
 ## In Progress
 
-- [x] **[BIZ-616](mention://issue/00906e74-a78f-4ba3-aa14-b157d7791fc3): V4 connected binding 진단 기대값을 sanitized 계약에 정렬** — fallback 미선언 CLI Skill의 stale `payload.safe_example_missing` 기대값을 closed phase code `connected_binding_failed`로 정렬하고, raw code·질문 비노출과 asset dispatch/Telegram/notifier/ConversationStore write `0/0/0/0`을 회귀로 고정했다. Source `1ce154e24101befcace05490800f96aadae92058`와 Graphify exact head `c83377cb72077abeb705e0e5d67dfbf22f1b6173`에서 user-scenario `16 passed`, 진단·formatter `11 passed`, 전체 Ruff·diff check, fresh CI 3종 및 독립 exact-head 리뷰를 통과한 [PR #660](https://github.com/ingki3/simpleclaw/pull/660)을 squash merge(SHA `6a8efffffefc86ec75a0b05dc284d93269fe9be2`)했다. Production allowlist·live config·deploy·restart·V4 primary·Telegram send는 변경하지 않았다. (완료: 2026-08-07)
-
-- [x] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — 원 구현 [PR #639](https://github.com/ingki3/simpleclaw/pull/639) merge 뒤 late mandatory review finding을 corrective children BIZ-610/BIZ-611/BIZ-612에서 각각 formatter redaction, domain-neutral installer/package 경계, catalog→registry TOCTOU 차단으로 보완해 모두 exact-head 리뷰·fresh CI·squash merge했다. Combined 최신 `dev@1a3c8d74a17b28722651b2cb33ebae96cc5240eb`에서 production installer output 기반 KBO no-send 3회, typed final·dispatch exactly-once, contract continuity `2/2`, side effect `0/0/0`, combined regression `137 passed`, 전체 unit `3538 passed, 3 xfailed`, Ruff·diff·CI 4종을 통과해 부모 code/offline corrective 범위를 완료했다. BIZ-573은 release·controlled live activation 전까지 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (완료: 2026-08-06)
-
-
+- [>] **[BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c): LangGraph V4 release·controlled live activation·rollback 검증** — [PR #659](https://github.com/ingki3/simpleclaw/pull/659)을 main merge(SHA `6da2db10607cf5034d419f9438ab763d079f2aa1`)해 release tag `v2026.08.06.1` 산출물을 확정했다. exact main을 live checkout에 배포했고 release-deploy drain restart·health smoke·post-deploy no-send를 모두 PASS했다. 운영자 승인 후 V4 primary 전환, 승인 절차의 drain restart·health 확인, controlled Telegram query 1건의 response-source·delivery·ConversationStore exactly-once·중복 `0`, 실패 시 rollback·재기동 증거가 남아 있으므로 BIZ-573과 부모 BIZ-562는 진행 중으로 유지한다. 본 tracker 보정에서는 live config·restart·primary activation·Telegram send를 수행하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-601](mention://issue/89934d4a-1925-43bd-8c4f-ae7edf2c952b): PR #634 primary 안전 blocker를 보정** — merged `dev`의 BIZ-600 runtime에 durable invocation claim, post-dispatch fallback 차단, unsafe effect/invalid mode fail-closed, guarded user-facing composition과 validator 고정 contract gate를 추가한다. BIZ-601 수정 PR의 fresh CI와 필수 안전 리뷰 전에는 live primary activation을 재개하지 않는다. (진행: 2026-08-06)
 
@@ -218,6 +214,13 @@
 ---
 
 ## Done
+
+
+### 2026-08-07
+
+- [x] **[BIZ-616](mention://issue/00906e74-a78f-4ba3-aa14-b157d7791fc3): V4 connected binding 진단 기대값을 sanitized 계약에 정렬** — fallback 미선언 CLI Skill의 stale `payload.safe_example_missing` 기대값을 closed phase code `connected_binding_failed`로 정렬하고, raw code·질문 비노출과 asset dispatch/Telegram/notifier/ConversationStore write `0/0/0/0`을 회귀로 고정했다. Source `1ce154e24101befcace05490800f96aadae92058`와 Graphify exact head `c83377cb72077abeb705e0e5d67dfbf22f1b6173`에서 user-scenario `16 passed`, 진단·formatter `11 passed`, 전체 Ruff·diff check, fresh CI 3종 및 독립 exact-head 리뷰를 통과한 [PR #660](https://github.com/ingki3/simpleclaw/pull/660)을 squash merge(SHA `6a8efffffefc86ec75a0b05dc284d93269fe9be2`)했다. Production allowlist·live config·deploy·restart·V4 primary·Telegram send는 변경하지 않았다. (완료: 2026-08-07)
+
+- [x] **[BIZ-609](mention://issue/939c2a5c-9e9c-4090-83db-e5672529eeee): V4 primary effective-plan ValueError를 진단·수정** — 원 구현 [PR #639](https://github.com/ingki3/simpleclaw/pull/639) merge 뒤 late mandatory review finding을 corrective children BIZ-610/BIZ-611/BIZ-612에서 각각 formatter redaction, domain-neutral installer/package 경계, catalog→registry TOCTOU 차단으로 보완해 모두 exact-head 리뷰·fresh CI·squash merge했다. Combined 최신 `dev@1a3c8d74a17b28722651b2cb33ebae96cc5240eb`에서 production installer output 기반 KBO no-send 3회, typed final·dispatch exactly-once, contract continuity `2/2`, side effect `0/0/0`, combined regression `137 passed`, 전체 unit `3538 passed, 3 xfailed`, Ruff·diff·CI 4종을 통과해 부모 code/offline corrective 범위를 완료했다. BIZ-573은 release·controlled live activation 전까지 `blocked`, live `legacy_v2`/V4 `no_send`를 유지한다. (완료: 2026-08-06)
 
 
 ### 2026-08-06
