@@ -181,12 +181,13 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
     value, result = _values("actual-deadline-request")
     db_path = tmp_path / "actual-deadline.sqlite3"
     compose_started = asyncio.Event()
+    deadline = asyncio.timeout(None)
 
     async def compose(_value):
         compose_started.set()
+        deadline.reschedule(asyncio.get_running_loop().time())
         await asyncio.Future()
 
-    deadline = asyncio.timeout(0.01)
     safe_render = Mock(
         return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
     )
@@ -254,12 +255,13 @@ async def test_actual_guard_timeout_records_generic_fallback_and_replay_reuses_i
     value, result = _values("guard-deadline-request")
     db_path = tmp_path / "guard-deadline.sqlite3"
     guard_started = asyncio.Event()
+    deadline = asyncio.timeout(None)
 
     async def guard(_value, _draft):
         guard_started.set()
+        deadline.reschedule(asyncio.get_running_loop().time())
         await asyncio.Future()
 
-    deadline = asyncio.timeout(0.01)
     safe_render = Mock(
         return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
     )
@@ -332,6 +334,8 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
         ),
     )
 
+    deadline = asyncio.timeout(None)
+
     class DelayedFirstRecordJournal(SQLiteFinalArtifactJournal):
         def __init__(self) -> None:
             super().__init__(db_path)
@@ -340,10 +344,10 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
         async def record_or_reuse(self, **kwargs):
             self.record_calls += 1
             if self.record_calls == 1:
+                deadline.reschedule(asyncio.get_running_loop().time())
                 await asyncio.Future()
             return await super().record_or_reuse(**kwargs)
 
-    deadline = asyncio.timeout(0.01)
     safe_render = Mock(
         return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
     )
