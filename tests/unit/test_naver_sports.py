@@ -38,6 +38,13 @@ def test_installer_materializes_version_controlled_wrapper(tmp_path):
     ).startswith("#!/usr/bin/env python3\nfrom simpleclaw.skills.naver_sports import main")
 
 
+def test_helper_parser_rejects_abbreviated_limit_flag():
+    with pytest.raises(SystemExit):
+        naver_sports.build_parser().parse_args(
+            ["--limit", "3", "--lim", "10"]
+        )
+
+
 def sports_response(*games):
     return {
         "code": 200,

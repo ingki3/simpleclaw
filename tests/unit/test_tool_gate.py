@@ -193,6 +193,10 @@ def test_exact_skill_scope_authorizes_matching_trusted_read_only_safety() -> Non
         "--mode standings --limit 10 --json",
         "--mode standings --json",
         "--mode standings --limit 3 --limit 10 --json",
+        "--mode standings --limit 3 --limit=10 --json",
+        "--mode standings --limit 3 --lim 10 --json",
+        "--mode standings --limit=3 --json",
+        "--mode standings --lim 3 --json",
         "--mode standings --limit nope --json",
     ),
 )

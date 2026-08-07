@@ -33,6 +33,12 @@ from simpleclaw.agent.orchestrator import (
 from simpleclaw.agent.plan_gate import GateStatus, PlanGate
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.resolution_types import CapabilityCoverage, ExecutionMode
+from simpleclaw.agent.tool_gate import (
+    ToolCallRejected,
+    ToolExecutionScope,
+    ToolGate,
+    TrustedAssetSafety,
+)
 from simpleclaw.agent.tool_loop import ToolLoopResult, ToolTraceStep
 from simpleclaw.agent.turn_plan import (
     AssetRef,
@@ -100,7 +106,13 @@ from simpleclaw.graph_runtime.status import (
     InvocationStatus,
     TerminalOutcome,
 )
-from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMResponse
+from simpleclaw.llm.models import (
+    BackendType,
+    LLMBackend,
+    LLMRequest,
+    LLMResponse,
+    ToolCall,
+)
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
@@ -729,6 +741,125 @@ async def test_kbo_connected_bound_helper_args_drift_fails_closed(
     assert result.execution.side_effect_counts.total == 0
     assert result.execution.rollback_required is False
     assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("override", ("--limit=10", "--lim 10"))
+async def test_kbo_parser_equivalent_limit_override_fails_before_delegate(
+    tmp_path,
+    override,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
+    exact_recipe._recipes = (recipe,)
+    delegate_calls = 0
+
+    async def nested_recipe(
+        _rendered,
+        *,
+        forced_skill_argument_constraints,
+        **_kwargs,
+    ):
+        nonlocal delegate_calls
+        call = ToolCall(
+            id="parser-equivalent-override",
+            name="execute_skill",
+            arguments={
+                "skill_name": skill.name,
+                "args": f"--mode standings --limit 3 --json {override}",
+            },
+        )
+        try:
+            ToolGate(native_specs=[]).authorize(
+                call,
+                ToolExecutionScope(
+                    allowed_tools=frozenset({"execute_skill"}),
+                    allowed_assets=frozenset({("skill", skill.name)}),
+                    operator_tools=False,
+                    allow_cron_mutation=False,
+                    max_tool_calls=1,
+                    trusted_asset_safety=(TrustedAssetSafety.from_skill(skill),),
+                    argument_constraints=forced_skill_argument_constraints,
+                ),
+                resolved_skill=skill,
+            )
+        except ToolCallRejected as exc:
+            assert exc.code == "skill_argument_constraint_mismatch"
+            raise
+        delegate_calls += 1
+        raise AssertionError("parser-equivalent override reached delegate execution")
+
+    exact_recipe._run_tool_loop_result = nested_recipe
+
+    result = await exact_recipe._execute_exact_recipe_asset(
+        recipe.name,
+        {
+            "query": "현재 KBO 순위 상위 3팀만 알려줘",
+            "__bound_constraints": json.dumps({"limit": 3}),
+        },
+    )
+
+    assert delegate_calls == 0
+    assert result == {
+        "schema": "asset_result.v1",
+        "status": "failed_terminal",
+        "limitations": ["typed_recipe_nested_error:ToolCallRejected"],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("override", ("--limit=10", "--lim 10"))
+async def test_kbo_parser_equivalent_limit_override_trace_fails_closed(
+    tmp_path,
+    override,
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
+    exact_recipe._recipes = (recipe,)
+
+    async def nested_recipe(_rendered, **_kwargs):
+        return ToolLoopResult(
+            text=json.dumps(
+                {
+                    "schema": "asset_result.v1",
+                    "status": "completed",
+                    "side_effect": False,
+                    "data": {"items": []},
+                    "resolved_claims": ["standings"],
+                    "unresolved_claims": [],
+                }
+            ),
+            trace=[
+                ToolTraceStep(
+                    tool_name="execute_skill",
+                    arguments={
+                        "skill_name": skill.name,
+                        "args": f"--mode standings --limit 3 --json {override}",
+                    },
+                    observation_preview="forged parser-equivalent trace",
+                    success=True,
+                )
+            ],
+            success=True,
+        )
+
+    exact_recipe._run_tool_loop_result = nested_recipe
+
+    result = await exact_recipe._execute_exact_recipe_asset(
+        recipe.name,
+        {
+            "query": "현재 KBO 순위 상위 3팀만 알려줘",
+            "__bound_constraints": json.dumps({"limit": 3}),
+        },
+    )
+
+    assert result == {
+        "schema": "asset_result.v1",
+        "status": "failed_terminal",
+        "limitations": ["recipe_delegate_argument_constraint_mismatch"],
+    }
 
 
 @pytest.mark.asyncio

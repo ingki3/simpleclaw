@@ -82,7 +82,12 @@ class ToolArgumentConstraint:
     expected_value: str
 
     def matches(self, arguments: Mapping[str, object]) -> bool:
-        """flag가 정확히 한 번 exact value와 함께 전달됐는지 검사한다."""
+        """canonical flag가 정확히 한 번 exact value와 함께 전달됐는지 검사한다.
+
+        argparse long option의 ``--flag=value`` 및 unique-prefix abbreviation도
+        같은 option을 덮어쓸 수 있으므로 equivalent spelling으로 세어 canonical
+        분리형 외에는 fail-closed한다.
+        """
         raw = arguments.get(self.argument_name)
         if not isinstance(raw, str):
             return False
@@ -90,11 +95,28 @@ class ToolArgumentConstraint:
             argv = shlex.split(raw)
         except ValueError:
             return False
-        positions = [index for index, token in enumerate(argv) if token == self.flag]
+        positions = [
+            index
+            for index, token in enumerate(argv)
+            if self._is_parser_equivalent_flag(token)
+        ]
         return (
             len(positions) == 1
+            and argv[positions[0]] == self.flag
             and positions[0] + 1 < len(argv)
             and argv[positions[0] + 1] == self.expected_value
+        )
+
+    def _is_parser_equivalent_flag(self, token: str) -> bool:
+        """argparse가 constrained long option으로 해석할 수 있는 철자인지 본다."""
+        option = token.partition("=")[0]
+        if option == self.flag:
+            return True
+        return (
+            self.flag.startswith("--")
+            and option.startswith("--")
+            and len(option) > 2
+            and self.flag.startswith(option)
         )
 
 
