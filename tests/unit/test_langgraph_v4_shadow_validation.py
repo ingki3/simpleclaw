@@ -14,20 +14,20 @@ import pytest
 
 import simpleclaw.langgraph_v4_shadow_validation as validation
 from scripts.dev import validate_langgraph_v4_no_send as fixture_validation
-from scripts.dev.validate_naver_sports_asset import (
-    _PROVENANCE_PREFIX,
-    _assert_installed_asset,
-    _decode_subprocess_provenance,
-    _execute_real_source_cli,
-    ProductionAssetValidationError,
-)
-from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.dev.validate_langgraph_v4_no_send import (
     EXPECTED_CONTRACT_SET,
 )
 from scripts.dev.validate_langgraph_v4_no_send import (
     definitions as _definitions,
 )
+from scripts.dev.validate_naver_sports_asset import (
+    _PROVENANCE_PREFIX,
+    ProductionAssetValidationError,
+    _assert_installed_asset,
+    _decode_subprocess_provenance,
+    _execute_real_source_cli,
+)
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.langgraph_v4_shadow_validation import (
     ContractIdentity,
