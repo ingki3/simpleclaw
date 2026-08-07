@@ -7,7 +7,7 @@ destination:
 files:
   - source: SKILL.md
     destination: SKILL.md
-    sha256: d1f13b812b54baec17a937b8170723faa85cd98e6fcb39c437a75984f94ce0b9
+    sha256: bdc3d069850e116d49b0cd92e222efc0f207f18cb57a4650ee66a974a3d189c7
   - source: scripts/naver_sports.py
     destination: scripts/naver_sports.py
     sha256: 02965db275138bb571b0c6eccb45d989612ad144618b15f4ff814a42518a8ab7

@@ -490,6 +490,7 @@ def test_team_standings_select_last_enabled_season_and_project_fields():
     result = naver_sports.run(
         mode="standings",
         category="kbo",
+        season="auto",
         limit=10,
         client=FakeClient([seasons, teams]),
     )
@@ -516,6 +517,95 @@ def test_team_standings_select_last_enabled_season_and_project_fields():
         "확인된 결과입니다.\n- 순위: 1 · 팀: 삼성 · 승: 55"
     )
     assert len(naver_sports.dumps_bounded(result)) <= 7000
+
+
+def test_explicit_unknown_standings_season_remains_invalid_argument():
+    seasons = {
+        "code": 200,
+        "success": True,
+        "result": {
+            "seasons": [
+                {
+                    "seasonCode": "2026",
+                    "title": "2026 KBO",
+                    "isEnable": "Y",
+                }
+            ]
+        },
+    }
+    client = FakeClient([seasons])
+
+    result = naver_sports.run(
+        mode="standings",
+        category="kbo",
+        season="unknown-season",
+        client=client,
+    )
+
+    assert result["ok"] is False
+    assert result["side_effect"] is False
+    assert result["error"]["code"] == "INVALID_ARGUMENT"
+    assert len(client.urls) == 1
+
+
+def test_exact_production_cli_season_auto_selects_active_season(
+    monkeypatch, capsys
+):
+    seasons = {
+        "code": 200,
+        "success": True,
+        "result": {
+            "seasons": [
+                {
+                    "seasonCode": "2025",
+                    "title": "2025 KBO",
+                    "isEnable": "Y",
+                },
+                {
+                    "seasonCode": "2026",
+                    "title": "2026 KBO",
+                    "isEnable": "Y",
+                },
+            ]
+        },
+    }
+    teams = {
+        "code": 200,
+        "success": True,
+        "result": {
+            "seasonTeamStats": [
+                {"ranking": 1, "teamName": "LG", "winGameCount": 60},
+                {"ranking": 2, "teamName": "한화", "winGameCount": 58},
+                {"ranking": 3, "teamName": "롯데", "winGameCount": 55},
+            ]
+        },
+    }
+    client = FakeClient([seasons, teams])
+    monkeypatch.setattr(naver_sports, "SportsClient", lambda: client)
+
+    exit_code = naver_sports.main(
+        [
+            "--mode",
+            "standings",
+            "--category",
+            "kbo",
+            "--date",
+            "today",
+            "--season",
+            "auto",
+            "--limit",
+            "10",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["side_effect"] is False
+    assert payload["season"]["code"] == "2026"
+    assert len(payload["items"]) == 3
+    assert payload["answer"].count("\n- ") == 3
 
 
 def test_golf_player_standings_projection():
@@ -601,6 +691,35 @@ def test_lck_standings_validates_league_and_projects_team():
         "score": 21,
         "win_rate": 0.83,
     }
+
+
+def test_lck_standings_auto_uses_current_season_not_lck_auto():
+    current_year = naver_sports.datetime.now(naver_sports.KST).year
+    league_id = f"lck_{current_year}"
+    rankings = {
+        "code": 200,
+        "content": [
+            {
+                "leagueId": league_id,
+                "rank": 1,
+                "wins": 15,
+                "losses": 3,
+                "team": {"name": "한화생명e스포츠"},
+            }
+        ],
+    }
+    client = FakeClient([rankings])
+
+    result = naver_sports.run(
+        mode="standings",
+        category="lck",
+        season="auto",
+        client=client,
+    )
+
+    assert result["ok"] is True
+    assert result["season"]["code"] == league_id
+    assert all("lck_auto" not in url for url in client.urls)
 
 
 @pytest.mark.parametrize(
