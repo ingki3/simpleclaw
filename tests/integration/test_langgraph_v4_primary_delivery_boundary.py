@@ -16,10 +16,11 @@ from simpleclaw.graph_runtime.idempotency import (
     canonical_artifact_id,
 )
 from simpleclaw.graph_runtime.status import DeliveryStatus
-from simpleclaw.memory import ConversationStore
+from simpleclaw.memory import ConversationMessage, ConversationStore, MessageRole
 from simpleclaw.outbound_delivery import (
     PrimaryDeliveryCoordinator,
     PrimaryDeliveryMetadataV1,
+    PrimaryPersistenceStatus,
     PrimaryResponseText,
 )
 
@@ -66,6 +67,15 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
     update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
     bot = _bot(coordinator)
     response = _response()
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="production-shaped request",
+            channel="telegram",
+        ),
+        session_key=response.metadata.session_key,
+        request_id=response.metadata.request_id,
+    )
 
     first = await bot._send_response(update, response, chat_id=42, user_id=1)
     replay = await bot._send_response(update, response, chat_id=42, user_id=1)
@@ -74,10 +84,72 @@ async def test_actual_telegram_success_sends_and_persists_once_on_replay(
     assert replay.delivery_receipt.delivery_id == first.delivery_receipt.delivery_id
     assert first.persistence_receipt is not None
     assert replay.persistence_receipt is not None
+    assert first.persistence_status is PrimaryPersistenceStatus.PERSISTED
+    assert first.complete_success is True
     assert reply_text.await_count == 1
     messages = store.get_recent(session_key="telegram-session-1")
-    assert [(message.role.value, message.content) for message in messages] == [
-        ("assistant", "V4 primary answer")
+    assert [
+        (message.role.value, message.content, message.turn_id)
+        for message in messages
+    ] == [
+        ("user", "production-shaped request", "telegram:42:1001"),
+        ("assistant", "V4 primary answer", "telegram:42:1001"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_send_success_persistence_failure_is_typed_and_replay_repairs_once(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = ConversationStore(tmp_path / "conversation.db")
+    response = _response()
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="production-shaped request",
+            channel="telegram",
+        ),
+        session_key=response.metadata.session_key,
+        request_id=response.metadata.request_id,
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "delivery.db",
+        conversation_store=store,
+    )
+    original_save = store.save_outbound_once
+    persistence_attempts = 0
+
+    def fail_first_persistence(*args, **kwargs):
+        nonlocal persistence_attempts
+        persistence_attempts += 1
+        if persistence_attempts == 1:
+            raise RuntimeError("injected persistence failure")
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(store, "save_outbound_once", fail_first_persistence)
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=777))
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+    bot = _bot(coordinator)
+
+    failed = await bot._send_response(update, response, chat_id=42, user_id=1)
+    replay = await bot._send_response(update, response, chat_id=42, user_id=1)
+
+    assert failed.delivery_receipt.status is DeliveryStatus.DELIVERED
+    assert failed.persistence_status is PrimaryPersistenceStatus.FAILED
+    assert failed.persistence_error_type == "RuntimeError"
+    assert failed.complete_success is False
+    assert replay.persistence_status is PrimaryPersistenceStatus.PERSISTED
+    assert replay.complete_success is True
+    assert reply_text.await_count == 1
+    assert persistence_attempts == 2
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=response.metadata.session_key)
+    ] == [
+        (MessageRole.USER, response.metadata.request_id),
+        (MessageRole.ASSISTANT, response.metadata.request_id),
     ]
 
 

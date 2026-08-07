@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Self
 
@@ -30,6 +32,8 @@ from simpleclaw.graph_runtime.runtime import (
     SQLiteDeliveryJournal,
 )
 from simpleclaw.graph_runtime.status import DeliveryStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,24 @@ class PrimaryResponseText(str):
 class PrimaryDeliveryOutcomeV1:
     delivery_receipt: DeliveryReceiptV1
     persistence_receipt: PersistenceReceiptV1 | None
+    persistence_status: "PrimaryPersistenceStatus"
+    persistence_error_type: str | None = None
+
+    @property
+    def complete_success(self) -> bool:
+        """Telegram delivery와 assistant persistence가 모두 끝났는지 반환한다."""
+        return (
+            self.delivery_receipt.status is DeliveryStatus.DELIVERED
+            and self.persistence_status is PrimaryPersistenceStatus.PERSISTED
+        )
+
+
+class PrimaryPersistenceStatus(str, Enum):
+    """V4 primary user-visible delivery 이후의 persistence 상태다."""
+
+    NOT_ATTEMPTED = "not_attempted"
+    PERSISTED = "persisted"
+    FAILED = "failed"
 
 
 class PrimaryDeliveryCoordinator:
@@ -114,7 +136,11 @@ class PrimaryDeliveryCoordinator:
             poll_interval=self._delivery_poll_interval,
         ).deliver(intent, str(response))
         if receipt.status is not DeliveryStatus.DELIVERED:
-            return PrimaryDeliveryOutcomeV1(receipt, None)
+            return PrimaryDeliveryOutcomeV1(
+                receipt,
+                None,
+                PrimaryPersistenceStatus.NOT_ATTEMPTED,
+            )
 
         persistence_identity = persistence_id(
             metadata.session_key,
@@ -122,30 +148,55 @@ class PrimaryDeliveryCoordinator:
             metadata.artifact_hash,
         )
         payload_hash = hashlib.sha256(str(response).encode()).hexdigest()
-        if self._store.get_outbound_persistence(
-            persistence_identity,
-            payload_hash=payload_hash,
-        ) is not None:
-            persisted = PersistenceReceiptV1(
+        try:
+            if self._store.get_outbound_persistence(
                 persistence_identity,
-                payload_hash,
-                True,
+                payload_hash=payload_hash,
+            ) is not None:
+                self._store.bind_outbound_to_turn(
+                    persistence_identity,
+                    payload_hash=payload_hash,
+                    turn_id=metadata.request_id,
+                )
+                persisted = PersistenceReceiptV1(
+                    persistence_identity,
+                    payload_hash,
+                    True,
+                )
+            else:
+                persisted = await PersistenceRuntime(
+                    journal=InMemoryPersistenceJournal(),
+                    writer=ConversationStorePersistenceAdapter(
+                        self._store,
+                        channel="telegram",
+                        request_id=metadata.request_id,
+                    ),
+                ).persist_delivered(
+                    session_key=metadata.session_key,
+                    request_id=metadata.request_id,
+                    artifact_hash=metadata.artifact_hash,
+                    content=str(response),
+                    delivery_receipt=receipt,
+                )
+        except Exception as exc:
+            logger.exception(
+                "V4 primary assistant persistence failed after Telegram delivery: "
+                "request_id=%s delivery_id=%s error_type=%s",
+                metadata.request_id,
+                receipt.delivery_id,
+                type(exc).__name__,
             )
-        else:
-            persisted = await PersistenceRuntime(
-                journal=InMemoryPersistenceJournal(),
-                writer=ConversationStorePersistenceAdapter(
-                    self._store,
-                    channel="telegram",
-                ),
-            ).persist_delivered(
-                session_key=metadata.session_key,
-                request_id=metadata.request_id,
-                artifact_hash=metadata.artifact_hash,
-                content=str(response),
-                delivery_receipt=receipt,
+            return PrimaryDeliveryOutcomeV1(
+                receipt,
+                None,
+                PrimaryPersistenceStatus.FAILED,
+                type(exc).__name__,
             )
-        return PrimaryDeliveryOutcomeV1(receipt, persisted)
+        return PrimaryDeliveryOutcomeV1(
+            receipt,
+            persisted,
+            PrimaryPersistenceStatus.PERSISTED,
+        )
 
 
 PrimaryDeliveryHandler = Callable[
