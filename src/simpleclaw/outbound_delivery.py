@@ -159,11 +159,14 @@ class PrimaryDeliveryCoordinator:
         payload_hash = hashlib.sha256(str(response).encode()).hexdigest()
         for attempt in range(1, self._persistence_max_attempts + 1):
             try:
-                if self._store.get_outbound_persistence(
+                existing_persistence = await asyncio.to_thread(
+                    self._store.get_outbound_persistence,
                     persistence_identity,
                     payload_hash=payload_hash,
-                ) is not None:
-                    self._store.bind_outbound_to_turn(
+                )
+                if existing_persistence is not None:
+                    await asyncio.to_thread(
+                        self._store.bind_outbound_to_turn,
                         persistence_identity,
                         payload_hash=payload_hash,
                         turn_id=metadata.request_id,
@@ -174,13 +177,29 @@ class PrimaryDeliveryCoordinator:
                         True,
                     )
                 else:
+                    store_writer = ConversationStorePersistenceAdapter(
+                        self._store,
+                        channel="telegram",
+                        request_id=metadata.request_id,
+                    )
+
+                    async def write_outbound(
+                        session_key: str,
+                        identity: str,
+                        content_hash: str,
+                        content: str,
+                    ) -> None:
+                        await asyncio.to_thread(
+                            store_writer,
+                            session_key,
+                            identity,
+                            content_hash,
+                            content,
+                        )
+
                     persisted = await PersistenceRuntime(
                         journal=InMemoryPersistenceJournal(),
-                        writer=ConversationStorePersistenceAdapter(
-                            self._store,
-                            channel="telegram",
-                            request_id=metadata.request_id,
-                        ),
+                        writer=write_outbound,
                     ).persist_delivered(
                         session_key=metadata.session_key,
                         request_id=metadata.request_id,
