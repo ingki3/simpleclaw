@@ -220,13 +220,13 @@ from simpleclaw.persona.assembler import assemble_prompt
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
-from simpleclaw.recipes.executor import (
-    execute_recipe,
-    render_exact_recipe_instructions,
-)
 from simpleclaw.recipes.bindings import (
     constraint_values,
     resolve_recipe_argument_constraints,
+)
+from simpleclaw.recipes.executor import (
+    execute_recipe,
+    render_exact_recipe_instructions,
 )
 from simpleclaw.recipes.learning import (
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,

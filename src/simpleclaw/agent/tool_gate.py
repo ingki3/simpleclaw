@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,
