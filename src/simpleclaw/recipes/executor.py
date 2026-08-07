@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from simpleclaw.agent.progress import (
@@ -371,6 +372,7 @@ def render_exact_recipe_instructions(
     intents: tuple[str, ...] = (),
     reference_date: str = "",
     required_claims: tuple[str, ...] = (),
+    bound_variables: Mapping[str, str] | None = None,
 ) -> str:
     """Instructions recipe를 strict ``query.v1`` 실행 프롬프트로 렌더한다.
 
@@ -397,6 +399,14 @@ def render_exact_recipe_instructions(
         for parameter in recipe.parameters
         if parameter.default
     }
+    if bound_variables:
+        variables.update(
+            {
+                str(key): str(value)
+                for key, value in bound_variables.items()
+                if not str(key).startswith("__")
+            }
+        )
     variables["query"] = normalized_query
     rendered = render_instructions(recipe.instructions, variables=variables).rstrip()
     delegates = ", ".join(recipe.skills)
