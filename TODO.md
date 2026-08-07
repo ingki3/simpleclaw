@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-627](mention://issue/10515293-4f91-4128-af2b-389b8b549e59): Post-main Unit Test catalog assertion을 결정적으로 수정** — whole-prompt 숫자 substring 검사를 bounded capability catalog와 fingerprint의 JSON 구조 검증으로 대체하고, timestamp에 `101`/`102`가 포함돼도 정상 통과하는 한편 실제 `msg:101` identifier leak은 계속 fail-closed하도록 고정한다. fresh CI 3종·독립 Stage D·merge와 후속 post-main Unit Tests 성공 전까지 production deploy와 Telegram 전송을 HOLD한다. (진행: 2026-08-07)
-
 - [>] **[BIZ-619](mention://issue/676488c0-4e71-4474-a585-ae564192206b): Payload-origin architecture guard의 wrapper·비제어식 우회를 차단** — BIZ-618 PR #663 merge 직전 late finding을 corrective lifecycle로 분리했다. opaque payload identity를 보존하는 `dict`·`cast`·method/module copy wrapper를 추적하고, protected Core 전체에서 return·assignment·formatting을 포함한 static-key read를 architecture violation으로 차단한다. 현재 Core false positive 0, 전체 contracts/unit/Ruff, deterministic full Graphify와 corrective PR exact-head CI·독립 Stage D PASS 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-618](mention://issue/a29f937a-fc6b-42de-9c75-313b832519c2): Naver Sports read-only effect metadata와 V4 typed renderer를 정렬** — production helper의 정상·empty·error·compact payload에 top-level `side_effect=false`를 명시하고, Naver Sports asset이 allowlisted 정규화 필드로 deterministic·bounded `answer`를 소유한다. Core 밖 generic presentation 경계는 typed status/effect/side-effect 안전 gate를 preferred text보다 먼저 적용하고 Core는 opaque payload 의미를 해석하지 않는다. payload alias/data-flow와 sports vocabulary의 Core 재유입을 architecture mutation guard로 차단하며 confirmation·idempotency·exactly-once 경계와 raw diagnostic 비노출을 유지한다. Corrective PR의 fresh exact-head CI와 독립 Stage D 리뷰 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
@@ -223,6 +221,8 @@
 
 
 ### 2026-08-07
+
+- [x] **[BIZ-627](mention://issue/10515293-4f91-4128-af2b-389b8b549e59): Post-main Unit Test catalog assertion을 결정적으로 수정** — whole-prompt 숫자 substring 검사를 parsed JSON의 bounded capability identity·fingerprint 검증으로 대체하고, excluded `skill:calendar` 비노출과 정상 timestamp `2026-08-07T01:02:03.101102+00:00` 허용, 실제 `msg:101` identifier leak fail-closed를 고정했다. formerly failing test `20/20`, raw identifier leak·file suite `21 passed`, 전체 unit `3588 passed, 3 xfailed`, Ruff·diff check와 fresh exact-head CI 3종 및 독립 Stage D를 통과한 [PR #683](https://github.com/ingki3/simpleclaw/pull/683)을 squash merge(SHA `3e3155bceba3c32b5658ebe7f22cba150efa13bc`)했다. 본 완료는 code/offline corrective 범위이며 새 release의 post-main 4종 성공 전까지 [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c) production deploy·Telegram smoke HOLD를 유지한다. (완료: 2026-08-07)
 
 - [x] **[BIZ-626](mention://issue/4b4b7058-ba45-45f7-92a5-86996d3a38a1): Telegram persistence SQLite 호출을 event loop에서 격리** — ConversationStore read/bind/write를 `asyncio.to_thread()`로 event-loop 밖에 격리하고 실제 SQLite write lock 중 heartbeat 지속, lock 해제 뒤 send/user/assistant/outbound marker exactly-once, replay duplicate 0과 retry 소진 fail-closed를 검증했다. focused `16 passed`, changed-file Ruff·diff check와 fresh exact-head CI 3종 및 독립 Stage D를 통과한 [PR #678](https://github.com/ingki3/simpleclaw/pull/678)을 squash merge(SHA `84f597e005338d1357707b771e70f24615ed5c5d`)했다. 부모 [BIZ-624](mention://issue/56fb8f9b-d22d-4c55-b183-2de3022cb9b7)는 fresh 재평가 전까지 `in_review`, [BIZ-573](mention://issue/d91645fd-f0de-48b9-a10f-7469773f827c) release/deploy/smoke는 HOLD를 유지하며 실제 Telegram 전송·live config·restart/deploy는 수행하지 않았다. (완료: 2026-08-07)
 
