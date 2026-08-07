@@ -141,32 +141,13 @@ class FinalCompositionRuntime:
                 ),
             )
 
-        controlled_deadline_interrupted = False
-        request_lock = self._lock_for(request_id)
-        try:
-            await request_lock.acquire()
-        except asyncio.CancelledError:
-            if not self._controlled_deadline_owns_cancellation(
-                cancellation_baseline=cancellation_baseline
-            ):
-                raise
-            controlled_deadline_interrupted = True
-            await request_lock.acquire()
-        try:
+        async with self._lock_for(request_id):
             if self._journal is not None:
-                try:
-                    existing = await self._journal.load(
-                        request_id=request_id,
-                        normalized_payload_hash=payload_hash,
-                        composer_fingerprint=self._composer_fingerprint,
-                    )
-                except asyncio.CancelledError:
-                    if not self._controlled_deadline_owns_cancellation(
-                        cancellation_baseline=cancellation_baseline
-                    ):
-                        raise
-                    existing = None
-                    controlled_deadline_interrupted = True
+                existing = await self._journal.load(
+                    request_id=request_id,
+                    normalized_payload_hash=payload_hash,
+                    composer_fingerprint=self._composer_fingerprint,
+                )
                 if existing is not None:
                     self._finals[request_id] = (payload_hash, existing)
                     return existing
@@ -178,67 +159,49 @@ class FinalCompositionRuntime:
                     )
                 return cached[1]
 
-            if self._journal is not None and not controlled_deadline_interrupted:
+            if self._journal is not None:
                 claim = getattr(self._journal, "claim_composition", None)
                 wait_for_final = getattr(self._journal, "wait_for_final", None)
                 if callable(claim) and callable(wait_for_final):
-                    try:
-                        acquired = await claim(
+                    acquired = await claim(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                    )
+                    if not acquired:
+                        existing = await wait_for_final(
                             request_id=request_id,
                             normalized_payload_hash=payload_hash,
                             composer_fingerprint=self._composer_fingerprint,
+                            timeout_seconds=self._claim_wait_seconds,
                         )
-                    except asyncio.CancelledError:
-                        if not self._controlled_deadline_owns_cancellation(
-                            cancellation_baseline=cancellation_baseline
-                        ):
-                            raise
-                        acquired = True
-                        controlled_deadline_interrupted = True
-                    if not acquired:
-                        try:
-                            existing = await wait_for_final(
-                                request_id=request_id,
-                                normalized_payload_hash=payload_hash,
-                                composer_fingerprint=self._composer_fingerprint,
-                                timeout_seconds=self._claim_wait_seconds,
-                            )
-                        except asyncio.CancelledError:
-                            if not self._controlled_deadline_owns_cancellation(
-                                cancellation_baseline=cancellation_baseline
-                            ):
-                                raise
-                            existing = None
-                            controlled_deadline_interrupted = True
-                        if existing is not None:
-                            self._finals[request_id] = (payload_hash, existing)
-                            return existing
+                        self._finals[request_id] = (payload_hash, existing)
+                        return existing
 
             content: str | None = None
             draft: Any | None = None
-            if not controlled_deadline_interrupted:
-                try:
-                    argument: object = composition_input or normalized_result
-                    candidate = await _await_if_needed(self._compose(argument))
-                    if composition_input is None:
-                        if isinstance(candidate, str) and candidate.strip():
-                            content = candidate.strip()
-                    elif (
-                        getattr(candidate, "schema_version", None)
-                        == "draft_response.v1"
-                        and isinstance(getattr(candidate, "content", None), str)
-                    ):
-                        draft = candidate
-                except asyncio.CancelledError:
-                    if not self._controlled_deadline_owns_cancellation(
-                        cancellation_baseline=cancellation_baseline
-                    ):
-                        raise
-                    content = None
-                    draft = None
-                except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
-                    content = None
-                    draft = None
+            try:
+                argument: object = composition_input or normalized_result
+                candidate = await _await_if_needed(self._compose(argument))
+                if composition_input is None:
+                    if isinstance(candidate, str) and candidate.strip():
+                        content = candidate.strip()
+                elif (
+                    getattr(candidate, "schema_version", None)
+                    == "draft_response.v1"
+                    and isinstance(getattr(candidate, "content", None), str)
+                ):
+                    draft = candidate
+            except asyncio.CancelledError:
+                if not self._controlled_deadline_owns_cancellation(
+                    cancellation_baseline=cancellation_baseline
+                ):
+                    raise
+                content = None
+                draft = None
+            except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
+                content = None
+                draft = None
 
             guarded = False
             if composition_input is None and content is not None:
@@ -302,5 +265,3 @@ class FinalCompositionRuntime:
                     )
             self._finals[request_id] = (payload_hash, final)
             return final
-        finally:
-            request_lock.release()
