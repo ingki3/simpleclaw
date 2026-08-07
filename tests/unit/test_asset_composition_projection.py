@@ -163,7 +163,7 @@ def test_descriptor_rejects_presentation_and_private_paths(path: str) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["data.password", "data.apiKey", "data.email", "data.internalPrompt"],
+    ["data.safeMissing", "other.value"],
 )
 def test_descriptor_rejects_paths_not_declared_by_schema(path: str) -> None:
     owner = AssetRefV1(type="recipe", name="fixture")
@@ -179,5 +179,29 @@ def test_descriptor_rejects_paths_not_declared_by_schema(path: str) -> None:
                 "type": "object",
                 "properties": {"data": {"properties": {"safe": {}}}},
                 "x-simpleclaw-composition-fields": [path],
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["password", "apiKey", "credentials", "email", "internalPrompt"],
+)
+def test_descriptor_rejects_declared_private_fields(field: str) -> None:
+    owner = AssetRefV1(type="recipe", name="fixture")
+    with pytest.raises(ValueError, match="forbidden presentation"):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="fixture.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "data": {"properties": {field: {"type": "string"}}}
+                },
+                "x-simpleclaw-composition-fields": [f"data.{field}"],
             },
         )

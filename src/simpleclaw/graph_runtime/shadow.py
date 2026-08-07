@@ -18,13 +18,19 @@ from typing import Any, Literal, cast
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from simpleclaw.agent.asset_result_presentation import (
+    SAFE_EMPTY_RESULT,
     compose_user_facing_asset_result,
+    compose_user_facing_projected_facts,
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
-from simpleclaw.agent.composition_projection import build_composition_input
+from simpleclaw.agent.composition_projection import (
+    CompositionProjectionError,
+    build_composition_input,
+    project_declared_paths,
+)
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
@@ -45,6 +51,7 @@ from .contracts import (
     AssetBindingRefV1,
     AssetInvocationV1,
     AssetRefV1,
+    ContractDescriptorV1,
     FinalArtifactV1,
     NormalizedAssetResultV1,
 )
@@ -1081,13 +1088,27 @@ def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
     return "react"
 
 
-def _compose_user_facing_result(result: NormalizedAssetResultV1) -> str:
+def _compose_user_facing_result(
+    result: NormalizedAssetResultV1,
+    *,
+    descriptor: ContractDescriptorV1 | None = None,
+) -> str:
     """Core 밖 generic presentation boundary의 text 결과만 소비한다."""
-    return compose_user_facing_asset_result(
+    rendered = compose_user_facing_asset_result(
         payload=result.payload,
         result_status=result.status.value,
         effect_status=result.effect_status.value,
     )
+    if rendered != SAFE_EMPTY_RESULT or descriptor is None:
+        return rendered
+    try:
+        facts = project_declared_paths(
+            result.payload,
+            descriptor.composition_fields,
+        )
+    except (CompositionProjectionError, ValueError):
+        return SAFE_EMPTY_RESULT
+    return compose_user_facing_projected_facts(facts)
 
 
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:
@@ -1521,7 +1542,10 @@ class ConnectedShadowTurnRunner:
             )
         else:
             composition = FinalCompositionRuntime(
-                compose=_compose_user_facing_result,
+                compose=lambda result: _compose_user_facing_result(
+                    result,
+                    descriptor=entry.output_descriptor,
+                ),
                 guard=lambda content: bool(content.strip())
                 and not content.lstrip().startswith(("{", "[")),
                 safe_render=lambda _result: (

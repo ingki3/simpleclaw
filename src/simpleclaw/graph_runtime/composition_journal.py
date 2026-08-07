@@ -40,6 +40,22 @@ class FinalArtifactJournal(Protocol):
 
     def lock_for(self, request_id: str) -> asyncio.Lock: ...
 
+    async def claim_composition(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+    ) -> bool: ...
+
+    async def wait_for_final(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+    ) -> FinalArtifactV1: ...
+
 
 _SCHEMA_LOCKS_GUARD = threading.Lock()
 _SCHEMA_LOCKS: dict[str, threading.Lock] = {}
@@ -101,6 +117,16 @@ class SQLiteFinalArtifactJournal:
                         composer_fingerprint TEXT NOT NULL,
                         artifact_json TEXT NOT NULL,
                         created_at REAL NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS graph_final_composition_claims (
+                        request_id TEXT PRIMARY KEY,
+                        normalized_payload_hash TEXT NOT NULL,
+                        composer_fingerprint TEXT NOT NULL,
+                        claimed_at REAL NOT NULL
                     )
                     """
                 )
@@ -187,6 +213,102 @@ class SQLiteFinalArtifactJournal:
             composer_fingerprint,
         )
 
+    def _claim_sync(
+        self,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+    ) -> bool:
+        """Provider 전에 durable claim을 잡아 process/loop 간 at-most-once를 만든다."""
+        self._ensure_schema_sync()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            final_exists = connection.execute(
+                "SELECT 1 FROM graph_final_artifacts WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+            if final_exists is not None:
+                connection.commit()
+                return False
+            cursor = connection.execute(
+                """
+                INSERT INTO graph_final_composition_claims (
+                    request_id, normalized_payload_hash,
+                    composer_fingerprint, claimed_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(request_id) DO NOTHING
+                """,
+                (
+                    request_id,
+                    normalized_payload_hash,
+                    composer_fingerprint,
+                    time.time(),
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT normalized_payload_hash, composer_fingerprint
+                FROM graph_final_composition_claims WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        if row is None:  # pragma: no cover - transaction invariant
+            raise RuntimeError("composition claim write produced no row")
+        if row[0] != normalized_payload_hash:
+            raise FinalArtifactInvariantError(
+                "composition claim reused with different normalized payload"
+            )
+        if row[1] != composer_fingerprint:
+            raise FinalArtifactInvariantError(
+                "composition claim reused with different composer fingerprint"
+            )
+        return cursor.rowcount == 1
+
+    async def claim_composition(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+    ) -> bool:
+        """첫 worker만 durable composition owner가 되게 한다."""
+        return await asyncio.to_thread(
+            self._claim_sync,
+            request_id,
+            normalized_payload_hash,
+            composer_fingerprint,
+        )
+
+    async def wait_for_final(
+        self,
+        *,
+        request_id: str,
+        normalized_payload_hash: str,
+        composer_fingerprint: str,
+    ) -> FinalArtifactV1:
+        """다른 owner의 final을 bounded wait하고 abandoned claim은 재실행하지 않는다."""
+        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        while True:
+            existing = await self.load(
+                request_id=request_id,
+                normalized_payload_hash=normalized_payload_hash,
+                composer_fingerprint=composer_fingerprint,
+            )
+            if existing is not None:
+                return existing
+            if asyncio.get_running_loop().time() >= deadline:
+                raise FinalArtifactInvariantError(
+                    "composition is already claimed without a durable final"
+                )
+            await asyncio.sleep(0.02)
+
     def _record_sync(
         self,
         request_id: str,
@@ -222,6 +344,10 @@ class SQLiteFinalArtifactJournal:
                 """,
                 (request_id,),
             ).fetchone()
+            connection.execute(
+                "DELETE FROM graph_final_composition_claims WHERE request_id = ?",
+                (request_id,),
+            )
             connection.commit()
         except BaseException:
             connection.rollback()

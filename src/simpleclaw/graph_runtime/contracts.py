@@ -34,11 +34,18 @@ _COMPOSITION_PATH_RE = re.compile(
 _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS = frozenset(
     {
         "answer",
+        "apikey",
         "content",
         "credential",
+        "credentials",
         "diagnostic",
+        "email",
         "error",
+        "internal",
+        "internalprompt",
+        "password",
         "private",
+        "prompt",
         "provider",
         "raw",
         "secret",
@@ -101,11 +108,14 @@ def validate_composition_fields(
         if len(segments) > MAX_COMPOSITION_FIELD_DEPTH:
             raise ValueError("composition field path is too deep")
         for segment in segments:
-            name = segment.removesuffix("[*]").casefold()
-            components = set(re.split(r"[-_]", name))
+            raw_name = segment.removesuffix("[*]")
+            split_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", raw_name)
+            name = raw_name.casefold()
+            components = set(re.split(r"[-_]", split_name.casefold()))
+            compact_name = re.sub(r"[-_]", "", name)
             if name.startswith("_") or bool(
                 components & _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS
-            ):
+            ) or compact_name in _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS:
                 raise ValueError(
                     "composition field path contains a forbidden presentation "
                     f"or private field: {path}"

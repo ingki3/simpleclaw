@@ -6,6 +6,7 @@ import pytest
 
 from simpleclaw.graph_runtime.contracts import (
     AssetRefV1,
+    ContractDescriptorV1,
     ContractRefV1,
     NormalizedAssetResultV1,
 )
@@ -125,6 +126,47 @@ def test_large_typed_preferred_output_is_bounded_in_compat_mode() -> None:
 
     assert len(rendered) == 3_500
     assert rendered.endswith("…")
+
+
+def test_compat_fact_fallback_uses_only_contract_projection() -> None:
+    payload = _typed_payload()
+    assert isinstance(payload["data"], dict)
+    payload["data"].pop("answer")
+    payload["data"]["metadata"] = {"value": "PRIVATE-API-KEY-123"}
+    result = _result(payload)
+    descriptor = ContractDescriptorV1(
+        ref=result.output_contract,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "properties": {
+                                    "rank": {},
+                                    "team": {},
+                                    "wins": {},
+                                }
+                            },
+                        }
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.items[*].rank",
+                "data.items[*].team",
+                "data.items[*].wins",
+            ],
+        },
+    )
+
+    rendered = _compose_user_facing_result(result, descriptor=descriptor)
+
+    assert "items[0].team: LG" in rendered
+    assert "PRIVATE-API-KEY-123" not in rendered
+    assert "metadata" not in rendered
 
 
 def test_non_typed_legacy_preferred_text_remains_unbounded() -> None:

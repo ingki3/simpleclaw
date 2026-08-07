@@ -663,8 +663,9 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "현재 KBO 상위 3팀은 LG, 한화, 롯데입니다. "
                 "각각 60승, 58승, 55승입니다."
             ),
-            cited_paths=(
-                "data.items[0].team",
+                cited_paths=(
+                    "data.category",
+                    "data.items[0].team",
                 "data.items[0].wins",
                 "data.items[1].team",
                 "data.items[1].wins",

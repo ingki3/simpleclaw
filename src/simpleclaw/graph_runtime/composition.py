@@ -101,6 +101,24 @@ class FinalCompositionRuntime:
                     )
                 return cached[1]
 
+            if self._journal is not None:
+                claim = getattr(self._journal, "claim_composition", None)
+                wait_for_final = getattr(self._journal, "wait_for_final", None)
+                if callable(claim) and callable(wait_for_final):
+                    acquired = await claim(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                    )
+                    if not acquired:
+                        existing = await wait_for_final(
+                            request_id=request_id,
+                            normalized_payload_hash=payload_hash,
+                            composer_fingerprint=self._composer_fingerprint,
+                        )
+                        self._finals[request_id] = (payload_hash, existing)
+                        return existing
+
             content: str | None = None
             draft: Any | None = None
             try:

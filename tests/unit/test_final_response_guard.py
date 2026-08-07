@@ -23,6 +23,7 @@ def _input() -> CompositionInputV1:
         normalized_payload_hash="payload-hash",
         public_facts={
             "data": {
+                "category": "KBO",
                 "items": [
                     {"rank": 1, "team": "KT", "wins": 59},
                     {"rank": 2, "team": "삼성", "wins": 58},
@@ -42,6 +43,7 @@ def test_guard_accepts_grounded_natural_response() -> None:
                 "각각 59승, 58승, 57승입니다."
             ),
             cited_paths=(
+                "data.category",
                 "data.items[0].team",
                 "data.items[0].wins",
                 "data.items[1].team",
@@ -156,3 +158,62 @@ def test_guard_rejects_provider_diagnostics() -> None:
     )
 
     assert result.code == "raw_contract_exposed"
+
+
+def test_guard_rejects_unprojected_name_and_korean_address() -> None:
+    name = guard_final_response(
+        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        DraftResponseV1(
+            content="현재 상위 팀은 KT이며 두산도 포함됩니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+    address = guard_final_response(
+        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        DraftResponseV1(
+            content="현재 상위 팀은 KT입니다. 주소는 서울시 강남구 역삼동입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+
+    assert name.code == "ungrounded_text"
+    assert address.code == "ungrounded_text"
+
+
+def test_guard_accepts_grounded_english_multiword_name() -> None:
+    value = CompositionInputV1(
+        request_id="request-english",
+        question="Who is the top 1 team?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts={"items": [{"team": "New York Yankees"}]},
+    )
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="The current leader is New York Yankees.",
+            cited_paths=("items[0].team",),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_requires_string_identity_for_each_top_n_item() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="상위 3팀을 확인했습니다.",
+            cited_paths=(
+                "data.items[0].rank",
+                "data.items[1].rank",
+                "data.items[2].rank",
+            ),
+        ),
+    )
+
+    assert result.code == "requested_item_identity_not_cited"

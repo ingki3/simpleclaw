@@ -54,7 +54,115 @@ _LIMITATION_MARKERS = (
     "cannot verify",
 )
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_IDENTIFIER_RE = re.compile(r"\b[A-Z0-9_-]{6,}\b", re.IGNORECASE)
+_WORD_RE = re.compile(r"[A-Za-z]+|[가-힣]+")
+_KOREAN_SUFFIXES = (
+    "이었습니다",
+    "였습니다",
+    "입니다",
+    "됩니다",
+    "했습니다",
+    "드립니다",
+    "이며",
+    "이고",
+    "으로",
+    "에서",
+    "까지",
+    "부터",
+    "처럼",
+    "보다",
+    "만",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "와",
+    "과",
+    "도",
+    "로",
+    "의",
+    "에",
+)
+_SAFE_RESPONSE_WORDS = frozenset(
+    {
+        "각각",
+        "결과",
+        "기준",
+        "다음",
+        "상위",
+        "순서",
+        "순위",
+        "승",
+        "위",
+        "현재",
+        "확인",
+        "확인할",
+        "확인했습니다",
+        "확정",
+        "포함",
+        "팀",
+        "이며",
+        "이고",
+        "입니다",
+        "됩니다",
+        "은",
+        "는",
+        "이",
+        "가",
+        "을",
+        "를",
+        "와",
+        "과",
+        "도",
+        "로",
+        "의",
+        "에",
+        "외",
+        "중",
+        "불확실",
+        "제한",
+        "추정",
+        "알",
+        "수",
+        "없습니다",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "is",
+        "are",
+        "was",
+        "were",
+        "current",
+        "currently",
+        "top",
+        "leader",
+        "leaders",
+        "leads",
+        "rank",
+        "ranking",
+        "team",
+        "teams",
+        "win",
+        "wins",
+        "with",
+        "respectively",
+        "result",
+        "results",
+        "based",
+        "on",
+        "confirmed",
+        "unknown",
+        "uncertain",
+        "unverified",
+        "could",
+        "not",
+        "verify",
+        "cannot",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +223,26 @@ def _required_item_indices(
     return set(sorted(available)[:top_n])
 
 
+def _word_stem(token: str) -> str:
+    if not re.fullmatch(r"[가-힣]+", token):
+        return token.casefold()
+    for suffix in _KOREAN_SUFFIXES:
+        if token.endswith(suffix) and len(token) > len(suffix):
+            return token[: -len(suffix)]
+    return token
+
+
+def _grounded_words(values: dict[str, JsonValue]) -> set[str]:
+    words: set[str] = set()
+    for value in values.values():
+        if not isinstance(value, str):
+            continue
+        for token in _WORD_RE.findall(_URL_RE.sub("", value)):
+            words.add(token.casefold())
+            words.add(_word_stem(token).casefold())
+    return words
+
+
 def guard_final_response(
     value: CompositionInputV1,
     draft: DraftResponseV1,
@@ -132,17 +260,8 @@ def guard_final_response(
         marker in lowered for marker in _RAW_MARKERS
     ):
         return _rejected("raw_contract_exposed")
-    identifier_source = _URL_RE.sub("", content)
-    if _EMAIL_RE.search(content) or _IDENTIFIER_RE.search(identifier_source):
-        # 긴 identifier는 projected scalar로 명시 인용된 경우에만 허용한다.
-        identifiers = set(_IDENTIFIER_RE.findall(identifier_source))
-        projected_identifiers = {
-            str(item)
-            for item in flatten_public_facts(value.public_facts).values()
-            if isinstance(item, str)
-        }
-        if _EMAIL_RE.search(content) or not identifiers <= projected_identifiers:
-            return _rejected("private_or_unprojected_identifier")
+    if _EMAIL_RE.search(content):
+        return _rejected("private_or_unprojected_identifier")
 
     concrete = flatten_public_facts(value.public_facts)
     if not draft.cited_paths:
@@ -150,17 +269,20 @@ def guard_final_response(
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
+    cited_item_string_indices: set[int] = set()
     for path in draft.cited_paths:
         if "[*]" in path or path not in concrete:
             return _rejected("citation_not_projected")
+        index = _item_index(path)
         if top_n is not None:
-            index = _item_index(path)
             if index is not None and index >= top_n:
                 return _rejected("citation_outside_requested_scope")
             if index is not None:
                 cited_item_indices.add(index)
         cited = concrete[path]
         cited_values[path] = cited
+        if index is not None and isinstance(cited, str) and cited.strip():
+            cited_item_string_indices.add(index)
         if isinstance(cited, str) and len(cited.strip()) >= 2:
             if cited.strip().casefold() not in lowered:
                 return _rejected("cited_value_not_rendered")
@@ -168,6 +290,10 @@ def guard_final_response(
         concrete, top_n
     ):
         return _rejected("requested_scope_not_fully_cited")
+    if top_n is not None and cited_item_string_indices != _required_item_indices(
+        concrete, top_n
+    ):
+        return _rejected("requested_item_identity_not_cited")
 
     # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
     # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
@@ -179,13 +305,24 @@ def guard_final_response(
             continue
         if (
             rendered.casefold() in lowered
-            and rendered.casefold() not in value.question.casefold()
             and not any(
                 cited_value == projected
                 for cited_value in cited_values.values()
             )
         ):
             return _rejected("rendered_value_not_cited")
+
+    grounded_words = _grounded_words(cited_values)
+    for token in _WORD_RE.findall(_URL_RE.sub("", content)):
+        folded = token.casefold()
+        stem = _word_stem(token).casefold()
+        if (
+            folded not in grounded_words
+            and stem not in grounded_words
+            and folded not in _SAFE_RESPONSE_WORDS
+            and stem not in _SAFE_RESPONSE_WORDS
+        ):
+            return _rejected("ungrounded_text")
 
     limitation_values = {
         f"unresolved_claims[{index}]": claim

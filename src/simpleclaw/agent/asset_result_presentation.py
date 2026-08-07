@@ -43,7 +43,7 @@ def _bounded_typed_text(value: str) -> str:
     return value[: MAX_TYPED_PRESENTATION_CHARS - 1].rstrip() + "…"
 
 
-def _flatten_typed_facts(
+def _flatten_projected_facts(
     value: Any,
     *,
     path: str = "",
@@ -65,15 +65,25 @@ def _flatten_typed_facts(
             ):
                 continue
             child_path = f"{path}.{key}" if path else key
-            _flatten_typed_facts(item, path=child_path, lines=output)
+            _flatten_projected_facts(item, path=child_path, lines=output)
     elif isinstance(value, list):
         for index, item in enumerate(value[:20]):
-            _flatten_typed_facts(item, path=f"{path}[{index}]", lines=output)
+            _flatten_projected_facts(item, path=f"{path}[{index}]", lines=output)
     elif value is None or isinstance(value, str | int | float | bool):
         rendered = str(value).strip()
         if path and rendered:
             output.append(f"- {path}: {rendered}")
     return output
+
+
+def compose_user_facing_projected_facts(
+    public_facts: Mapping[str, Any],
+) -> str:
+    """Contract allowlist projection만 compat path/value 텍스트로 만든다."""
+    lines = _flatten_projected_facts(public_facts)
+    if not lines:
+        return SAFE_EMPTY_RESULT
+    return _bounded_typed_text("처리 결과입니다.\n" + "\n".join(lines))
 
 
 def compose_user_facing_asset_result(
@@ -85,8 +95,8 @@ def compose_user_facing_asset_result(
     """Deprecated compatibility mode의 안전한 기존 asset presentation을 유지한다.
 
     중앙 mode는 이 함수를 import하거나 호출하지 않는다. Rollout 승인 전 compat
-    mode만 기존 preferred text를 유지하며, 새 typed asset에 prose가 없으면 bounded
-    data path/value 목록을 반환해 generic 오류로 퇴행하지 않게 한다.
+    mode만 기존 preferred text를 유지한다. Prose가 없는 신규 typed asset의 compat
+    fallback은 호출자가 contract projection을 만든 뒤 별도 renderer에 전달한다.
     """
     if payload.get("schema") == "asset_result.v1":
         if (
@@ -102,9 +112,6 @@ def compose_user_facing_asset_result(
             preferred = _preferred_text(data)
         if preferred is not None:
             return _bounded_typed_text(preferred)
-        lines = _flatten_typed_facts(data if data is not None else payload)
-        if lines:
-            return _bounded_typed_text("처리 결과입니다.\n" + "\n".join(lines))
         return SAFE_EMPTY_RESULT
 
     preferred = _preferred_text(payload)

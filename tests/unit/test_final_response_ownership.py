@@ -3,6 +3,7 @@
 from simpleclaw.agent.asset_result_presentation import (
     SAFE_EMPTY_RESULT,
     compose_user_facing_asset_result,
+    compose_user_facing_projected_facts,
 )
 
 
@@ -27,7 +28,7 @@ def test_compat_mode_preserves_safe_typed_asset_answer_during_rollout() -> None:
     assert rendered == "ASSET_OWNED_FINAL_MUST_NOT_RENDER"
 
 
-def test_compat_mode_renders_new_typed_facts_without_generic_failure() -> None:
+def test_compat_mode_renders_only_contract_projected_typed_facts() -> None:
     rendered = compose_user_facing_asset_result(
         payload={
             "schema": "asset_result.v1",
@@ -39,7 +40,12 @@ def test_compat_mode_renders_new_typed_facts_without_generic_failure() -> None:
         effect_status="none",
     )
 
-    assert rendered != SAFE_EMPTY_RESULT
+    assert rendered == SAFE_EMPTY_RESULT
+
+    rendered = compose_user_facing_projected_facts(
+        {"data": {"items": [{"rank": 1, "team": "KT", "wins": 59}]}}
+    )
+
     assert "items[0].team: KT" in rendered
     assert "items[0].wins: 59" in rendered
 

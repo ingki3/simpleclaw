@@ -80,7 +80,12 @@ async def test_central_final_delivery_persistence_and_replay_are_exactly_once(
     tmp_path,
 ) -> None:
     request_id = "telegram:42:central-1001"
-    facts = {"data": {"items": [{"rank": 1, "team": "KT", "wins": 59}]}}
+    facts = {
+        "data": {
+            "category": "KBO",
+            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+        }
+    }
     composition_input = CompositionInputV1(
         request_id=request_id,
         question="KBO 1위 팀과 승수를 알려줘",
@@ -108,7 +113,11 @@ async def test_central_final_delivery_persistence_and_replay_are_exactly_once(
     compose = AsyncMock(
         return_value=DraftResponseV1(
             content="KBO 1위는 KT이며 59승입니다.",
-            cited_paths=("data.items[0].team", "data.items[0].wins"),
+            cited_paths=(
+                "data.category",
+                "data.items[0].team",
+                "data.items[0].wins",
+            ),
         )
     )
     journal_path = tmp_path / "graph.db"

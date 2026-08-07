@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -31,7 +32,12 @@ from simpleclaw.graph_runtime.status import (
 
 
 def _values(request_id: str = "request-1"):
-    facts = {"data": {"items": [{"rank": 1, "team": "KT", "wins": 59}]}}
+    facts = {
+        "data": {
+            "category": "KBO",
+            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+        }
+    }
     value = CompositionInputV1(
         request_id=request_id,
         question="KBO 1위 팀을 알려줘",
@@ -62,7 +68,11 @@ def _values(request_id: str = "request-1"):
 def _draft() -> DraftResponseV1:
     return DraftResponseV1(
         content="KBO 1위는 KT이며 59승입니다.",
-        cited_paths=("data.items[0].team", "data.items[0].wins"),
+        cited_paths=(
+            "data.category",
+            "data.items[0].team",
+            "data.items[0].wins",
+        ),
     )
 
 
@@ -143,6 +153,76 @@ async def test_concurrent_runtime_instances_compose_exactly_once(tmp_path) -> No
         assert connection.execute(
             "SELECT COUNT(*) FROM graph_final_artifacts"
         ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_event_loop_runtimes_compose_exactly_once(tmp_path) -> None:
+    value, result = _values("cross-loop-request")
+    db_path = tmp_path / "cross-loop.sqlite3"
+    calls = 0
+    calls_lock = threading.Lock()
+
+    async def compose(_value):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        await asyncio.sleep(0.05)
+        return _draft()
+
+    async def finalize():
+        return await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(db_path),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+    )
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_abandoned_durable_claim_fails_closed_without_recomposition(
+    tmp_path,
+) -> None:
+    value, result = _values("abandoned-claim-request")
+    compose = AsyncMock(return_value=_draft())
+    journal = SQLiteFinalArtifactJournal(
+        tmp_path / "abandoned.sqlite3",
+        timeout_seconds=0.1,
+    )
+    assert await journal.claim_composition(
+        request_id=value.request_id,
+        normalized_payload_hash=value.normalized_payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is True
+
+    with pytest.raises(FinalArtifactInvariantError, match="already claimed"):
+        await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=journal,
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    assert compose.await_count == 0
 
 
 @pytest.mark.asyncio
