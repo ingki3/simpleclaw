@@ -544,9 +544,13 @@ async def test_foreign_waiter_deadline_preserves_active_owner_claim_100_times(
         owner_started = asyncio.Event()
         owner_release = asyncio.Event()
 
-        async def owner_compose(_value):
-            owner_started.set()
-            await owner_release.wait()
+        async def owner_compose(
+            _value,
+            started=owner_started,
+            release=owner_release,
+        ):
+            started.set()
+            await release.wait()
             return _draft()
 
         owner = FinalCompositionRuntime(
@@ -569,8 +573,8 @@ async def test_foreign_waiter_deadline_preserves_active_owner_claim_100_times(
         deadline = asyncio.timeout(None)
 
         class DeadlineWaiterJournal(ProcessLocalJournal):
-            async def wait_for_final(self, **kwargs):
-                deadline.reschedule(asyncio.get_running_loop().time())
+            async def wait_for_final(self, _deadline=deadline, **kwargs):
+                _deadline.reschedule(asyncio.get_running_loop().time())
                 await asyncio.Future()
 
         waiter_compose = AsyncMock(return_value=_draft())
