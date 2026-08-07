@@ -1,0 +1,436 @@
+"""BIZ-628 — accepted final의 durable write-once/replay 회귀."""
+
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+import threading
+from unittest.mock import AsyncMock, Mock
+
+import pytest
+
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
+from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
+from simpleclaw.graph_runtime.composition_journal import (
+    FinalArtifactInvariantError,
+    SQLiteFinalArtifactJournal,
+)
+from simpleclaw.graph_runtime.contracts import (
+    AssetRefV1,
+    ContractRefV1,
+    NormalizedAssetResultV1,
+)
+from simpleclaw.graph_runtime.status import (
+    AssetResultStatus,
+    EffectStatus,
+    TerminalOutcome,
+)
+
+
+def _values(request_id: str = "request-1"):
+    facts = {
+        "data": {
+            "category": "KBO",
+            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+        }
+    }
+    value = CompositionInputV1(
+        request_id=request_id,
+        question="KBO 1위 팀을 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="payload-hash",
+        public_facts=facts,
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="invocation",
+        output_contract=ContractRefV1(
+            contract_id="recipe.sports-live.output",
+            version="1",
+            owner_ref=value.asset_ref,
+            schema_hash="schema-hash",
+        ),
+        status=AssetResultStatus.RESOLVED,
+        payload={"side_effect": False, **facts},
+        payload_hash="payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    return value, result
+
+
+def _draft() -> DraftResponseV1:
+    return DraftResponseV1(
+        content="KBO 1위는 KT이며 59승입니다.",
+        cited_paths=(
+            "data.category",
+            "data.items[0].team",
+            "data.items[0].wins",
+        ),
+    )
+
+
+class _ComposerStop(RuntimeError):
+    def __init__(self, stop_condition: str) -> None:
+        self.stop_condition = stop_condition
+        super().__init__(
+            f"provider raw diagnostic: {stop_condition}; KBO 1위 KT 59승"
+        )
+
+
+async def _assert_stop_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+    *,
+    stop_condition: str,
+    request_id: str,
+) -> None:
+    value, result = _values(request_id)
+    db_path = tmp_path / f"{stop_condition}.sqlite3"
+    compose = AsyncMock(side_effect=_ComposerStop(stop_condition))
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    first = await FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=guard_final_response,
+        safe_render=Mock(return_value="replay must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert first is not None
+    assert replay == first
+    assert compose.await_count == 1
+    assert safe_render.call_count == 1
+    assert replay_compose.await_count == 0
+    assert all(
+        forbidden not in first.content
+        for forbidden in (
+            "provider",
+            "raw diagnostic",
+            stop_condition,
+            "KBO",
+            "KT",
+            "1위",
+            "59",
+        )
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    await _assert_stop_records_generic_fallback_and_replay_reuses_it(
+        tmp_path,
+        stop_condition="budget_exhausted",
+        request_id="budget-exhaustion-request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_deadline_signal_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    await _assert_stop_records_generic_fallback_and_replay_reuses_it(
+        tmp_path,
+        stop_condition="deadline",
+        request_id="deadline-request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_restart_reuses_first_accepted_final_without_recomposing(tmp_path) -> None:
+    value, result = _values()
+    compose = AsyncMock(return_value=_draft())
+    journal = SQLiteFinalArtifactJournal(tmp_path / "invocations.sqlite3")
+    runtime = FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=lambda: "generic fallback",
+        journal=journal,
+        composer_fingerprint="composer-v1",
+    )
+
+    finals = await asyncio.gather(
+        *(
+            runtime.finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+            for _ in range(32)
+        )
+    )
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=guard_final_response,
+        safe_render=lambda: "generic fallback",
+        journal=SQLiteFinalArtifactJournal(tmp_path / "invocations.sqlite3"),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert compose.await_count == 1
+    assert replay_compose.await_count == 0
+    assert replay == finals[0]
+    assert all(item == finals[0] for item in finals)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_runtime_instances_compose_exactly_once(tmp_path) -> None:
+    value, result = _values("shared-runtime-request")
+    compose = AsyncMock(return_value=_draft())
+    db_path = tmp_path / "invocations.sqlite3"
+
+    def runtime() -> FinalCompositionRuntime:
+        return FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(db_path),
+            composer_fingerprint="composer-v1",
+        )
+
+    finals = await asyncio.gather(
+        *(
+            runtime().finalize(
+                request_id=value.request_id,
+                normalized_result=result,
+                outcome=TerminalOutcome.COMPLETED,
+                composition_input=value,
+            )
+            for _ in range(32)
+        )
+    )
+
+    assert compose.await_count == 1
+    assert all(final == finals[0] for final in finals)
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_cross_event_loop_runtimes_compose_exactly_once(tmp_path) -> None:
+    value, result = _values("cross-loop-request")
+    db_path = tmp_path / "cross-loop.sqlite3"
+    calls = 0
+    calls_lock = threading.Lock()
+
+    async def compose(_value):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        await asyncio.sleep(0.05)
+        return _draft()
+
+    async def finalize():
+        return await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(db_path),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+    )
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_abandoned_durable_claim_fails_closed_without_recomposition(
+    tmp_path,
+) -> None:
+    value, result = _values("abandoned-claim-request")
+    compose = AsyncMock(return_value=_draft())
+    journal = SQLiteFinalArtifactJournal(
+        tmp_path / "abandoned.sqlite3",
+        timeout_seconds=0.1,
+    )
+    assert await journal.claim_composition(
+        request_id=value.request_id,
+        normalized_payload_hash=value.normalized_payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is True
+
+    with pytest.raises(FinalArtifactInvariantError, match="already claimed"):
+        await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=journal,
+            composer_fingerprint="composer-v1",
+            claim_wait_seconds=0.1,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    assert compose.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_follower_wait_is_not_limited_by_sqlite_busy_timeout(tmp_path) -> None:
+    value, result = _values("slow-owner-request")
+    db_path = tmp_path / "slow-owner.sqlite3"
+    calls = 0
+    calls_lock = threading.Lock()
+
+    async def compose(_value):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        await asyncio.sleep(0.3)
+        return _draft()
+
+    async def finalize():
+        return await FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=lambda: "generic fallback",
+            journal=SQLiteFinalArtifactJournal(
+                db_path,
+                timeout_seconds=0.1,
+            ),
+            composer_fingerprint="composer-v1",
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    first, second = await asyncio.gather(
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+        asyncio.to_thread(lambda: asyncio.run(finalize())),
+    )
+
+    assert calls == 1
+    assert first == second
+
+
+@pytest.mark.asyncio
+async def test_same_request_with_different_payload_hash_conflicts(tmp_path) -> None:
+    value, result = _values()
+    journal = SQLiteFinalArtifactJournal(tmp_path / "invocations.sqlite3")
+    runtime = FinalCompositionRuntime(
+        compose=AsyncMock(return_value=_draft()),
+        guard=guard_final_response,
+        safe_render=lambda: "generic fallback",
+        journal=journal,
+        composer_fingerprint="composer-v1",
+    )
+    await runtime.finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+    changed_result = result.model_copy(update={"payload_hash": "changed"})
+    changed_input = value.model_copy(
+        update={"normalized_payload_hash": "changed"}
+    )
+
+    with pytest.raises(FinalArtifactInvariantError, match="different normalized"):
+        await runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=changed_result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=changed_input,
+        )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_write_lock_does_not_block_event_loop(tmp_path) -> None:
+    value, result = _values("locked-request")
+    db_path = tmp_path / "invocations.sqlite3"
+    journal = SQLiteFinalArtifactJournal(db_path)
+    assert await journal.load(
+        request_id=value.request_id,
+        normalized_payload_hash=value.normalized_payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is None
+    blocker = sqlite3.connect(db_path, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    runtime = FinalCompositionRuntime(
+        compose=AsyncMock(return_value=_draft()),
+        guard=guard_final_response,
+        safe_render=lambda: "generic fallback",
+        journal=journal,
+        composer_fingerprint="composer-v1",
+    )
+    task = asyncio.create_task(
+        runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    ticks = 0
+    try:
+        for _ in range(8):
+            await asyncio.sleep(0.01)
+            ticks += 1
+        assert task.done() is False
+    finally:
+        blocker.commit()
+        blocker.close()
+
+    assert await task is not None
+    assert ticks == 8

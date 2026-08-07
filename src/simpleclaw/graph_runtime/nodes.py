@@ -132,6 +132,14 @@ def final_composition_node(
             request_id=request_id,
             normalized_result=result,
             outcome=outcome,
+            composition_input=(
+                state.get("composition_candidate")
+                if getattr(
+                    state.get("composition_candidate"), "schema_version", None
+                )
+                == "composition_input.v1"
+                else None
+            ),
         )
         return {} if final is None else {"final_artifact": final}
 

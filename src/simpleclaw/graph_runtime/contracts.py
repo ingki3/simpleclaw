@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -22,6 +23,116 @@ from .status import AssetResultStatus, DeliveryStatus, EffectStatus, TerminalOut
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
+
+COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
+MAX_COMPOSITION_FIELD_PATHS = 64
+MAX_COMPOSITION_FIELD_DEPTH = 10
+_COMPOSITION_PATH_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?)*$"
+)
+_FORBIDDEN_COMPOSITION_SEGMENT_MARKERS = frozenset(
+    {
+        "answer",
+        "apikey",
+        "content",
+        "credential",
+        "credentials",
+        "diagnostic",
+        "email",
+        "error",
+        "internal",
+        "internalprompt",
+        "password",
+        "private",
+        "prompt",
+        "provider",
+        "raw",
+        "secret",
+        "summary",
+        "text",
+        "token",
+    }
+)
+
+
+def _composition_path_is_declared(
+    schema: dict[str, object],
+    path: str,
+) -> bool:
+    """Composer path가 JSON Schema의 properties/items에 실제 선언됐는지 본다."""
+    current: object = schema
+    for raw_segment in path.split("."):
+        if not isinstance(current, dict):
+            return False
+        properties = current.get("properties")
+        if not isinstance(properties, dict):
+            return False
+        name = raw_segment.removesuffix("[*]")
+        child = properties.get(name)
+        if not isinstance(child, dict):
+            return False
+        if raw_segment.endswith("[*]"):
+            if child.get("type") != "array":
+                return False
+            child = child.get("items")
+            if not isinstance(child, dict):
+                return False
+        current = child
+    return True
+
+
+def validate_composition_fields(
+    value: object,
+    *,
+    json_schema: dict[str, object] | None = None,
+) -> tuple[str, ...]:
+    """Contract extension을 bounded·schema-declared path tuple로 검증한다."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(  # noqa: TRY004 - public contract validation API
+            f"{COMPOSITION_FIELDS_EXTENSION} must be an array"
+        )
+    if not value or len(value) > MAX_COMPOSITION_FIELD_PATHS:
+        raise ValueError(
+            f"{COMPOSITION_FIELDS_EXTENSION} must contain 1.."
+            f"{MAX_COMPOSITION_FIELD_PATHS} paths"
+        )
+    paths: list[str] = []
+    for raw_path in value:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("composition field path must be a non-empty string")
+        path = raw_path.strip()
+        if path != raw_path or not _COMPOSITION_PATH_RE.fullmatch(path):
+            raise ValueError(f"invalid composition field path: {raw_path!r}")
+        segments = path.split(".")
+        if len(segments) > MAX_COMPOSITION_FIELD_DEPTH:
+            raise ValueError("composition field path is too deep")
+        for segment in segments:
+            raw_name = segment.removesuffix("[*]")
+            split_name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", raw_name)
+            name = raw_name.casefold()
+            components = set(re.split(r"[-_]", split_name.casefold()))
+            compact_name = re.sub(r"[-_]", "", name)
+            if name.startswith("_") or bool(
+                components & _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS
+            ) or compact_name in _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS:
+                raise ValueError(
+                    "composition field path contains a forbidden presentation "
+                    f"or private field: {path}"
+                )
+        if json_schema is not None and not _composition_path_is_declared(
+            json_schema, path
+        ):
+            raise ValueError(
+                "composition field path is not declared by JSON Schema: "
+                f"{path}"
+            )
+        paths.append(path)
+    if len(set(paths)) != len(paths):
+        raise ValueError("composition field paths must be unique")
+    return tuple(paths)
 
 
 def _validate_json_value(value: Any, *, path: str = "payload") -> None:
@@ -167,6 +278,14 @@ class ContractDescriptorV1(ContractModel):
         """호출자의 중첩 변경이 계약 원본에 닿지 않는 schema 복사본을 반환한다."""
         return _restore_json_object(self.json_schema_json)
 
+    @property
+    def composition_fields(self) -> tuple[str, ...]:
+        """중앙 composer에 노출하도록 계약이 선언한 semantic path만 반환한다."""
+        return validate_composition_fields(
+            self.json_schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=self.json_schema,
+        )
+
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
         """binding과 contract가 서로 다른 owner를 가리키는 상태를 차단한다."""
@@ -175,6 +294,11 @@ class ContractDescriptorV1(ContractModel):
             and self.binding_ref.owner_ref != self.ref.owner_ref
         ):
             raise ValueError("binding owner must match the contract owner")
+        schema = self.json_schema
+        validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
         return self
 
 

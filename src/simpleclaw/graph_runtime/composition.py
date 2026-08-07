@@ -1,20 +1,23 @@
-"""Final composition과 response guard의 write-once 경계를 구현한다."""
+"""Final composition, response guard, durable write-once 경계를 구현한다."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
+from typing import Any
 
+from .composition_journal import FinalArtifactInvariantError, FinalArtifactJournal
 from .contracts import DraftArtifactV1, FinalArtifactV1, NormalizedAssetResultV1
 from .idempotency import (
     canonical_artifact_content_hash,
     canonical_artifact_id,
 )
-from .status import TerminalOutcome
+from .status import AssetResultStatus, EffectStatus, TerminalOutcome
 
-ComposeCallback = Callable[[NormalizedAssetResultV1], str | Awaitable[str]]
-GuardCallback = Callable[[str], bool | Awaitable[bool]]
-SafeRenderCallback = Callable[[NormalizedAssetResultV1], str]
+ComposeCallback = Callable[[object], object | Awaitable[object]]
+GuardCallback = Callable[..., object | Awaitable[object]]
+SafeRenderCallback = Callable[..., str]
 
 
 async def _await_if_needed(value):
@@ -24,7 +27,7 @@ async def _await_if_needed(value):
 
 
 class FinalCompositionRuntime:
-    """composer 실패/guard 거부를 solver 재실행 없이 안전 응답으로 수렴시킨다."""
+    """Composer/guard 실패를 재실행 없이 generic fallback 또는 억제로 수렴시킨다."""
 
     def __init__(
         self,
@@ -32,11 +35,28 @@ class FinalCompositionRuntime:
         compose: ComposeCallback,
         guard: GuardCallback,
         safe_render: SafeRenderCallback,
+        journal: FinalArtifactJournal | None = None,
+        composer_fingerprint: str = "asset_text_compat_v1",
+        claim_wait_seconds: float | None = None,
     ) -> None:
+        if not composer_fingerprint.strip():
+            raise ValueError("composer_fingerprint is required")
         self._compose = compose
         self._guard = guard
         self._safe_render = safe_render
-        self._finals: dict[str, FinalArtifactV1] = {}
+        self._journal = journal
+        self._composer_fingerprint = composer_fingerprint
+        self._claim_wait_seconds = claim_wait_seconds
+        self._finals: dict[str, tuple[str, FinalArtifactV1]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, request_id: str) -> asyncio.Lock:
+        """같은 process의 concurrent replay에서 provider 호출을 한 번으로 묶는다."""
+        if self._journal is not None:
+            shared_lock = getattr(self._journal, "lock_for", None)
+            if callable(shared_lock):
+                return shared_lock(request_id)
+        return self._locks.setdefault(request_id, asyncio.Lock())
 
     async def finalize(
         self,
@@ -44,53 +64,135 @@ class FinalCompositionRuntime:
         request_id: str,
         normalized_result: NormalizedAssetResultV1,
         outcome: TerminalOutcome,
+        composition_input: object | None = None,
     ) -> FinalArtifactV1 | None:
-        """guard 통과 전에는 final을 만들지 않고 safe renderer를 최대 한 번 호출한다."""
-        existing = self._finals.get(request_id)
-        if existing is not None:
-            return existing
-
-        content: str | None = None
-        try:
-            candidate = await _await_if_needed(self._compose(normalized_result))
-            if isinstance(candidate, str) and candidate.strip():
-                content = candidate.strip()
-        except Exception:  # noqa: BLE001 - composer 실패는 deterministic fallback 대상
-            content = None
-
-        guarded = False
-        if content is not None:
-            try:
-                guarded = bool(await _await_if_needed(self._guard(content)))
-            except Exception:  # noqa: BLE001 - guard 실패는 fail-closed 거부
-                guarded = False
-
-        if not guarded:
-            # pre-validated deterministic renderer다. 비동기/tool callback을 허용하지
-            # 않아 이 fallback이 새 dispatch 경로가 되지 않게 한다.
-            try:
-                safe_content = self._safe_render(normalized_result)
-            except Exception:  # noqa: BLE001 - safe renderer 부재로 delivery를 억제
+        """Accepted final을 durable하게 기록한 뒤에만 delivery 경계로 반환한다."""
+        if composition_input is not None:
+            if getattr(composition_input, "request_id", None) != request_id:
+                raise FinalArtifactInvariantError("composition request_id mismatch")
+            if (
+                getattr(composition_input, "normalized_payload_hash", None)
+                != normalized_result.payload_hash
+            ):
+                raise FinalArtifactInvariantError("composition payload hash mismatch")
+            if (
+                getattr(composition_input, "result_status", None)
+                is not AssetResultStatus.RESOLVED
+            ) or (
+                getattr(composition_input, "effect_status", None)
+                not in {EffectStatus.NONE, EffectStatus.VERIFIED}
+            ):
                 return None
-            if not isinstance(safe_content, str) or not safe_content.strip():
-                return None
-            content = safe_content.strip()
 
-        artifact_id = canonical_artifact_id(request_id, content)
-        draft = DraftArtifactV1(
-            artifact_id=artifact_id,
-            request_id=request_id,
-            content=content,
-            outcome=outcome,
-        )
-        final = FinalArtifactV1(
-            artifact_id=draft.artifact_id,
-            request_id=draft.request_id,
-            content=draft.content,
-            outcome=draft.outcome,
-            content_hash=canonical_artifact_content_hash(draft.content),
-        )
-        prior = self._finals.setdefault(request_id, final)
-        if prior != final:
-            raise ValueError("final artifact is write-once")
-        return prior
+        payload_hash = normalized_result.payload_hash
+        async with self._lock_for(request_id):
+            if self._journal is not None:
+                existing = await self._journal.load(
+                    request_id=request_id,
+                    normalized_payload_hash=payload_hash,
+                    composer_fingerprint=self._composer_fingerprint,
+                )
+                if existing is not None:
+                    self._finals[request_id] = (payload_hash, existing)
+                    return existing
+            cached = self._finals.get(request_id)
+            if cached is not None:
+                if cached[0] != payload_hash:
+                    raise FinalArtifactInvariantError(
+                        "final artifact request reused with different normalized payload"
+                    )
+                return cached[1]
+
+            if self._journal is not None:
+                claim = getattr(self._journal, "claim_composition", None)
+                wait_for_final = getattr(self._journal, "wait_for_final", None)
+                if callable(claim) and callable(wait_for_final):
+                    acquired = await claim(
+                        request_id=request_id,
+                        normalized_payload_hash=payload_hash,
+                        composer_fingerprint=self._composer_fingerprint,
+                    )
+                    if not acquired:
+                        existing = await wait_for_final(
+                            request_id=request_id,
+                            normalized_payload_hash=payload_hash,
+                            composer_fingerprint=self._composer_fingerprint,
+                            timeout_seconds=self._claim_wait_seconds,
+                        )
+                        self._finals[request_id] = (payload_hash, existing)
+                        return existing
+
+            content: str | None = None
+            draft: Any | None = None
+            try:
+                argument: object = composition_input or normalized_result
+                candidate = await _await_if_needed(self._compose(argument))
+                if composition_input is None:
+                    if isinstance(candidate, str) and candidate.strip():
+                        content = candidate.strip()
+                elif (
+                    getattr(candidate, "schema_version", None)
+                    == "draft_response.v1"
+                    and isinstance(getattr(candidate, "content", None), str)
+                ):
+                    draft = candidate
+            except Exception:  # noqa: BLE001 - composer stop도 durable fallback으로 수렴
+                content = None
+                draft = None
+
+            guarded = False
+            if composition_input is None and content is not None:
+                try:
+                    guarded = bool(await _await_if_needed(self._guard(content)))
+                except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
+                    guarded = False
+            elif composition_input is not None and draft is not None:
+                try:
+                    result = await _await_if_needed(
+                        self._guard(composition_input, draft)
+                    )
+                    guarded = (
+                        getattr(result, "accepted", None) is True
+                    )
+                    if guarded:
+                        content = draft.content.strip()
+                except Exception:  # noqa: BLE001 - guard 실패는 fail-closed
+                    guarded = False
+
+            if not guarded:
+                try:
+                    safe_content = (
+                        self._safe_render(normalized_result)
+                        if composition_input is None
+                        else self._safe_render()
+                    )
+                except Exception:  # noqa: BLE001 - fallback 부재 시 delivery 억제
+                    return None
+                if not isinstance(safe_content, str) or not safe_content.strip():
+                    return None
+                content = safe_content.strip()
+            assert content is not None
+
+            artifact_id = canonical_artifact_id(request_id, content)
+            draft_artifact = DraftArtifactV1(
+                artifact_id=artifact_id,
+                request_id=request_id,
+                content=content,
+                outcome=outcome,
+            )
+            final = FinalArtifactV1(
+                artifact_id=draft_artifact.artifact_id,
+                request_id=draft_artifact.request_id,
+                content=draft_artifact.content,
+                outcome=draft_artifact.outcome,
+                content_hash=canonical_artifact_content_hash(draft_artifact.content),
+            )
+            if self._journal is not None:
+                final = await self._journal.record_or_reuse(
+                    request_id=request_id,
+                    normalized_payload_hash=payload_hash,
+                    composer_fingerprint=self._composer_fingerprint,
+                    artifact=final,
+                )
+            self._finals[request_id] = (payload_hash, final)
+            return final

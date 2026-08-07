@@ -24,6 +24,11 @@ from .checkpoint import (
     validate_resume,
 )
 from .composition import FinalCompositionRuntime
+from .composition_journal import (
+    FinalArtifactInvariantError,
+    FinalArtifactJournal,
+    SQLiteFinalArtifactJournal,
+)
 from .contracts import (
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -155,6 +160,8 @@ __all__ = [
     "EffectStatus",
     "ExecutionBudgetV1",
     "ExecutionPlanV1",
+    "FinalArtifactInvariantError",
+    "FinalArtifactJournal",
     "FinalArtifactV1",
     "FinalCompositionRuntime",
     "GeneralRoute",
@@ -193,6 +200,7 @@ __all__ = [
     "RuntimeGraphState",
     "RuntimeSnapshotV1",
     "SQLiteDeliveryJournal",
+    "SQLiteFinalArtifactJournal",
     "ShadowBudgetUsageV1",
     "ShadowComparisonTelemetryV1",
     "ShadowNoSendConfigurationError",

@@ -36,6 +36,29 @@ Evidence/Action Validator를 통과한다.
 `capability_first_v3` canary/primary는 resolution budget 축 중 하나 이상이 유한할
 때만 실행되며, live config·restart·cohort 확대는 별도 운영자 승인을 요구한다.
 
+## LangGraph V4 최종 발화 책임
+
+V4 exact asset 실행 결과는 사용자 문장이 아니라 typed state·fact·provenance다.
+Output contract의 `x-simpleclaw-composition-fields`가 중앙 composer에 노출할
+semantic JSON path만 선언하며, `answer/content/text/summary`와 raw/error/token/
+provider diagnostic path는 계약 단계에서 거부한다.
+
+| 계층 | 소유 | 금지 |
+|---|---|---|
+| Skill/Recipe | typed facts, state, provenance | final prose, persona |
+| Projection | contract-declared public field exposure | domain interpretation |
+| Composer | 최신 persona 기반 `DraftResponseV1` 1회 작성 | tool/asset 호출, retry |
+| Guard | citation, 숫자·날짜·URL, top-N, raw 노출 검증 | solver 재실행 |
+| Fallback | domain fact 없는 generic 실패 안내 | asset text 재사용 |
+| Journal/Delivery | accepted final write-once와 exactly-once 전달 | recomposition |
+
+`central_persona_v1` composer는 기존 Router의 명시 backend를 사용해 provider retry를
+비활성화하고, graph runtime call/token budget에 포함된다. Guard를 통과한 final은
+delivery보다 먼저 checkpoint SQLite의 `graph_final_artifacts`에 기록한다. 같은
+request가 다른 payload hash나 composer fingerprint로 재사용되면 전달 없이
+fail-closed한다. 초기 rollout 기본은 `asset_text_compat`이며 중앙 모드 활성화,
+restart, Telegram smoke는 별도 운영자 승인 사항이다.
+
 ## Outer turn과 inner loop
 
 Planner는 outer turn의 상위 실행 결정을 소유한다. 정상 경로에서는 user turn당

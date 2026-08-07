@@ -74,6 +74,34 @@ class TestAgentOrchestrator:
         assert orchestrator._metrics is None
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_final_composer_persona_excludes_user_and_memory(self, config_file):
+        persona_dir = config_file.parent / "persona_local"
+        (persona_dir / "SOUL.md").write_text(
+            "# Soul\n\n따뜻하고 간결한 한국어 존댓말",
+            encoding="utf-8",
+        )
+        (persona_dir / "USER.md").write_text(
+            "# User\n\nprivate-user-identifier",
+            encoding="utf-8",
+        )
+        (persona_dir / "MEMORY.md").write_text(
+            "# Memory\n\nprivate-memory-secret",
+            encoding="utf-8",
+        )
+
+        orchestrator = AgentOrchestrator(config_file)
+
+        assert "따뜻하고 간결한 한국어 존댓말" in (
+            orchestrator._composition_persona_prompt
+        )
+        assert "private-user-identifier" not in (
+            orchestrator._composition_persona_prompt
+        )
+        assert "private-memory-secret" not in (
+            orchestrator._composition_persona_prompt
+        )
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_init_accepts_metrics(self, config_file):
         """``metrics`` 인자가 주입되면 오케스트레이터에 보존되어야 한다."""
         from simpleclaw.logging.metrics import MetricsCollector

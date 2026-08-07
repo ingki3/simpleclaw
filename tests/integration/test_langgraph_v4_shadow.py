@@ -23,6 +23,10 @@ from scripts.dev.validate_naver_sports_asset import (
 )
 from scripts.install_naver_sports_skill import install as install_naver_sports_skill
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
 from simpleclaw.agent.context_candidates import ContextCandidateSet
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
@@ -649,8 +653,19 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert helper_payload["ok"] is True
         assert helper_payload["season"]["code"] == "2026"
         assert helper_payload["items"]
-        assert helper_payload["answer"].count("\n- ") == 3
+        assert "answer" not in helper_payload
         return result
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        assert len(value.public_facts["data"]["items"]) == 3
+        return DraftResponseV1(
+            content="LG, 한화, 롯데입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        )
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
     runner = ConnectedShadowTurnRunner(
@@ -666,6 +681,9 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         definitions=(recipe, skill),
         conversation_store=store,
         recipe_executor=executor,
+        composition_mode="central_persona_v1",
+        response_composer=compose,
+        composer_fingerprint="kbo-fixture-composer-v1",
     )
 
     for index in range(3):
@@ -678,12 +696,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
-        assert result.execution.final_content == (
-            "확인된 결과입니다.\n"
-            "- 순위: 1 · 팀: LG · 승: 60\n"
-            "- 순위: 2 · 팀: 한화 · 승: 58\n"
-            "- 순위: 3 · 팀: 롯데 · 승: 55"
-        )
+        assert result.execution.final_content == "LG, 한화, 롯데입니다."
         assert "asset_result.v1" not in result.execution.final_content
         assert "status" not in result.execution.final_content
         assert "error" not in result.execution.final_content

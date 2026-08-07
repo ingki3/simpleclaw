@@ -96,6 +96,7 @@ from simpleclaw.agent.file_mutation_tracker import (
     FileMutationTracker,
     TrackedRoot,
 )
+from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.goal_loop import GoalLoopConfig, GoalLoopRunner
 from simpleclaw.agent.observation_claims import (
     declared_claim_bindings,
@@ -217,6 +218,7 @@ from simpleclaw.outbound_delivery import (
     PrimaryResponseText,
 )
 from simpleclaw.persona.assembler import assemble_prompt
+from simpleclaw.persona.models import FileType
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
@@ -1137,6 +1139,18 @@ class AgentOrchestrator:
             persona_files, self._persona_config["token_budget"]
         )
         self._persona_prompt = assembly.assembled_text or ""
+        # Final composer에는 말투/정체성(SOUL)만 전달한다. USER/MEMORY와 운영
+        # AGENT 지침은 verified public facts가 아니므로 출력 유출면에서 제외한다.
+        style_files = [
+            persona
+            for persona in persona_files
+            if persona.file_type is FileType.SOUL
+        ]
+        style_assembly = assemble_prompt(
+            style_files,
+            min(int(self._persona_config["token_budget"]), 2_048),
+        )
+        self._composition_persona_prompt = style_assembly.assembled_text or ""
 
         # --- 스킬 리로드 (.agent/skills, ~/.agents/skills) ---
         self._skills = discover_skills(
@@ -1968,12 +1982,25 @@ class AgentOrchestrator:
                     execution_mode=effective_plan.execution.mode.value,
                     gate_status=gate_result.status.value,
                 )
+                connected_budget = getattr(
+                    getattr(connected, "telemetry", None),
+                    "budget_usage",
+                    None,
+                )
                 return ToolLoopResult(
                     execution.final_content,
                     success=True,
                     selected_route=execution.selected_route,
-                    model_calls=usage_router.response_count,
-                    tokens=usage_router.output_tokens,
+                    model_calls=getattr(
+                        connected_budget,
+                        "llm_calls",
+                        usage_router.response_count,
+                    ),
+                    tokens=getattr(
+                        connected_budget,
+                        "tokens",
+                        usage_router.output_tokens,
+                    ),
                     primary_delivery=PrimaryDeliveryMetadataV1(
                         request_id=execution.request_id,
                         artifact_id=execution.final_artifact.artifact_id,
@@ -2870,12 +2897,38 @@ class AgentOrchestrator:
                 raise TypeError("connected recipe output must be a JSON object")
             return raw
 
+        composition_config = v4.get("composition", {})
+        if not isinstance(composition_config, dict):
+            raise TypeError("langgraph_v4 composition configuration is required")
+        composition_mode = str(
+            composition_config.get("mode", "asset_text_compat")
+        )
+        response_composer = None
+        composer_fingerprint = "asset_text_compat_v1"
+        if composition_mode == "central_persona_v1":
+            composer = FinalResponseComposer(
+                send=self._router.send,
+                persona_prompt=self._composition_persona_prompt,
+                max_tokens=int(composition_config.get("max_tokens", 1200)),
+                max_output_chars=int(
+                    composition_config.get("max_output_chars", 3500)
+                ),
+                # Explicit backend selection is the Router's no-retry path, so one
+                # composer send cannot silently become two provider calls.
+                backend_name=self._router.get_default_backend(),
+            )
+            response_composer = composer.compose
+            composer_fingerprint = composer.fingerprint
+
         result = await ConnectedShadowTurnRunner(
             facade=facade,
             definitions=(*recipes, *skills),
             conversation_store=self._store,
             recipe_executor=execute_recipe,
             skill_executor=execute_skill,
+            composition_mode=composition_mode,
+            response_composer=response_composer,
+            composer_fingerprint=composer_fingerprint,
         ).run(
             plan=plan,
             legacy=legacy,

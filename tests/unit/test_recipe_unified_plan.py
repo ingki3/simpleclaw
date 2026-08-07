@@ -354,7 +354,7 @@ async def test_smoke_003_recipe_accepts_exactly_one_successful_delegate(
                     "data": {
                         "ok": True,
                         "side_effect": False,
-                        "answer": "확인된 결과입니다.\n- 순위: 1 · 팀: LG",
+                        "items": [{"rank": 1, "team": "LG", "wins": 60}],
                     },
                     "resolved_claims": ["standings"],
                     "unresolved_claims": [],
