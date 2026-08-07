@@ -43,7 +43,11 @@ from simpleclaw.agent.progress import (
 from simpleclaw.channels.models import AccessAttempt
 from simpleclaw.graph_runtime.adapters.delivery import SenderReceipt
 from simpleclaw.llm.models import MultimodalAttachment
-from simpleclaw.outbound_delivery import PrimaryResponseText
+from simpleclaw.outbound_delivery import (
+    PrimaryDeliveryOutcomeV1,
+    PrimaryPersistenceStatus,
+    PrimaryResponseText,
+)
 from simpleclaw.proactive.presenter import (
     build_proactive_callback_data,
     parse_proactive_callback_data,
@@ -951,11 +955,20 @@ class TelegramBot:
                     message_ids.append(str(message_id))
                 return SenderReceipt(external_message_id=",".join(message_ids))
 
-            return await self._primary_delivery_handler(
+            outcome = await self._primary_delivery_handler(
                 response,
                 destination_ref,
                 sender,
             )
+            if (
+                isinstance(outcome, PrimaryDeliveryOutcomeV1)
+                and outcome.persistence_status is PrimaryPersistenceStatus.FAILED
+            ):
+                raise RuntimeError(
+                    "V4 primary Telegram delivery completed but assistant "
+                    "persistence did not"
+                )
+            return outcome
         for part in split_for_telegram(response):
             await update.message.reply_text(part)
 

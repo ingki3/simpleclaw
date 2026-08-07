@@ -325,6 +325,7 @@ class ConversationStore:
         session_key: str,
         persistence_id: str,
         payload_hash: str,
+        turn_id: str | None = None,
     ) -> tuple[int, bool]:
         """V4 delivered artifact를 persistence_id 기준 exactly-once 저장한다.
 
@@ -359,7 +360,7 @@ class ConversationStore:
                     assistant_message.token_count,
                     assistant_message.channel,
                     session_key,
-                    persistence_id,
+                    turn_id or persistence_id,
                 ),
             )
             message_id = int(cursor.lastrowid)
@@ -375,6 +376,40 @@ class ConversationStore:
                 ),
             )
         return message_id, True
+
+    def bind_outbound_to_turn(
+        self,
+        persistence_id: str,
+        *,
+        payload_hash: str,
+        turn_id: str,
+    ) -> int:
+        """기존 outbound marker의 assistant row를 원래 request turn에 연결한다.
+
+        이전 구현이 ``persistence_id``를 ``messages.turn_id``로 기록한 행도 replay
+        시 새 assistant row를 만들지 않고 제자리에서 복구한다.
+        """
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload_hash, message_id FROM graph_outbound_persistence "
+                "WHERE persistence_id = ?",
+                (persistence_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("outbound persistence marker does not exist")
+            if str(row[0]) != payload_hash:
+                raise ValueError(
+                    "persistence_id already exists with a different payload"
+                )
+            message_id = int(row[1])
+            cursor = conn.execute(
+                "UPDATE messages SET turn_id = ? WHERE id = ? AND role = ?",
+                (turn_id, message_id, MessageRole.ASSISTANT.value),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("outbound persistence message does not exist")
+        return message_id
 
     def get_outbound_persistence(
         self,

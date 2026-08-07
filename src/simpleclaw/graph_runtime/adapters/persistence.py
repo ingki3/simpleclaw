@@ -10,9 +10,16 @@ from ..side_effect_monitor import record_shadow_side_effect
 class ConversationStorePersistenceAdapter:
     """PersistenceRuntime writer signature를 기존 ConversationStore에 연결한다."""
 
-    def __init__(self, store, *, channel: str | None = None) -> None:
+    def __init__(
+        self,
+        store,
+        *,
+        channel: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
         self._store = store
         self._channel = channel
+        self._request_id = request_id
 
     def __call__(
         self,
@@ -31,4 +38,5 @@ class ConversationStorePersistenceAdapter:
             session_key=session_key,
             persistence_id=persistence_id,
             payload_hash=payload_hash,
+            turn_id=self._request_id,
         )
