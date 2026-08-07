@@ -65,7 +65,7 @@ class PrimaryResponseText(str):
 class PrimaryDeliveryOutcomeV1:
     delivery_receipt: DeliveryReceiptV1
     persistence_receipt: PersistenceReceiptV1 | None
-    persistence_status: "PrimaryPersistenceStatus"
+    persistence_status: PrimaryPersistenceStatus
     persistence_error_type: str | None = None
 
     @property
