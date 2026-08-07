@@ -245,6 +245,161 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
 
 
 @pytest.mark.asyncio
+async def test_actual_guard_timeout_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    value, result = _values("guard-deadline-request")
+    db_path = tmp_path / "guard-deadline.sqlite3"
+    guard_started = asyncio.Event()
+
+    async def guard(_value, _draft):
+        guard_started.set()
+        await asyncio.Future()
+
+    deadline = asyncio.timeout(0.01)
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    runtime = FinalCompositionRuntime(
+        compose=AsyncMock(return_value=_draft()),
+        guard=guard,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+        controlled_deadline_expired=deadline.expired,
+    )
+
+    async with deadline:
+        first = await runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay_guard = AsyncMock(return_value=Mock(accepted=True))
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=replay_guard,
+        safe_render=Mock(return_value="replay must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert guard_started.is_set()
+    assert first is not None
+    assert replay == first
+    assert replay_compose.await_count == 0
+    assert replay_guard.await_count == 0
+    assert safe_render.call_count == 1
+    assert all(
+        forbidden not in first.content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_it(
+    tmp_path,
+) -> None:
+    value, result = _values("record-deadline-request")
+    db_path = tmp_path / "record-deadline.sqlite3"
+    accepted_draft = DraftResponseV1(
+        content="KBO · KT · 59",
+        cited_paths=(
+            "data.category",
+            "data.items[0].team",
+            "data.items[0].wins",
+        ),
+    )
+
+    class DelayedFirstRecordJournal(SQLiteFinalArtifactJournal):
+        def __init__(self) -> None:
+            super().__init__(db_path)
+            self.record_calls = 0
+
+        async def record_or_reuse(self, **kwargs):
+            self.record_calls += 1
+            if self.record_calls == 1:
+                await asyncio.Future()
+            return await super().record_or_reuse(**kwargs)
+
+    deadline = asyncio.timeout(0.01)
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    journal = DelayedFirstRecordJournal()
+    runtime = FinalCompositionRuntime(
+        compose=AsyncMock(return_value=accepted_draft),
+        guard=guard_final_response,
+        safe_render=safe_render,
+        journal=journal,
+        composer_fingerprint="composer-v1",
+        controlled_deadline_expired=deadline.expired,
+    )
+
+    async with deadline:
+        first = await runtime.finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay_guard = AsyncMock(return_value=Mock(accepted=True))
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=replay_guard,
+        safe_render=Mock(return_value="replay must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert first is not None
+    assert replay == first
+    assert replay_compose.await_count == 0
+    assert replay_guard.await_count == 0
+    assert journal.record_calls == 2
+    assert safe_render.call_count == 1
+    assert all(
+        forbidden not in first.content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_caller_cancellation_is_not_treated_as_controlled_deadline(
     tmp_path,
 ) -> None:
