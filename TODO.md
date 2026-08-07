@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-625](mention://issue/3fad3191-80df-48cd-b2af-84f819dc0363): V4 primary persistence SQLite를 Telegram event loop에서 격리** — Telegram 전송 후 ConversationStore의 조회·turn binding·assistant write를 bounded worker thread 경계로 옮기고, 실제 SQLite write lock 중 heartbeat 응답성 및 send/user/assistant/marker exactly-once 회귀를 고정한다. 전체 unit·Ruff·Graphify·fresh CI와 독립 Stage D 검토 전에는 release·live 재배포·V4 primary 활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
+
 - [>] **[BIZ-624](mention://issue/56fb8f9b-d22d-4c55-b183-2de3022cb9b7): V4 primary Telegram delivery 후 assistant persistence를 exactly-once 보장** — [PR #675](https://github.com/ingki3/simpleclaw/pull/675) exact-head Stage D HOLD에서 production polling 경계가 persistence 실패 outcome을 정상 종료로 버리는 결함을 보정한다. delivery receipt를 재사용하는 bounded persistence-only retry와 실패 소진 시 non-terminal 승격, 단일 `_on_message` send 1 / assistant row 1 connected 회귀, fresh CI·재검토·merge/release gate가 남아 있어 진행 중으로 유지한다. (진행: 2026-08-07)
 
 - [>] **[BIZ-619](mention://issue/676488c0-4e71-4474-a585-ae564192206b): Payload-origin architecture guard의 wrapper·비제어식 우회를 차단** — BIZ-618 PR #663 merge 직전 late finding을 corrective lifecycle로 분리했다. opaque payload identity를 보존하는 `dict`·`cast`·method/module copy wrapper를 추적하고, protected Core 전체에서 return·assignment·formatting을 포함한 static-key read를 architecture violation으로 차단한다. 현재 Core false positive 0, 전체 contracts/unit/Ruff, deterministic full Graphify와 corrective PR exact-head CI·독립 Stage D PASS 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
