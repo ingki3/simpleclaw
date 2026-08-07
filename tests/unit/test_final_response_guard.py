@@ -463,3 +463,62 @@ def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
     )
 
     assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT, LG. KT는 LG입니다.",
+        "KT 59, LG 57, KT 57, LG 59입니다.",
+    ],
+)
+def test_guard_rejects_canonical_decoy_prefix_and_duplicate_tail(
+    content: str,
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "현재 상위 2팀과 승수",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"LG","wins":57}'
+                "]}}"
+            ),
+        }
+    )
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[1].team",
+    )
+    if "59" in content:
+        cited_paths = (
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+        )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=cited_paths),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize("rendered_number", ["-59", "+59", "59%"])
+def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
+    rendered_number: str,
+) -> None:
+    result = guard_final_response(
+        _input().model_copy(update={"question": "KT 승수를 알려줘"}),
+        DraftResponseV1(
+            content=f"KT {rendered_number}입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+            ),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"

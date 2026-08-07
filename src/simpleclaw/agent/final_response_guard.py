@@ -55,7 +55,7 @@ _LIMITATION_MARKERS = (
 )
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-_SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/%+]*$")
+_SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/+]*$")
 _LIST_SEPARATOR_WORD_RE = re.compile(r"(?:와|과|and)", re.IGNORECASE)
 _KOREAN_SUFFIXES = (
     "이었습니다",
@@ -244,35 +244,49 @@ def _literal_pattern(value: JsonValue) -> re.Pattern[str] | None:
         return None
     escaped = re.escape(rendered)
     if isinstance(value, int | float) and not isinstance(value, bool):
-        return re.compile(rf"(?<![\d.]){escaped}(?![\d.])")
+        return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
     return re.compile(escaped, re.IGNORECASE)
 
 
-def _cited_literals_follow_contract_order(
+def _cited_literal_order_error(
     content: str,
     concrete: dict[str, JsonValue],
     cited_values: dict[str, JsonValue],
-) -> bool:
+) -> str | None:
     """인용 scalar를 canonical path 순서의 list로만 배치하게 제한한다."""
     cursor = 0
     previous_end: int | None = None
+    matched_spans: list[tuple[int, int]] = []
+    patterns: list[re.Pattern[str]] = []
     for path, value in concrete.items():
         if path not in cited_values:
             continue
         pattern = _literal_pattern(value)
         if pattern is None:
-            return False
+            return "cited_value_order_mismatch"
         match = pattern.search(content, cursor)
         if match is None:
-            return False
+            return "cited_value_order_mismatch"
         if previous_end is not None:
             separator = content[previous_end : match.start()]
             separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
             if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
-                return False
+                return "cited_value_order_mismatch"
         cursor = match.end()
         previous_end = match.end()
-    return previous_end is not None
+        matched_spans.append(match.span())
+        patterns.append(pattern)
+    if previous_end is None:
+        return "cited_value_order_mismatch"
+    unmatched_chars = list(content)
+    for start, end in matched_spans:
+        unmatched_chars[start:end] = " " * (end - start)
+    unmatched = "".join(unmatched_chars)
+    if any(pattern.search(unmatched) for pattern in patterns):
+        return "cited_value_order_mismatch"
+    if _NUMBER_RE.search(_URL_RE.sub("", unmatched)) is not None:
+        return "ungrounded_number"
+    return None
 
 
 def guard_final_response(
@@ -328,12 +342,13 @@ def guard_final_response(
         concrete, top_n
     ):
         return _rejected("requested_item_identity_not_cited")
-    if not _cited_literals_follow_contract_order(
+    literal_order_error = _cited_literal_order_error(
         content,
         concrete,
         cited_values,
-    ):
-        return _rejected("cited_value_order_mismatch")
+    )
+    if literal_order_error is not None:
+        return _rejected(literal_order_error)
 
     # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
     # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
