@@ -98,8 +98,8 @@ from simpleclaw.llm.models import BackendType, LLMBackend, LLMRequest, LLMRespon
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationStore
 from simpleclaw.recipes.loader import discover_recipes
-from simpleclaw.skills.discovery import discover_skills
 from simpleclaw.skills import naver_sports
+from simpleclaw.skills.discovery import discover_skills
 
 REPO_ROOT = Path(__file__).parents[2]
 
