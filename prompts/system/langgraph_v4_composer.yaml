@@ -22,6 +22,9 @@ system_prompt: |-
   used for each available item from index 0 through N-1 and no later item. Use
   projected strings literally. Outside projected literals, use only ordinary
   grammatical connectors; do not reuse uncited domain terms from the question.
+  Render cited scalar values in their public_facts contract order. Between two
+  cited values use only punctuation, whitespace, or list conjunctions; never
+  assert a new relation between them.
   Adding any new name, place, organization, descriptive fact, or personal detail
   will be rejected. If
   unresolved_claims is non-empty, visibly state the uncertainty and include every

@@ -18,6 +18,7 @@ _NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
 _TOP_N_PATTERNS = (
     re.compile(r"(?:상위|앞)\s*(\d+)", re.IGNORECASE),
     re.compile(r"\btop\s*(\d+)\b", re.IGNORECASE),
+    re.compile(r"(?<!\d)(\d+)\s*[^\W\d_]+만\b", re.IGNORECASE),
 )
 _RAW_MARKERS = (
     "```json",
@@ -55,6 +56,7 @@ _LIMITATION_MARKERS = (
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/%+]*$")
+_LIST_SEPARATOR_WORD_RE = re.compile(r"(?:와|과|and)", re.IGNORECASE)
 _KOREAN_SUFFIXES = (
     "이었습니다",
     "였습니다",
@@ -92,12 +94,6 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "다음",
         "순서",
         "현재",
-        "확인",
-        "확인할",
-        "확인했습니다",
-        "확인된",
-        "확정",
-        "포함",
         "이며",
         "이고",
         "입니다",
@@ -115,12 +111,6 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "의",
         "에",
         "중",
-        "불확실",
-        "제한",
-        "추정",
-        "알",
-        "수",
-        "없습니다",
         "the",
         "a",
         "an",
@@ -137,11 +127,23 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "results",
         "based",
         "on",
-        "confirmed",
+    }
+)
+_LIMITATION_WORDS = frozenset(
+    {
+        "불확실",
+        "확인되지",
+        "확인할",
+        "알",
+        "수",
+        "없습니다",
+        "제한",
+        "추정",
         "unknown",
         "uncertain",
         "unverified",
         "could",
+        "not",
         "verify",
         "cannot",
     }
@@ -234,6 +236,45 @@ def _remove_cited_literals(
     return residual
 
 
+def _literal_pattern(value: JsonValue) -> re.Pattern[str] | None:
+    if value is None or isinstance(value, dict | list):
+        return None
+    rendered = str(value).strip()
+    if not rendered:
+        return None
+    escaped = re.escape(rendered)
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return re.compile(rf"(?<![\d.]){escaped}(?![\d.])")
+    return re.compile(escaped, re.IGNORECASE)
+
+
+def _cited_literals_follow_contract_order(
+    content: str,
+    concrete: dict[str, JsonValue],
+    cited_values: dict[str, JsonValue],
+) -> bool:
+    """인용 scalar를 canonical path 순서의 list로만 배치하게 제한한다."""
+    cursor = 0
+    previous_end: int | None = None
+    for path, value in concrete.items():
+        if path not in cited_values:
+            continue
+        pattern = _literal_pattern(value)
+        if pattern is None:
+            return False
+        match = pattern.search(content, cursor)
+        if match is None:
+            return False
+        if previous_end is not None:
+            separator = content[previous_end : match.start()]
+            separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
+            if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
+                return False
+        cursor = match.end()
+        previous_end = match.end()
+    return previous_end is not None
+
+
 def guard_final_response(
     value: CompositionInputV1,
     draft: DraftResponseV1,
@@ -257,6 +298,8 @@ def guard_final_response(
     concrete = flatten_public_facts(value.public_facts)
     if not draft.cited_paths:
         return _rejected("citations_required")
+    if len(draft.cited_paths) != len(set(draft.cited_paths)):
+        return _rejected("duplicate_citation")
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
@@ -285,6 +328,12 @@ def guard_final_response(
         concrete, top_n
     ):
         return _rejected("requested_item_identity_not_cited")
+    if not _cited_literals_follow_contract_order(
+        content,
+        concrete,
+        cited_values,
+    ):
+        return _rejected("cited_value_order_mismatch")
 
     # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
     # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
@@ -304,12 +353,15 @@ def guard_final_response(
             return _rejected("rendered_value_not_cited")
 
     lexical_residual = _remove_cited_literals(content, cited_values)
+    allowed_words = _SAFE_CONNECTOR_WORDS
+    if value.unresolved_claims:
+        allowed_words = allowed_words | _LIMITATION_WORDS
     for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()
         if (
-            folded not in _SAFE_CONNECTOR_WORDS
-            and stem not in _SAFE_CONNECTOR_WORDS
+            folded not in allowed_words
+            and stem not in allowed_words
         ):
             return _rejected("ungrounded_text")
     symbol_residual = _WORD_RE.sub(

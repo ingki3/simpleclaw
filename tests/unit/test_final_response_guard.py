@@ -143,6 +143,25 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     assert certain.code == "limitation_not_rendered"
 
 
+def test_guard_accepts_limitation_language_for_declared_unresolved_claim() -> None:
+    value = _input().model_copy(update={"unresolved_claims": ("동률 여부",)})
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT, 삼성, LG입니다. 확인할 수 없습니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+            limitation_paths=("unresolved_claims[0]",),
+        ),
+    )
+
+    assert result.accepted is True
+
+
 def test_guard_rejects_provider_diagnostics() -> None:
     result = guard_final_response(
         _input(),
@@ -270,7 +289,7 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 Apple 200 USD입니다.",
+            content="현재 USD 200 Apple입니다.",
             cited_paths=("symbol", "price", "currency"),
         ),
     )
@@ -297,10 +316,10 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
 @pytest.mark.parametrize(
     ("question", "content", "cited_paths"),
     [
-        (
-            "현재 주가는 얼마인가요?",
-            "현재 주가는 200 USD입니다. 주가하락입니다.",
-            ("price", "currency"),
+            (
+                "현재 주가는 얼마인가요?",
+                "현재 USD 200입니다. 주가하락입니다.",
+                ("currency", "price"),
         ),
         (
             "현재 상태를 알려줘",
@@ -352,3 +371,95 @@ def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
     )
 
     assert result.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["KT는 확인할 수 없습니다.", "KT is unverified."],
+)
+def test_guard_rejects_limitation_language_without_unresolved_claims(
+    content: str,
+) -> None:
+    result = guard_final_response(
+        _input().model_copy(update={"question": "KT를 알려줘"}),
+        DraftResponseV1(
+            content=content,
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+def test_guard_enforces_domain_neutral_count_only_scope() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "3팀만 알려줘",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"rank":1,"team":"KT"},'
+                '{"rank":2,"team":"삼성"},'
+                '{"rank":3,"team":"LG"},'
+                '{"rank":4,"team":"두산"}'
+                "]}}"
+            ),
+        }
+    )
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT 1, 삼성 2, LG 3, 두산 4입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].rank",
+                "data.items[1].team",
+                "data.items[1].rank",
+                "data.items[2].team",
+                "data.items[2].rank",
+                "data.items[3].team",
+                "data.items[3].rank",
+            ),
+        ),
+    )
+
+    assert result.code == "citation_outside_requested_scope"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT 57, LG 59입니다.",
+        "KT는 LG입니다.",
+        "KT is LG.",
+    ],
+)
+def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "현재 상위 2팀과 승수",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"LG","wins":57}'
+                "]}}"
+            ),
+        }
+    )
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[1].team",
+    )
+    if "57" in content:
+        cited_paths = (
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+        )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=cited_paths),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
