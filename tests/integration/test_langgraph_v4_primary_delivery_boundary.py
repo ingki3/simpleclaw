@@ -330,6 +330,148 @@ async def test_budget_fallback_delivery_and_persistence_are_exactly_once(
 
 @pytest.mark.asyncio
 @pytest.mark.offline
+async def test_hard_deadline_fallback_delivery_and_persistence_are_exactly_once(
+    tmp_path,
+) -> None:
+    request_id = "telegram:42:hard-deadline-fallback-1001"
+    facts = {
+        "data": {
+            "category": "KBO",
+            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+        }
+    }
+    composition_input = CompositionInputV1(
+        request_id=request_id,
+        question="KBO 1위 팀과 승수를 알려줘",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="hard-deadline-fallback-payload-hash",
+        public_facts=facts,
+    )
+    normalized_result = NormalizedAssetResultV1(
+        invocation_id="hard-deadline-fallback-invocation",
+        output_contract=ContractRefV1(
+            contract_id="recipe.sports-live.output",
+            version="1",
+            owner_ref=composition_input.asset_ref,
+            schema_hash="schema-hash",
+        ),
+        status=AssetResultStatus.RESOLVED,
+        payload={"side_effect": False, **facts},
+        payload_hash="hard-deadline-fallback-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    compose_started = asyncio.Event()
+    composer_calls = 0
+
+    async def compose(_value):
+        nonlocal composer_calls
+        composer_calls += 1
+        compose_started.set()
+        await asyncio.Future()
+
+    deadline = asyncio.timeout(0.01)
+    safe_render = Mock(
+        return_value="요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    )
+    final_journal_path = tmp_path / "hard-deadline-graph.db"
+
+    def runtime() -> FinalCompositionRuntime:
+        return FinalCompositionRuntime(
+            compose=compose,
+            guard=guard_final_response,
+            safe_render=safe_render,
+            journal=SQLiteFinalArtifactJournal(final_journal_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=lambda: (
+                deadline.expired()
+            ),
+        )
+
+    async with deadline:
+        first = await runtime().finalize(
+            request_id=request_id,
+            normalized_result=normalized_result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=composition_input,
+        )
+    replay = await runtime().finalize(
+        request_id=request_id,
+        normalized_result=normalized_result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=composition_input,
+    )
+    assert compose_started.is_set()
+    assert first is not None
+    assert replay == first
+
+    conversation_path = tmp_path / "hard-deadline-conversation.db"
+    store = ConversationStore(conversation_path)
+    session_key = "telegram-session-hard-deadline-fallback"
+    store.save_inbound_once(
+        ConversationMessage(
+            role=MessageRole.USER,
+            content="KBO 1위 팀과 승수를 알려줘",
+            channel="telegram",
+        ),
+        session_key=session_key,
+        request_id=request_id,
+    )
+    response = PrimaryResponseText(
+        first.content,
+        PrimaryDeliveryMetadataV1(
+            request_id=request_id,
+            artifact_id=first.artifact_id,
+            artifact_hash=first.content_hash,
+            session_key=session_key,
+        ),
+    )
+    coordinator = PrimaryDeliveryCoordinator(
+        journal_path=tmp_path / "hard-deadline-delivery.db",
+        conversation_store=store,
+    )
+    reply_text = AsyncMock(return_value=SimpleNamespace(message_id=779))
+    bot = _bot(coordinator)
+    update = SimpleNamespace(message=SimpleNamespace(reply_text=reply_text))
+
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+    await bot._send_response(update, response, chat_id=42, user_id=1)
+
+    assert safe_render.call_count == 1
+    assert composer_calls == 1
+    assert reply_text.await_count == 1
+    assert all(
+        forbidden not in first.content
+        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+    )
+    assert [
+        (message.role, message.turn_id)
+        for message in store.get_recent(session_key=session_key)
+    ] == [
+        (MessageRole.USER, request_id),
+        (MessageRole.ASSISTANT, request_id),
+    ]
+    with sqlite3.connect(final_journal_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0] == 0
+    with sqlite3.connect(conversation_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_outbound_persistence"
+        ).fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
 async def test_actual_telegram_success_sends_and_persists_once_on_replay(
     tmp_path,
 ) -> None:

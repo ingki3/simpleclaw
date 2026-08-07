@@ -1297,6 +1297,7 @@ class ConnectedShadowTurnRunner:
         route = _route_for_plan(plan, asset_ref)
         response: AdapterResponse | None = None
         durable_terminal_reused = False
+        durable_final_recovered = False
         dispatch_guard = _TargetDispatchGuard(invocation)
         durable_claims = _DurableInvocationClaims(self._facade.checkpoint_path)
         binding_ref = entry.snapshot.declared_binding
@@ -1529,6 +1530,15 @@ class ConnectedShadowTurnRunner:
                 raw_callbacks.resume_user_input, budget_controller
             ),
         )
+        composition_deadline: asyncio.Timeout | None = None
+
+        def controlled_composition_deadline_expired() -> bool:
+            return (
+                composition_deadline is not None
+                and composition_deadline.expired()
+            )
+
+        composition_journal: SQLiteFinalArtifactJournal | None = None
         if self._composition_mode == "central_persona_v1":
             async def central_compose(
                 value: CompositionInputV1,
@@ -1537,6 +1547,9 @@ class ConnectedShadowTurnRunner:
                     raise RuntimeError("central response composer is not configured")
                 return await self._response_composer(value)
 
+            composition_journal = SQLiteFinalArtifactJournal(
+                self._facade.checkpoint_path
+            )
             composition = FinalCompositionRuntime(
                 compose=central_compose,
                 guard=guard_final_response,
@@ -1544,8 +1557,11 @@ class ConnectedShadowTurnRunner:
                     "결과는 확인했지만 지금은 안전하게 답변을 구성하지 못했습니다. "
                     "잠시 후 다시 확인해 주세요."
                 ),
-                journal=SQLiteFinalArtifactJournal(self._facade.checkpoint_path),
+                journal=composition_journal,
                 composer_fingerprint=self._composer_fingerprint,
+                controlled_deadline_expired=(
+                    controlled_composition_deadline_expired
+                ),
             )
         else:
             composition = FinalCompositionRuntime(
@@ -1608,20 +1624,24 @@ class ConnectedShadowTurnRunner:
                 bind_runtime_llm_budget(budget_controller),
             ):
                 try:
-                    async with asyncio.timeout(
+                    composition_deadline = asyncio.timeout(
                         budget_controller.remaining_seconds
-                    ):
-                        state = await graph.ainvoke(
-                            {"ingress": plan.context.standalone_question},
-                            {
-                                "configurable": {
-                                    "thread_id": f"shadow:{request_id}"
+                    )
+                    try:
+                        async with composition_deadline:
+                            state = await graph.ainvoke(
+                                {"ingress": plan.context.standalone_question},
+                                {
+                                    "configurable": {
+                                        "thread_id": f"shadow:{request_id}"
+                                    },
+                                    "recursion_limit": (
+                                        self._facade.budget.max_graph_steps + 1
+                                    ),
                                 },
-                                "recursion_limit": (
-                                    self._facade.budget.max_graph_steps + 1
-                                ),
-                            },
-                        )
+                            )
+                    finally:
+                        composition_deadline = None
                 except TimeoutError:
                     stop_condition = "deadline"
                 except _ShadowBudgetStop as exc:
@@ -1670,34 +1690,61 @@ class ConnectedShadowTurnRunner:
                     **state,
                     "terminal_outcome": TerminalOutcome.BLOCKED,
                 }
-        if durable_terminal_reused and response is not None:
-            safe_terminal = (
-                response.status is AssetResultStatus.RESOLVED
-                and response.result is not None
-                and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+        safe_terminal = (
+            response is not None
+            and response.status is AssetResultStatus.RESOLVED
+            and response.result is not None
+            and response.effect_status in {EffectStatus.NONE, EffectStatus.VERIFIED}
+        )
+        if (
+            safe_terminal
+            and composition_journal is not None
+            and state.get("final_artifact") is None
+        ):
+            assert response is not None
+            assert response.result is not None
+            recovered_final = await composition_journal.load(
+                request_id=request_id,
+                normalized_payload_hash=response.result.payload_hash,
+                composer_fingerprint=self._composer_fingerprint,
             )
+            if recovered_final is not None:
+                state = {
+                    **state,
+                    "final_artifact": recovered_final,
+                    "terminal_outcome": TerminalOutcome.COMPLETED,
+                }
+                stop_condition = "completed"
+                failure_code = None
+                durable_final_recovered = True
+        if durable_terminal_reused and response is not None:
             dispatch_guard.reuse_terminal(succeeded=safe_terminal)
-            if safe_terminal:
+            if safe_terminal and state.get("final_artifact") is None:
                 # 이미 durable terminal인 호출은 checkpoint serializer/resume 오류로
                 # 완료 판정을 뒤집거나 target을 재실행하지 않는다.
                 stop_condition = "completed"
                 failure_code = None
+                final_artifact = None
                 try:
                     with bind_runtime_llm_budget(budget_controller):
-                        async with asyncio.timeout(
+                        composition_deadline = asyncio.timeout(
                             budget_controller.remaining_seconds
-                        ):
-                            final_artifact = await composition.finalize(
-                                request_id=request_id,
-                                normalized_result=response.result,
-                                outcome=TerminalOutcome.COMPLETED,
-                                composition_input=(
-                                    composition_input_for(response.result)
-                                    if self._composition_mode
-                                    == "central_persona_v1"
-                                    else None
-                                ),
-                            )
+                        )
+                        try:
+                            async with composition_deadline:
+                                final_artifact = await composition.finalize(
+                                    request_id=request_id,
+                                    normalized_result=response.result,
+                                    outcome=TerminalOutcome.COMPLETED,
+                                    composition_input=(
+                                        composition_input_for(response.result)
+                                        if self._composition_mode
+                                        == "central_persona_v1"
+                                        else None
+                                    ),
+                                )
+                        finally:
+                            composition_deadline = None
                 except TimeoutError:
                     final_artifact = None
                     stop_condition = "deadline"
@@ -1744,7 +1791,7 @@ class ConnectedShadowTurnRunner:
         delivery_receipt = state.get("delivery_receipt")
         delivery_status = (
             DeliveryStatus.SHADOWED
-            if durable_terminal_reused
+            if durable_terminal_reused or durable_final_recovered
             else getattr(
                 delivery_receipt,
                 "status",
