@@ -69,9 +69,14 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
 
 ## Output contract
 
-The helper emits one JSON object with `ok`, `source`, `mode`, `category`, `season`,
-`date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`.
+The helper emits one JSON object with `ok`, `side_effect`, `source`, `mode`, `category`, `season`,
+`date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`. Non-empty results also
+include an asset-owned, deterministic, bounded `answer` for user-facing presentation.
 
+- Every success, normal-empty, error, and compact fallback result declares the
+  read-only execution contract as top-level `side_effect=false`.
+- `answer` is derived only from allowlisted normalized sports fields, is capped at
+  3,500 characters, and never serializes nested raw provider objects.
 - Every result item preserves `event_state`, `status_code`, score, winner, date,
   `fetched_at`, and `source_url`.
 - Cancelled, suspended, postponed, unknown, or score-incomplete events are never

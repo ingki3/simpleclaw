@@ -27,6 +27,26 @@ ASSET_NAMESPACES = ("simpleclaw.recipes", "simpleclaw.skills")
 CONCRETE_CONTRACT_ID = re.compile(
     r"[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*){2,}\Z"
 )
+ASSET_PRESENTATION_LITERALS = frozenset(
+    {
+        "rank",
+        "team",
+        "played",
+        "wins",
+        "draws",
+        "losses",
+        "win_rate",
+        "games_behind",
+        "순위",
+        "팀",
+        "경기",
+        "승",
+        "무",
+        "패",
+        "승률",
+        "게임차",
+    }
+)
 
 
 def _static_string(node: ast.AST) -> str | None:
@@ -36,20 +56,84 @@ def _static_string(node: ast.AST) -> str | None:
     return None
 
 
-def _is_payload_expression(node: ast.AST) -> bool:
-    """직접 payload 또는 envelope.payload 접근인지 판정한다."""
-    return (isinstance(node, ast.Name) and node.id == "payload") or (
-        isinstance(node, ast.Attribute) and node.attr == "payload"
+def _payload_origin(
+    node: ast.AST,
+    aliases: dict[str, str | None],
+) -> tuple[bool, str | None]:
+    """Payload 또는 그 파생 alias인지와 마지막 static key를 반환한다."""
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return True, aliases[node.id]
+    if isinstance(node, ast.Attribute) and node.attr == "payload":
+        return True, None
+    if isinstance(node, ast.Subscript):
+        derived, origin = _payload_origin(node.value, aliases)
+        if derived:
+            return True, _static_string(node.slice) or origin
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        derived, origin = _payload_origin(node.func.value, aliases)
+        if derived:
+            key = (
+                _static_string(node.args[0])
+                if node.func.attr == "get" and node.args
+                else None
+            )
+            return True, key or origin
+    return False, None
+
+
+def _scope_nodes(scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef):
+    """Nested lexical scope를 제외한 현재 scope node만 순회한다."""
+    stack = list(reversed(scope.body))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
+            continue
+        stack.extend(reversed(tuple(ast.iter_child_nodes(node))))
+
+
+def _payload_aliases(
+    scope: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, str | None]:
+    """단순 assignment를 따라 payload와 nested static-key alias를 추적한다."""
+    aliases: dict[str, str | None] = {"payload": None}
+    assignments = tuple(
+        node
+        for node in _scope_nodes(scope)
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr)
     )
+    changed = True
+    while changed:
+        changed = False
+        for assignment in assignments:
+            value = assignment.value
+            derived, origin = _payload_origin(value, aliases)
+            if not derived:
+                continue
+            targets = (
+                tuple(assignment.targets)
+                if isinstance(assignment, ast.Assign)
+                else (assignment.target,)
+            )
+            for target in targets:
+                if isinstance(target, ast.Name) and (
+                    target.id not in aliases or aliases[target.id] != origin
+                ):
+                    aliases[target.id] = origin
+                    changed = True
+    return aliases
 
 
-def _payload_key_accesses(expression: ast.AST) -> list[tuple[int, str]]:
+def _payload_key_accesses(
+    expression: ast.AST,
+    aliases: dict[str, str | None],
+) -> list[tuple[int, str]]:
     """제어식에서 opaque payload의 정적 key 해석을 찾는다."""
     accesses: list[tuple[int, str]] = []
     for node in ast.walk(expression):
         if (
             isinstance(node, ast.Subscript)
-            and _is_payload_expression(node.value)
+            and _payload_origin(node.value, aliases)[0]
             and (key := _static_string(node.slice)) is not None
         ):
             accesses.append((node.lineno, key))
@@ -57,7 +141,7 @@ def _payload_key_accesses(expression: ast.AST) -> list[tuple[int, str]]:
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "get"
-            and _is_payload_expression(node.func.value)
+            and _payload_origin(node.func.value, aliases)[0]
             and node.args
             and (key := _static_string(node.args[0])) is not None
         ):
@@ -68,11 +152,11 @@ def _payload_key_accesses(expression: ast.AST) -> list[tuple[int, str]]:
                 left, right = operands[index : index + 2]
                 if (
                     isinstance(operator, (ast.In, ast.NotIn))
-                    and _is_payload_expression(right)
+                    and _payload_origin(right, aliases)[0]
                     and (key := _static_string(left)) is not None
                 ):
                     accesses.append((node.lineno, key))
-    return accesses
+    return list(dict.fromkeys(accesses))
 
 
 def _control_flow_expressions(node: ast.AST) -> tuple[ast.AST, ...]:
@@ -122,6 +206,14 @@ def _architecture_violations(
             if (
                 isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
+                and node.value in ASSET_PRESENTATION_LITERALS
+            ):
+                violations.append(
+                    f"{label}:{node.lineno}:asset-presentation-literal:{node.value}"
+                )
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
                 and node.value in concrete_literals
             ):
                 violations.append(
@@ -135,9 +227,6 @@ def _architecture_violations(
                 violations.append(
                     f"{label}:{node.lineno}:static-contract-id:{node.value}"
                 )
-            for expression in _control_flow_expressions(node):
-                for lineno, key in _payload_key_accesses(expression):
-                    violations.append(f"{label}:{lineno}:payload-key-branch:{key}")
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 for module in _imported_modules(node):
                     if not _is_asset_specific_import(module):
@@ -147,6 +236,13 @@ def _architecture_violations(
                 lowered = node.name.casefold()
                 if "evidence" in lowered and "reduc" in lowered:
                     violations.append(f"{label}:{node.lineno}:evidence-reducer:{node.name}")
+        scopes = (tree, *(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)))
+        for scope in scopes:
+            aliases = _payload_aliases(scope)
+            for node in _scope_nodes(scope):
+                for expression in _control_flow_expressions(node):
+                    for lineno, key in _payload_key_accesses(expression, aliases):
+                        violations.append(f"{label}:{lineno}:payload-key-branch:{key}")
     return violations
 
 
@@ -214,6 +310,36 @@ def test_architecture_guard_kills_payload_key_branch_mutation() -> None:
     }
     assert _architecture_violations(mutated) == [
         "nodes.py:2:payload-key-branch:comet_token"
+    ]
+
+
+def test_architecture_guard_kills_payload_alias_branch_mutation() -> None:
+    """result.payload alias rename과 nested data alias도 payload branch로 탐지한다."""
+    mutated = {
+        "nodes.py": (
+            "def dispatch(result):\n"
+            "    envelope = result.payload\n"
+            "    data = envelope.get('data')\n"
+            "    if envelope.get('schema') == 'asset_result.v1':\n"
+            "        return data.get('items') if data.get('ok') else []\n"
+        )
+    }
+
+    assert _architecture_violations(mutated) == [
+        "nodes.py:4:payload-key-branch:schema",
+        "nodes.py:5:payload-key-branch:ok",
+    ]
+
+
+def test_architecture_guard_kills_asset_presentation_vocabulary_mutation() -> None:
+    """업무별 field/label mapping이 protected Core로 돌아오지 못하게 한다."""
+    mutated = {"renderer.py": "FIELDS = (('rank', '순위'), ('team', '팀'))\n"}
+
+    assert _architecture_violations(mutated) == [
+        "renderer.py:1:asset-presentation-literal:rank",
+        "renderer.py:1:asset-presentation-literal:순위",
+        "renderer.py:1:asset-presentation-literal:team",
+        "renderer.py:1:asset-presentation-literal:팀",
     ]
 
 

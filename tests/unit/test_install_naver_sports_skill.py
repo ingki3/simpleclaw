@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,7 +17,10 @@ from scripts.install_naver_sports_skill import (
     install,
     main,
 )
+from simpleclaw.skills import naver_sports
 from simpleclaw.skills.discovery import discover_skills
+
+REPO_ROOT = Path(__file__).parents[2]
 
 
 def _installed_skill(tmp_path: Path, mutation: str | None = None):
@@ -126,6 +133,35 @@ def test_installer_repairs_skill_bytes_and_executable_mode(tmp_path: Path) -> No
     assert skill_md.stat().st_mode & 0o777 == 0o644
     assert wrapper.read_bytes() == wrapper_bytes
     assert wrapper.stat().st_mode & 0o777 == 0o755
+
+
+def test_installed_wrapper_preserves_canonical_source_effect_contract(
+    tmp_path: Path,
+) -> None:
+    skill_dir = install(tmp_path / "global")
+    source_payload = naver_sports.run(mode="live", category="unknown")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(skill_dir / "scripts" / "naver_sports.py"),
+            "--mode",
+            "live",
+            "--category",
+            "unknown",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    bundled_payload = json.loads(completed.stdout)
+    assert set(bundled_payload) == set(source_payload)
+    assert bundled_payload["ok"] is source_payload["ok"] is False
+    assert bundled_payload["side_effect"] is source_payload["side_effect"] is False
+    assert bundled_payload["error"]["code"] == source_payload["error"]["code"]
 
 
 @pytest.mark.parametrize(

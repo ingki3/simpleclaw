@@ -70,6 +70,7 @@ def test_live_rechecks_endpoint_and_uses_second_response():
     )
 
     assert result["ok"] is True
+    assert result["side_effect"] is False
     assert len(client.urls) == 2
     assert client.urls[0] == client.urls[1]
     assert result["freshness"]["refreshed_twice"] is True
@@ -511,6 +512,9 @@ def test_team_standings_select_last_enabled_season_and_project_fields():
             "games_behind": 0,
         }
     ]
+    assert result["answer"] == (
+        "확인된 결과입니다.\n- 순위: 1 · 팀: 삼성 · 승: 55"
+    )
     assert len(naver_sports.dumps_bounded(result)) <= 7000
 
 
@@ -676,6 +680,7 @@ def test_all_outputs_keep_public_schema_keys():
 
     assert {
         "ok",
+        "side_effect",
         "source",
         "mode",
         "category",
@@ -688,8 +693,27 @@ def test_all_outputs_keep_public_schema_keys():
         "error",
     }.issubset(result)
     assert result["ok"] is True
+    assert result["side_effect"] is False
     assert result["items"] == []
     assert result["message"]
+
+
+def test_error_and_compact_outputs_keep_explicit_no_effect_contract():
+    error = naver_sports.run(
+        mode="live",
+        category="unknown",
+        client=FakeClient([]),
+    )
+
+    assert error["ok"] is False
+    assert error["side_effect"] is False
+
+    oversized = {**error, "unpruned": "x" * 10_000}
+    compact = json.loads(naver_sports.dumps_bounded(oversized))
+
+    assert compact["ok"] is False
+    assert compact["side_effect"] is False
+    assert compact["error"]["code"] == "OUTPUT_TOO_LARGE"
 
 
 def test_cli_prints_exactly_one_json_document(capsys):

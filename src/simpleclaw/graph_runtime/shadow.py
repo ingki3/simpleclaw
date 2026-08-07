@@ -17,6 +17,9 @@ from typing import Any, Literal, cast
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from simpleclaw.agent.asset_result_presentation import (
+    compose_user_facing_asset_result,
+)
 from simpleclaw.agent.resolution_types import ExecutionMode
 from simpleclaw.agent.turn_plan import UnifiedTurnPlan
 from simpleclaw.graph_runtime.adapters.persistence import (
@@ -1072,24 +1075,12 @@ def _route_for_plan(plan: UnifiedTurnPlan, asset_ref: AssetRefV1) -> str:
 
 
 def _compose_user_facing_result(result: NormalizedAssetResultV1) -> str:
-    """Opaque contract JSON을 그대로 노출하지 않는 bounded deterministic renderer."""
-    payload = result.payload
-    preferred = ("answer", "result", "content", "text", "message", "summary")
-    for key in preferred:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    strings = [value.strip() for value in payload.values() if isinstance(value, str) and value.strip()]
-    if len(strings) == 1:
-        return strings[0]
-    lines = [
-        f"- {key}: {value}"
-        for key, value in sorted(payload.items())
-        if isinstance(value, (str, int, float, bool))
-    ]
-    if lines:
-        return "처리 결과입니다.\n" + "\n".join(lines)
-    return "요청을 처리했지만 안전하게 표시할 수 있는 텍스트 결과가 없습니다."
+    """Core 밖 generic presentation boundary의 text 결과만 소비한다."""
+    return compose_user_facing_asset_result(
+        payload=result.payload,
+        result_status=result.status.value,
+        effect_status=result.effect_status.value,
+    )
 
 
 def _invocation_status(response: AdapterResponse) -> InvocationStatus:
