@@ -59,6 +59,14 @@ class FinalArtifactJournal(Protocol):
         owner_token: str,
     ) -> bool: ...
 
+    async def settle_composition_claim(
+        self,
+        *,
+        owner_token: str,
+    ) -> bool | None: ...
+
+    def cancel_composition_claim(self, *, owner_token: str) -> None: ...
+
     async def wait_for_final(
         self,
         *,
@@ -92,6 +100,11 @@ class SQLiteFinalArtifactJournal:
         self._timeout_seconds = max(float(timeout_seconds), 0.1)
         self._schema_lock = _schema_lock(self._path)
         self._initialized = False
+        self._claim_workers_guard = threading.Lock()
+        self._claim_workers: dict[
+            tuple[asyncio.AbstractEventLoop, str],
+            tuple[asyncio.Task[bool], threading.Event],
+        ] = {}
 
     def lock_for(self, request_id: str) -> asyncio.Lock:
         """같은 loop/path/request의 모든 runtime 인스턴스가 공유하는 compose lock."""
@@ -305,20 +318,82 @@ class SQLiteFinalArtifactJournal:
         composer_fingerprint: str,
         owner_token: str = "",
     ) -> bool:
-        """첫 worker만 owner가 되며 취소 뒤에도 worker 결과를 확정한다."""
-        worker = asyncio.create_task(
-            asyncio.to_thread(
-                self._claim_sync,
+        """첫 worker만 owner가 되며 caller 취소 시 late self-claim을 정리한다."""
+        cancellation_requested = threading.Event()
+
+        def claim_and_cleanup() -> bool:
+            acquired = self._claim_sync(
                 request_id,
                 normalized_payload_hash,
                 composer_fingerprint,
                 owner_token,
             )
+            if acquired and cancellation_requested.is_set():
+                self._release_claim_sync(request_id, owner_token)
+            return acquired
+
+        loop = asyncio.get_running_loop()
+        worker = asyncio.create_task(
+            asyncio.to_thread(claim_and_cleanup)
         )
+        worker_key = (loop, owner_token)
+        with self._claim_workers_guard:
+            self._claim_workers[worker_key] = (
+                worker,
+                cancellation_requested,
+            )
         try:
             return await asyncio.shield(worker)
         except asyncio.CancelledError:
-            return await asyncio.shield(worker)
+            cancellation_requested.set()
+            raise
+        finally:
+            with self._claim_workers_guard:
+                active_worker = self._claim_workers.get(worker_key)
+                if active_worker is not None and active_worker[0] is worker:
+                    self._claim_workers.pop(worker_key, None)
+
+    async def settle_composition_claim(
+        self,
+        *,
+        owner_token: str,
+    ) -> bool | None:
+        """Controlled deadline만 실제 SQLite claim worker 결과를 확정한다."""
+        worker_key = (asyncio.get_running_loop(), owner_token)
+        with self._claim_workers_guard:
+            active_worker = self._claim_workers.get(worker_key)
+        if active_worker is None:
+            return None
+        worker = active_worker[0]
+        return await asyncio.shield(worker)
+
+    def cancel_composition_claim(self, *, owner_token: str) -> None:
+        """Caller cancellation을 worker에 즉시 표시해 late self-claim을 정리한다."""
+        worker_key = (asyncio.get_running_loop(), owner_token)
+        with self._claim_workers_guard:
+            active_worker = self._claim_workers.get(worker_key)
+        if active_worker is not None:
+            active_worker[1].set()
+
+    def _release_claim_sync(self, request_id: str, owner_token: str) -> None:
+        """취소된 호출이 뒤늦게 만든 자기 claim만 제거한다."""
+        self._ensure_schema_sync()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                DELETE FROM graph_final_composition_claims
+                WHERE request_id = ? AND owner_token = ?
+                """,
+                (request_id, owner_token),
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _owns_claim_sync(
         self,

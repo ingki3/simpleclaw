@@ -763,6 +763,101 @@ async def test_claim_timeout_waits_for_delayed_non_owner_and_preserves_claim(
 
 
 @pytest.mark.asyncio
+async def test_claim_caller_cancellation_is_bounded_and_cleans_late_claim(
+    tmp_path,
+) -> None:
+    value, result = _values("delayed-claim-caller-cancel")
+    db_path = tmp_path / "delayed-claim-caller-cancel.sqlite3"
+    worker_started = threading.Event()
+    worker_finished = threading.Event()
+    release_worker = threading.Event()
+    base_journal = SQLiteFinalArtifactJournal(db_path)
+    assert await base_journal.load(
+        request_id=value.request_id,
+        normalized_payload_hash=result.payload_hash,
+        composer_fingerprint="composer-v1",
+    ) is None
+
+    class DelayedClaimJournal(SQLiteFinalArtifactJournal):
+        def _claim_sync(self, *args):
+            worker_started.set()
+            assert release_worker.wait(timeout=1.0)
+            try:
+                return super()._claim_sync(*args)
+            finally:
+                worker_finished.set()
+
+    compose = AsyncMock(return_value=_draft())
+    safe_render = Mock(return_value="must not render")
+    task = asyncio.create_task(
+        FinalCompositionRuntime(
+            compose=compose,
+            guard=lambda *_args: Mock(accepted=True),
+            safe_render=safe_render,
+            journal=DelayedClaimJournal(db_path),
+            composer_fingerprint="composer-v1",
+            controlled_deadline_expired=lambda: False,
+        ).finalize(
+            request_id=value.request_id,
+            normalized_result=result,
+            outcome=TerminalOutcome.COMPLETED,
+            composition_input=value,
+        )
+    )
+    assert await asyncio.to_thread(worker_started.wait, 1.0)
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=0.1)
+    cancellation_was_bounded = task in done
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(worker_finished.wait, 1.0)
+
+    for _ in range(100):
+        with sqlite3.connect(db_path) as connection:
+            claim_count = connection.execute(
+                "SELECT COUNT(*) FROM graph_final_composition_claims "
+                "WHERE request_id = ?",
+                (value.request_id,),
+            ).fetchone()[0]
+        if claim_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert cancellation_was_bounded
+    assert claim_count == 0
+    assert compose.await_count == 0
+    assert safe_render.call_count == 0
+
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=lambda *_args: Mock(accepted=True),
+        safe_render=Mock(return_value="must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+    assert replay is not None
+    assert replay.content == _draft().content
+    assert replay_compose.await_count == 1
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_composition_claims "
+            "WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
 async def test_foreign_waiter_deadline_preserves_active_owner_claim_100_times(
     tmp_path,
 ) -> None:

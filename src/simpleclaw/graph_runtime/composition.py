@@ -189,6 +189,12 @@ class FinalCompositionRuntime:
                 owns_claim = getattr(
                     self._journal, "owns_composition_claim", None
                 )
+                settle_claim = getattr(
+                    self._journal, "settle_composition_claim", None
+                )
+                cancel_claim = getattr(
+                    self._journal, "cancel_composition_claim", None
+                )
                 wait_for_final = getattr(self._journal, "wait_for_final", None)
                 if (
                     callable(claim)
@@ -209,20 +215,34 @@ class FinalCompositionRuntime:
                         if not self._controlled_deadline_owns_cancellation(
                             cancellation_baseline=cancellation_baseline
                         ):
+                            if callable(cancel_claim):
+                                cancel_claim(owner_token=claim_owner_token)
+                            claim_task.cancel()
+                            raise
+                        controlled_deadline_interrupted = True
+                        settled = None
+                        if callable(settle_claim):
+                            try:
+                                settled = await settle_claim(
+                                    owner_token=claim_owner_token,
+                                )
+                            except asyncio.CancelledError:
+                                if callable(cancel_claim):
+                                    cancel_claim(owner_token=claim_owner_token)
+                                claim_task.cancel()
+                                raise
+                        if settled is None:
                             claim_task.cancel()
                             with suppress(Exception, asyncio.CancelledError):
                                 await claim_task
-                            raise
-                        claim_task.cancel()
-                        with suppress(Exception, asyncio.CancelledError):
-                            await claim_task
-                        controlled_deadline_interrupted = True
-                        acquired = await owns_claim(
-                            request_id=request_id,
-                            normalized_payload_hash=payload_hash,
-                            composer_fingerprint=self._composer_fingerprint,
-                            owner_token=claim_owner_token,
-                        )
+                            acquired = await owns_claim(
+                                request_id=request_id,
+                                normalized_payload_hash=payload_hash,
+                                composer_fingerprint=self._composer_fingerprint,
+                                owner_token=claim_owner_token,
+                            )
+                        else:
+                            acquired = settled
                         if not acquired:
                             existing = await self._journal.load(
                                 request_id=request_id,
