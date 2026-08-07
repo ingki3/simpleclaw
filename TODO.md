@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-627](mention://issue/10515293-4f91-4128-af2b-389b8b549e59): Post-main Unit Test catalog assertion을 결정적으로 수정** — whole-prompt 숫자 substring 검사를 bounded capability catalog와 fingerprint의 JSON 구조 검증으로 대체하고, timestamp에 `101`/`102`가 포함돼도 정상 통과하는 한편 실제 `msg:101` identifier leak은 계속 fail-closed하도록 고정한다. fresh CI 3종·독립 Stage D·merge와 후속 post-main Unit Tests 성공 전까지 production deploy와 Telegram 전송을 HOLD한다. (진행: 2026-08-07)
+
 - [>] **[BIZ-619](mention://issue/676488c0-4e71-4474-a585-ae564192206b): Payload-origin architecture guard의 wrapper·비제어식 우회를 차단** — BIZ-618 PR #663 merge 직전 late finding을 corrective lifecycle로 분리했다. opaque payload identity를 보존하는 `dict`·`cast`·method/module copy wrapper를 추적하고, protected Core 전체에서 return·assignment·formatting을 포함한 static-key read를 architecture violation으로 차단한다. 현재 Core false positive 0, 전체 contracts/unit/Ruff, deterministic full Graphify와 corrective PR exact-head CI·독립 Stage D PASS 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-618](mention://issue/a29f937a-fc6b-42de-9c75-313b832519c2): Naver Sports read-only effect metadata와 V4 typed renderer를 정렬** — production helper의 정상·empty·error·compact payload에 top-level `side_effect=false`를 명시하고, Naver Sports asset이 allowlisted 정규화 필드로 deterministic·bounded `answer`를 소유한다. Core 밖 generic presentation 경계는 typed status/effect/side-effect 안전 gate를 preferred text보다 먼저 적용하고 Core는 opaque payload 의미를 해석하지 않는다. payload alias/data-flow와 sports vocabulary의 Core 재유입을 architecture mutation guard로 차단하며 confirmation·idempotency·exactly-once 경계와 raw diagnostic 비노출을 유지한다. Corrective PR의 fresh exact-head CI와 독립 Stage D 리뷰 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)

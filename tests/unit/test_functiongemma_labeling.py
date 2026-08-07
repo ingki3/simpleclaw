@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from argparse import Namespace
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -624,8 +625,16 @@ async def test_pre_call_candidates_and_fingerprint_remain_identical() -> None:
     )
 
 
-def test_bounded_catalog_and_actual_prompt_match_case_candidates() -> None:
-    assets = (_asset("search"), _asset("weather"))
+def test_bounded_catalog_and_actual_prompt_match_case_candidates(
+    monkeypatch,
+) -> None:
+    class TimestampWithIdentifierDigits(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 7, 1, 2, 3, 101102, tzinfo=tz)
+
+    monkeypatch.setattr(intent_poc, "datetime", TimestampWithIdentifierDigits)
+    assets = (_asset("search"), _asset("weather"), _asset("calendar"))
     catalog = PlannerCatalog(assets=assets, fingerprint="full")
     candidates = (
         CandidateAsset("skill:weather", "skill", "weather"),
@@ -657,11 +666,18 @@ def test_bounded_catalog_and_actual_prompt_match_case_candidates() -> None:
         for item in payload["capability_catalog"]
     ] == ["skill:weather", "skill:search"]
     assert payload["catalog_fingerprint"] == candidate_fingerprint(candidates)
-    assert "101" not in prompt
-    assert "102" not in prompt
+    assert payload["context_candidates"][0]["timestamp"] == (
+        "2026-08-07T01:02:03.101102+00:00"
+    )
 
 
-def test_provider_prompt_diagnostic_rejects_raw_message_id() -> None:
+def test_provider_prompt_diagnostic_rejects_raw_message_id(monkeypatch) -> None:
+    class TimestampWithIdentifierDigits(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 8, 7, 1, 2, 3, 101102, tzinfo=tz)
+
+    monkeypatch.setattr(intent_poc, "datetime", TimestampWithIdentifierDigits)
     asset = _asset()
     catalog = PlannerCatalog(assets=(asset,), fingerprint="full")
     candidates = (
