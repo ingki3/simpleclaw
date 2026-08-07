@@ -127,6 +127,7 @@ from simpleclaw.agent.session_state import (
 )
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.agent.tool_gate import (
+    ToolArgumentConstraint,
     ToolExecutionScope,
     TrustedAssetSafety,
     skill_definition_fingerprint,
@@ -222,6 +223,10 @@ from simpleclaw.proactive.store import OpportunityStore
 from simpleclaw.recipes.executor import (
     execute_recipe,
     render_exact_recipe_instructions,
+)
+from simpleclaw.recipes.bindings import (
+    constraint_values,
+    resolve_recipe_argument_constraints,
 )
 from simpleclaw.recipes.learning import (
     RECIPE_SUGGESTION_RESPONSE_SCHEMA,
@@ -2836,16 +2841,29 @@ class AgentOrchestrator:
             payload = json.loads(bound_steps[0].source_payload_json)
             if not isinstance(payload, dict):
                 raise TypeError("connected recipe payload must be an object")
+            bound_constraints: dict[str, object] = {}
+            for step in bound_steps:
+                for key, value in step.constraints.items():
+                    if key in bound_constraints and bound_constraints[key] != value:
+                        raise ValueError("connected recipe constraints conflict")
+                    bound_constraints[key] = value
+            variables = {
+                key: (
+                    value
+                    if isinstance(value, str)
+                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
+                )
+                for key, value in payload.items()
+            }
+            variables["__bound_constraints"] = json.dumps(
+                bound_constraints,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
             raw = await self._execute_exact_recipe_asset(
                 definition.name,
-                {
-                    key: (
-                        value
-                        if isinstance(value, str)
-                        else json.dumps(value, ensure_ascii=False, sort_keys=True)
-                    )
-                    for key, value in payload.items()
-                },
+                variables,
                 on_progress=on_progress,
             )
             if not isinstance(raw, dict):
@@ -3385,6 +3403,45 @@ class AgentOrchestrator:
             }
 
         if recipe.instructions:
+            source_variables = {
+                key: value
+                for key, value in variables.items()
+                if not key.startswith("__")
+            }
+            try:
+                resolved_constraints = resolve_recipe_argument_constraints(
+                    recipe,
+                    source_variables,
+                )
+                resolved_values = constraint_values(resolved_constraints)
+                declared_bound = variables.get("__bound_constraints")
+                if declared_bound is not None:
+                    decoded_bound = json.loads(declared_bound)
+                    if decoded_bound != resolved_values:
+                        return {
+                            "schema": "asset_result.v1",
+                            "status": "failed_terminal",
+                            "limitations": ["recipe_bound_constraint_drift"],
+                        }
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["recipe_argument_constraint_invalid"],
+                }
+            render_variables = {
+                key: str(value) for key, value in resolved_values.items()
+            }
+            tool_argument_constraints = tuple(
+                ToolArgumentConstraint(
+                    asset_type="skill",
+                    asset_name=item.target_skill,
+                    argument_name=item.argument_name,
+                    flag=item.flag,
+                    expected_value=str(item.value),
+                )
+                for item in resolved_constraints
+            )
             try:
                 def _typed_string_tuple(name: str) -> tuple[str, ...]:
                     """CapabilityExecutor의 JSON string tuple 변수를 보수 파싱한다."""
@@ -3407,6 +3464,7 @@ class AgentOrchestrator:
                     intents=_typed_string_tuple("intents"),
                     reference_date=str(variables.get("reference_date") or ""),
                     required_claims=_typed_string_tuple("required_claims"),
+                    bound_variables=render_variables,
                 )
                 nested_requirement = EvidenceRequirement(
                     required=False,
@@ -3430,6 +3488,7 @@ class AgentOrchestrator:
                     evidence_requirement=nested_requirement,
                     forced_skill_names=frozenset(recipe.skills),
                     forced_tool_names=frozenset({"execute_skill"}),
+                    forced_skill_argument_constraints=tool_argument_constraints,
                     final_response_schema=ASSET_RESULT_RESPONSE_SCHEMA,
                 )
             except Exception as exc:
@@ -3452,6 +3511,15 @@ class AgentOrchestrator:
                     "schema": "asset_result.v1",
                     "status": "failed_terminal",
                     "limitations": ["recipe_requires_one_successful_delegate"],
+                }
+            if any(
+                not constraint.matches(delegate_trace[0].arguments)
+                for constraint in tool_argument_constraints
+            ):
+                return {
+                    "schema": "asset_result.v1",
+                    "status": "failed_terminal",
+                    "limitations": ["recipe_delegate_argument_constraint_mismatch"],
                 }
             if not nested.success:
                 return {
@@ -3550,6 +3618,7 @@ class AgentOrchestrator:
         turn: TurnExecutionState | None = None,
         forced_skill_names: frozenset[str] | None = None,
         forced_tool_names: frozenset[str] | None = None,
+        forced_skill_argument_constraints: tuple[ToolArgumentConstraint, ...] = (),
         final_response_schema: dict[str, object] | None = None,
     ) -> ToolLoopState:
         """tool loop runner 입력 상태를 조립한다.
@@ -3577,6 +3646,8 @@ class AgentOrchestrator:
                 raise ValueError("forced skill scope cannot be combined with a plan or hint")
             if forced_tool_names is None or not forced_tool_names:
                 raise ValueError("forced skill scope requires a non-empty tool scope")
+        elif forced_skill_argument_constraints:
+            raise ValueError("argument constraints require a forced skill scope")
         if plan is not None and candidates is None:
             raise ValueError("planned tool loop requires context candidates")
         if evidence_requirement is None:
@@ -3869,6 +3940,7 @@ class AgentOrchestrator:
                 allow_cron_mutation=False,
                 max_tool_calls=1,
                 trusted_asset_safety=trusted_asset_safety,
+                argument_constraints=forced_skill_argument_constraints,
             )
         elif plan is not None:
             tools = filter_tool_definitions(
@@ -3933,6 +4005,7 @@ class AgentOrchestrator:
         turn: TurnExecutionState | None = None,
         forced_skill_names: frozenset[str] | None = None,
         forced_tool_names: frozenset[str] | None = None,
+        forced_skill_argument_constraints: tuple[ToolArgumentConstraint, ...] = (),
         final_response_schema: dict[str, object] | None = None,
     ) -> ToolLoopResult:
         """Native Function Calling 루프를 실행하고 structured result를 반환한다.
@@ -3966,6 +4039,7 @@ class AgentOrchestrator:
             turn=turn,
             forced_skill_names=forced_skill_names,
             forced_tool_names=forced_tool_names,
+            forced_skill_argument_constraints=forced_skill_argument_constraints,
             final_response_schema=final_response_schema,
         )
         result = await ToolLoopRunner(self).run(state)

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Mapping
 
 from simpleclaw.agent.tool_schemas import (
     NativeToolSpec,
@@ -71,6 +73,33 @@ class TrustedAssetSafety:
 
 
 @dataclass(frozen=True)
+class ToolArgumentConstraint:
+    """Loaded Recipe binding에서 파생된 exact Skill argument 제약."""
+
+    asset_type: str
+    asset_name: str
+    argument_name: str
+    flag: str
+    expected_value: str
+
+    def matches(self, arguments: Mapping[str, object]) -> bool:
+        """flag가 정확히 한 번 exact value와 함께 전달됐는지 검사한다."""
+        raw = arguments.get(self.argument_name)
+        if not isinstance(raw, str):
+            return False
+        try:
+            argv = shlex.split(raw)
+        except ValueError:
+            return False
+        positions = [index for index, token in enumerate(argv) if token == self.flag]
+        return (
+            len(positions) == 1
+            and positions[0] + 1 < len(argv)
+            and argv[positions[0] + 1] == self.expected_value
+        )
+
+
+@dataclass(frozen=True)
 class ToolExecutionScope:
     """한 tool loop에서 planner/controller가 허용한 실행 범위."""
 
@@ -83,6 +112,7 @@ class ToolExecutionScope:
     max_tool_calls: int | None = None
     # Planner/model payload가 아니라 loaded asset definition에서 만든 값만 넣는다.
     trusted_asset_safety: tuple[TrustedAssetSafety, ...] = ()
+    argument_constraints: tuple[ToolArgumentConstraint, ...] = ()
 
     def safety_for(self, asset_type: str, asset_name: str) -> TrustedAssetSafety | None:
         matches = tuple(
@@ -91,6 +121,18 @@ class ToolExecutionScope:
             if item.asset_type == asset_type and item.asset_name == asset_name
         )
         return matches[0] if len(matches) == 1 else None
+
+    def constraints_for(
+        self,
+        asset_type: str,
+        asset_name: str,
+    ) -> tuple[ToolArgumentConstraint, ...]:
+        """현재 exact asset에 선언된 argument constraint만 반환한다."""
+        return tuple(
+            item
+            for item in self.argument_constraints
+            if item.asset_type == asset_type and item.asset_name == asset_name
+        )
 
 
 class ToolCallRejected(RuntimeError):
@@ -166,6 +208,11 @@ class ToolGate:
                     raise ToolCallRejected("skill_definition_identity_mismatch")
                 if not safety.matches_definition(resolved_skill):
                     raise ToolCallRejected("skill_definition_fingerprint_mismatch")
+                if any(
+                    not constraint.matches(call.arguments)
+                    for constraint in scope.constraints_for("skill", skill)
+                ):
+                    raise ToolCallRejected("skill_argument_constraint_mismatch")
             return
 
         spec = self._specs.get(call.name)

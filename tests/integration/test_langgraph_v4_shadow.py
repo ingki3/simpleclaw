@@ -191,15 +191,26 @@ def _kbo_incident_plan(
 
 
 def _bound_helper_argv(bound_steps) -> tuple[str, ...]:
-    """Recipe source payload와 mapped Skill args의 동일성을 검증해 argv로 만든다."""
+    """자연어 source와 Recipe-owned top-N sidecar에서 exact helper argv를 만든다."""
     assert len(bound_steps) == 1
     bound = bound_steps[0]
     source_payload = json.loads(bound.source_payload_json)
     assert source_payload == {"query": source_payload["query"]}
     assert bound.payload == {"args": source_payload["query"]}
-    argv = tuple(shlex.split(bound.payload["args"]))
-    assert argv
-    return argv
+    assert bound.constraints == {"limit": 3}
+    return (
+        "--mode",
+        "standings",
+        "--category",
+        "kbo",
+        "--date",
+        "today",
+        "--season",
+        "auto",
+        "--limit",
+        str(bound.constraints["limit"]),
+        "--json",
+    )
 
 
 def test_connected_validation_discovers_planner_visible_contract_fixtures() -> None:
@@ -478,11 +489,10 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         recipes=(recipe,),
         native_specs=(),
     )
-    helper_args = (
-        "--mode standings --category kbo --date today "
-        "--season auto --limit 3 --json"
+    original = _kbo_incident_plan(
+        catalog.fingerprint,
+        prompt="현재 KBO 순위 상위 3팀만 알려줘",
     )
-    original = _kbo_incident_plan(catalog.fingerprint, prompt=helper_args)
     gate = PlanGate().evaluate(
         original,
         candidates=ContextCandidateSet((), 0, False),
@@ -503,10 +513,12 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
 
     async def nested_recipe(rendered, **_kwargs):
         assert pending_argv is not None
-        assert helper_args in rendered
+        assert "canonical `limit=3`" in rendered
+        assert "`--limit 3`" in rendered
         gate_result = validate_production_asset(
             Path(skill.skill_dir),
             argv=pending_argv,
+            expected_result_limit=3,
         )
         helper_payload = gate_result.payload
         return ToolLoopResult(
@@ -542,16 +554,23 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert "season을 trim한 뒤 `auto`" in recipe.instructions
         pending_argv = _bound_helper_argv(bound_steps)
         source_payload = json.loads(bound_steps[0].source_payload_json)
+        variables = {
+            key: (
+                value
+                if isinstance(value, str)
+                else json.dumps(value, ensure_ascii=False, sort_keys=True)
+            )
+            for key, value in source_payload.items()
+        }
+        variables["__bound_constraints"] = json.dumps(
+            bound_steps[0].constraints,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         result = await exact_recipe._execute_exact_recipe_asset(
             recipe.name,
-            {
-                key: (
-                    value
-                    if isinstance(value, str)
-                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
-                )
-                for key, value in source_payload.items()
-            },
+            variables,
         )
         assert isinstance(result, dict)
         helper_payload = result["data"]
@@ -618,10 +637,7 @@ async def test_kbo_connected_bound_helper_args_drift_fails_closed(
     )
     original = _kbo_incident_plan(
         catalog.fingerprint,
-        prompt=(
-            "--mode standings --category kbo --date today "
-            "--season unavailable-season --limit 3 --json"
-        ),
+        prompt="현재 KBO 순위 상위 3팀만 알려줘",
     )
     gate = PlanGate().evaluate(
         original,
@@ -639,14 +655,17 @@ async def test_kbo_connected_bound_helper_args_drift_fails_closed(
     async def nested_recipe(_rendered, **_kwargs):
         nonlocal gate_failures
         assert pending_argv is not None
+        drifted = list(pending_argv)
+        drifted[drifted.index("--limit") + 1] = "10"
         try:
             validate_production_asset(
                 Path(skill.skill_dir),
-                argv=pending_argv,
+                argv=tuple(drifted),
+                expected_result_limit=3,
             )
         except ProductionAssetValidationError as exc:
             gate_failures += 1
-            assert exc.code == "helper_not_ok"
+            assert exc.code == "result_limit_drift"
             raise
         raise AssertionError("drifted bound args unexpectedly passed")
 
@@ -657,16 +676,23 @@ async def test_kbo_connected_bound_helper_args_drift_fails_closed(
         calls += 1
         pending_argv = _bound_helper_argv(bound_steps)
         source_payload = json.loads(bound_steps[0].source_payload_json)
+        variables = {
+            key: (
+                value
+                if isinstance(value, str)
+                else json.dumps(value, ensure_ascii=False, sort_keys=True)
+            )
+            for key, value in source_payload.items()
+        }
+        variables["__bound_constraints"] = json.dumps(
+            bound_steps[0].constraints,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         return await exact_recipe._execute_exact_recipe_asset(
             recipe.name,
-            {
-                key: (
-                    value
-                    if isinstance(value, str)
-                    else json.dumps(value, ensure_ascii=False, sort_keys=True)
-                )
-                for key, value in source_payload.items()
-            },
+            variables,
         )
 
     store = ConversationStore(tmp_path / "kbo-drift-conversation.db")
@@ -703,6 +729,42 @@ async def test_kbo_connected_bound_helper_args_drift_fails_closed(
     assert result.execution.side_effect_counts.total == 0
     assert result.execution.rollback_required is False
     assert store.get_recent() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.offline
+@pytest.mark.parametrize("mutated_bound", ({}, {"limit": 10}))
+async def test_kbo_bound_constraint_loss_or_mutation_fails_before_delegate(
+    tmp_path,
+    mutated_bound,
+) -> None:
+    recipe, _skill = _production_sports_definitions(tmp_path)
+    exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
+    exact_recipe._recipes = (recipe,)
+
+    async def unexpected_delegate(*_args, **_kwargs):
+        raise AssertionError("drifted bound reached the nested delegate")
+
+    exact_recipe._run_tool_loop_result = unexpected_delegate
+
+    result = await exact_recipe._execute_exact_recipe_asset(
+        recipe.name,
+        {
+            "query": "현재 KBO 순위 상위 3팀만 알려줘",
+            "__bound_constraints": json.dumps(
+                mutated_bound,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        },
+    )
+
+    assert result == {
+        "schema": "asset_result.v1",
+        "status": "failed_terminal",
+        "limitations": ["recipe_bound_constraint_drift"],
+    }
 
 
 @pytest.mark.asyncio
