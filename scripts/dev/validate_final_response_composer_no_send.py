@@ -650,16 +650,16 @@ async def _connected_probe(
             f"lexical_token_sha256={token_hashes}"
         )
     concrete = flatten_public_facts(capture.value.public_facts)
-    nonliteral_evidence = {
+    implicit_evidence = {
         path
-        for relation in capture.value.semantic_relations
-        if relation.kind == "question_scope_absent"
+        for relation in capture.value.structural_evidence_relations
+        if not relation.evidence_must_be_visible
         for path in relation.evidence_paths
     }
     if any(
         path not in concrete
         or (
-            path not in nonliteral_evidence
+            path not in implicit_evidence
             and not projected_scalar_is_visible(
                 capture.draft.content,
                 concrete[path],

@@ -136,11 +136,11 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
                 "data.state",
                 "data.records[*].state",
             ],
-            "x-simpleclaw-composition-relations": [
+            "x-simpleclaw-structural-evidence-relations": [
                 {
-                    "kind": "question_scope_absent",
                     "when": {"path": "data.state", "equals": "absent"},
                     "evidence_fields": ["data.state"],
+                    "evidence_must_be_visible": False,
                 }
             ],
         },
@@ -167,10 +167,13 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
         descriptor=descriptor,
     )
 
-    assert [item.model_dump() for item in projection.semantic_relations] == [
+    assert [
+        item.model_dump() for item in projection.structural_evidence_relations
+    ] == [
         {
-            "kind": "question_scope_absent",
             "evidence_paths": ("data.state",),
+            "evidence_must_be_visible": False,
+            "allowed_scope_words": ("Are", "records", "available"),
         }
     ]
 
@@ -194,7 +197,7 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
         normalized_result=nonmatching,
         descriptor=descriptor,
     )
-    assert nonmatching_projection.semantic_relations == ()
+    assert nonmatching_projection.structural_evidence_relations == ()
 
 
 def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
@@ -216,12 +219,125 @@ def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
                     }
                 },
                 "x-simpleclaw-composition-fields": ["data.state"],
-                "x-simpleclaw-composition-relations": [
+                "x-simpleclaw-structural-evidence-relations": [
                     {
-                        "kind": "question_scope_absent",
                         "when": {"path": "data.state", "equals": "absent"},
                         "evidence_fields": ["data.reason"],
+                        "evidence_must_be_visible": False,
                     }
+                ],
+            },
+        )
+
+
+def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+    ref = ContractRefV1(
+        contract_id="recipe.neutral-records.output",
+        version="1",
+        owner_ref=owner,
+        schema_hash="neutral-wildcard-hash",
+    )
+    descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "phase": {},
+                        "records": {
+                            "type": "array",
+                            "items": {"properties": {"value": {}}},
+                        },
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.phase",
+                "data.records[*].value",
+            ],
+            "x-simpleclaw-structural-evidence-relations": [
+                {
+                    "when": {"path": "data.phase", "equals": "ready"},
+                    "evidence_fields": ["data.records[*].value"],
+                    "evidence_must_be_visible": True,
+                }
+            ],
+        },
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="neutral-wildcard",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {
+                "phase": "ready",
+                "records": [{"value": "alpha"}, {"value": "beta"}],
+            },
+        },
+        payload_hash="neutral-wildcard-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+
+    projection = build_composition_input(
+        request_id="neutral-wildcard-request",
+        question="What are the two record values?",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=result,
+        descriptor=descriptor,
+    )
+
+    assert projection.structural_evidence_relations[0].evidence_paths == (
+        "data.records[0].value",
+        "data.records[1].value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("second_policy", "message"),
+    [
+        (False, "duplicate structural evidence relation"),
+        (True, "conflicting structural evidence relation"),
+    ],
+)
+def test_descriptor_rejects_duplicate_or_conflicting_structural_relations(
+    second_policy: bool,
+    message: str,
+) -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+    relation = {
+        "when": {"path": "data.phase", "equals": "ready"},
+        "evidence_fields": ["data.value"],
+        "evidence_must_be_visible": False,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="recipe.neutral-records.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="neutral-conflict-hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "data": {"properties": {"phase": {}, "value": {}}}
+                },
+                "x-simpleclaw-composition-fields": [
+                    "data.phase",
+                    "data.value",
+                ],
+                "x-simpleclaw-structural-evidence-relations": [
+                    relation,
+                    {
+                        **relation,
+                        "evidence_must_be_visible": second_policy,
+                    },
                 ],
             },
         )

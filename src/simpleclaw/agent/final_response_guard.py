@@ -14,7 +14,11 @@ from .composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
 )
-from .composition_contracts import CompositionInputV1, DraftResponseV1
+from .composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+    StructuralEvidenceRelationV1,
+)
 from .composition_projection import flatten_public_facts
 
 _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
@@ -104,6 +108,7 @@ _KOREAN_SUFFIXES = (
     "로",
     "의",
     "에",
+    "야",
 )
 _SAFE_CONNECTOR_WORDS = frozenset(
     {
@@ -167,23 +172,6 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
-_ABSENCE_RELATION_WORDS = frozenset(
-    {
-        "없",
-        "없는",
-        "없다",
-        "없습니다",
-        "없어요",
-        "없음",
-        "no",
-        "not",
-        "none",
-        "absent",
-        "available",
-        "unavailable",
-        "there",
-    }
-)
 _CAUSAL_RELATION_WORDS = frozenset(
     {
         "because",
@@ -197,16 +185,24 @@ _CAUSAL_RELATION_WORDS = frozenset(
         "탓",
     }
 )
-_SEMANTIC_RELATION_GRAMMAR_WORDS = frozenset(
+_STRUCTURAL_RELATION_GRAMMAR_WORDS = frozenset(
     {
         "a",
         "an",
+        "absent",
         "are",
         "current",
         "currently",
         "is",
+        "아니야",
+        "안",
+        "no",
+        "none",
+        "not",
         "the",
         "there",
+        "unavailable",
+        "available",
         "was",
         "were",
         "각각",
@@ -227,6 +223,14 @@ _SEMANTIC_RELATION_GRAMMAR_WORDS = frozenset(
         "입니다",
         "중",
         "현재",
+        "진행",
+        "해요",
+        "없",
+        "없는",
+        "없다",
+        "없습니다",
+        "없어요",
+        "없음",
     }
 )
 
@@ -300,7 +304,7 @@ def _word_stem(token: str) -> str:
 
 
 def _word_forms(token: str) -> frozenset[str]:
-    """표면형과 공통 조사 제거형을 동일 semantic slot 후보로 취급한다."""
+    """표면형과 공통 조사 제거형을 동일 lexical slot 후보로 취급한다."""
     return frozenset({token.casefold(), _word_stem(token).casefold()})
 
 
@@ -308,18 +312,18 @@ def _remove_cited_literals(
     content: str,
     cited_values: dict[str, JsonValue],
 ) -> str:
-    literals = sorted(
+    patterns = sorted(
         {
-            item.strip()
+            pattern.pattern: pattern
             for item in cited_values.values()
-            if isinstance(item, str) and item.strip()
-        },
-        key=len,
+            if (pattern := projected_scalar_literal_pattern(item)) is not None
+        }.values(),
+        key=lambda pattern: len(pattern.pattern),
         reverse=True,
     )
     residual = content
-    for literal in literals:
-        residual = re.sub(re.escape(literal), "", residual, flags=re.IGNORECASE)
+    for pattern in patterns:
+        residual = pattern.sub("", residual)
     return residual
 
 
@@ -649,78 +653,86 @@ def _cited_literal_order_error(
     return (None, tuple(allowed_unit_spans))
 
 
-def _guard_declared_semantic_relation(
+def _matched_structural_evidence_relation(
     value: CompositionInputV1,
     draft: DraftResponseV1,
-    concrete: dict[str, JsonValue],
-) -> GuardResult | None:
-    """Descriptor가 활성화한 추상 relation을 domain/value 독립적으로 검증한다."""
-    relation = next(
+) -> StructuralEvidenceRelationV1 | None:
+    """Provider citation 전체가 정확히 일치하는 structural relation을 찾는다."""
+    return next(
         (
             item
-            for item in value.semantic_relations
+            for item in value.structural_evidence_relations
             if item.evidence_paths == tuple(draft.cited_paths)
         ),
         None,
     )
-    if relation is None:
-        return None
+
+
+def _structural_relation_literal_order_error(
+    content: str,
+    cited_values: dict[str, JsonValue],
+    *,
+    evidence_must_be_visible: bool,
+) -> str | None:
+    """Visible evidence literal을 projection 순서·1회 노출로 제한한다."""
+    cursor = 0
+    matched_spans: list[tuple[int, int]] = []
+    patterns: list[re.Pattern[str]] = []
+    for value in cited_values.values():
+        pattern = projected_scalar_literal_pattern(value)
+        if pattern is None:
+            return "structural_relation_evidence_invalid"
+        match = pattern.search(content, cursor)
+        if match is None:
+            if evidence_must_be_visible:
+                return "cited_value_not_rendered"
+            continue
+        matched_spans.append(match.span())
+        patterns.append(pattern)
+        cursor = match.end()
+    unmatched = _blank_spans(content, tuple(matched_spans))
+    if any(pattern.search(unmatched) for pattern in patterns):
+        return "cited_value_order_mismatch"
+    return None
+
+
+def _guard_structural_evidence_relation_text(
+    value: CompositionInputV1,
+    draft: DraftResponseV1,
+    cited_values: dict[str, JsonValue],
+    *,
+    evidence_must_be_visible: bool,
+    allowed_scope_words: tuple[str, ...],
+) -> GuardResult | None:
+    """Relation text를 question scope와 bounded grammar로만 제한한다."""
     if draft.limitation_paths or value.unresolved_claims:
-        return _rejected("semantic_relation_unresolved")
-    cited_values: dict[str, JsonValue] = {}
-    for path in relation.evidence_paths:
-        if path not in concrete or isinstance(concrete[path], dict | list):
-            return _rejected("semantic_relation_evidence_invalid")
-        cited_values[path] = concrete[path]
+        return _rejected("structural_relation_unresolved")
     content = draft.content.strip()
     if _URL_RE.search(content):
-        return _rejected("semantic_relation_ungrounded_fact")
-    if relation.kind == "question_scope_state" and any(
-        not projected_scalar_is_visible(content, item)
-        for item in cited_values.values()
-    ):
-        return _rejected("cited_value_not_rendered")
-    for path, projected in concrete.items():
-        if (
-            isinstance(projected, str)
-            and len(projected.strip()) >= 2
-            and projected_scalar_is_visible(content, projected)
-            and path not in cited_values
-        ):
-            return _rejected("rendered_value_not_cited")
+        return _rejected("structural_relation_ungrounded_fact")
     residual = _remove_cited_literals(content, cited_values)
     if _NUMBER_RE.search(residual):
-        return _rejected("semantic_relation_ungrounded_fact")
+        return _rejected("structural_relation_ungrounded_fact")
     question_words = {
-        form for token in _WORD_RE.findall(value.question) for form in _word_forms(token)
+        form for token in allowed_scope_words for form in _word_forms(token)
     }
     residual_tokens = tuple(_WORD_RE.findall(residual))
     residual_words = {
         form for token in residual_tokens for form in _word_forms(token)
     }
-    if (
-        relation.kind == "question_scope_absent"
-        and not residual_words & question_words
-    ):
-        return _rejected("semantic_relation_scope_missing")
     if residual_words & _CAUSAL_RELATION_WORDS:
-        return _rejected("semantic_relation_ungrounded_fact")
+        return _rejected("structural_relation_ungrounded_fact")
     if len(residual_tokens) > max(8, len(_WORD_RE.findall(value.question)) + 4):
-        return _rejected("semantic_relation_ungrounded_fact")
-    if (
-        relation.kind == "question_scope_absent"
-        and not residual_words & _ABSENCE_RELATION_WORDS
-    ):
-        return _rejected("semantic_relation_absence_missing")
-    allowed_words = question_words | _SEMANTIC_RELATION_GRAMMAR_WORDS
-    if relation.kind == "question_scope_absent":
-        allowed_words |= _ABSENCE_RELATION_WORDS
+        return _rejected("structural_relation_ungrounded_fact")
+    allowed_words = question_words | _STRUCTURAL_RELATION_GRAMMAR_WORDS
     if any(not (_word_forms(token) & allowed_words) for token in residual_tokens):
-        return _rejected("semantic_relation_ungrounded_fact")
+        return _rejected("structural_relation_ungrounded_fact")
+    if not evidence_must_be_visible and not residual_words & question_words:
+        return _rejected("structural_relation_scope_missing")
     symbol_residual = _WORD_RE.sub("", residual)
     if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
         return _rejected("ungrounded_symbol")
-    return GuardResult(accepted=True, code="accepted")
+    return None
 
 
 def guard_final_response(
@@ -748,9 +760,6 @@ def guard_final_response(
         return _rejected("citations_required")
     if len(draft.cited_paths) != len(set(draft.cited_paths)):
         return _rejected("duplicate_citation")
-    semantic_result = _guard_declared_semantic_relation(value, draft, concrete)
-    if semantic_result is not None:
-        return semantic_result
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
@@ -768,8 +777,13 @@ def guard_final_response(
         cited_values[path] = cited
         if index is not None and isinstance(cited, str) and cited.strip():
             cited_item_string_indices.add(index)
+    structural_relation = _matched_structural_evidence_relation(value, draft)
+    for cited in cited_values.values():
+        if projected_scalar_literal_pattern(cited) is None:
+            return _rejected("citation_not_scalar")
         if (
-            isinstance(cited, str)
+            structural_relation is None
+            and isinstance(cited, str)
             and len(cited.strip()) >= 2
             and not projected_scalar_is_visible(content, cited)
         ):
@@ -782,26 +796,32 @@ def guard_final_response(
         concrete, top_n
     ):
         return _rejected("requested_item_identity_not_cited")
-    literal_order_error, allowed_unit_spans = _cited_literal_order_error(
-        content,
-        concrete,
-        cited_values,
-        top_n=top_n,
-        question=value.question,
-    )
+    allowed_unit_spans: tuple[tuple[int, int], ...] = ()
+    if structural_relation is not None:
+        literal_order_error = _structural_relation_literal_order_error(
+            content,
+            cited_values,
+            evidence_must_be_visible=(
+                structural_relation.evidence_must_be_visible
+            ),
+        )
+    else:
+        literal_order_error, allowed_unit_spans = _cited_literal_order_error(
+            content,
+            concrete,
+            cited_values,
+            top_n=top_n,
+            question=value.question,
+        )
     if literal_order_error is not None:
         return _rejected(literal_order_error)
 
-    # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
-    # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
+    # bool/null/string은 여기서, 숫자는 아래 top-N/number 집합에서 일관되게 본다.
     for path, projected in concrete.items():
-        if not isinstance(projected, str):
-            continue
-        rendered = str(projected).strip()
-        if len(rendered) < 2:
+        if isinstance(projected, int | float) and not isinstance(projected, bool):
             continue
         if (
-            rendered.casefold() in lowered
+            projected_scalar_is_visible(content, projected)
             and not any(
                 cited_value == projected
                 for cited_value in cited_values.values()
@@ -809,36 +829,46 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
-    scope_phrase_spans = _scope_phrase_spans(
-        content,
-        question=value.question,
-        top_n=top_n,
-        cited_values=cited_values,
-    )
-    if scope_phrase_spans is None:
-        return _rejected("ungrounded_text")
-    allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
-    lexical_residual = _remove_cited_literals(
-        _blank_spans(content, allowed_lexical_spans),
-        cited_values,
-    )
-    allowed_words = _SAFE_CONNECTOR_WORDS
-    if value.unresolved_claims:
-        allowed_words = allowed_words | _LIMITATION_WORDS
-    for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
-        folded = token.casefold()
-        stem = _word_stem(token).casefold()
-        if (
-            folded not in allowed_words
-            and stem not in allowed_words
-        ):
+    if structural_relation is not None:
+        relation_error = _guard_structural_evidence_relation_text(
+            value,
+            draft,
+            cited_values,
+            evidence_must_be_visible=(
+                structural_relation.evidence_must_be_visible
+            ),
+            allowed_scope_words=structural_relation.allowed_scope_words,
+        )
+        if relation_error is not None:
+            return relation_error
+    else:
+        scope_phrase_spans = _scope_phrase_spans(
+            content,
+            question=value.question,
+            top_n=top_n,
+            cited_values=cited_values,
+        )
+        if scope_phrase_spans is None:
             return _rejected("ungrounded_text")
-    symbol_residual = _WORD_RE.sub(
-        "",
-        _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
-    )
-    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
-        return _rejected("ungrounded_symbol")
+        allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
+        lexical_residual = _remove_cited_literals(
+            _blank_spans(content, allowed_lexical_spans),
+            cited_values,
+        )
+        allowed_words = _SAFE_CONNECTOR_WORDS
+        if value.unresolved_claims:
+            allowed_words = allowed_words | _LIMITATION_WORDS
+        for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
+            folded = token.casefold()
+            stem = _word_stem(token).casefold()
+            if folded not in allowed_words and stem not in allowed_words:
+                return _rejected("ungrounded_text")
+        symbol_residual = _WORD_RE.sub(
+            "",
+            _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
+        )
+        if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+            return _rejected("ungrounded_symbol")
 
     limitation_values = {
         f"unresolved_claims[{index}]": claim

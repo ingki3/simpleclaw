@@ -122,13 +122,13 @@ output_contract:
       - items[*].source_url
       - warnings[*]
       - source.urls[*]
-    x-simpleclaw-composition-relations:
-      - kind: question_scope_absent
-        when: {path: status, equals: empty}
+    x-simpleclaw-structural-evidence-relations:
+      - when: {path: status, equals: empty}
         evidence_fields: [status]
-      - kind: question_scope_state
-        when: {path: mode, equals: schedule}
+        evidence_must_be_visible: false
+      - when: {path: mode, equals: schedule}
         evidence_fields: ["items[*].status"]
+        evidence_must_be_visible: true
 argument_binding:
   binding_id: shell-argv.v1
   owner_ref: {type: skill, name: naver-sports-skill}

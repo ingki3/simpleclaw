@@ -26,7 +26,9 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
-COMPOSITION_RELATIONS_EXTENSION = "x-simpleclaw-composition-relations"
+STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION = (
+    "x-simpleclaw-structural-evidence-relations"
+)
 MAX_COMPOSITION_FIELD_PATHS = 64
 MAX_COMPOSITION_FIELD_DEPTH = 10
 MAX_COMPOSITION_RELATIONS = 8
@@ -139,69 +141,97 @@ def validate_composition_fields(
 
 
 @dataclass(frozen=True, slots=True)
-class CompositionRelationDeclaration:
-    """Descriptor가 선언한 domain-neutral semantic relation 조건이다."""
+class StructuralEvidenceRelationDeclaration:
+    """Descriptor가 선언한 domain-neutral evidence relation 조건이다."""
 
-    kind: str
     when_path: str
     when_equals: JsonValue
     evidence_fields: tuple[str, ...]
+    evidence_must_be_visible: bool
 
 
-def validate_composition_relations(
+def validate_structural_evidence_relations(
     value: object,
     *,
     json_schema: dict[str, object],
     composition_fields: tuple[str, ...],
-) -> tuple[CompositionRelationDeclaration, ...]:
-    """Semantic relation extension을 bounded typed declaration으로 검증한다."""
+) -> tuple[StructuralEvidenceRelationDeclaration, ...]:
+    """Evidence relation을 의미 enum 없이 bounded structural contract로 검증한다."""
     if value is None:
         return ()
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_COMPOSITION_RELATIONS:
         raise ValueError(
-            f"{COMPOSITION_RELATIONS_EXTENSION} must contain 1.."
+            f"{STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION} must contain 1.."
             f"{MAX_COMPOSITION_RELATIONS} relations"
         )
-    declarations: list[CompositionRelationDeclaration] = []
-    supported_kinds = {"question_scope_absent", "question_scope_state"}
+    declarations: list[StructuralEvidenceRelationDeclaration] = []
+    seen: dict[tuple[str, str, tuple[str, ...]], bool] = {}
     for raw in value:
         if not isinstance(raw, dict) or set(raw) != {
-            "kind",
             "when",
             "evidence_fields",
+            "evidence_must_be_visible",
         }:
-            raise ValueError("composition relation has invalid fields")
-        kind = raw["kind"]
+            raise ValueError("structural evidence relation has invalid fields")
         when = raw["when"]
         evidence = raw["evidence_fields"]
-        if kind not in supported_kinds:
-            raise ValueError(f"unsupported composition relation kind: {kind!r}")
+        evidence_must_be_visible = raw["evidence_must_be_visible"]
+        if not isinstance(evidence_must_be_visible, bool):
+            raise ValueError(
+                "structural evidence visibility policy must be a boolean"
+            )
         if not isinstance(when, dict) or set(when) != {"path", "equals"}:
-            raise ValueError("composition relation when must contain path and equals")
+            raise ValueError(
+                "structural evidence relation when must contain path and equals"
+            )
         when_path = validate_composition_fields(
             [when["path"]],
             json_schema=json_schema,
         )[0]
         if "[*]" in when_path:
-            raise ValueError("composition relation condition cannot use a wildcard")
+            raise ValueError(
+                "structural evidence relation condition cannot use a wildcard"
+            )
         when_equals = when["equals"]
-        if when_equals is None or isinstance(when_equals, dict | list):
-            raise ValueError("composition relation condition must use a scalar value")
-        _validate_json_value(when_equals, path="composition relation condition")
+        if isinstance(when_equals, dict | list):
+            raise ValueError(
+                "structural evidence relation condition must use a scalar value"
+            )
+        _validate_json_value(
+            when_equals,
+            path="structural evidence relation condition",
+        )
         evidence_fields = validate_composition_fields(
             evidence,
             json_schema=json_schema,
         )
         if any(path not in composition_fields for path in evidence_fields):
             raise ValueError(
-                "composition relation evidence must be composition-visible"
+                "structural relation evidence must be composition-visible"
             )
+        identity = (
+            when_path,
+            json.dumps(
+                when_equals,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            evidence_fields,
+        )
+        previous_policy = seen.get(identity)
+        if previous_policy is not None:
+            if previous_policy == evidence_must_be_visible:
+                raise ValueError("duplicate structural evidence relation")
+            raise ValueError("conflicting structural evidence relation")
+        seen[identity] = evidence_must_be_visible
         declarations.append(
-            CompositionRelationDeclaration(
-                kind=str(kind),
+            StructuralEvidenceRelationDeclaration(
                 when_path=when_path,
                 when_equals=when_equals,
                 evidence_fields=evidence_fields,
+                evidence_must_be_visible=evidence_must_be_visible,
             )
         )
     return tuple(declarations)
@@ -359,15 +389,17 @@ class ContractDescriptorV1(ContractModel):
         )
 
     @property
-    def composition_relations(self) -> tuple[CompositionRelationDeclaration, ...]:
-        """계약이 선언한 추상 semantic relation을 반환한다."""
+    def structural_evidence_relations(
+        self,
+    ) -> tuple[StructuralEvidenceRelationDeclaration, ...]:
+        """계약이 선언한 structural evidence relation을 반환한다."""
         schema = self.json_schema
         fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
         )
-        return validate_composition_relations(
-            schema.get(COMPOSITION_RELATIONS_EXTENSION),
+        return validate_structural_evidence_relations(
+            schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),
             json_schema=schema,
             composition_fields=fields,
         )
@@ -385,8 +417,8 @@ class ContractDescriptorV1(ContractModel):
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
         )
-        validate_composition_relations(
-            schema.get(COMPOSITION_RELATIONS_EXTENSION),
+        validate_structural_evidence_relations(
+            schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),
             json_schema=schema,
             composition_fields=composition_fields,
         )

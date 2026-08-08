@@ -7,8 +7,8 @@ import pytest
 from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
-    CompositionSemanticRelationV1,
     DraftResponseV1,
+    StructuralEvidenceRelationV1,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.contracts import AssetRefV1
@@ -38,10 +38,14 @@ def _input() -> CompositionInputV1:
     )
 
 
-def _neutral_empty_input() -> CompositionInputV1:
+def _neutral_empty_input(
+    *,
+    question: str = "Are any records available?",
+    allowed_scope_words: tuple[str, ...] = ("Are", "any", "records", "available"),
+) -> CompositionInputV1:
     return CompositionInputV1(
         request_id="request-neutral-empty",
-        question="Are any records available?",
+        question=question,
         locale="en-US",
         selected_route="recipe",
         asset_ref=AssetRefV1(type="skill", name="neutral-records"),
@@ -55,10 +59,11 @@ def _neutral_empty_input() -> CompositionInputV1:
                 "records": [],
             }
         },
-        semantic_relations=(
-            CompositionSemanticRelationV1(
-                kind="question_scope_absent",
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
                 evidence_paths=("data.state",),
+                evidence_must_be_visible=False,
+                allowed_scope_words=allowed_scope_words,
             ),
         ),
     )
@@ -76,7 +81,31 @@ def test_guard_accepts_declared_neutral_empty_relation() -> None:
     assert result.accepted is True
 
 
-def test_guard_rejects_undeclared_semantic_cause() -> None:
+@pytest.mark.parametrize(
+    ("question", "content"),
+    [
+        ("오늘 레코드 하냐?", "오늘 레코드 안 해요."),
+        ("지금 레코드 중이야?", "지금 레코드는 진행 중이 아니야."),
+    ],
+)
+def test_guard_accepts_question_scoped_korean_negation_grammar(
+    question: str,
+    content: str,
+) -> None:
+    value = _neutral_empty_input(
+        question=question,
+        allowed_scope_words=tuple(question.rstrip("?").split()),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_rejects_undeclared_structural_relation_cause() -> None:
     result = guard_final_response(
         _neutral_empty_input(),
         DraftResponseV1(
@@ -85,12 +114,16 @@ def test_guard_rejects_undeclared_semantic_cause() -> None:
         ),
     )
 
-    assert result.code == "semantic_relation_ungrounded_fact"
+    assert result.code == "structural_relation_ungrounded_fact"
 
 
 @pytest.mark.parametrize(
     "content",
     [
+        "No records maintenance unavailable.",
+        "No records hacked unavailable.",
+        "No records are unavailable tomorrow.",
+        "No records corrupted unavailable.",
         "No records unicorn available.",
         "No records fabricated outage available.",
     ],
@@ -101,7 +134,7 @@ def test_guard_rejects_undeclared_absence_relation_tokens(content: str) -> None:
         DraftResponseV1(content=content, cited_paths=("data.state",)),
     )
 
-    assert result.code == "semantic_relation_ungrounded_fact"
+    assert result.code == "structural_relation_ungrounded_fact"
 
 
 def test_canonicalizer_keeps_only_declared_absence_evidence() -> None:
@@ -127,10 +160,11 @@ def test_guard_accepts_declared_question_scoped_state() -> None:
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="state-payload-hash",
         public_facts={"data": {"state": "ready"}},
-        semantic_relations=(
-            CompositionSemanticRelationV1(
-                kind="question_scope_state",
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
                 evidence_paths=("data.state",),
+                evidence_must_be_visible=True,
+                allowed_scope_words=("What", "is", "the", "record", "state"),
             ),
         ),
     )
@@ -151,6 +185,9 @@ def test_guard_accepts_declared_question_scoped_state() -> None:
     [
         "The record state is ready unicorn.",
         "Fabricated outage says ready.",
+        "ready hacked tomorrow.",
+        "ready confidential internal.",
+        "ready corrupted.",
     ],
 )
 def test_guard_rejects_undeclared_state_relation_tokens(content: str) -> None:
@@ -164,10 +201,11 @@ def test_guard_rejects_undeclared_state_relation_tokens(content: str) -> None:
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="state-mutation-payload-hash",
         public_facts={"data": {"state": "ready"}},
-        semantic_relations=(
-            CompositionSemanticRelationV1(
-                kind="question_scope_state",
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
                 evidence_paths=("data.state",),
+                evidence_must_be_visible=True,
+                allowed_scope_words=("What", "is", "the", "record", "state"),
             ),
         ),
     )
@@ -177,7 +215,101 @@ def test_guard_rejects_undeclared_state_relation_tokens(content: str) -> None:
         DraftResponseV1(content=content, cited_paths=("data.state",)),
     )
 
-    assert result.code == "semantic_relation_ungrounded_fact"
+    assert result.code == "structural_relation_ungrounded_fact"
+
+
+def test_structural_relation_cannot_bypass_top_n_cardinality() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-top-two",
+        question="What are the top 2 record states?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="top-two-payload-hash",
+        public_facts={
+            "records": [{"state": "alpha"}, {"state": "beta"}]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("records[0].state",),
+                evidence_must_be_visible=True,
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="The record state is alpha.",
+            cited_paths=("records[0].state",),
+        ),
+    )
+
+    assert result.code == "requested_scope_not_fully_cited"
+
+
+def test_relation_canonicalizer_preserves_malformed_provider_citation() -> None:
+    draft = DraftResponseV1(
+        content="No records are available.",
+        cited_paths=("data.state", "bogus.path"),
+    )
+
+    canonical = canonicalize_draft_citations(_neutral_empty_input(), draft)
+
+    assert canonical is draft
+    assert guard_final_response(_neutral_empty_input(), canonical).code == (
+        "citation_not_projected"
+    )
+
+
+def test_visible_boolean_number_and_null_citations_are_never_dropped() -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What are the three values?",
+            "public_facts_json": '{"flag":true,"count":2,"missing":null}',
+            "structural_evidence_relations": (),
+        }
+    )
+    draft = DraftResponseV1(
+        content="true, 2, null.",
+        cited_paths=("flag", "count", "missing"),
+    )
+
+    canonical = canonicalize_draft_citations(value, draft)
+
+    assert canonical is draft
+    assert guard_final_response(value, canonical).accepted is True
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "content", "expected_code"),
+    [
+        ('{"label":"alpha","value":true}', "alpha, true.", "rendered_value_not_cited"),
+        ('{"label":"alpha","value":null}', "alpha, null.", "rendered_value_not_cited"),
+        ('{"label":"alpha","value":2}', "alpha, 2.", "ungrounded_number"),
+    ],
+)
+def test_guard_rejects_visible_uncited_scalar_for_every_json_scalar_type(
+    public_facts_json: str,
+    content: str,
+    expected_code: str,
+) -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What is alpha?",
+            "public_facts_json": public_facts_json,
+            "structural_evidence_relations": (),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("label",)),
+    )
+
+    assert result.code == expected_code
 
 
 def test_guard_accepts_grounded_natural_response() -> None:

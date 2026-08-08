@@ -16,16 +16,19 @@ from simpleclaw.graph_runtime.contracts import (
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 
-class CompositionSemanticRelationV1(ContractModel):
-    """Descriptor 조건에 의해 활성화된 추상 의미와 근거 path다."""
+class StructuralEvidenceRelationV1(ContractModel):
+    """Descriptor 조건으로 활성화된 구조적 evidence/citation 계약이다."""
 
-    kind: Literal["question_scope_absent", "question_scope_state"]
-    evidence_paths: tuple[NonEmptyStr, ...] = Field(min_length=1, max_length=8)
+    evidence_paths: tuple[NonEmptyStr, ...] = Field(min_length=1, max_length=64)
+    evidence_must_be_visible: bool
+    allowed_scope_words: tuple[NonEmptyStr, ...] = Field(default=(), max_length=64)
 
     @model_validator(mode="after")
-    def validate_evidence_paths(self) -> CompositionSemanticRelationV1:
+    def validate_evidence_paths(self) -> StructuralEvidenceRelationV1:
         if len(set(self.evidence_paths)) != len(self.evidence_paths):
-            raise ValueError("semantic relation evidence_paths must be unique")
+            raise ValueError("structural relation evidence_paths must be unique")
+        if len(set(self.allowed_scope_words)) != len(self.allowed_scope_words):
+            raise ValueError("structural relation allowed_scope_words must be unique")
         return self
 
 
@@ -46,7 +49,7 @@ class CompositionInputV1(ContractModel):
     public_facts_json: CanonicalJsonObject = Field(alias="public_facts")
     resolved_claims: tuple[NonEmptyStr, ...] = ()
     unresolved_claims: tuple[NonEmptyStr, ...] = ()
-    semantic_relations: tuple[CompositionSemanticRelationV1, ...] = ()
+    structural_evidence_relations: tuple[StructuralEvidenceRelationV1, ...] = ()
 
     @property
     def public_facts(self) -> dict[str, JsonValue]:
@@ -62,6 +65,16 @@ class CompositionInputV1(ContractModel):
             raise ValueError("composition input requires a safe effect status")
         if not self.public_facts:
             raise ValueError("composition input public_facts must not be empty")
+        relation_policies: dict[tuple[str, ...], bool] = {}
+        for relation in self.structural_evidence_relations:
+            previous = relation_policies.get(relation.evidence_paths)
+            if previous is not None:
+                if previous == relation.evidence_must_be_visible:
+                    raise ValueError("duplicate structural evidence relation")
+                raise ValueError("conflicting structural evidence relation")
+            relation_policies[relation.evidence_paths] = (
+                relation.evidence_must_be_visible
+            )
         return self
 
 

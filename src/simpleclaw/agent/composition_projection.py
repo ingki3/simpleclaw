@@ -19,7 +19,7 @@ from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 from .composition_contracts import (
     CompositionInputV1,
-    CompositionSemanticRelationV1,
+    StructuralEvidenceRelationV1,
 )
 
 MAX_COMPOSITION_ARRAY_ITEMS = 20
@@ -159,29 +159,43 @@ def _concrete_path_pattern(path: str) -> re.Pattern[str]:
     return re.compile(rf"^{escaped}$")
 
 
-def _semantic_relations(
+def _structural_evidence_relations(
     public_facts: Mapping[str, JsonValue],
     descriptor: ContractDescriptorV1,
-) -> tuple[CompositionSemanticRelationV1, ...]:
-    """Descriptor condition과 일치하는 추상 relation만 concrete path로 만든다."""
+    *,
+    question: str,
+) -> tuple[StructuralEvidenceRelationV1, ...]:
+    """활성 relation의 모든 evidence를 source index 순서로 구체화한다."""
     concrete = flatten_public_facts(public_facts)
-    activated: list[CompositionSemanticRelationV1] = []
-    for declaration in descriptor.composition_relations:
+    allowed_scope_words = tuple(
+        dict.fromkeys(re.findall(r"[^\W\d_]+", question, re.UNICODE))
+    )
+    activated: list[StructuralEvidenceRelationV1] = []
+    for declaration in descriptor.structural_evidence_relations:
         if concrete.get(declaration.when_path, _MISSING) != declaration.when_equals:
             continue
-        evidence_paths: list[str] = []
-        for field in declaration.evidence_fields:
-            pattern = _concrete_path_pattern(field)
-            match = next((path for path in concrete if pattern.fullmatch(path)), None)
-            if match is None:
-                evidence_paths = []
-                break
-            evidence_paths.append(match)
+        patterns = tuple(
+            _concrete_path_pattern(field) for field in declaration.evidence_fields
+        )
+        matches_by_pattern = tuple(
+            tuple(path for path in concrete if pattern.fullmatch(path))
+            for pattern in patterns
+        )
+        if any(not matches for matches in matches_by_pattern):
+            continue
+        evidence_paths = tuple(
+            path
+            for path in concrete
+            if any(pattern.fullmatch(path) for pattern in patterns)
+        )
         if evidence_paths:
             activated.append(
-                CompositionSemanticRelationV1(
-                    kind=declaration.kind,
-                    evidence_paths=tuple(evidence_paths),
+                StructuralEvidenceRelationV1(
+                    evidence_paths=evidence_paths,
+                    evidence_must_be_visible=(
+                        declaration.evidence_must_be_visible
+                    ),
+                    allowed_scope_words=allowed_scope_words,
                 )
             )
     return tuple(activated)
@@ -221,7 +235,11 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
-        semantic_relations=_semantic_relations(public_facts, descriptor),
+        structural_evidence_relations=_structural_evidence_relations(
+            public_facts,
+            descriptor,
+            question=question,
+        ),
     )
 
 

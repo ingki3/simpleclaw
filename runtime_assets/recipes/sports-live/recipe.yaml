@@ -134,13 +134,13 @@ output_contract:
       - data.items[*].source_url
       - data.warnings[*]
       - data.source.urls[*]
-    x-simpleclaw-composition-relations:
-      - kind: question_scope_absent
-        when: {path: data.status, equals: empty}
+    x-simpleclaw-structural-evidence-relations:
+      - when: {path: data.status, equals: empty}
         evidence_fields: [data.status]
-      - kind: question_scope_state
-        when: {path: data.mode, equals: schedule}
+        evidence_must_be_visible: false
+      - when: {path: data.mode, equals: schedule}
         evidence_fields: ["data.items[*].status"]
+        evidence_must_be_visible: true
 
 step_bindings:
   - binding_id: naver-sports-query.v1

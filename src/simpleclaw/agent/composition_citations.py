@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 
@@ -10,21 +11,26 @@ from pydantic import JsonValue
 from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
-CITATION_CANONICALIZATION_POLICY_VERSION = "visible_subset_v1"
+CITATION_CANONICALIZATION_POLICY_VERSION = "validated_visible_subset_v2"
 
 
 def projected_scalar_literal_pattern(
     value: JsonValue,
 ) -> re.Pattern[str] | None:
     """Guard와 canonicalizer가 공유하는 exact-visible scalar pattern이다."""
-    if value is None or isinstance(value, dict | list):
+    if isinstance(value, dict | list):
         return None
-    rendered = str(value).strip()
+    if value is None or isinstance(value, bool):
+        rendered = json.dumps(value)
+    else:
+        rendered = str(value).strip()
     if not rendered:
         return None
     escaped = re.escape(rendered)
     if isinstance(value, int | float) and not isinstance(value, bool):
         return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
+    if value is None or isinstance(value, bool):
+        return re.compile(rf"(?<![\w]){escaped}(?![\w])", re.IGNORECASE)
     return re.compile(escaped, re.IGNORECASE)
 
 
@@ -68,22 +74,22 @@ def canonicalize_draft_citations(
     """본문 불변으로 provider citation의 safe visible subset만 반영한다."""
     concrete = flatten_public_facts(value.public_facts)
     provider_paths = tuple(draft.cited_paths)
-    if len(provider_paths) == len(set(provider_paths)):
-        selected = set(provider_paths)
-        for relation in value.semantic_relations:
-            if (
-                relation.kind == "question_scope_absent"
-                and set(relation.evidence_paths) <= selected
-                and all(path in concrete for path in relation.evidence_paths)
-            ):
-                return draft.model_copy(
-                    update={"cited_paths": relation.evidence_paths}
-                )
-    cited_paths = canonical_visible_cited_paths(
+    visible_paths = canonical_visible_cited_paths(
         draft.content,
         provider_paths,
         concrete,
     )
+    if visible_paths is None:
+        return draft
+    selected = set(provider_paths)
+    preserved = set(visible_paths)
+    for relation in value.structural_evidence_relations:
+        if (
+            not relation.evidence_must_be_visible
+            and set(relation.evidence_paths) <= selected
+        ):
+            preserved.update(relation.evidence_paths)
+    cited_paths = tuple(path for path in concrete if path in preserved)
     if not cited_paths or cited_paths == draft.cited_paths:
         return draft
     return draft.model_copy(update={"cited_paths": cited_paths})
