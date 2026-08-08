@@ -40,31 +40,36 @@ from simpleclaw.graph_runtime.status import (
 def _values(request_id: str = "request-1"):
     facts = {
         "data": {
-            "category": "KBO",
-            "items": [{"rank": 1, "team": "KT", "wins": 59}],
+            "field_alpha": "token_alpha",
+            "items": [
+                {
+                    "field_beta": "token_beta",
+                    "field_gamma": 37,
+                }
+            ],
         }
     }
     value = CompositionInputV1(
         request_id=request_id,
-        question="KBO 1위 팀을 알려줘",
-        locale="ko-KR",
+        question="Return the projected fields.",
+        locale="en-US",
         selected_route="recipe",
-        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        asset_ref=AssetRefV1(type="recipe", name="neutral-record"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
         composition_list_root="data.items",
         public_facts=facts,
         resolved_claims=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
+            "data.field_alpha",
+            "data.items[0].field_beta",
+            "data.items[0].field_gamma",
         ),
     )
     result = NormalizedAssetResultV1(
         invocation_id="invocation",
         output_contract=ContractRefV1(
-            contract_id="recipe.sports-live.output",
+            contract_id="recipe.neutral-record.output",
             version="1",
             owner_ref=value.asset_ref,
             schema_hash="schema-hash",
@@ -79,11 +84,11 @@ def _values(request_id: str = "request-1"):
 
 def _draft() -> DraftResponseV1:
     return DraftResponseV1(
-        content="KBO 1위는 KT이며 59승입니다.",
+        content="token_alpha, token_beta, 37.",
         cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
+            "data.field_alpha",
+            "data.items[0].field_beta",
+            "data.items[0].field_gamma",
         ),
     )
 
@@ -92,7 +97,8 @@ class _ComposerStop(FinalResponseComposerError):
     def __init__(self, stop_condition: str) -> None:
         self.stop_condition = stop_condition
         super().__init__(
-            f"provider raw diagnostic: {stop_condition}; KBO 1위 KT 59승"
+            "provider raw diagnostic: "
+            f"{stop_condition}; token_alpha token_beta 37"
         )
 
 
@@ -146,10 +152,9 @@ async def _assert_stop_records_generic_fallback_and_replay_reuses_it(
             "provider",
             "raw diagnostic",
             stop_condition,
-            "KBO",
-            "KT",
-            "1위",
-            "59",
+            "token_alpha",
+            "token_beta",
+            "37",
         )
     )
     with sqlite3.connect(db_path) as connection:
@@ -257,7 +262,13 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in (
+            "provider",
+            "raw",
+            "token_alpha",
+            "token_beta",
+            "37",
+        )
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -328,7 +339,13 @@ async def test_actual_guard_timeout_records_generic_fallback_and_replay_reuses_i
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in (
+            "provider",
+            "raw",
+            "token_alpha",
+            "token_beta",
+            "37",
+        )
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -411,7 +428,13 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in (
+            "provider",
+            "raw",
+            "token_alpha",
+            "token_beta",
+            "37",
+        )
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -593,9 +616,9 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
 
     assert canonical.content == accepted_draft.content
     assert canonical.cited_paths == (
-        "data.category",
-        "data.items[0].team",
-        "data.items[0].wins",
+        "data.field_alpha",
+        "data.items[0].field_beta",
+        "data.items[0].field_gamma",
     )
     assert first is not None
     assert first.content == accepted_draft.content

@@ -2041,24 +2041,28 @@ def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
     assert exclusion.code == "ungrounded_text"
 
 
-def test_guard_accepts_domain_neutral_projected_literals() -> None:
+def test_guard_accepts_synthetic_neutral_projected_literals() -> None:
     value = CompositionInputV1(
-        request_id="request-stock",
-        question="현재 Apple 주가는 얼마인가요?",
-        locale="ko-KR",
-        selected_route="react",
-        asset_ref=AssetRefV1(type="skill", name="stock-snapshot"),
+        request_id="request-synthetic-fields",
+        question="Return the projected fields.",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-record"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
-        public_facts={"symbol": "Apple", "price": 200, "currency": "USD"},
-        resolved_claims=("currency", "price", "symbol"),
+        public_facts={
+            "field_alpha": "token_alpha",
+            "field_beta": 200,
+            "field_gamma": "token_gamma",
+        },
+        resolved_claims=("field_alpha", "field_beta", "field_gamma"),
     )
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="USD, 200, Apple.",
-            cited_paths=("currency", "price", "symbol"),
+            content="token_alpha, 200, token_gamma.",
+            cited_paths=("field_alpha", "field_beta", "field_gamma"),
         ),
     )
 
