@@ -21,7 +21,7 @@ _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
 _NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
 _TOP_N_PATTERNS = (
     re.compile(r"(?:상위|앞)\s*(\d+)", re.IGNORECASE),
-    re.compile(r"\btop\s*(\d+)\b", re.IGNORECASE),
+    re.compile(r"\b(?:top|first)\s*(\d+)", re.IGNORECASE),
     re.compile(r"(?<!\d)(\d+)\s*[^\W\d_]+만\b", re.IGNORECASE),
 )
 _RAW_MARKERS = (
@@ -63,6 +63,19 @@ _SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/+]*$")
 _LIST_SEPARATOR_WORD_RE = re.compile(r"(?:와|과|and)", re.IGNORECASE)
 _ITEM_INDEX_RE = re.compile(r"\[(\d+)\]")
 _TOPIC_PARTICLES = frozenset({"은", "는", "이", "가"})
+_SCOPE_CLASSIFIER_PARTICLES = (
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "와",
+    "과",
+    "도",
+    "만",
+)
+_SCOPE_RELATION_SUFFIXES = ("보다", "처럼", "의")
 _KOREAN_SUFFIXES = (
     "이었습니다",
     "였습니다",
@@ -261,36 +274,105 @@ def _scope_number_spans(content: str, top_n: int | None) -> set[tuple[int, int]]
     }
 
 
+def _scope_classifier(
+    text: str,
+    match: re.Match[str],
+) -> tuple[str | None, tuple[int, int]] | None:
+    """top-N 표현 바로 뒤 classifier의 stem과 절대 span을 반환한다."""
+    suffix_end = match.end() if match.end() != match.end(1) else len(text)
+    classifier = re.match(
+        rf"\s*({_WORD_RE.pattern})",
+        text[match.end(1) : suffix_end],
+    )
+    if classifier is None:
+        return None
+    token = classifier.group(1)
+    stem: str | None = token.casefold()
+    if re.fullmatch(r"[가-힣]+", token):
+        if any(
+            token.endswith(suffix) and len(token) > len(suffix)
+            for suffix in _SCOPE_RELATION_SUFFIXES
+        ):
+            stem = None
+        else:
+            for suffix in _SCOPE_CLASSIFIER_PARTICLES:
+                if token.endswith(suffix) and len(token) > len(suffix):
+                    stem = token[: -len(suffix)].casefold()
+                    break
+    return (
+        stem,
+        (
+            match.end(1) + classifier.start(1),
+            match.end(1) + classifier.end(1),
+        ),
+    )
+
+
+def _top_n_scope_matches(text: str, top_n: int) -> tuple[re.Match[str], ...]:
+    """겹치는 pattern은 같은 numeric slot 하나로 정규화한다."""
+    matches_by_number_span: dict[tuple[int, int], re.Match[str]] = {}
+    for pattern in _TOP_N_PATTERNS:
+        for match in pattern.finditer(text):
+            if int(match.group(1)) != top_n:
+                continue
+            number_span = match.span(1)
+            previous = matches_by_number_span.get(number_span)
+            if previous is None or match.start() < previous.start():
+                matches_by_number_span[number_span] = match
+    return tuple(
+        matches_by_number_span[span] for span in sorted(matches_by_number_span)
+    )
+
+
+def _requested_scope_classifier_stems(question: str, top_n: int) -> set[str]:
+    """질문의 동일 top-N 표현에 직접 결합된 classifier stem만 수집한다."""
+    return {
+        classifier[0]
+        for match in _top_n_scope_matches(question, top_n)
+        if (classifier := _scope_classifier(question, match)) is not None
+        if classifier[0] is not None
+    }
+
+
+def _first_cited_literal_start(
+    content: str,
+    cited_values: dict[str, JsonValue],
+) -> int | None:
+    starts = [
+        match.start()
+        for value in cited_values.values()
+        if (match := projected_scalar_literal_pattern(value).search(content))
+        is not None
+    ]
+    return min(starts, default=None)
+
+
 def _scope_phrase_spans(
     content: str,
     *,
     question: str,
     top_n: int | None,
-) -> tuple[tuple[int, int], ...]:
+    cited_values: dict[str, JsonValue],
+) -> tuple[tuple[int, int], ...] | None:
     """질문과 같은 requested top-N scope 표현만 lexical fact 검사에서 제외한다."""
     if top_n is None:
         return ()
+    requested_classifiers = _requested_scope_classifier_stems(question, top_n)
+    scope_matches = _top_n_scope_matches(content, top_n)
+    if len(scope_matches) > 1:
+        return None
+    first_cited_start = _first_cited_literal_start(content, cited_values)
     spans: list[tuple[int, int]] = []
-    for pattern in _TOP_N_PATTERNS:
-        for match in pattern.finditer(content):
-            if int(match.group(1)) != top_n:
-                continue
-            spans.append(match.span())
-            if match.end() != match.end(1):
-                continue
-            classifier = re.match(
-                rf"\s*({_WORD_RE.pattern})",
-                content[match.end() :],
-            )
-            if classifier is not None and (
-                _word_stem(classifier.group(1)).casefold() in question.casefold()
-            ):
-                spans.append(
-                    (
-                        match.end() + classifier.start(1),
-                        match.end() + classifier.end(1),
-                    )
-                )
+    for match in scope_matches:
+        if first_cited_start is not None and match.start() >= first_cited_start:
+            return None
+        spans.append((match.start(), match.end(1)))
+        classifier = _scope_classifier(content, match)
+        if classifier is None:
+            continue
+        if classifier[0] is None or classifier[0] not in requested_classifiers:
+            return None
+        spans.append(classifier[1])
     return tuple(spans)
 
 
@@ -583,11 +665,15 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
-    allowed_lexical_spans = allowed_unit_spans + _scope_phrase_spans(
+    scope_phrase_spans = _scope_phrase_spans(
         content,
         question=value.question,
         top_n=top_n,
+        cited_values=cited_values,
     )
+    if scope_phrase_spans is None:
+        return _rejected("ungrounded_text")
+    allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
     lexical_residual = _remove_cited_literals(
         _blank_spans(content, allowed_lexical_spans),
         cited_values,

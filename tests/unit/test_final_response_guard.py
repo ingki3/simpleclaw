@@ -124,6 +124,117 @@ def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
     assert rejected.code == "ungrounded_number"
 
 
+def test_guard_requires_exact_requested_top_n_classifier() -> None:
+    value = _input().model_copy(
+        update={"question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"}
+    )
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="상위 3승은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert accepted.accepted is True
+    assert rejected.accepted is False
+    assert rejected.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
+    ("question", "content"),
+    [
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3순서는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3현재는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀보다 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀처럼 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀의 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3결과입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "결과와 현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀team은 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3clubs는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+    ],
+)
+def test_guard_rejects_invalid_top_n_classifier_slot(
+    question: str,
+    content: str,
+) -> None:
+    value = _input().model_copy(update={"question": question})
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.code == "ungrounded_text"
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -884,6 +995,93 @@ def test_guard_enforces_domain_neutral_count_only_scope() -> None:
     )
 
     assert result.code == "citation_outside_requested_scope"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Tell me the first 3 teams",
+        "Tell me the first3 teams",
+        "Tell me the first3teams",
+        "Tell me the top3teams",
+        "Tell me the top 3teams",
+    ],
+)
+def test_guard_enforces_english_compact_top_n_scope(question: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": question,
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+    four_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(4)
+        for field in ("team", "wins")
+    )
+    three_paths = four_paths[:6]
+
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT는 59, 삼성은 58, LG는 57, 두산은 56입니다.",
+            cited_paths=four_paths,
+        ),
+    )
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="first 3 teams: KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=three_paths,
+        ),
+    )
+
+    assert rejected.code == "citation_outside_requested_scope"
+    assert accepted.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "first 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+        "top 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_english_top_n_classifier_mismatch(content: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "Tell me the first 3 teams",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=tuple(
+                f"data.items[{index}].{field}"
+                for index in range(3)
+                for field in ("team", "wins")
+            ),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
 
 
 @pytest.mark.parametrize(
