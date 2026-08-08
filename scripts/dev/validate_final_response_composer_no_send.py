@@ -77,6 +77,12 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import DeliveryStatus
+from simpleclaw.llm.models import (
+    LLMAuthError,
+    LLMError,
+    LLMProviderError,
+    LLMTimeoutError,
+)
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
 from simpleclaw.persona.composition_projection import (
@@ -94,6 +100,94 @@ class _ProbeInvariantError(RuntimeError):
 
 class _ForbiddenBoundaryReached(RuntimeError):
     """no-send run이 live sink/supporting dispatch 경계에 진입했음을 표시한다."""
+
+
+@dataclass(frozen=True, slots=True)
+class _SanitizedComposerFailure:
+    """Provider 원문 없이 Composer 실패 provenance만 보존한다."""
+
+    error_code: str
+    error_type: str
+    error_stage: str
+    cause_type: str | None = None
+    root_cause_type: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "cause_type": self.cause_type,
+            "error_code": self.error_code,
+            "error_stage": self.error_stage,
+            "error_type": self.error_type,
+            "raw_content_exposed": False,
+            "root_cause_type": self.root_cause_type,
+        }
+
+
+class _CapturedComposerFailure(_ProbeInvariantError):
+    """Graph fallback 뒤에도 sanitized Composer 실패를 운반한다."""
+
+    def __init__(self, failure: _SanitizedComposerFailure) -> None:
+        super().__init__(failure.error_code)
+        self.failure = failure
+
+
+_COMPOSER_ERROR_CODES = {
+    "composer returned tool calls": "composer_tool_calls",
+    "composer returned an empty response": "composer_empty_response",
+    "composer response was invalid": "composer_response_invalid",
+}
+
+
+def _safe_exception_type(exc: BaseException) -> str:
+    """예외 payload가 아니라 bounded class name만 진단값으로 반환한다."""
+    name = type(exc).__name__
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) else "Error"
+
+
+def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return tuple(chain)
+
+
+def _sanitize_composer_failure(exc: FinalResponseComposerError) -> _SanitizedComposerFailure:
+    """Composer/Provider 예외를 raw message 없는 stable provenance로 축약한다."""
+    chain = _exception_chain(exc)
+    provider_error = next((item for item in chain if isinstance(item, LLMError)), None)
+    if isinstance(provider_error, LLMAuthError):
+        error_code = "provider_auth_error"
+        error_stage = "provider"
+    elif isinstance(provider_error, LLMTimeoutError) or any(
+        isinstance(item, TimeoutError) for item in chain
+    ):
+        error_code = "provider_timeout"
+        error_stage = "provider"
+    elif isinstance(provider_error, LLMProviderError):
+        error_code = "provider_error"
+        error_stage = "provider"
+    else:
+        error_code = _COMPOSER_ERROR_CODES.get(str(exc), "composer_error")
+        error_stage = (
+            "composer_parse"
+            if error_code == "composer_response_invalid"
+            else "composer"
+        )
+    return _SanitizedComposerFailure(
+        error_code=error_code,
+        error_type=_safe_exception_type(exc),
+        error_stage=error_stage,
+        cause_type=(
+            _safe_exception_type(chain[1]) if len(chain) > 1 else None
+        ),
+        root_cause_type=(
+            _safe_exception_type(chain[-1]) if len(chain) > 1 else None
+        ),
+    )
 
 
 class _OneCallSend:
@@ -150,6 +244,7 @@ class _ComposerCapture:
     calls: int = 0
     value: CompositionInputV1 | None = None
     draft: DraftResponseV1 | None = None
+    failure: _SanitizedComposerFailure | None = None
 
 
 class _ConnectedProbeFacade(LangGraphV4RolloutFacade):
@@ -335,14 +430,24 @@ def _bounded_backend_names(
     default_backend: str,
     overrides: list[str] | tuple[str, ...],
     available: list[str] | tuple[str, ...],
+    *,
+    only_backend: str | None = None,
 ) -> tuple[str, ...]:
     """Runtime default를 바꾸지 않고 최대 두 alternate만 eval에 추가한다."""
     normalized = tuple(
         dict.fromkeys(item.strip() for item in overrides if item.strip())
     )
+    if only_backend is not None and normalized:
+        raise _ProbeInvariantError("backend_selection_conflict")
     if len(normalized) > 2:
         raise _ProbeInvariantError("backend_override_limit_exceeded")
-    selected = tuple(dict.fromkeys((default_backend, *normalized)))
+    if only_backend is not None:
+        selected_name = only_backend.strip()
+        if not selected_name:
+            raise _ProbeInvariantError("backend_selection_empty")
+        selected = (selected_name,)
+    else:
+        selected = tuple(dict.fromkeys((default_backend, *normalized)))
     unknown = tuple(item for item in selected if item not in available)
     if unknown:
         raise _ProbeInvariantError("backend_override_unknown")
@@ -518,7 +623,11 @@ async def _connected_probe(
     async def compose(value: CompositionInputV1) -> DraftResponseV1:
         capture.calls += 1
         capture.value = value
-        capture.draft = await composer.compose(value)
+        try:
+            capture.draft = await composer.compose(value)
+        except FinalResponseComposerError as exc:
+            capture.failure = _sanitize_composer_failure(exc)
+            raise
         return capture.draft
 
     async def target_executor(_definition, _bound_steps):
@@ -648,6 +757,8 @@ async def _connected_probe(
         conversation_delta = len(store.get_recent()) - baseline_messages
 
     if capture.value is None or capture.draft is None:
+        if capture.failure is not None:
+            raise _CapturedComposerFailure(capture.failure)
         raise _ProbeInvariantError("composer_capture_missing")
     guard = guard_final_response(capture.value, capture.draft)
     if not guard.accepted:
@@ -772,6 +883,7 @@ async def _run(args: argparse.Namespace) -> int:
             default_backend,
             args.backend,
             router.list_backends(),
+            only_backend=args.only_backend,
         )
     except _ProbeInvariantError as exc:
         print(
@@ -872,6 +984,14 @@ async def _run(args: argparse.Namespace) -> int:
                     ),
                     timeout=args.timeout,
                 )
+            except _CapturedComposerFailure as exc:
+                scenario_result = {
+                    "backend": backend,
+                    **exc.failure.as_dict(),
+                    "name": scenario.name,
+                    "provider_calls": counted_send.calls,
+                    "retry_calls": max(0, counted_send.calls - 1),
+                }
             except (
                 FinalResponseComposerError,
                 TimeoutError,
@@ -881,6 +1001,11 @@ async def _run(args: argparse.Namespace) -> int:
                 _ForbiddenBoundaryReached,
                 _ProbeInvariantError,
             ) as exc:
+                sanitized = (
+                    _sanitize_composer_failure(exc).as_dict()
+                    if isinstance(exc, FinalResponseComposerError)
+                    else None
+                )
                 scenario_result = {
                     "backend": backend,
                     "error_code": (
@@ -889,8 +1014,11 @@ async def _run(args: argparse.Namespace) -> int:
                     "error_type": type(exc).__name__,
                     "name": scenario.name,
                     "provider_calls": counted_send.calls,
+                    "raw_content_exposed": False,
                     "retry_calls": max(0, counted_send.calls - 1),
                 }
+                if sanitized is not None:
+                    scenario_result.update(sanitized)
             scenario_result["backend"] = backend
             scenario_results.append(scenario_result)
             backend_provider_calls += counted_send.calls
@@ -963,13 +1091,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument(
+    backend_group = parser.add_mutually_exclusive_group()
+    backend_group.add_argument(
         "--backend",
         action="append",
         default=[],
         help=(
             "Add up to two configured alternate backends for this eval only; "
             "the runtime default remains unchanged."
+        ),
+    )
+    backend_group.add_argument(
+        "--only-backend",
+        help=(
+            "Evaluate exactly one configured backend without implicitly re-running "
+            "the runtime default."
         ),
     )
     parser.add_argument(

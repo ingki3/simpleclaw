@@ -10,6 +10,7 @@ from scripts.dev.validate_final_response_composer_no_send import (
     _NATURAL_KBO_SCENARIO,
     _SCENARIOS,
     _bounded_backend_names,
+    _CapturedComposerFailure,
     _connected_probe,
     _ConnectedProbeFacade,
     _first_failure,
@@ -25,7 +26,7 @@ from simpleclaw.graph_runtime.runtime import (
     InMemoryDeliveryJournal,
     ShadowBudgetUsageV1,
 )
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.models import LLMProviderError, LLMResponse
 from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 
 
@@ -51,6 +52,14 @@ async def _draft_response(request) -> LLMResponse:
             }
         )
     )
+
+
+async def _invalid_draft_response(_request) -> LLMResponse:
+    return LLMResponse(text="raw-provider-content-must-not-escape")
+
+
+async def _provider_failure(_request) -> LLMResponse:
+    raise LLMProviderError("raw-provider-error-must-not-escape")
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS, ids=lambda item: item.name)
@@ -135,6 +144,85 @@ def test_backend_override_is_eval_only_bounded_and_default_first() -> None:
             ("a", "b", "c"),
             ("default", "a", "b", "c"),
         )
+
+
+def test_only_backend_does_not_implicitly_repeat_default() -> None:
+    assert _bounded_backend_names(
+        "default",
+        (),
+        ("default", "gemini", "glm"),
+        only_backend="gemini",
+    ) == ("gemini",)
+
+    with pytest.raises(RuntimeError, match="conflict"):
+        _bounded_backend_names(
+            "default",
+            ("glm",),
+            ("default", "gemini", "glm"),
+            only_backend="gemini",
+        )
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_preserves_sanitized_provenance_without_raw_content() -> None:
+    counted_send = _OneCallSend(_invalid_draft_response)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    with pytest.raises(_CapturedComposerFailure) as captured:
+        await _connected_probe(
+            composer=composer,
+            counted_send=counted_send,
+            scenario=_SCENARIOS[0],
+            timeout=10.0,
+        )
+
+    failure = captured.value.failure.as_dict()
+    assert failure == {
+        "cause_type": "ValidationError",
+        "error_code": "composer_response_invalid",
+        "error_stage": "composer_parse",
+        "error_type": "FinalResponseComposerError",
+        "raw_content_exposed": False,
+        "root_cause_type": "ValidationError",
+    }
+    assert "raw-provider-content-must-not-escape" not in str(failure)
+    assert "raw-provider-content-must-not-escape" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_preserves_type_without_raw_error_message() -> None:
+    counted_send = _OneCallSend(_provider_failure)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    with pytest.raises(_CapturedComposerFailure) as captured:
+        await _connected_probe(
+            composer=composer,
+            counted_send=counted_send,
+            scenario=_SCENARIOS[0],
+            timeout=10.0,
+        )
+
+    failure = captured.value.failure.as_dict()
+    assert failure == {
+        "cause_type": "LLMProviderError",
+        "error_code": "provider_error",
+        "error_stage": "provider",
+        "error_type": "FinalResponseComposerError",
+        "raw_content_exposed": False,
+        "root_cause_type": "LLMProviderError",
+    }
+    assert "raw-provider-error-must-not-escape" not in str(failure)
+    assert "raw-provider-error-must-not-escape" not in str(captured.value)
 
 
 def test_first_failure_is_preserved_after_later_pass() -> None:
