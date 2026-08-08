@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [!] **[BIZ-657](mention://issue/ae93d2a9-2b68-4175-9c85-fdf523e073fb): PR #714 lifecycle와 exact-head activation evidence를 보정** — production config fixed 및 exact-checkout install real read-only connected no-send를 각각 고정 3회 실행했으나 모두 0/3이었다. 각 gate는 provider 3회·retry 0을 지켰고 첫 run은 정상 materialized 숫자 종결(예: `55.`)을 numeric literal 정규식이 값 미노출로 오판해 Guard `cited_value_order_mismatch`로 거부했으며, 후속 run은 raw provider 내용을 노출하지 않고 `composer_capture_missing`으로 fail-closed했다. 계획에 없는 Guard 수정 또는 별도 corrective child 결정 전까지 부모 PR의 merge·release·deploy·restart·Telegram 전송을 보류한다. (블로커: 2026-08-08)
+- [>] **[BIZ-657](mention://issue/ae93d2a9-2b68-4175-9c85-fdf523e073fb): PR #714 lifecycle와 exact-head activation evidence를 보정** — production config fixed 및 exact-checkout install real read-only connected no-send의 0/3 원인이 정상 materialized 숫자 종결(예: `55.`)을 값 미노출로 오판한 generic Guard 경계임을 재현했다. Stage D 옵션 A 승인에 따라 terminal numeric punctuation만 최소 보정하고 synthetic-neutral repeated-number·decimal/sign/percent fail-closed 회귀와 full regression을 통과했으며, 새 exact SHA의 3/3+3/3 no-send·CI·필수 재리뷰 전까지 부모 PR의 merge·release·deploy·restart·Telegram 전송을 보류한다. (재개: 2026-08-08)
 
 - [>] **[BIZ-656](mention://issue/69877c9f-818e-4934-8318-696f2bb6793f): Central Composer를 typed render plan으로 fail-closed materialize** — provider free-form final content를 concrete path와 bounded grammar enum의 typed render plan으로 대체하고, 중앙 materializer가 projected scalar를 canonical order로 exactly-once 삽입한 뒤 기존 Guard를 그대로 통과하도록 구현한 [PR #714](https://github.com/ingki3/simpleclaw/pull/714)은 Stage D 검토 중이다. Architecture/domain-neutrality와 Guard/security의 이전 exact-head 판정은 PASS했지만 lifecycle 및 activation evidence 보정으로 head가 변경되므로 BIZ-657 완료 뒤 새 exact SHA의 no-send·CI·필수 재검토 전까지 merge를 보류한다. (검토 중: 2026-08-08)
 

@@ -447,6 +447,50 @@ def test_structural_relation_accepts_repeated_scalar_materialized_per_identity()
     assert result.accepted is True
 
 
+def test_structural_relation_accepts_repeated_number_before_terminal_punctuation(
+) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-repeated-number",
+        question="What are the top 3 records and values?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="repeated-number-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [
+                {"name": "alpha", "value": 60},
+                {"name": "beta", "value": 55},
+                {"name": "gamma", "value": 55},
+            ]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=tuple(
+                    f"records[{index}].{field}"
+                    for index in range(3)
+                    for field in ("name", "value")
+                ),
+                identity_paths=tuple(
+                    f"records[{index}].name" for index in range(3)
+                ),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha 60, beta 55, gamma 55.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.accepted is True
+
+
 def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
     value = CompositionInputV1(
         request_id="request-neutral-mixed-roots",
@@ -1780,7 +1824,10 @@ def test_guard_rejects_canonical_decoy_prefix_and_duplicate_tail(
     assert result.code == "cited_value_order_mismatch"
 
 
-@pytest.mark.parametrize("rendered_number", ["-59", "+59", "59%"])
+@pytest.mark.parametrize(
+    "rendered_number",
+    ["-59", "+59", "59%", "59.0"],
+)
 def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
     rendered_number: str,
 ) -> None:

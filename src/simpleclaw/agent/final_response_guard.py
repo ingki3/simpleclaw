@@ -156,6 +156,23 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
+
+
+def _guard_projected_scalar_literal_pattern(
+    value: JsonValue,
+) -> re.Pattern[str] | None:
+    """숫자 뒤 문장 종결점은 허용하되 numeric 재해석은 거부한다."""
+    pattern = projected_scalar_literal_pattern(value)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return pattern
+    rendered = str(value).strip()
+    if not rendered:
+        return None
+    return re.compile(
+        rf"(?<![\d.+%-]){re.escape(rendered)}(?![\d+%-]|\.\d)"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GuardResult:
     """Response guard의 명시적 승인 여부와 stable 거부 code다."""
@@ -279,7 +296,7 @@ def _remove_cited_literals(
         {
             pattern.pattern: pattern
             for item in cited_values.values()
-            if (pattern := projected_scalar_literal_pattern(item)) is not None
+            if (pattern := _guard_projected_scalar_literal_pattern(item)) is not None
         }.values(),
         key=lambda pattern: len(pattern.pattern),
         reverse=True,
@@ -375,7 +392,7 @@ def _first_cited_literal_start(
     starts = [
         match.start()
         for value in cited_values.values()
-        if (match := projected_scalar_literal_pattern(value).search(content))
+        if (match := _guard_projected_scalar_literal_pattern(value).search(content))
         is not None
     ]
     return min(starts, default=None)
@@ -511,7 +528,7 @@ def _cited_literal_order_error(
     patterns: list[re.Pattern[str]] = []
     boundary_units: list[tuple[str | None, tuple[int, int] | None]] = []
     for path, value in cited_values.items():
-        pattern = projected_scalar_literal_pattern(value)
+        pattern = _guard_projected_scalar_literal_pattern(value)
         if pattern is None:
             return ("cited_value_order_mismatch", ())
         match = pattern.search(content, cursor)
@@ -672,7 +689,7 @@ def guard_final_response(
     if value.structural_evidence_relations and structural_relation is None:
         return _rejected("structural_relation_citation_mismatch")
     for cited in cited_values.values():
-        if projected_scalar_literal_pattern(cited) is None:
+        if _guard_projected_scalar_literal_pattern(cited) is None:
             return _rejected("citation_not_scalar")
         if (
             isinstance(cited, str)
