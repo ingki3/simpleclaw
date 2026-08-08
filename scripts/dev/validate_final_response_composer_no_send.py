@@ -17,6 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -37,6 +39,7 @@ from simpleclaw.agent.composition_citations import (
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
 from simpleclaw.agent.composition_projection import flatten_public_facts
@@ -197,6 +200,7 @@ class _OneCallSend:
         self._send = send
         self.calls = 0
         self.provider_plan_shape_valid = False
+        self.provider_plan_error_code: str | None = None
 
     async def __call__(self, request):
         self.calls += 1
@@ -204,16 +208,42 @@ class _OneCallSend:
             raise _ProbeInvariantError("composer_provider_call_cap_exceeded")
         response = await self._send(request)
         try:
-            payload = json.loads(response.text)
-            self.provider_plan_shape_valid = (
-                isinstance(payload, dict)
-                and set(payload) <= {"schema", "separator", "ending"}
-                and isinstance(payload.get("separator"), str)
-                and payload.get("ending") == "period"
-            )
-        except (AttributeError, TypeError, ValueError):
+            CompositionRenderPlanV1.model_validate_json(response.text)
+            self.provider_plan_shape_valid = True
+            self.provider_plan_error_code = None
+        except ValidationError as exc:
             self.provider_plan_shape_valid = False
+            self.provider_plan_error_code = _render_plan_validation_code(exc)
+        except (AttributeError, TypeError):
+            self.provider_plan_shape_valid = False
+            self.provider_plan_error_code = "provider_plan_response_type_invalid"
         return response
+
+
+def _render_plan_validation_code(exc: ValidationError) -> str:
+    """Pydantic input/message 없이 render-plan schema 실패 종류만 보존한다."""
+    errors = exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    error_types = {str(item.get("type")) for item in errors}
+    safe_locations = {
+        str(item["loc"][0])
+        for item in errors
+        if item.get("loc")
+        and item["loc"][0] in {"schema", "separator", "ending"}
+    }
+    if "json_invalid" in error_types:
+        return "provider_plan_invalid_json"
+    if "extra_forbidden" in error_types:
+        return "provider_plan_extra_fields"
+    for field in ("schema", "separator", "ending"):
+        if field in safe_locations and "missing" in error_types:
+            return f"provider_plan_{field}_missing"
+        if field in safe_locations and "literal_error" in error_types:
+            return f"provider_plan_{field}_invalid"
+    return "provider_plan_schema_invalid"
 
 
 @dataclass(slots=True)
@@ -989,6 +1019,9 @@ async def _run(args: argparse.Namespace) -> int:
                     "backend": backend,
                     **exc.failure.as_dict(),
                     "name": scenario.name,
+                    "provider_plan_error_code": (
+                        counted_send.provider_plan_error_code
+                    ),
                     "provider_calls": counted_send.calls,
                     "retry_calls": max(0, counted_send.calls - 1),
                 }
@@ -1019,6 +1052,9 @@ async def _run(args: argparse.Namespace) -> int:
                 }
                 if sanitized is not None:
                     scenario_result.update(sanitized)
+                    scenario_result["provider_plan_error_code"] = (
+                        counted_send.provider_plan_error_code
+                    )
             scenario_result["backend"] = backend
             scenario_results.append(scenario_result)
             backend_provider_calls += counted_send.calls
