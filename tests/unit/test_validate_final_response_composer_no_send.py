@@ -28,7 +28,10 @@ async def _draft_response(request) -> LLMResponse:
     citation_paths = request.response_schema["properties"]["cited_paths"]["items"][
         "enum"
     ]
-    if len(citation_paths) > 1:
+    value = json.loads(request.user_message)
+    if "현재 KBO" in value["question"]:
+        content = "LG 60, 한화 58, 롯데 55입니다."
+    elif len(citation_paths) > 1:
         citation_paths = sorted(
             citation_paths,
             key=lambda path: (
@@ -36,11 +39,9 @@ async def _draft_response(request) -> LLMResponse:
                 0 if path.endswith(".name") else 1,
             ),
         )
-    content = (
-        "The activation gate is READY."
-        if len(citation_paths) == 1
-        else "Alpha One, Beta Two, Gamma Three."
-    )
+        content = "Alpha One, Beta Two, Gamma Three."
+    else:
+        content = "The activation gate is READY."
     return LLMResponse(
         text=json.dumps(
             {
@@ -75,7 +76,13 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["retry_calls"] == 0
     assert result["composer_calls"] == 1
     assert result["guard_accepted"] is True
-    assert set(result["citations"]) == set(scenario.resolved_claims)
+    assert tuple(result["citations"]) == scenario.expected_citations
+    assert result["canonical_citation_count"] == len(scenario.expected_citations)
+    assert result["provider_citation_count"] >= len(scenario.expected_citations)
+    assert "content" not in result
+    if scenario.name == "kbo_top_three_fixed":
+        assert result["pruned_citation_count"] > 0
+        assert result["source_mode"] == "production_shaped_fixed"
     assert result["sink_spy_preflight_calls"] == {
         "telegram_send": 1,
         "notifier": 1,

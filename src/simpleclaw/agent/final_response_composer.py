@@ -9,6 +9,10 @@ from collections.abc import Awaitable, Callable
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 
+from .composition_citations import (
+    CITATION_CANONICALIZATION_POLICY_VERSION,
+    canonicalize_draft_citations,
+)
 from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
@@ -81,6 +85,9 @@ class FinalResponseComposer:
         payload = json.dumps(
             {
                 "backend": self._backend_name,
+                "citation_canonicalization": (
+                    CITATION_CANONICALIZATION_POLICY_VERSION
+                ),
                 "max_tokens": self._max_tokens,
                 "max_output_chars": self._max_output_chars,
                 "persona": self._persona_prompt,
@@ -118,7 +125,7 @@ class FinalResponseComposer:
             draft = DraftResponseV1.model_validate_json(response.text)
             if len(draft.content) > self._max_output_chars:
                 raise FinalResponseComposerError("composer output exceeded configured cap")
-            return draft
+            return canonicalize_draft_citations(value, draft)
         except FinalResponseComposerError:
             raise
         except Exception as exc:

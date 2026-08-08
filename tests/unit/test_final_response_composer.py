@@ -13,6 +13,7 @@ from simpleclaw.agent.composition_contracts import (
     DraftResponseV1,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 from simpleclaw.llm.models import LLMResponse
@@ -37,6 +38,30 @@ def _input() -> CompositionInputV1:
                 ]
             }
         },
+    )
+
+
+def _production_shaped_input() -> CompositionInputV1:
+    return _input().model_copy(
+        update={
+            "question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "public_facts_json": json.dumps(
+                {
+                    "data": {
+                        "season": {"title": "2026 KBO"},
+                        "date": "2026-08-08",
+                        "items": [
+                            {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
+                            {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
+                            {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
+                        ],
+                    }
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        }
     )
 
 
@@ -236,3 +261,128 @@ async def test_composer_does_not_retry_empty_citations() -> None:
     request = send.await_args.args[0]
     assert "cited_paths" in request.response_schema["required"]
     assert request.response_schema["properties"]["cited_paths"]["minItems"] == 1
+
+
+@pytest.mark.asyncio
+async def test_composer_prunes_only_valid_unrendered_citations() -> None:
+    content = "LG 60, 한화 58, 롯데 55입니다."
+    provider_paths = [
+        "data.items[2].losses",
+        "data.date",
+        "data.items[0].wins",
+        "data.items[0].team",
+        "data.items[0].losses",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+        "data.season.title",
+    ]
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": content,
+                    "cited_paths": provider_paths,
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_prompt="간결하게",
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    draft = await composer.compose(_production_shaped_input())
+
+    assert send.await_count == 1
+    assert draft.content == content
+    assert draft.cited_paths == (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+    assert set(draft.cited_paths) < set(provider_paths)
+    assert guard_final_response(_production_shaped_input(), draft).accepted is True
+
+
+@pytest.mark.asyncio
+async def test_composer_never_adds_visible_citations_missing_from_provider() -> None:
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": "LG 60, 한화 58, 롯데 55입니다.",
+                    "cited_paths": ["data.items[0].team"],
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_prompt="간결하게",
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    draft = await composer.compose(_production_shaped_input())
+
+    assert draft.cited_paths == ("data.items[0].team",)
+    assert guard_final_response(_production_shaped_input(), draft).accepted is False
+
+
+@pytest.mark.asyncio
+async def test_composer_keeps_original_citations_when_visible_subset_is_empty() -> None:
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": "LG입니다.",
+                    "cited_paths": ["data.season.title", "data.date"],
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_prompt="간결하게",
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    draft = await composer.compose(_production_shaped_input())
+
+    assert draft.cited_paths == ("data.season.title", "data.date")
+    result = guard_final_response(_production_shaped_input(), draft)
+    assert result.accepted is False
+    assert result.code == "cited_value_not_rendered"
+
+
+def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> None:
+    kwargs = {
+        "send": AsyncMock(),
+        "persona_prompt": "간결하게",
+        "max_tokens": 1200,
+        "backend_name": "fixture-backend",
+    }
+    original = FinalResponseComposer(**kwargs).fingerprint
+    monkeypatch.setattr(
+        "simpleclaw.agent.final_response_composer."
+        "CITATION_CANONICALIZATION_POLICY_VERSION",
+        "visible_subset_v2",
+    )
+
+    changed = FinalResponseComposer(**kwargs).fingerprint
+
+    assert changed != original

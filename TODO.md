@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-642](mention://issue/f5c8b31e-46a5-4ef7-97c8-435a57885a01): visible citation canonical subset으로 실제 KBO gate 통과** — provider가 반환한 valid concrete citation 중 response content에 Guard와 동일한 exact literal 규칙으로 보이는 path만 deterministic projection 순서로 유지한다. content·limitation은 변경하지 않고 citation 추가·provider retry 없이 over-citation만 줄이며, unknown/wildcard/duplicate/empty subset은 기존 Guard가 fail-closed한다. production-shaped fixed 및 선택적 real KBO top-3 connected no-send에서 provider 1회, retry 0, sink delta 0을 검증하고 exact-head CI·필수 안전 리뷰 전에는 release·production activation·restart·Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
+
 - [>] **[BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307): divergent composer gate를 canonical PR에 통합** — [PR #696](https://github.com/ingki3/simpleclaw/pull/696)을 canonical target으로 삼아 dynamic concrete-path enum·root-relative prompt와 scalar/top-3 connected production no-send gate를 함께 유지한다. 시나리오별 provider 1회, retry 0, Telegram/Cron adapter·ConversationStore writer·supporting dispatch per-run delta 0을 fail-closed spy로 고정하고 source 통합 커밋 이후 Graphify를 재생성한다. exact-head CI·필수 review·squash merge 전에는 production activation·restart·Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
 
 - [>] **[BIZ-640](mention://issue/29e9c2b4-9703-4479-94ce-1d2702841d0e): projected citation path를 schema allowlist로 고정** — input별 scalar leaf만 `cited_paths` enum으로 허용하고 prefixed/wildcard/container/unknown path를 schema·Guard에서 fail-closed한다. 최종 검증·병합은 BIZ-641이 통합하는 canonical [PR #696](https://github.com/ingki3/simpleclaw/pull/696)이 소유한다. (진행: 2026-08-08)
