@@ -177,7 +177,7 @@ def validate_structural_evidence_relations(
         evidence = raw["evidence_fields"]
         evidence_must_be_visible = raw["evidence_must_be_visible"]
         if not isinstance(evidence_must_be_visible, bool):
-            raise ValueError(
+            raise TypeError(
                 "structural evidence visibility policy must be a boolean"
             )
         if not isinstance(when, dict) or set(when) != {"path", "equals"}:
@@ -194,7 +194,7 @@ def validate_structural_evidence_relations(
             )
         when_equals = when["equals"]
         if isinstance(when_equals, dict | list):
-            raise ValueError(
+            raise TypeError(
                 "structural evidence relation condition must use a scalar value"
             )
         _validate_json_value(
