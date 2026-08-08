@@ -7,10 +7,14 @@ import json
 import pytest
 
 from scripts.dev.validate_final_response_composer_no_send import (
+    _DIRECT_SKILL_SCENARIOS,
     _NATURAL_KBO_SCENARIO,
     _SCENARIOS,
+    _bounded_backend_names,
+    _CapturedComposerFailure,
     _connected_probe,
     _ConnectedProbeFacade,
+    _first_failure,
     _OneCallSend,
     _production_persona_projection,
 )
@@ -23,7 +27,7 @@ from simpleclaw.graph_runtime.runtime import (
     InMemoryDeliveryJournal,
     ShadowBudgetUsageV1,
 )
-from simpleclaw.llm.models import LLMResponse
+from simpleclaw.llm.models import LLMProviderError, LLMResponse
 from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 
 
@@ -39,34 +43,23 @@ def _persona_projection(text: str) -> CompositionPersonaProjection:
 
 
 async def _draft_response(request) -> LLMResponse:
-    citation_paths = request.response_schema["properties"]["cited_paths"]["items"][
-        "enum"
-    ]
     value = json.loads(request.user_message)
-    data = value["public_facts"]["data"]
-    if data.get("empty_reason") == "no_scheduled_events":
-        content = "empty, no_scheduled_events."
-        citation_paths = ["data.status", "data.empty_reason"]
-    elif data.get("empty_reason") == "no_live_events":
-        content = "empty, no_live_events."
-        citation_paths = ["data.status", "data.empty_reason"]
-    else:
-        assert value["question"] == "오늘 프로야구 하냐?"
-        content = "경기 예정, 두산, 한화."
-        citation_paths = [
-            "data.items[0].status",
-            "data.items[0].participants.away.name",
-            "data.items[0].participants.home.name",
-        ]
+    assert value["question"] == "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"
     return LLMResponse(
         text=json.dumps(
             {
-                "content": content,
-                "cited_paths": citation_paths,
-                "limitation_paths": [],
+                "separator": "comma_space",
             }
         )
     )
+
+
+async def _invalid_draft_response(_request) -> LLMResponse:
+    return LLMResponse(text="raw-provider-content-must-not-escape")
+
+
+async def _provider_failure(_request) -> LLMResponse:
+    raise LLMProviderError("raw-provider-error-must-not-escape")
 
 
 @pytest.mark.parametrize("scenario", _SCENARIOS, ids=lambda item: item.name)
@@ -75,9 +68,7 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     counted_send = _OneCallSend(_draft_response)
     composer = FinalResponseComposer(
         send=counted_send,
-        persona_projection=_persona_projection(
-            "Answer only from the supplied facts."
-        ),
+        persona_projection=_persona_projection("Answer only from the supplied facts."),
         max_tokens=1200,
         backend_name="offline-fixture",
     )
@@ -97,9 +88,8 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["guard_accepted"] is True
     assert tuple(result["citations"]) == scenario.expected_citations
     assert result["canonical_citation_count"] == len(scenario.expected_citations)
-    assert result["provider_citation_count"] >= len(scenario.expected_citations)
+    assert result["provider_plan_shape_valid"] is True
     assert "content" not in result
-    assert result["pruned_citation_count"] >= 0
     assert result["source_mode"] == "production_shaped_fixed"
     assert result["sink_spy_preflight_calls"] == {
         "telegram_send": 1,
@@ -121,19 +111,176 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["conversation_store_message_delta"] == 0
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    _DIRECT_SKILL_SCENARIOS,
+    ids=lambda item: item.name,
+)
+@pytest.mark.asyncio
+async def test_direct_skill_probe_measures_separate_react_boundary(scenario) -> None:
+    counted_send = _OneCallSend(_draft_response)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from the supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    result = await _connected_probe(
+        composer=composer,
+        counted_send=counted_send,
+        scenario=scenario,
+        timeout=10.0,
+    )
+
+    assert result["selected_asset_type"] == "skill"
+    assert result["source_mode"] == "production_direct_skill_fixed"
+    assert result["provider_calls"] == 1
+    assert result["composer_calls"] == 1
+    assert result["retry_calls"] == 0
+    assert result["guard_accepted"] is True
+    assert tuple(result["citations"]) == scenario.expected_citations
+    assert result["connected_target_dispatch_calls"] == 1
+    assert set(result["measured_side_effect_deltas"].values()) == {0}
+    assert set(result["measured_forbidden_boundary_calls"].values()) == {0}
+    assert result["conversation_store_message_delta"] == 0
+
+
 def test_activation_scenarios_use_natural_question_without_local_persona() -> None:
     assert len(_SCENARIOS) == 3
     assert [scenario.question for scenario in _SCENARIOS] == [
-        "오늘 프로야구 하냐?",
-        "오늘 프로야구 하냐?",
-        "지금 KBO 경기 중이야?",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
     ]
     assert [scenario.name for scenario in _SCENARIOS] == [
-        "production_schedule_present",
-        "production_schedule_empty",
-        "production_live_empty",
+        "production_persona_natural_kbo_1",
+        "production_persona_natural_kbo_2",
+        "production_persona_natural_kbo_3",
+    ]
+    assert [item["wins"] for item in _SCENARIOS[0].payload["data"]["items"]] == [
+        60,
+        55,
+        55,
     ]
     assert not hasattr(_NATURAL_KBO_SCENARIO, "persona_prompt")
+
+
+def test_backend_override_is_eval_only_bounded_and_default_first() -> None:
+    assert _bounded_backend_names(
+        "default",
+        ("alternate_a", "alternate_b", "alternate_a"),
+        ("default", "alternate_a", "alternate_b"),
+    ) == ("default", "alternate_a", "alternate_b")
+
+    with pytest.raises(RuntimeError, match="limit"):
+        _bounded_backend_names(
+            "default",
+            ("a", "b", "c"),
+            ("default", "a", "b", "c"),
+        )
+
+
+def test_only_backend_does_not_implicitly_repeat_default() -> None:
+    assert _bounded_backend_names(
+        "default",
+        (),
+        ("default", "alternate_a", "alternate_b"),
+        only_backend="alternate_a",
+    ) == ("alternate_a",)
+
+    with pytest.raises(RuntimeError, match="conflict"):
+        _bounded_backend_names(
+            "default",
+            ("alternate_b",),
+            ("default", "alternate_a", "alternate_b"),
+            only_backend="alternate_a",
+        )
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_preserves_sanitized_provenance_without_raw_content() -> None:
+    counted_send = _OneCallSend(_invalid_draft_response)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    with pytest.raises(_CapturedComposerFailure) as captured:
+        await _connected_probe(
+            composer=composer,
+            counted_send=counted_send,
+            scenario=_SCENARIOS[0],
+            timeout=10.0,
+        )
+
+    failure = captured.value.failure.as_dict()
+    assert failure == {
+        "cause_type": "ValidationError",
+        "error_code": "composer_response_invalid",
+        "error_stage": "composer_parse",
+        "error_type": "FinalResponseComposerError",
+        "raw_content_exposed": False,
+        "root_cause_type": "ValidationError",
+    }
+    assert counted_send.provider_plan_error_code == "provider_plan_invalid_json"
+    assert counted_send.provider_plan_validation_signature == (
+        "root:json_invalid",
+    )
+    assert "raw-provider-content-must-not-escape" not in str(failure)
+    assert "raw-provider-content-must-not-escape" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_preserves_type_without_raw_error_message() -> None:
+    counted_send = _OneCallSend(_provider_failure)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    with pytest.raises(_CapturedComposerFailure) as captured:
+        await _connected_probe(
+            composer=composer,
+            counted_send=counted_send,
+            scenario=_SCENARIOS[0],
+            timeout=10.0,
+        )
+
+    failure = captured.value.failure.as_dict()
+    assert failure == {
+        "cause_type": "LLMProviderError",
+        "error_code": "provider_error",
+        "error_stage": "provider",
+        "error_type": "FinalResponseComposerError",
+        "raw_content_exposed": False,
+        "root_cause_type": "LLMProviderError",
+    }
+    assert counted_send.provider_plan_error_code is None
+    assert counted_send.provider_plan_validation_signature == ()
+    assert "raw-provider-error-must-not-escape" not in str(failure)
+    assert "raw-provider-error-must-not-escape" not in str(captured.value)
+
+
+def test_first_failure_is_preserved_after_later_pass() -> None:
+    first = {
+        "name": "run-1",
+        "error_code": "guard_rejected",
+        "provider_calls": 1,
+    }
+    results = [
+        first,
+        {"name": "run-2", "guard_accepted": True, "provider_calls": 1},
+    ]
+
+    captured = _first_failure(results)
+    results[0]["error_code"] = "changed"
+
+    assert captured == first | {"error_code": "guard_rejected"}
 
 
 def test_production_persona_uses_allowlisted_runtime_projection(tmp_path) -> None:

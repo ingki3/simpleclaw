@@ -123,6 +123,20 @@ output_contract:
       - warnings[*]
       - source.urls[*]
     x-simpleclaw-composition-list-root: items
+    x-simpleclaw-citable-paths:
+      - when: {path: mode, equals: live}
+        paths:
+          - "items[*].participants.away.name"
+          - "items[*].participants.home.name"
+          - "items[*].score.away"
+          - "items[*].score.home"
+      - when: {path: mode, equals: results}
+        paths:
+          - "items[*].participants.away.name"
+          - "items[*].participants.home.name"
+          - "items[*].score.away"
+          - "items[*].score.home"
+          - "items[*].winner"
     x-simpleclaw-structural-evidence-relations:
       - when: {path: status, equals: empty}
         fallback_for: [schedule_items]
@@ -136,6 +150,12 @@ output_contract:
         identity_fields:
           - "items[*].participants.away.name"
           - "items[*].participants.home.name"
+      - when: {path: mode, equals: standings}
+        evidence_fields:
+          - "items[*].team"
+          - "items[*].wins"
+        identity_fields:
+          - "items[*].team"
 argument_binding:
   binding_id: shell-argv.v1
   owner_ref: {type: skill, name: naver-sports-skill}

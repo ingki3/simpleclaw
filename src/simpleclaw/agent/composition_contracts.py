@@ -50,6 +50,7 @@ class CompositionInputV1(ContractModel):
     public_facts_json: CanonicalJsonObject = Field(alias="public_facts")
     resolved_claims: tuple[NonEmptyStr, ...] = ()
     unresolved_claims: tuple[NonEmptyStr, ...] = ()
+    citable_paths: tuple[NonEmptyStr, ...] = Field(default=(), max_length=128)
     composition_list_root: NonEmptyStr | None = None
     structural_evidence_relations: tuple[StructuralEvidenceRelationV1, ...] = ()
 
@@ -69,7 +70,20 @@ class CompositionInputV1(ContractModel):
             raise ValueError("composition input public_facts must not be empty")
         if len(self.structural_evidence_relations) > 1:
             raise ValueError("conflicting active structural evidence relations")
+        if len(set(self.citable_paths)) != len(self.citable_paths):
+            raise ValueError("citable_paths must be unique")
         return self
+
+
+class CompositionRenderPlanV1(ContractModel):
+    """Provider가 fact/path/terminal authority 없이 separator만 선택하는 계약이다."""
+
+    separator: Literal[
+        "space",
+        "comma_space",
+        "middle_dot_space",
+        "semicolon_space",
+    ]
 
 
 class DraftResponseV1(ContractModel):
@@ -92,3 +106,12 @@ class DraftResponseV1(ContractModel):
         if len(self.cited_paths) > 128 or len(self.limitation_paths) > 64:
             raise ValueError("draft response contains too many paths")
         return self
+
+
+def validated_draft_snapshot(candidate: object) -> DraftResponseV1:
+    """정확한 draft instance를 새 immutable contract로 방어 재검증한다."""
+    if type(candidate) is not DraftResponseV1:
+        raise TypeError("candidate must be a DraftResponseV1 instance")
+    return DraftResponseV1.model_validate(
+        candidate.model_dump(mode="python", by_alias=True, warnings="error")
+    )

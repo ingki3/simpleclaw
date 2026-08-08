@@ -23,6 +23,7 @@ from simpleclaw.capability import (
 )
 
 from .contracts import (
+    CITABLE_PATHS_EXTENSION,
     COMPOSITION_FIELDS_EXTENSION,
     COMPOSITION_LIST_ROOT_EXTENSION,
     STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
@@ -32,6 +33,7 @@ from .contracts import (
     ContractDescriptorV1,
     ContractRefV1,
     RetryPolicyV1,
+    validate_citable_paths,
     validate_composition_fields,
     validate_composition_list_root,
     validate_structural_evidence_relations,
@@ -360,6 +362,7 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "oneOf",
         COMPOSITION_FIELDS_EXTENSION,
         COMPOSITION_LIST_ROOT_EXTENSION,
+        CITABLE_PATHS_EXTENSION,
         STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     }
 )
@@ -381,6 +384,11 @@ def _validate_schema_definition(schema: object) -> None:
         )
         validate_composition_list_root(
             schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
+        )
+        validate_citable_paths(
+            schema.get(CITABLE_PATHS_EXTENSION),
             json_schema=schema,
             composition_fields=composition_fields,
         )

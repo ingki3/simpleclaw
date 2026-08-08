@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 from unittest.mock import AsyncMock, Mock
@@ -12,9 +13,13 @@ import pytest
 from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
-from simpleclaw.agent.final_response_composer import FinalResponseComposerError
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposerError,
+    materialize_render_plan,
+)
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
 from simpleclaw.graph_runtime.composition_journal import (
@@ -34,27 +39,28 @@ from simpleclaw.graph_runtime.status import (
 
 
 def _values(request_id: str = "request-1"):
-    facts = {
-        "data": {
-            "category": "KBO",
-            "items": [{"rank": 1, "team": "KT", "wins": 59}],
-        }
-    }
+    facts = {"records": [{"name": "alpha", "measure_a": 59}]}
     value = CompositionInputV1(
         request_id=request_id,
-        question="KBO 1위 팀을 알려줘",
-        locale="ko-KR",
+        question="Return the first record.",
+        locale="en-US",
         selected_route="recipe",
-        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        asset_ref=AssetRefV1(type="recipe", name="neutral-records"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_root="records",
         public_facts=facts,
+        resolved_claims=("aggregate",),
+        citable_paths=(
+            "records[0].name",
+            "records[0].measure_a",
+        ),
     )
     result = NormalizedAssetResultV1(
         invocation_id="invocation",
         output_contract=ContractRefV1(
-            contract_id="recipe.sports-live.output",
+            contract_id="recipe.neutral-records.output",
             version="1",
             owner_ref=value.asset_ref,
             schema_hash="schema-hash",
@@ -69,20 +75,89 @@ def _values(request_id: str = "request-1"):
 
 def _draft() -> DraftResponseV1:
     return DraftResponseV1(
-        content="KBO 1위는 KT이며 59승입니다.",
+        content="alpha, 59.",
         cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
+            "records[0].name",
+            "records[0].measure_a",
         ),
     )
+
+
+class _StatefulDuckDraft:
+    schema_version = "draft_response.v1"
+    cited_paths = ("records[0].name", "records[0].measure_a")
+    limitation_paths: tuple[str, ...] = ()
+
+    def __init__(self) -> None:
+        self.content_reads = 0
+
+    @property
+    def content(self) -> str:
+        self.content_reads += 1
+        if self.content_reads <= 2:
+            return "alpha, 59."
+        return "raw diagnostic SECRET."
+
+
+@pytest.mark.asyncio
+async def test_mutable_duck_draft_fails_closed_without_content_reaccess(
+    tmp_path,
+) -> None:
+    value, result = _values("stateful-duck-request")
+    db_path = tmp_path / "stateful-duck.sqlite3"
+    candidate = _StatefulDuckDraft()
+    compose = AsyncMock(return_value=candidate)
+    guard = AsyncMock()
+    fallback = "요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    safe_render = Mock(return_value=fallback)
+
+    first = await FinalCompositionRuntime(
+        compose=compose,
+        guard=guard,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+    replay = await FinalCompositionRuntime(
+        compose=AsyncMock(return_value=_draft()),
+        guard=guard_final_response,
+        safe_render=Mock(return_value="must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert first is not None
+    assert first.content == fallback
+    assert replay == first
+    assert candidate.content_reads == 0
+    assert guard.await_count == 0
+    assert safe_render.call_count == 1
+    with sqlite3.connect(db_path) as connection:
+        stored = connection.execute(
+            "SELECT artifact_json FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchall()
+    assert len(stored) == 1
+    assert json.loads(stored[0][0])["content"] == fallback
+    assert "raw diagnostic" not in stored[0][0]
+    assert "SECRET" not in stored[0][0]
 
 
 class _ComposerStop(FinalResponseComposerError):
     def __init__(self, stop_condition: str) -> None:
         self.stop_condition = stop_condition
         super().__init__(
-            f"provider raw diagnostic: {stop_condition}; KBO 1위 KT 59승"
+            f"provider raw diagnostic: {stop_condition}; alpha measure 59"
         )
 
 
@@ -136,9 +211,7 @@ async def _assert_stop_records_generic_fallback_and_replay_reuses_it(
             "provider",
             "raw diagnostic",
             stop_condition,
-            "KBO",
-            "KT",
-            "1위",
+            "alpha",
             "59",
         )
     )
@@ -247,7 +320,7 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -318,7 +391,7 @@ async def test_actual_guard_timeout_records_generic_fallback_and_replay_reuses_i
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -338,13 +411,9 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
 ) -> None:
     value, result = _values("record-deadline-request")
     db_path = tmp_path / "record-deadline.sqlite3"
-    accepted_draft = DraftResponseV1(
-        content="KBO · KT · 59",
-        cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
-        ),
+    accepted_draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="middle_dot_space"),
     )
 
     deadline = asyncio.timeout(None)
@@ -405,7 +474,7 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in ("provider", "raw", "KBO", "KT", "1위", "59")
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -551,15 +620,11 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
     tmp_path,
 ) -> None:
     value, result = _values("canonicalized-replay-request")
-    provider_draft = DraftResponseV1(
-        content="KBO, KT, 59",
-        cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
-        ),
+    accepted_draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
     )
-    canonical = canonicalize_draft_citations(value, provider_draft)
+    canonical = canonicalize_draft_citations(value, accepted_draft)
     db_path = tmp_path / "canonicalized-replay.sqlite3"
     compose = AsyncMock(return_value=canonical)
 
@@ -589,14 +654,13 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
         composition_input=value,
     )
 
-    assert canonical.content == provider_draft.content
+    assert canonical.content == accepted_draft.content
     assert canonical.cited_paths == (
-        "data.category",
-        "data.items[0].team",
-        "data.items[0].wins",
+        "records[0].name",
+        "records[0].measure_a",
     )
     assert first is not None
-    assert first.content == provider_draft.content
+    assert first.content == accepted_draft.content
     assert replay == first
     assert compose.await_count == 1
     assert replay_compose.await_count == 0

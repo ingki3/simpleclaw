@@ -25,9 +25,15 @@ from scripts.install_naver_sports_skill import install as install_naver_sports_s
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposer,
+    materialize_render_plan,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
     _allow_v4_legacy_fallback,
@@ -125,6 +131,7 @@ from simpleclaw.outbound_delivery import (
     PrimaryPersistenceStatus,
     PrimaryResponseText,
 )
+from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
@@ -583,6 +590,8 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     assert _v4_connected_contract_eligible(gate.effective_plan, catalog) is True
 
     calls = 0
+    composer_calls = 0
+    provider_calls = 0
     pending_argv: tuple[str, ...] | None = None
     exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
     exact_recipe._recipes = (recipe,)
@@ -656,16 +665,40 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert "answer" not in helper_payload
         return result
 
-    async def compose(value: CompositionInputV1) -> DraftResponseV1:
-        assert len(value.public_facts["data"]["items"]) == 3
-        return DraftResponseV1(
-            content="LG, 한화, 롯데입니다.",
-            cited_paths=(
-                "data.items[0].team",
-                "data.items[1].team",
-                "data.items[2].team",
-            ),
+    async def send_render_plan(request: LLMRequest) -> LLMResponse:
+        nonlocal provider_calls
+        provider_calls += 1
+        assert request.tools is None
+        assert request.require_structured_output is True
+        assert set(request.response_schema["properties"]) == {"separator"}
+        return LLMResponse(
+            text=json.dumps(
+                {
+                    "separator": "comma_space",
+                },
+                ensure_ascii=False,
+            )
         )
+
+    central_composer = FinalResponseComposer(
+        send=send_render_plan,
+        persona_projection=CompositionPersonaProjection(
+            instruction_text="Use concise bounded grammar.",
+            source_types=(FileType.SOUL,),
+            token_count=4,
+            token_budget=128,
+            policy_version="integration_fixture_v1",
+            fingerprint="integration-fixture-v1",
+        ),
+        max_tokens=1200,
+        backend_name="offline-render-plan",
+    )
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        assert len(value.public_facts["data"]["items"]) == 3
+        return await central_composer.compose(value)
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
     runner = ConnectedShadowTurnRunner(
@@ -683,7 +716,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         recipe_executor=executor,
         composition_mode="central_persona_v1",
         response_composer=compose,
-        composer_fingerprint="kbo-fixture-composer-v1",
+        composer_fingerprint=central_composer.fingerprint,
     )
 
     for index in range(3):
@@ -696,7 +729,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
-        assert result.execution.final_content == "LG, 한화, 롯데입니다."
+        assert result.execution.final_content == "LG, 60, 한화, 58, 롯데, 55."
         assert "asset_result.v1" not in result.execution.final_content
         assert "status" not in result.execution.final_content
         assert "error" not in result.execution.final_content
@@ -706,11 +739,13 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert result.execution.side_effect_counts.total == 0
 
     assert calls == 3
+    assert composer_calls == 3
+    assert provider_calls == 3
     assert store.get_recent() == []
 
 
 @pytest.mark.parametrize(
-    ("prompt", "data", "content", "citations"),
+    ("prompt", "data", "content", "citations", "resolved_claims"),
     [
         (
             "오늘 프로야구 하냐?",
@@ -736,6 +771,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "data.items[0].participants.away.name",
                 "data.items[0].participants.home.name",
             ),
+            ("schedule",),
         ),
         (
             "오늘 프로야구 하냐?",
@@ -747,6 +783,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             },
             "empty, no_scheduled_events.",
             ("data.status", "data.empty_reason"),
+            ("schedule",),
         ),
         (
             "지금 KBO 경기 중이야?",
@@ -758,6 +795,57 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             },
             "empty, no_live_events.",
             ("data.status", "data.empty_reason"),
+            ("score",),
+        ),
+        (
+            "지금 KBO 경기 중이야?",
+            {
+                "mode": "live",
+                "status": "ok",
+                "items": [
+                    {
+                        "participants": {
+                            "away": {"name": "alpha"},
+                            "home": {"name": "beta"},
+                        },
+                        "score": {"away": 2, "home": 3},
+                    }
+                ],
+            },
+            "alpha, beta, 2, 3.",
+            (
+                "data.items[0].participants.away.name",
+                "data.items[0].participants.home.name",
+                "data.items[0].score.away",
+                "data.items[0].score.home",
+            ),
+            ("score",),
+        ),
+        (
+            "어제 KBO 경기 결과 알려줘",
+            {
+                "mode": "results",
+                "status": "ok",
+                "items": [
+                    {
+                        "participants": {
+                            "away": {"name": "alpha"},
+                            "home": {"name": "beta"},
+                        },
+                        "score": {"away": 2, "home": 3},
+                        "winner": "beta",
+                    }
+                ],
+            },
+            "alpha, beta, 2, 3, beta.",
+            (
+                "data.items[0].participants.away.name",
+                "data.items[0].participants.home.name",
+                "data.items[0].score.away",
+                "data.items[0].score.home",
+                "data.items[0].winner",
+            ),
+            ("game_result", "score", "winner"),
         ),
     ],
 )
@@ -769,6 +857,7 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
     data: dict[str, object],
     content: str,
     citations: tuple[str, ...],
+    resolved_claims: tuple[str, ...],
 ) -> None:
     recipe, skill = _production_sports_definitions(tmp_path)
     catalog = build_planner_catalog(
@@ -793,7 +882,7 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
             "status": "completed",
             "side_effect": False,
             "data": data,
-            "resolved_claims": list(citations),
+            "resolved_claims": list(resolved_claims),
             "unresolved_claims": [],
         }
 
@@ -801,7 +890,14 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
         nonlocal composer_calls
         composer_calls += 1
         assert value.public_facts["data"]["mode"] == data["mode"]
-        return DraftResponseV1(content=content, cited_paths=citations)
+        assert value.resolved_claims == resolved_claims
+        draft = materialize_render_plan(
+            value,
+            CompositionRenderPlanV1(separator="comma_space"),
+        )
+        assert draft.cited_paths == citations
+        assert draft.content == content
+        return draft
 
     runner = ConnectedShadowTurnRunner(
         facade=LangGraphV4RolloutFacade(
@@ -839,6 +935,213 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
     assert result.execution.side_effect_counts.total == 0
     assert provider_calls == 1
     assert composer_calls == 1
+
+
+def _direct_sports_skill_plan(skill, *, prompt: str, intent: str) -> UnifiedTurnPlan:
+    asset = AssetRef(asset_type="skill", name="naver-sports-skill")
+    return UnifiedTurnPlan(
+        original_text=prompt,
+        context=ContextSelection(
+            relation=ContextRelation.STANDALONE,
+            use_prior_context=False,
+            selected_turn_ids=(),
+            standalone_question=prompt,
+        ),
+        clarification=ClarificationPlan(required=False),
+        domains=("sports",),
+        intents=(intent,),
+        fact_check=FactCheckPlan(
+            required=True,
+            owner=EvidenceOwner.PLANNER,
+            domain="sports",
+            entities=(),
+            search_query="",
+            intents=(intent,),
+            freshness_required=True,
+        ),
+        execution=ExecutionPlan(
+            mode=ExecutionMode.ANSWER_WITH_EVIDENCE,
+            primary_asset=asset,
+            allowed_assets=(asset,),
+        ),
+        capability=CapabilityPlan(
+            coverage=CapabilityCoverage.FULL,
+            primary_asset=asset,
+            supporting_assets=(),
+        ),
+        confidence=1.0,
+        decision_summary="direct production sports skill boundary fixture",
+        approved_asset_fingerprint=skill.definition_fingerprint,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "prompt", "intent", "items", "content", "citations", "claims"),
+    [
+        (
+            "live",
+            "지금 KBO 경기 중이야?",
+            "live_score",
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": 3},
+                }
+            ],
+            "alpha, beta, 2, 3.",
+            (
+                "items[0].participants.away.name",
+                "items[0].participants.home.name",
+                "items[0].score.away",
+                "items[0].score.home",
+            ),
+            ("score",),
+        ),
+        (
+            "results",
+            "어제 KBO 경기 결과 알려줘",
+            "completed_result",
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": 3},
+                    "winner": "beta",
+                }
+            ],
+            "alpha, beta, 2, 3, beta.",
+            (
+                "items[0].participants.away.name",
+                "items[0].participants.home.name",
+                "items[0].score.away",
+                "items[0].score.home",
+                "items[0].winner",
+            ),
+            ("game_result", "score", "winner"),
+        ),
+        (
+            "standings",
+            "현재 KBO 순위 상위 2팀만 알려줘",
+            "standings",
+            [
+                {"team": "alpha", "wins": 60},
+                {"team": "beta", "wins": 58},
+            ],
+            "alpha, 60, beta, 58.",
+            (
+                "items[0].team",
+                "items[0].wins",
+                "items[1].team",
+                "items[1].wins",
+            ),
+            ("standings",),
+        ),
+    ],
+    ids=("live", "results", "standings"),
+)
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_direct_sports_skill_primary_react_materializes_and_guards_no_send(
+    tmp_path: Path,
+    mode: str,
+    prompt: str,
+    intent: str,
+    items: list[dict[str, object]],
+    content: str,
+    citations: tuple[str, ...],
+    claims: tuple[str, ...],
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    provider_calls = 0
+    composer_calls = 0
+    supporting_dispatch_calls = 0
+
+    async def skill_executor(definition, _argv):
+        nonlocal provider_calls
+        provider_calls += 1
+        assert definition.name == "naver-sports-skill"
+        return {
+            "ok": True,
+            "side_effect": False,
+            "mode": mode,
+            "status": "ok",
+            "items": items,
+            "resolved_claims": list(claims),
+            "unresolved_claims": [],
+        }
+
+    async def recipe_executor(_definition, _bound_steps):
+        nonlocal supporting_dispatch_calls
+        supporting_dispatch_calls += 1
+        raise AssertionError("direct skill path dispatched a supporting recipe")
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        assert value.selected_route == "react"
+        assert value.asset_ref == AssetRefV1(
+            type="skill",
+            name="naver-sports-skill",
+        )
+        assert value.resolved_claims == claims
+        draft = materialize_render_plan(
+            value,
+            CompositionRenderPlanV1(separator="comma_space"),
+        )
+        assert draft.content == content
+        assert draft.cited_paths == citations
+        assert guard_final_response(value, draft).accepted is True
+        return draft
+
+    store = ConversationStore(tmp_path / f"direct-{mode}-conversation.db")
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / f"direct-{mode}-checkpoint.sqlite3",
+            daemon_db_path=tmp_path / f"direct-{mode}-daemon.db",
+            conversations_db_path=tmp_path / f"direct-{mode}-conversation.db",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=store,
+        recipe_executor=recipe_executor,
+        skill_executor=skill_executor,
+        composition_mode="central_persona_v1",
+        response_composer=compose,
+        composer_fingerprint="direct-sports-skill-composer-v1",
+        locale="ko-KR",
+    )
+
+    result = await runner.run(
+        plan=_direct_sports_skill_plan(skill, prompt=prompt, intent=intent),
+        legacy=None,
+        request_id=f"direct-sports-{mode}-no-send",
+        session_key=f"direct-sports-{mode}-no-send",
+        planner_model_calls=0,
+        planner_tokens=0,
+    )
+
+    assert result.execution.final_content == content
+    assert result.telemetry.selected_route == "react"
+    assert result.telemetry.delivery_status is DeliveryStatus.SHADOWED
+    assert result.execution.dispatch_trace.attempted == 1
+    assert result.execution.dispatch_trace.executed == 1
+    assert result.execution.dispatch_trace.succeeded == 1
+    assert result.execution.dispatch_trace.duplicate_blocked == 0
+    assert result.execution.rollback_required is False
+    assert result.execution.side_effect_counts.total == 0
+    assert result.side_effect_counts.total == 0
+    assert store.get_recent() == []
+    assert provider_calls == 1
+    assert composer_calls == 1
+    assert supporting_dispatch_calls == 0
 
 
 @pytest.mark.asyncio

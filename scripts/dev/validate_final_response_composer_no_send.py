@@ -17,6 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -37,6 +39,7 @@ from simpleclaw.agent.composition_citations import (
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
 from simpleclaw.agent.composition_projection import flatten_public_facts
@@ -77,6 +80,12 @@ from simpleclaw.graph_runtime.runtime import (
 )
 from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import DeliveryStatus
+from simpleclaw.llm.models import (
+    LLMAuthError,
+    LLMError,
+    LLMProviderError,
+    LLMTimeoutError,
+)
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
 from simpleclaw.persona.composition_projection import (
@@ -96,13 +105,103 @@ class _ForbiddenBoundaryReached(RuntimeError):
     """no-send run이 live sink/supporting dispatch 경계에 진입했음을 표시한다."""
 
 
+@dataclass(frozen=True, slots=True)
+class _SanitizedComposerFailure:
+    """Provider 원문 없이 Composer 실패 provenance만 보존한다."""
+
+    error_code: str
+    error_type: str
+    error_stage: str
+    cause_type: str | None = None
+    root_cause_type: str | None = None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "cause_type": self.cause_type,
+            "error_code": self.error_code,
+            "error_stage": self.error_stage,
+            "error_type": self.error_type,
+            "raw_content_exposed": False,
+            "root_cause_type": self.root_cause_type,
+        }
+
+
+class _CapturedComposerFailure(_ProbeInvariantError):
+    """Graph fallback 뒤에도 sanitized Composer 실패를 운반한다."""
+
+    def __init__(self, failure: _SanitizedComposerFailure) -> None:
+        super().__init__(failure.error_code)
+        self.failure = failure
+
+
+_COMPOSER_ERROR_CODES = {
+    "composer returned tool calls": "composer_tool_calls",
+    "composer returned an empty response": "composer_empty_response",
+    "composer response was invalid": "composer_response_invalid",
+}
+
+
+def _safe_exception_type(exc: BaseException) -> str:
+    """예외 payload가 아니라 bounded class name만 진단값으로 반환한다."""
+    name = type(exc).__name__
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", name) else "Error"
+
+
+def _exception_chain(exc: BaseException) -> tuple[BaseException, ...]:
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(chain) < 8:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return tuple(chain)
+
+
+def _sanitize_composer_failure(exc: FinalResponseComposerError) -> _SanitizedComposerFailure:
+    """Composer/Provider 예외를 raw message 없는 stable provenance로 축약한다."""
+    chain = _exception_chain(exc)
+    provider_error = next((item for item in chain if isinstance(item, LLMError)), None)
+    if isinstance(provider_error, LLMAuthError):
+        error_code = "provider_auth_error"
+        error_stage = "provider"
+    elif isinstance(provider_error, LLMTimeoutError) or any(
+        isinstance(item, TimeoutError) for item in chain
+    ):
+        error_code = "provider_timeout"
+        error_stage = "provider"
+    elif isinstance(provider_error, LLMProviderError):
+        error_code = "provider_error"
+        error_stage = "provider"
+    else:
+        error_code = _COMPOSER_ERROR_CODES.get(str(exc), "composer_error")
+        error_stage = (
+            "composer_parse"
+            if error_code == "composer_response_invalid"
+            else "composer"
+        )
+    return _SanitizedComposerFailure(
+        error_code=error_code,
+        error_type=_safe_exception_type(exc),
+        error_stage=error_stage,
+        cause_type=(
+            _safe_exception_type(chain[1]) if len(chain) > 1 else None
+        ),
+        root_cause_type=(
+            _safe_exception_type(chain[-1]) if len(chain) > 1 else None
+        ),
+    )
+
+
 class _OneCallSend:
     """Provider 호출 수를 계측하고 두 번째 호출을 구조적으로 차단한다."""
 
     def __init__(self, send) -> None:
         self._send = send
         self.calls = 0
-        self.provider_citation_count = 0
+        self.provider_plan_shape_valid = False
+        self.provider_plan_error_code: str | None = None
+        self.provider_plan_validation_signature: tuple[str, ...] = ()
 
     async def __call__(self, request):
         self.calls += 1
@@ -110,15 +209,74 @@ class _OneCallSend:
             raise _ProbeInvariantError("composer_provider_call_cap_exceeded")
         response = await self._send(request)
         try:
-            payload = json.loads(response.text)
-            cited_paths = payload.get("cited_paths", [])
-            if isinstance(cited_paths, list) and all(
-                isinstance(path, str) for path in cited_paths
-            ):
-                self.provider_citation_count = len(cited_paths)
-        except (AttributeError, TypeError, ValueError):
-            self.provider_citation_count = 0
+            CompositionRenderPlanV1.model_validate_json(response.text)
+            self.provider_plan_shape_valid = True
+            self.provider_plan_error_code = None
+            self.provider_plan_validation_signature = ()
+        except ValidationError as exc:
+            self.provider_plan_shape_valid = False
+            self.provider_plan_error_code = _render_plan_validation_code(exc)
+            self.provider_plan_validation_signature = (
+                _render_plan_validation_signature(exc)
+            )
+        except (AttributeError, TypeError):
+            self.provider_plan_shape_valid = False
+            self.provider_plan_error_code = "provider_plan_response_type_invalid"
+            self.provider_plan_validation_signature = ()
         return response
+
+
+def _render_plan_validation_signature(exc: ValidationError) -> tuple[str, ...]:
+    """입력값·메시지를 제외한 bounded field/error-type signature를 만든다."""
+    signature: set[str] = set()
+    for item in exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
+        location = item.get("loc") or ()
+        raw_field = str(location[0]) if location else "root"
+        field = {
+            "schema_version": "schema",
+            "schema": "schema",
+            "separator": "separator",
+            "ending": "ending",
+            "root": "root",
+        }.get(raw_field, "other")
+        raw_error_type = str(item.get("type") or "validation_error")
+        error_type = (
+            raw_error_type
+            if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw_error_type)
+            else "validation_error"
+        )
+        signature.add(f"{field}:{error_type}")
+    return tuple(sorted(signature))
+
+
+def _render_plan_validation_code(exc: ValidationError) -> str:
+    """Pydantic input/message 없이 render-plan schema 실패 종류만 보존한다."""
+    errors = exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    error_types = {str(item.get("type")) for item in errors}
+    safe_locations = {
+        str(item["loc"][0])
+        for item in errors
+        if item.get("loc")
+        and item["loc"][0] in {"schema", "separator", "ending"}
+    }
+    if "json_invalid" in error_types:
+        return "provider_plan_invalid_json"
+    if "extra_forbidden" in error_types:
+        return "provider_plan_extra_fields"
+    for field in ("schema", "separator", "ending"):
+        if field in safe_locations and "missing" in error_types:
+            return f"provider_plan_{field}_missing"
+        if field in safe_locations and "literal_error" in error_types:
+            return f"provider_plan_{field}_invalid"
+    return "provider_plan_schema_invalid"
 
 
 @dataclass(slots=True)
@@ -149,6 +307,7 @@ class _ComposerCapture:
     calls: int = 0
     value: CompositionInputV1 | None = None
     draft: DraftResponseV1 | None = None
+    failure: _SanitizedComposerFailure | None = None
 
 
 class _ConnectedProbeFacade(LangGraphV4RolloutFacade):
@@ -202,6 +361,7 @@ class _Scenario:
     locale: str = "en-US"
     source_mode: str = "deterministic_fixture"
     source_evidence: dict[str, object] | None = None
+    asset_type: str = "recipe"
 
 
 _NATURAL_KBO_SCENARIO = _Scenario(
@@ -215,7 +375,7 @@ _NATURAL_KBO_SCENARIO = _Scenario(
             "date": "2026-08-08",
             "items": [
                 {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
-                {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
+                {"rank": 2, "team": "한화", "wins": 55, "losses": 40},
                 {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
             ],
         }
@@ -238,6 +398,34 @@ _NATURAL_KBO_SCENARIO = _Scenario(
     ),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
+)
+
+_DIRECT_SKILL_KBO_SCENARIO = _Scenario(
+    name="production_direct_skill_natural_kbo",
+    question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+    payload={
+        "mode": "standings",
+        "category": "KBO",
+        "season": {"code": "2026", "title": "2026 KBO"},
+        "date": "2026-08-08",
+        "items": [
+            {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
+            {"rank": 2, "team": "한화", "wins": 55, "losses": 40},
+            {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
+        ],
+    },
+    resolved_claims=("standings",),
+    expected_citations=(
+        "items[0].team",
+        "items[0].wins",
+        "items[1].team",
+        "items[1].wins",
+        "items[2].team",
+        "items[2].wins",
+    ),
+    locale="ko-KR",
+    source_mode="production_direct_skill_fixed",
+    asset_type="skill",
 )
 
 _SCHEDULE_PRESENT_SCENARIO = _Scenario(
@@ -322,16 +510,56 @@ def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
             locale=base.locale,
             source_mode=base.source_mode,
             source_evidence=base.source_evidence,
+            asset_type=base.asset_type,
         )
         for run in range(1, 4)
     )
 
 
-_SCENARIOS = (
-    _SCHEDULE_PRESENT_SCENARIO,
-    _SCHEDULE_EMPTY_SCENARIO,
-    _LIVE_EMPTY_SCENARIO,
-)
+_SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
+_DIRECT_SKILL_SCENARIOS = _independent_scenarios(_DIRECT_SKILL_KBO_SCENARIO)
+
+
+def _bounded_backend_names(
+    default_backend: str,
+    overrides: list[str] | tuple[str, ...],
+    available: list[str] | tuple[str, ...],
+    *,
+    only_backend: str | None = None,
+) -> tuple[str, ...]:
+    """Runtime default를 바꾸지 않고 최대 두 alternate만 eval에 추가한다."""
+    normalized = tuple(
+        dict.fromkeys(item.strip() for item in overrides if item.strip())
+    )
+    if only_backend is not None and normalized:
+        raise _ProbeInvariantError("backend_selection_conflict")
+    if len(normalized) > 2:
+        raise _ProbeInvariantError("backend_override_limit_exceeded")
+    if only_backend is not None:
+        selected_name = only_backend.strip()
+        if not selected_name:
+            raise _ProbeInvariantError("backend_selection_empty")
+        selected = (selected_name,)
+    else:
+        selected = tuple(dict.fromkeys((default_backend, *normalized)))
+    unknown = tuple(item for item in selected if item not in available)
+    if unknown:
+        raise _ProbeInvariantError("backend_override_unknown")
+    return selected
+
+
+def _first_failure(
+    scenario_results: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """후속 성공이 앞선 실패 증거를 지우지 않도록 첫 실패를 복사한다."""
+    return next(
+        (
+            dict(item)
+            for item in scenario_results
+            if item.get("guard_accepted") is not True
+        ),
+        None,
+    )
 
 
 def _production_persona_projection(
@@ -360,7 +588,11 @@ def _limit_three_argv() -> tuple[str, ...]:
     return tuple(argv)
 
 
-async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
+async def _real_kbo_scenario(
+    skill_dir: Path | None,
+    *,
+    direct_skill: bool = False,
+) -> _Scenario:
     result = await asyncio.to_thread(
         validate_production_asset,
         skill_dir,
@@ -369,19 +601,21 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
         expected_result_limit=3,
     )
     evidence = result.evidence
+    path_prefix = "" if direct_skill else "data."
     return _Scenario(
-        name="production_persona_natural_kbo",
-        question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
-        payload={"data": result.payload},
-        resolved_claims=(
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
-            "data.items[2].team",
-            "data.items[2].wins",
+        name=(
+            "production_direct_skill_natural_kbo"
+            if direct_skill
+            else "production_persona_natural_kbo"
         ),
-        expected_citations=(),
+        question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        payload=(result.payload if direct_skill else {"data": result.payload}),
+        resolved_claims=("standings",),
+        expected_citations=tuple(
+            f"{path_prefix}items[{index}].{field}"
+            for index in range(3)
+            for field in ("team", "wins")
+        ),
         locale="ko-KR",
         source_mode="real_read_only",
         source_evidence={
@@ -390,17 +624,23 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
             "helper_cli_executed": evidence.helper_cli_executed,
             "helper_source_sha256": evidence.helper_source_sha256,
             "installation_mode": (
-                "production_install" if skill_dir is not None else "exact_checkout_install"
+                "production_install"
+                if skill_dir is not None
+                else "exact_checkout_install"
             ),
             "item_count": evidence.item_count,
             "requested_limit": evidence.requested_limit,
         },
+        asset_type="skill" if direct_skill else "recipe",
     )
 
 
 def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
-    recipe = next(item for item in definitions if item.name == "sports-live")
-    asset = AssetRef(asset_type="recipe", name=recipe.name)
+    target_name = (
+        "naver-sports-skill" if scenario.asset_type == "skill" else "sports-live"
+    )
+    target = next(item for item in definitions if item.name == target_name)
+    asset = AssetRef(asset_type=scenario.asset_type, name=target.name)
     return UnifiedTurnPlan(
         original_text=scenario.question,
         context=ContextSelection(
@@ -420,7 +660,11 @@ def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
             search_query="",
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.DIRECT_ANSWER,
+            mode=(
+                ExecutionMode.ANSWER_WITH_EVIDENCE
+                if scenario.asset_type == "skill"
+                else ExecutionMode.DIRECT_ANSWER
+            ),
             primary_asset=asset,
             allowed_assets=(asset,),
         ),
@@ -431,7 +675,7 @@ def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
         ),
         confidence=1.0,
         decision_summary="synthetic connected citation activation gate",
-        approved_asset_fingerprint=recipe.definition_fingerprint,
+        approved_asset_fingerprint=target.definition_fingerprint,
     )
 
 
@@ -480,7 +724,11 @@ async def _connected_probe(
     async def compose(value: CompositionInputV1) -> DraftResponseV1:
         capture.calls += 1
         capture.value = value
-        capture.draft = await composer.compose(value)
+        try:
+            capture.draft = await composer.compose(value)
+        except FinalResponseComposerError as exc:
+            capture.failure = _sanitize_composer_failure(exc)
+            raise
         return capture.draft
 
     async def target_executor(_definition, _bound_steps):
@@ -507,18 +755,14 @@ async def _connected_probe(
         counters.notifier += 1
         raise _ForbiddenBoundaryReached("notifier")
 
-    def forbidden_conversation(
-        _self, _session, _identity, _payload_hash, _content
-    ):
+    def forbidden_conversation(_self, _session, _identity, _payload_hash, _content):
         counters.conversation_write += 1
         raise _ForbiddenBoundaryReached("conversation_write")
 
     def forbidden_sender(*_args):
         raise _ForbiddenBoundaryReached("sender_callback")
 
-    with TemporaryDirectory(
-        prefix=f"simpleclaw-biz-643-{scenario.name}-"
-    ) as directory:
+    with TemporaryDirectory(prefix=f"simpleclaw-biz-643-{scenario.name}-") as directory:
         temp = Path(directory)
         recipes_dir = temp / "runtime-recipes"
         skills_dir = temp / "runtime-skills"
@@ -538,12 +782,21 @@ async def _connected_probe(
             telegram_adapter=TelegramDeliveryAdapter(forbidden_sender),
             notifier_adapter=CronDeliveryAdapter(forbidden_sender),
         )
+        target_is_skill = scenario.asset_type == "skill"
         runner = ConnectedShadowTurnRunner(
             facade=facade,
             definitions=definitions,
             conversation_store=store,
-            recipe_executor=target_executor,
-            skill_executor=forbidden_supporting_dispatch,
+            recipe_executor=(
+                forbidden_supporting_dispatch
+                if target_is_skill
+                else target_executor
+            ),
+            skill_executor=(
+                target_executor
+                if target_is_skill
+                else forbidden_supporting_dispatch
+            ),
             composition_mode="central_persona_v1",
             response_composer=compose,
             composer_fingerprint=composer.fingerprint,
@@ -596,9 +849,7 @@ async def _connected_probe(
             except _ForbiddenBoundaryReached:
                 pass
             else:
-                raise _ProbeInvariantError(
-                    "conversation_write_spy_preflight_failed"
-                )
+                raise _ProbeInvariantError("conversation_write_spy_preflight_failed")
             preflight = counters.forbidden()
             if set(preflight.values()) != {1}:
                 raise _ProbeInvariantError("sink_spy_preflight_count_mismatch")
@@ -616,6 +867,8 @@ async def _connected_probe(
         conversation_delta = len(store.get_recent()) - baseline_messages
 
     if capture.value is None or capture.draft is None:
+        if capture.failure is not None:
+            raise _CapturedComposerFailure(capture.failure)
         raise _ProbeInvariantError("composer_capture_missing")
     guard = guard_final_response(capture.value, capture.draft)
     if not guard.accepted:
@@ -635,9 +888,7 @@ async def _connected_probe(
             match = pattern.search(content) if pattern is not None else None
             if match is not None:
                 rendered_positions.append((match.start(), path))
-        render_order = ",".join(
-            path for _, path in sorted(rendered_positions)
-        )
+        render_order = ",".join(path for _, path in sorted(rendered_positions))
         lexical_probe = content
         for projected in concrete.values():
             if isinstance(projected, str) and projected.strip():
@@ -657,16 +908,6 @@ async def _connected_probe(
             f"visible_uncited_paths={visible_uncited}:render_order={render_order}:"
             f"lexical_token_sha256={token_hashes}"
         )
-    concrete = flatten_public_facts(capture.value.public_facts)
-    if any(
-        path not in concrete
-        or not projected_scalar_is_visible(
-            capture.draft.content,
-            concrete[path],
-        )
-        for path in capture.draft.cited_paths
-    ):
-        raise _ProbeInvariantError("canonical_citation_not_visible")
     measured = result.side_effect_counts.as_dict()
     forbidden = counters.forbidden()
     checks = {
@@ -678,20 +919,19 @@ async def _connected_probe(
             result.telemetry.delivery_status is DeliveryStatus.SHADOWED
         ),
         "rollback_clear": result.execution.rollback_required is False,
-        "side_effect_delta_zero": all(
-            value == 0 for value in measured.values()
-        ),
-        "forbidden_boundary_zero": all(
-            value == 0 for value in forbidden.values()
-        ),
+        "side_effect_delta_zero": all(value == 0 for value in measured.values()),
+        "forbidden_boundary_zero": all(value == 0 for value in forbidden.values()),
         "conversation_delta_zero": conversation_delta == 0,
         "target_dispatch_once": counters.target_dispatch == 1,
+        "provider_plan_shape_valid": counted_send.provider_plan_shape_valid,
+        "source_citations_exact": (
+            tuple(capture.draft.cited_paths) == scenario.expected_citations
+        ),
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
         raise _ProbeInvariantError(
-            "connected_no_send_invariant_failed:"
-            + ",".join(failed)
+            "connected_no_send_invariant_failed:" + ",".join(failed)
         )
 
     content = capture.draft.content
@@ -707,11 +947,7 @@ async def _connected_probe(
         "content_length": len(content),
         "citations": list(capture.draft.cited_paths),
         "canonical_citation_count": len(capture.draft.cited_paths),
-        "provider_citation_count": counted_send.provider_citation_count,
-        "pruned_citation_count": max(
-            0,
-            counted_send.provider_citation_count - len(capture.draft.cited_paths),
-        ),
+        "provider_plan_shape_valid": counted_send.provider_plan_shape_valid,
         "delivery_status": result.telemetry.delivery_status.value,
         "sink_spy_preflight_calls": preflight,
         "measured_side_effect_deltas": measured,
@@ -720,6 +956,7 @@ async def _connected_probe(
         "connected_target_dispatch_calls": counters.target_dispatch,
         "retry_calls": max(0, counted_send.calls - 1),
         "source_mode": scenario.source_mode,
+        "selected_asset_type": scenario.asset_type,
         "source_evidence": scenario.source_evidence,
         "configured_sink_boundaries": [
             "telegram_adapter",
@@ -751,19 +988,43 @@ async def _run(args: argparse.Namespace) -> int:
 
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
-    backend = router.get_default_backend()
+    default_backend = router.get_default_backend()
+    try:
+        backends = _bounded_backend_names(
+            default_backend,
+            args.backend,
+            router.list_backends(),
+            only_backend=args.only_backend,
+        )
+    except _ProbeInvariantError as exc:
+        print(
+            json.dumps(
+                {
+                    "error_code": str(exc),
+                    "error_type": type(exc).__name__,
+                    "passed": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
     agent_config = load_agent_config(config_path)
     planner_config = agent_config.get("unified_turn_planner", {})
     langgraph_config = planner_config.get("langgraph_v4", {})
     composition_config = langgraph_config.get("composition", {})
     temperature = float(composition_config.get("temperature", 0.0))
-    base_scenario = _NATURAL_KBO_SCENARIO
+    base_scenario = (
+        _DIRECT_SKILL_KBO_SCENARIO
+        if args.direct_skill
+        else _NATURAL_KBO_SCENARIO
+    )
     if args.real_kbo:
         try:
             base_scenario = await _real_kbo_scenario(
                 None
                 if args.exact_checkout_install
-                else args.installed_skill_dir.expanduser()
+                else args.installed_skill_dir.expanduser(),
+                direct_skill=args.direct_skill,
             )
         except ProductionAssetValidationError as exc:
             print(
@@ -811,72 +1072,131 @@ async def _run(args: argparse.Namespace) -> int:
     scenarios = (
         list(_independent_scenarios(base_scenario))
         if args.real_kbo
-        else list(_SCENARIOS)
+        else list(
+            _DIRECT_SKILL_SCENARIOS if args.direct_skill else _SCENARIOS
+        )
     )
-    scenario_results: list[dict[str, object]] = []
+    backend_results: list[dict[str, object]] = []
     provider_calls = 0
     retry_calls = 0
-    for scenario in scenarios:
-        counted_send = _OneCallSend(router.send)
-        composer = FinalResponseComposer(
-            send=counted_send,
-            persona_projection=persona_projection,
-            max_tokens=args.max_tokens,
-            backend_name=backend,
-            temperature=temperature,
-        )
-        try:
-            scenario_result = await asyncio.wait_for(
-                _connected_probe(
-                    composer=composer,
-                    counted_send=counted_send,
-                    scenario=scenario,
-                    timeout=args.timeout,
-                ),
-                timeout=args.timeout,
+    for backend in backends:
+        scenario_results: list[dict[str, object]] = []
+        backend_provider_calls = 0
+        backend_retry_calls = 0
+        for scenario in scenarios:
+            counted_send = _OneCallSend(router.send)
+            composer = FinalResponseComposer(
+                send=counted_send,
+                persona_projection=persona_projection,
+                max_tokens=args.max_tokens,
+                backend_name=backend,
+                temperature=temperature,
             )
-        except (
-            FinalResponseComposerError,
-            TimeoutError,
-            AttributeError,
-            TypeError,
-            ValueError,
-            _ForbiddenBoundaryReached,
-            _ProbeInvariantError,
-        ) as exc:
-            scenario_results.append(
-                {
+            try:
+                scenario_result = await asyncio.wait_for(
+                    _connected_probe(
+                        composer=composer,
+                        counted_send=counted_send,
+                        scenario=scenario,
+                        timeout=args.timeout,
+                    ),
+                    timeout=args.timeout,
+                )
+            except _CapturedComposerFailure as exc:
+                scenario_result = {
+                    "backend": backend,
+                    **exc.failure.as_dict(),
+                    "name": scenario.name,
+                    "provider_plan_error_code": (
+                        counted_send.provider_plan_error_code
+                    ),
+                    "provider_plan_validation_signature": list(
+                        counted_send.provider_plan_validation_signature
+                    ),
+                    "provider_calls": counted_send.calls,
+                    "retry_calls": max(0, counted_send.calls - 1),
+                }
+            except (
+                FinalResponseComposerError,
+                TimeoutError,
+                AttributeError,
+                TypeError,
+                ValueError,
+                _ForbiddenBoundaryReached,
+                _ProbeInvariantError,
+            ) as exc:
+                sanitized = (
+                    _sanitize_composer_failure(exc).as_dict()
+                    if isinstance(exc, FinalResponseComposerError)
+                    else None
+                )
+                scenario_result = {
+                    "backend": backend,
                     "error_code": (
                         str(exc) if isinstance(exc, _ProbeInvariantError) else None
                     ),
                     "error_type": type(exc).__name__,
                     "name": scenario.name,
                     "provider_calls": counted_send.calls,
+                    "raw_content_exposed": False,
                     "retry_calls": max(0, counted_send.calls - 1),
                 }
-            )
-            provider_calls += counted_send.calls
-            retry_calls += max(0, counted_send.calls - 1)
-            continue
-        provider_calls += counted_send.calls
-        retry_calls += max(0, counted_send.calls - 1)
-        scenario_results.append(scenario_result)
+                if sanitized is not None:
+                    scenario_result.update(sanitized)
+                    scenario_result["provider_plan_error_code"] = (
+                        counted_send.provider_plan_error_code
+                    )
+                    scenario_result["provider_plan_validation_signature"] = list(
+                        counted_send.provider_plan_validation_signature
+                    )
+            scenario_result["backend"] = backend
+            scenario_results.append(scenario_result)
+            backend_provider_calls += counted_send.calls
+            backend_retry_calls += max(0, counted_send.calls - 1)
+        backend_passed = backend_provider_calls == len(scenarios) and all(
+            scenario.get("guard_accepted") is True
+            and scenario.get("provider_calls") == 1
+            and scenario.get("retry_calls") == 0
+            for scenario in scenario_results
+        )
+        backend_results.append(
+            {
+                "backend": backend,
+                "first_failure": _first_failure(scenario_results),
+                "pass_count": sum(
+                    scenario.get("guard_accepted") is True
+                    for scenario in scenario_results
+                ),
+                "passed": backend_passed,
+                "provider_calls": backend_provider_calls,
+                "retry_calls": backend_retry_calls,
+                "scenario_count": len(scenarios),
+                "scenarios": scenario_results,
+            }
+        )
+        provider_calls += backend_provider_calls
+        retry_calls += backend_retry_calls
 
-    passed = provider_calls == len(scenarios) and all(
-        scenario.get("guard_accepted") is True
-        and scenario.get("provider_calls") == 1
-        and scenario.get("retry_calls") == 0
-        for scenario in scenario_results
+    passed = all(item["passed"] is True for item in backend_results)
+    first_failure = next(
+        (
+            dict(item["first_failure"])
+            for item in backend_results
+            if item["first_failure"] is not None
+        ),
+        None,
     )
     result = {
-        "backend": backend,
+        "backend_results": backend_results,
+        "default_backend": default_backend,
         "delivery_sinks_configured": True,
-        "expected_provider_calls": len(scenarios),
+        "evaluated_backends": list(backends),
+        "expected_provider_calls": len(scenarios) * len(backends),
+        "first_failure": first_failure,
         "passed": passed,
         "provider_calls": provider_calls,
         "retry_calls": retry_calls,
         "scenario_count": len(scenarios),
-        "scenarios": scenario_results,
         "temperature": temperature,
         "persona_source_types": [
             source_type.value for source_type in persona_projection.source_types
@@ -901,6 +1221,31 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=120.0)
+    backend_group = parser.add_mutually_exclusive_group()
+    backend_group.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        help=(
+            "Add up to two configured alternate backends for this eval only; "
+            "the runtime default remains unchanged."
+        ),
+    )
+    backend_group.add_argument(
+        "--only-backend",
+        help=(
+            "Evaluate exactly one configured backend without implicitly re-running "
+            "the runtime default."
+        ),
+    )
+    parser.add_argument(
+        "--direct-skill",
+        action="store_true",
+        help=(
+            "Run the three independent probes through the direct "
+            "naver-sports-skill react boundary instead of the recipe boundary."
+        ),
+    )
     parser.add_argument(
         "--real-kbo",
         action="store_true",
@@ -909,12 +1254,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--installed-skill-dir",
         type=Path,
-        default=(
-            Path.home()
-            / ".agents"
-            / "skills"
-            / "naver-sports-skill"
-        ),
+        default=(Path.home() / ".agents" / "skills" / "naver-sports-skill"),
     )
     parser.add_argument(
         "--exact-checkout-install",

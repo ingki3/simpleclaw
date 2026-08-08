@@ -135,6 +135,20 @@ output_contract:
       - data.warnings[*]
       - data.source.urls[*]
     x-simpleclaw-composition-list-root: data.items
+    x-simpleclaw-citable-paths:
+      - when: {path: data.mode, equals: live}
+        paths:
+          - "data.items[*].participants.away.name"
+          - "data.items[*].participants.home.name"
+          - "data.items[*].score.away"
+          - "data.items[*].score.home"
+      - when: {path: data.mode, equals: results}
+        paths:
+          - "data.items[*].participants.away.name"
+          - "data.items[*].participants.home.name"
+          - "data.items[*].score.away"
+          - "data.items[*].score.home"
+          - "data.items[*].winner"
     x-simpleclaw-structural-evidence-relations:
       - when: {path: data.status, equals: empty}
         fallback_for: [schedule_items]
@@ -148,6 +162,12 @@ output_contract:
         identity_fields:
           - "data.items[*].participants.away.name"
           - "data.items[*].participants.home.name"
+      - when: {path: data.mode, equals: standings}
+        evidence_fields:
+          - "data.items[*].team"
+          - "data.items[*].wins"
+        identity_fields:
+          - "data.items[*].team"
 
 step_bindings:
   - binding_id: naver-sports-query.v1

@@ -6,93 +6,158 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 
+from pydantic import JsonValue
+
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 from simpleclaw.persona.models import CompositionPersonaProjection
 
+from .composition_admissibility import citation_list_root_violation
 from .composition_citations import (
     CITATION_CANONICALIZATION_POLICY_VERSION,
-    canonicalize_draft_citations,
+    projected_scalar_literal_pattern,
 )
-from .composition_contracts import CompositionInputV1, DraftResponseV1
+from .composition_contracts import (
+    CompositionInputV1,
+    CompositionRenderPlanV1,
+    DraftResponseV1,
+)
 from .composition_projection import flatten_public_facts
 
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]
 _MAX_CITATION_PATHS = 128
-_MAX_LIMITATION_PATHS = 64
 _SAMPLING_POLICY_VERSION = "request_temperature_v1"
+_RENDER_PLAN_POLICY_VERSION = "source_order_structural_punctuation_v3"
+_STRUCTURAL_SEPARATOR_TEXT = {
+    "space": " ",
+    "comma_space": ", ",
+    "middle_dot_space": " · ",
+    "semicolon_space": "; ",
+}
 
 
 class FinalResponseComposerError(RuntimeError):
     """Provider 원문을 노출하지 않고 중앙 composer 실패를 표시한다."""
 
 
-def _response_schema(value: CompositionInputV1) -> dict:
-    """현재 projection의 concrete scalar path만 허용하는 schema를 만든다."""
+def _scalar_literal(value: JsonValue) -> str:
+    """JSON scalar 타입과 원문 whitespace를 바꾸지 않는 literal을 만든다."""
+    if value is None or isinstance(value, dict | list):
+        raise FinalResponseComposerError("render plan selected an unsafe scalar")
+    if isinstance(value, bool):
+        return json.dumps(value)
+    if isinstance(value, str):
+        if not value or value != value.strip():
+            raise FinalResponseComposerError(
+                "render plan selected a non-canonical string"
+            )
+        return value
+    rendered = str(value)
+    if not rendered or rendered != rendered.strip():
+        raise FinalResponseComposerError("render plan selected an unsafe scalar")
+    return rendered
+
+
+def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
+    """bool/number equality가 서로 다른 JSON 타입을 합치지 않게 한다."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, int | float) and isinstance(right, int | float):
+        return left == right
+    return type(left) is type(right) and left == right
+
+
+def _citable_paths(
+    value: CompositionInputV1,
+) -> tuple[dict[str, JsonValue], tuple[str, ...]]:
+    """Source contract가 소유하는 exact fact path set/order를 반환한다."""
     concrete = flatten_public_facts(value.public_facts)
-    cited_paths = [
+    available = tuple(
         path
         for path, projected in concrete.items()
         if not isinstance(projected, dict | list)
-    ]
-    structural_relation = (
+        and projected is not None
+        and projected_scalar_literal_pattern(projected) is not None
+    )
+    relation = (
         value.structural_evidence_relations[0]
         if value.structural_evidence_relations
         else None
     )
-    if structural_relation is not None:
-        cited_paths = list(structural_relation.evidence_paths)
-    limitation_paths = [
-        f"unresolved_claims[{index}]"
-        for index in range(len(value.unresolved_claims))
-    ]
-    if not cited_paths:
-        raise FinalResponseComposerError("composer input has no citable scalar paths")
-    if len(cited_paths) > _MAX_CITATION_PATHS:
-        raise FinalResponseComposerError("composer input has too many citable paths")
-    if len(limitation_paths) > _MAX_LIMITATION_PATHS:
-        raise FinalResponseComposerError("composer input has too many limitation paths")
-
-    schema = DraftResponseV1.model_json_schema(by_alias=True)
-    properties = schema["properties"]
-    properties["cited_paths"]["items"]["enum"] = cited_paths
-    if structural_relation is not None:
-        properties["cited_paths"]["minItems"] = len(cited_paths)
-        properties["cited_paths"]["maxItems"] = len(cited_paths)
-        literals: list[str] = []
-        for path in cited_paths:
-            if path not in concrete:
-                raise FinalResponseComposerError(
-                    "structural evidence path is not projected"
-                )
-            projected = concrete[path]
-            if isinstance(projected, dict | list):
-                raise FinalResponseComposerError(
-                    "structural evidence must contain only scalar paths"
-                )
-            rendered = (
-                json.dumps(projected)
-                if projected is None or isinstance(projected, bool)
-                else str(projected).strip()
-            )
-            if not rendered:
-                raise FinalResponseComposerError(
-                    "structural evidence contains an empty literal"
-                )
-            literals.append(rendered)
-        properties["content"]["enum"] = list(
-            dict.fromkeys(
-                (
-                    f"{', '.join(literals)}.",
-                    f"{' · '.join(literals)}.",
-                )
-            )
-        )
-    if limitation_paths:
-        properties["limitation_paths"]["items"]["enum"] = limitation_paths
+    if relation is not None:
+        allowed = relation.evidence_paths
     else:
-        properties["limitation_paths"]["maxItems"] = 0
-    return schema
+        allowed = tuple(value.citable_paths)
+        if not allowed or any(path not in available for path in allowed):
+            raise FinalResponseComposerError(
+                "composer input has no verified citable-path contract"
+            )
+    if not allowed:
+        raise FinalResponseComposerError("composer input has no citable scalar paths")
+    if len(allowed) > _MAX_CITATION_PATHS:
+        raise FinalResponseComposerError("composer input has too many citable paths")
+    if any(path not in available for path in allowed):
+        raise FinalResponseComposerError(
+            "structural evidence contains an unsafe scalar path"
+        )
+    if value.unresolved_claims:
+        raise FinalResponseComposerError(
+            "unresolved claims require a fact-free fallback"
+        )
+    return concrete, tuple(allowed)
+
+
+def _response_schema(value: CompositionInputV1) -> dict:
+    """Fact/path authority를 노출하지 않는 domain-neutral plan schema다."""
+    _citable_paths(value)
+    return CompositionRenderPlanV1.model_json_schema(by_alias=True)
+
+
+def materialize_render_plan(
+    value: CompositionInputV1,
+    plan: CompositionRenderPlanV1,
+    *,
+    max_output_chars: int = 3_500,
+) -> DraftResponseV1:
+    """Source-owned canonical path order로 projected literal을 exactly-once 삽입한다."""
+    concrete, paths = _citable_paths(value)
+    list_root_violation = citation_list_root_violation(
+        paths,
+        declared_root=value.composition_list_root,
+    )
+    if list_root_violation == "mixed_list_roots":
+        raise FinalResponseComposerError("render plan mixes list roots")
+    if list_root_violation == "auxiliary_list_root":
+        raise FinalResponseComposerError("render plan uses an auxiliary list root")
+    selected_values = tuple(concrete[path] for path in paths)
+    bool_numbers = {int(item) for item in selected_values if isinstance(item, bool)}
+    numbers = {
+        item
+        for item in selected_values
+        if isinstance(item, int | float) and not isinstance(item, bool)
+    }
+    if any(number in bool_numbers for number in numbers):
+        raise FinalResponseComposerError("render plan has a bool-number collision")
+    rendered_by_literal: dict[str, JsonValue] = {}
+    chunks: list[str] = []
+    for projected in selected_values:
+        literal = _scalar_literal(projected)
+        prior = rendered_by_literal.get(literal)
+        if prior is not None and not _same_json_scalar(prior, projected):
+            raise FinalResponseComposerError(
+                "render plan has a typed literal collision"
+            )
+        rendered_by_literal[literal] = projected
+        chunks.append(literal)
+    separator = _STRUCTURAL_SEPARATOR_TEXT[plan.separator]
+    content = separator.join(chunks) + "."
+    if content != content.strip() or len(content) > max_output_chars:
+        raise FinalResponseComposerError("materialized content has an invalid length")
+    return DraftResponseV1(
+        content=content,
+        cited_paths=paths,
+        limitation_paths=(),
+    )
 
 
 class FinalResponseComposer:
@@ -130,9 +195,7 @@ class FinalResponseComposer:
         payload = json.dumps(
             {
                 "backend": self._backend_name,
-                "citation_canonicalization": (
-                    CITATION_CANONICALIZATION_POLICY_VERSION
-                ),
+                "citation_canonicalization": (CITATION_CANONICALIZATION_POLICY_VERSION),
                 "max_tokens": self._max_tokens,
                 "max_output_chars": self._max_output_chars,
                 "persona_content_hash": hashlib.sha256(
@@ -143,9 +206,10 @@ class FinalResponseComposer:
                     self._persona_projection.fingerprint
                 ),
                 "prompt": self._prompt,
+                "render_plan": _RENDER_PLAN_POLICY_VERSION,
                 "sampling_policy": _SAMPLING_POLICY_VERSION,
                 "temperature": self._temperature,
-                "version": "central_persona_v1",
+                "version": "central_render_plan_v1",
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -183,10 +247,12 @@ class FinalResponseComposer:
                 raise FinalResponseComposerError("composer returned tool calls")
             if not isinstance(response.text, str) or not response.text.strip():
                 raise FinalResponseComposerError("composer returned an empty response")
-            draft = DraftResponseV1.model_validate_json(response.text)
-            if len(draft.content) > self._max_output_chars:
-                raise FinalResponseComposerError("composer output exceeded configured cap")
-            return canonicalize_draft_citations(value, draft)
+            plan = CompositionRenderPlanV1.model_validate_json(response.text)
+            return materialize_render_plan(
+                value,
+                plan,
+                max_output_chars=self._max_output_chars,
+            )
         except FinalResponseComposerError:
             raise
         except Exception as exc:

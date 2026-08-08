@@ -186,12 +186,14 @@ class FinalCompositionRuntime:
                 if composition_input is None:
                     if isinstance(candidate, str) and candidate.strip():
                         content = candidate.strip()
-                elif (
-                    getattr(candidate, "schema_version", None)
-                    == "draft_response.v1"
-                    and isinstance(getattr(candidate, "content", None), str)
-                ):
-                    draft = candidate
+                else:
+                    # graph_runtime import cycle을 피하면서 runtime boundary에서만
+                    # concrete immutable draft contract를 고정한다.
+                    from simpleclaw.agent.composition_contracts import (
+                        validated_draft_snapshot,
+                    )
+
+                    draft = validated_draft_snapshot(candidate)
             except asyncio.CancelledError:
                 if not self._controlled_deadline_owns_cancellation(
                     cancellation_baseline=cancellation_baseline

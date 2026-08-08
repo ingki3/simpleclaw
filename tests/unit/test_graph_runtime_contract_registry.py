@@ -13,6 +13,7 @@ from simpleclaw.capability import (
     parse_owned_contract_metadata,
 )
 from simpleclaw.graph_runtime.contracts import (
+    CITABLE_PATHS_EXTENSION,
     COMPOSITION_FIELDS_EXTENSION,
     STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     AssetBindingRefV1,
@@ -177,6 +178,55 @@ def test_invalid_relation_types_are_normalized_at_registry_boundary(
 
     assert captured.value.code == "schema.invalid_composition_fields"
     assert isinstance(captured.value.__cause__, ValueError | TypeError)
+
+
+@pytest.mark.parametrize(
+    "declarations",
+    [
+        [
+            {
+                "when": {"path": "record_state", "equals": "ready"},
+                "paths": ["unknown_field"],
+            }
+        ],
+        [
+            {
+                "when": {"path": "record_state", "equals": "ready"},
+                "paths": ["record_state"],
+            },
+            {
+                "when": {"path": "record_state", "equals": "ready"},
+                "paths": ["record_state"],
+            },
+        ],
+        [
+            {
+                "when": {"path": "record_state", "equals": "ready"},
+                "paths": ["record_state", "record_state"],
+            }
+        ],
+    ],
+    ids=("unknown", "duplicate-condition", "duplicate-path"),
+)
+def test_invalid_citable_path_contract_is_rejected_at_registry_boundary(
+    declarations: list[dict[str, object]],
+) -> None:
+    malformed = replace(
+        _skill(),
+        output_contract=_contract(
+            "record_state",
+            schema_extensions={
+                COMPOSITION_FIELDS_EXTENSION: ["record_state"],
+                CITABLE_PATHS_EXTENSION: declarations,
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ContractRegistryError,
+        match="^schema.invalid_composition_fields$",
+    ):
+        build_contract_registry([malformed])
 
 
 def test_second_recipe_step_binding_owner_mismatch_is_rejected_by_registry():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import JsonValue
 
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
+from .composition_admissibility import citation_list_root_violation
 from .composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
@@ -18,6 +20,7 @@ from .composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
     StructuralEvidenceRelationV1,
+    validated_draft_snapshot,
 )
 from .composition_projection import flatten_public_facts
 
@@ -107,36 +110,6 @@ _KOREAN_SUFFIXES = (
     "에",
     "야",
 )
-_SAFE_CONNECTOR_WORDS = frozenset(
-    {
-        "각각",
-        "이며",
-        "이고",
-        "입니다",
-        "됩니다",
-        "은",
-        "는",
-        "이",
-        "가",
-        "을",
-        "를",
-        "와",
-        "과",
-        "도",
-        "로",
-        "에",
-        "the",
-        "a",
-        "an",
-        "and",
-        "is",
-        "are",
-        "was",
-        "were",
-        "with",
-        "respectively",
-    }
-)
 _LIMITATION_WORDS = frozenset(
     {
         "불확실",
@@ -156,6 +129,69 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
+
+
+def _guard_projected_scalar_literal_pattern(
+    value: JsonValue,
+) -> re.Pattern[str] | None:
+    """숫자 뒤 문장 종결점은 허용하되 numeric 재해석은 거부한다."""
+    pattern = projected_scalar_literal_pattern(value)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return pattern
+    rendered = str(value).strip()
+    if not rendered:
+        return None
+    return re.compile(
+        rf"(?<![\d.+%-]){re.escape(rendered)}(?![\d+%-]|\.\d)"
+    )
+
+
+def _projected_scalar_literal(value: JsonValue) -> str | None:
+    """중앙 materializer와 동일한 canonical scalar literal을 만든다."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return value if value and value == value.strip() else None
+    if isinstance(value, int | float):
+        rendered = str(value)
+        return rendered if rendered and rendered == rendered.strip() else None
+    return None
+
+
+def _matches_exact_materializer_layout(
+    content: str,
+    cited_values: dict[str, JsonValue],
+) -> bool:
+    """동일 structural separator와 terminal period만으로 된 exact 출력을 승인한다."""
+    values = tuple(cited_values.values())
+    if any(value is None for value in values):
+        return False
+    bool_numbers = {int(value) for value in values if isinstance(value, bool)}
+    numbers = {
+        value
+        for value in values
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+    if any(number in bool_numbers for number in numbers):
+        return False
+    literals = tuple(_projected_scalar_literal(value) for value in values)
+    if not literals or any(literal is None for literal in literals):
+        return False
+    canonical_literals = tuple(literal for literal in literals if literal is not None)
+    rendered_by_literal: dict[str, JsonValue] = {}
+    for literal, value in zip(canonical_literals, values, strict=True):
+        prior = rendered_by_literal.get(literal)
+        if prior is not None and not _same_json_scalar(prior, value):
+            return False
+        rendered_by_literal[literal] = value
+    return any(
+        content == separator.join(canonical_literals) + "."
+        for separator in (" ", ", ", " · ", "; ")
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GuardResult:
     """Response guard의 명시적 승인 여부와 stable 거부 code다."""
@@ -226,42 +262,6 @@ def _required_item_indices(
     return set(range(min(top_n, max(available) + 1)))
 
 
-def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
-    pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
-    return re.fullmatch(pattern, concrete_root) is not None
-
-
-def _structurally_identified_paths(
-    concrete: dict[str, JsonValue],
-    required_indices: set[int],
-) -> set[str]:
-    """동일 상대 path에서 index별로 유일한 string literal을 identity로 본다."""
-    candidates: dict[tuple[str, str], dict[int, tuple[str, str]]] = {}
-    for path, value in concrete.items():
-        location = _item_location(path)
-        if (
-            location is None
-            or location[1] not in required_indices
-            or not isinstance(value, str)
-            or not value.strip()
-        ):
-            continue
-        container, index, field = location
-        candidates.setdefault((container, field), {})[index] = (
-            path,
-            value.strip().casefold(),
-        )
-    identified: set[str] = set()
-    for matches in candidates.values():
-        if set(matches) != required_indices:
-            continue
-        literals = [matches[index][1] for index in sorted(required_indices)]
-        if len(set(literals)) != len(literals):
-            continue
-        identified.update(matches[index][0] for index in required_indices)
-    return identified
-
-
 def _word_stem(token: str) -> str:
     if not re.fullmatch(r"[가-힣]+", token):
         return token.casefold()
@@ -279,7 +279,7 @@ def _remove_cited_literals(
         {
             pattern.pattern: pattern
             for item in cited_values.values()
-            if (pattern := projected_scalar_literal_pattern(item)) is not None
+            if (pattern := _guard_projected_scalar_literal_pattern(item)) is not None
         }.values(),
         key=lambda pattern: len(pattern.pattern),
         reverse=True,
@@ -375,7 +375,7 @@ def _first_cited_literal_start(
     starts = [
         match.start()
         for value in cited_values.values()
-        if (match := projected_scalar_literal_pattern(value).search(content))
+        if (match := _guard_projected_scalar_literal_pattern(value).search(content))
         is not None
     ]
     return min(starts, default=None)
@@ -451,8 +451,6 @@ def _list_boundary_unit(
         or not isinstance(previous_value, int | float)
         or isinstance(previous_value, bool)
         or not unit
-        or unit.casefold() in _SAFE_CONNECTOR_WORDS
-        or _word_stem(unit).casefold() in _SAFE_CONNECTOR_WORDS
     ):
         return None
     if unit_match.start() != 0 or unit.casefold() not in question.casefold():
@@ -503,6 +501,7 @@ def _cited_literal_order_error(
     question: str,
 ) -> tuple[str | None, tuple[tuple[int, int], ...]]:
     """인용 scalar 순서와 concrete item 관계 shape를 함께 검증한다."""
+    matches_exact_layout = _matches_exact_materializer_layout(content, cited_values)
     cursor = 0
     previous_end: int | None = None
     previous_path: str | None = None
@@ -511,7 +510,7 @@ def _cited_literal_order_error(
     patterns: list[re.Pattern[str]] = []
     boundary_units: list[tuple[str | None, tuple[int, int] | None]] = []
     for path, value in cited_values.items():
-        pattern = projected_scalar_literal_pattern(value)
+        pattern = _guard_projected_scalar_literal_pattern(value)
         if pattern is None:
             return ("cited_value_order_mismatch", ())
         match = pattern.search(content, cursor)
@@ -530,9 +529,10 @@ def _cited_literal_order_error(
                 and current_location is not None
                 and previous_location[:2] == current_location[:2]
             ):
-                if not isinstance(previous_value, str) or not _safe_topic_separator(
-                    separator
-                ):
+                if (
+                    not isinstance(previous_value, str)
+                    and not matches_exact_layout
+                ) or not _safe_topic_separator(separator):
                     return ("cited_value_order_mismatch", ())
             elif (
                 previous_location is not None
@@ -634,11 +634,36 @@ def guard_final_response(
     draft: DraftResponseV1,
 ) -> GuardResult:
     """Projection 밖 사실·raw 진단·unsafe effect의 final 승격을 거부한다."""
+    if type(draft) is not DraftResponseV1:
+        return _rejected("invalid_draft_contract")
+    try:
+        raw_cited_paths = draft.cited_paths
+        raw_limitation_paths = draft.limitation_paths
+        if (
+            not isinstance(raw_cited_paths, tuple)
+            or not isinstance(raw_limitation_paths, tuple)
+            or len(raw_cited_paths) > 128
+            or len(raw_limitation_paths) > 64
+            or any(not isinstance(path, str) for path in raw_cited_paths)
+            or any(not isinstance(path, str) for path in raw_limitation_paths)
+        ):
+            return _rejected("invalid_draft_contract")
+        if not raw_cited_paths:
+            if not value.structural_evidence_relations and tuple(
+                raw_cited_paths
+            ) != tuple(value.citable_paths):
+                return _rejected("citable_path_citation_mismatch")
+            return _rejected("citations_required")
+        if len(raw_cited_paths) != len(set(raw_cited_paths)):
+            return _rejected("duplicate_citation")
+        draft = validated_draft_snapshot(draft)
+    except (AttributeError, TypeError, ValueError):
+        return _rejected("invalid_draft_contract")
     if value.result_status is not AssetResultStatus.RESOLVED or (
         value.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}
     ):
         return _rejected("unsafe_result")
-    content = draft.content.strip()
+    content = draft.content
     if not content or len(content) > 3_500:
         return _rejected("invalid_length")
     lowered = content.casefold()
@@ -650,10 +675,10 @@ def guard_final_response(
         return _rejected("private_or_unprojected_identifier")
 
     concrete = flatten_public_facts(value.public_facts)
-    if not draft.cited_paths:
-        return _rejected("citations_required")
-    if len(draft.cited_paths) != len(set(draft.cited_paths)):
-        return _rejected("duplicate_citation")
+    if not value.structural_evidence_relations and tuple(
+        draft.cited_paths
+    ) != tuple(value.citable_paths):
+        return _rejected("citable_path_citation_mismatch")
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
@@ -671,8 +696,24 @@ def guard_final_response(
     structural_relation = _matched_structural_evidence_relation(value, draft)
     if value.structural_evidence_relations and structural_relation is None:
         return _rejected("structural_relation_citation_mismatch")
+    list_root_violation = citation_list_root_violation(
+        tuple(draft.cited_paths),
+        declared_root=value.composition_list_root,
+    )
+    if list_root_violation == "mixed_list_roots":
+        return _rejected(
+            "requested_scope_mixed_list_roots"
+            if top_n is not None
+            else "citation_mixed_list_roots"
+        )
+    if list_root_violation == "auxiliary_list_root":
+        return _rejected(
+            "requested_scope_list_root_not_declared"
+            if top_n is not None
+            else "citation_auxiliary_list_root"
+        )
     for cited in cited_values.values():
-        if projected_scalar_literal_pattern(cited) is None:
+        if _guard_projected_scalar_literal_pattern(cited) is None:
             return _rejected("citation_not_scalar")
         if (
             isinstance(cited, str)
@@ -680,23 +721,17 @@ def guard_final_response(
             and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
+    if content != content.strip():
+        return _rejected("ungrounded_symbol")
     if top_n is not None:
         cited_list_roots = {
             location[0]
             for path in draft.cited_paths
             if (location := _item_location(path)) is not None
         }
-        if len(cited_list_roots) > 1:
-            return _rejected("requested_scope_mixed_list_roots")
         if not cited_list_roots:
             return _rejected("requested_scope_not_fully_cited")
         list_root = next(iter(cited_list_roots))
-        declared_root = value.composition_list_root
-        if declared_root is None or not _matches_declared_list_root(
-            list_root,
-            declared_root,
-        ):
-            return _rejected("requested_scope_list_root_not_declared")
         required_indices = _required_item_indices(
             concrete,
             top_n,
@@ -704,11 +739,9 @@ def guard_final_response(
         )
         if cited_item_indices != required_indices:
             return _rejected("requested_scope_not_fully_cited")
-        identity_paths = (
-            set(structural_relation.identity_paths)
-            if structural_relation is not None
-            else _structurally_identified_paths(concrete, required_indices)
-        )
+        if structural_relation is None or not structural_relation.identity_paths:
+            return _rejected("requested_item_identity_not_cited")
+        identity_paths = set(structural_relation.identity_paths)
         cited_identity_indices = {
             index
             for path in draft.cited_paths
@@ -740,6 +773,18 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
+    if not _matches_exact_materializer_layout(content, cited_values):
+        lexical_residual = _remove_cited_literals(content, cited_values)
+        symbol_residual = _WORD_RE.sub(
+            "",
+            _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
+        )
+        if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+            return _rejected("ungrounded_symbol")
+        if _WORD_RE.search(_URL_RE.sub("", lexical_residual)):
+            return _rejected("ungrounded_text")
+        return _rejected("ungrounded_symbol")
+
     scope_phrase_spans = _scope_phrase_spans(
         content,
         question=value.question,
@@ -753,9 +798,7 @@ def guard_final_response(
         _blank_spans(content, allowed_lexical_spans),
         cited_values,
     )
-    allowed_words = _SAFE_CONNECTOR_WORDS
-    if value.unresolved_claims:
-        allowed_words = allowed_words | _LIMITATION_WORDS
+    allowed_words = _LIMITATION_WORDS if value.unresolved_claims else frozenset()
     for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()
