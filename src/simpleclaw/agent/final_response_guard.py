@@ -344,6 +344,37 @@ def _list_boundary_unit(
     return (unit, (unit_match.start(), unit_match.start() + len(unit)))
 
 
+def _fallback_transition_boundary(
+    separator: str,
+    *,
+    previous_value: JsonValue,
+    current_value: JsonValue,
+    question: str,
+) -> tuple[str | None, tuple[int, int] | None] | None:
+    """list 위치가 없는 연속 scalar도 관계 재조합 없이 연결한다."""
+    previous_is_number = isinstance(previous_value, int | float) and not isinstance(
+        previous_value, bool
+    )
+    current_is_number = isinstance(current_value, int | float) and not isinstance(
+        current_value, bool
+    )
+    if isinstance(previous_value, str) and current_is_number:
+        return (None, None) if _safe_topic_separator(separator) else None
+    if previous_is_number and isinstance(current_value, str):
+        return _list_boundary_unit(
+            separator,
+            previous_value=previous_value,
+            question=question,
+        )
+    if isinstance(previous_value, str) and isinstance(current_value, str):
+        if _safe_topic_separator(separator):
+            return (None, None)
+    separator_without_conjunction = _LIST_SEPARATOR_WORD_RE.sub("", separator)
+    if _SAFE_PUNCTUATION_RE.fullmatch(separator_without_conjunction) is None:
+        return None
+    return (None, None)
+
+
 def _cited_literal_order_error(
     content: str,
     concrete: dict[str, JsonValue],
@@ -407,12 +438,23 @@ def _cited_literal_order_error(
                         previous_end + relative_span[1],
                     )
                 boundary_units.append((unit, absolute_span))
-            elif previous_path is not None and (
-                previous_path.rsplit(".", 1)[-1] == path.rsplit(".", 1)[-1]
-            ):
-                separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
-                if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
+            else:
+                boundary = _fallback_transition_boundary(
+                    separator,
+                    previous_value=previous_value,
+                    current_value=value,
+                    question=question,
+                )
+                if boundary is None:
                     return ("cited_value_order_mismatch", ())
+                unit, relative_span = boundary
+                absolute_span = None
+                if relative_span is not None:
+                    absolute_span = (
+                        previous_end + relative_span[0],
+                        previous_end + relative_span[1],
+                    )
+                boundary_units.append((unit, absolute_span))
         cursor = match.end()
         previous_end = match.end()
         previous_path = path

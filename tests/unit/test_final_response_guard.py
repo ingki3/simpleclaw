@@ -199,6 +199,102 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
     assert result.code == "cited_value_order_mismatch"
 
 
+@pytest.mark.parametrize(
+    ("public_facts_json", "cited_paths"),
+    [
+        (
+            '{"first_label":"A","first_value":3,'
+            '"second_label":"B","second_value":2}',
+            ("first_label", "first_value", "second_label", "second_value"),
+        ),
+        (
+            '{"metrics":{"first_label":"A","first_value":3,'
+            '"second_label":"B","second_value":2}}',
+            (
+                "metrics.first_label",
+                "metrics.first_value",
+                "metrics.second_label",
+                "metrics.second_value",
+            ),
+        ),
+    ],
+)
+def test_guard_rejects_relation_reassembly_without_list_locations(
+    public_facts_json: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": public_facts_json,
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A의 3은 B의 2입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+def test_guard_accepts_root_scalar_label_value_sequence() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3, B는 2입니다.",
+            cited_paths=(
+                "first_label",
+                "first_value",
+                "second_label",
+                "second_value",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"left":[{"label":"A","value":3}],'
+                '"right":[{"label":"B","value":2}]}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3은 B는 2입니다.",
+            cited_paths=(
+                "left[0].label",
+                "left[0].value",
+                "right[0].label",
+                "right[0].value",
+            ),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
 def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> None:
     value = _input().model_copy(
         update={
