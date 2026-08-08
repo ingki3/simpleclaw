@@ -15,8 +15,6 @@
 
 ## In Progress
 
-- [>] **[BIZ-648](mention://issue/ff765dd7-58bd-42eb-a0fc-066f08c50f4c): 중앙 Composer와 Guard의 domain-specific 분기를 제거** — PR #709 Stage D HOLD의 semantic relation residual-token 우회를 relation-kind별 닫힌 grammar와 질문·cited literal 기반 fail-closed 검증으로 차단한다. 최신 `origin/dev`의 BIZ-649 governance gate를 보존하고 mutation 회귀, 전체 unit/contracts/Ruff, exact-head fresh CI와 Hermes 재검토 전에는 merge·release하지 않는다. (재개: 2026-08-08)
-
 - [>] **[BIZ-645](mention://issue/4e305f23-136d-48fa-896c-c7fb77fafd4d): Composer 요청에 deterministic sampling 경계를 추가** — PR #700 merge SHA `352b58219b9701cd09e92eea1aba27c29749054c`에 BIZ-643 Guard·prompt·validator semantic, provider-neutral request-scoped `temperature=0.0`, provider native mapping과 BIZ-646 lease waiter 안정화를 통합했다. Corrective PR #704에서 classifier slot 즉시 fail-closed, ordinary 조사 전용 정규화, scope 1회·cited literal 이전 위치 계약을 보완했으며, 후속 required review의 English `first N` 및 compact `first3teams`/`top3teams` requested-scope 누락을 domain-neutral top-N parser와 exact classifier 회귀로 추가 보정한다. 새 exact head의 full CI·actual-provider no-send·필수 리뷰 전 merge, production activation, release, restart, 사용자 전송은 수행하지 않는다. (재개: 2026-08-08)
 
 - [>] **[BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307): divergent composer gate를 canonical PR에 통합** — [PR #696](https://github.com/ingki3/simpleclaw/pull/696)을 canonical target으로 삼아 dynamic concrete-path enum·root-relative prompt와 scalar/top-3 connected production no-send gate를 함께 유지한다. 시나리오별 provider 1회, retry 0, Telegram/Cron adapter·ConversationStore writer·supporting dispatch per-run delta 0을 fail-closed spy로 고정하고 source 통합 커밋 이후 Graphify를 재생성한다. exact-head CI·필수 review·squash merge 전에는 production activation·restart·Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
@@ -230,6 +228,8 @@
 ## Done
 
 ### 2026-08-08
+
+- [x] **[BIZ-648](mention://issue/ff765dd7-58bd-42eb-a0fc-066f08c50f4c): 중앙 Composer와 Guard의 domain-specific 분기를 제거** — PR #709의 semantic relation은 질문 token·cited literal·relation-kind별 닫힌 grammar 밖 residual token을 fail-closed해 네 개 adversarial mutation을 모두 `semantic_relation_ungrounded_fact`로 거부한다. 최신 `origin/dev`의 BIZ-649 governance gate를 merge로 보존했고 focused `123 passed`, 전체 unit `3765 passed, 3 xfailed`, contracts `45 passed`, Ruff·diff check와 core/global prompt added-line 금지 도메인 audit 0건을 통과했다. Graphify는 code commit `25a9fab41a1b62bda6f0fb06685eaab1ee9f3798` 기준으로 갱신했다. 이 표시는 code/offline corrective 완료이며 새 exact head의 fresh CI와 Hermes 재검토 전 merge·release는 계속 금지한다. (완료: 2026-08-08)
 
 - [x] **[BIZ-644](mention://issue/60170922-f331-4310-8fb2-60c702334f51): 중앙 Composer runtime persona projection 완료** — runtime SOUL/AGENT/USER의 allowlisted presentation 섹션만 immutable typed projection으로 전달하고 MEMORY·repo AGENTS·운영 AGENT 섹션·managed Dreaming·HTML comment·credential line을 fail-closed 제외했다. Stage D에서 credential 경계의 AWS access-key·Authorization Bearer·credential-bearing URI 누락을 발견해 전체 줄 제거와 합성 회귀를 추가했으며 exact head `e453372e5e15f92c42953edc9d973a6c37b33ae2`에서 focused `19 passed`, 전체 unit `3704 passed, 3 xfailed`, Ruff·diff-check 및 CI 3종을 통과했다. Exact-checkout actual-provider natural KBO no-send도 live `soul/agent/user` projection으로 3/3 PASS(provider 1회/run, retry 0, Guard 3/3, Telegram/Cron/ConversationStore/supporting dispatch delta 0)했고 [PR #702](https://github.com/ingki3/simpleclaw/pull/702)을 squash merge(SHA `643c7d06fe3eb0f58d892e81e034b864c74a7ddc`)했다. Release·production activation·restart·승인된 Telegram smoke는 후속 release 단계 소유로 남긴다. (완료: 2026-08-08)
 
