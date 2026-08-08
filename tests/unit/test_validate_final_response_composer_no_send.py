@@ -128,7 +128,12 @@ def test_production_persona_uses_allowlisted_runtime_projection(tmp_path) -> Non
         encoding="utf-8",
     )
     (persona_dir / "USER.md").write_text(
-        "# Preferences\n\n짧은 목록 선호\n\n# Private\n\n비공개 사용자 정보",
+        "# Preferences\n\n"
+        "짧은 목록 선호\n"
+        "Authorization: Bearer validator-fixture-token\n"
+        "database_url = postgresql://fixture:password@db.invalid/app\n"
+        "AWS access key: AKIAIOSFODNN7EXAMPLE\n\n"
+        "# Private\n\n비공개 사용자 정보",
         encoding="utf-8",
     )
     config = tmp_path / "config.yaml"
@@ -145,6 +150,9 @@ def test_production_persona_uses_allowlisted_runtime_projection(tmp_path) -> Non
     assert "따뜻하고 간결한 한국어 존댓말" in projection.instruction_text
     assert "짧은 목록 선호" in projection.instruction_text
     assert "비공개 사용자 정보" not in projection.instruction_text
+    assert "validator-fixture-token" not in projection.instruction_text
+    assert "fixture:password" not in projection.instruction_text
+    assert "AKIAIOSFODNN7EXAMPLE" not in projection.instruction_text
     assert projection.source_types == (FileType.SOUL, FileType.USER)
 
 

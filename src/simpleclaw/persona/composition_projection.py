@@ -32,8 +32,20 @@ DEFAULT_COMPOSITION_SECTIONS: dict[FileType, tuple[str, ...]] = {
 _SECRET_LINE_RE = re.compile(
     r"(?:"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"\b(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)\b\s*[:=]|"
-    r"\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b"
+    r"\bauthorization\b\s*[:=]?\s*(?:bearer|basic)\s+\S+|"
+    r"\b[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@|"
+    r"\b(?:"
+    r"api[_ -]?key|access[_ -]?(?:key|token)|auth[_ -]?token|"
+    r"authorization|password|passwd|secret|credential|account[_ -]?key|"
+    r"private[_ -]?key|client[_ -]?secret|aws[_ -]?secret[_ -]?access[_ -]?key"
+    r")\b\s*[:=]|"
+    r"\b(?:AKIA|ASIA|AIDA|AROA|AIPA|ANPA|ANVA|ASCA)[A-Z0-9]{16}\b|"
+    r"\bAIza[0-9A-Za-z_-]{20,}\b|"
+    r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{12,}\b|"
+    r"\b(?:sk|gh[pousr]|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b|"
+    r"\bglpat-[A-Za-z0-9_-]{12,}\b|"
+    r"\bSG\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b|"
+    r"\bSK[0-9A-F]{32}\b"
     r")",
     re.IGNORECASE,
 )

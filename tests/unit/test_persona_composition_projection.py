@@ -156,6 +156,71 @@ def test_secret_line_is_removed_even_in_an_allowlisted_section(tmp_path) -> None
     assert "fixture-password" not in projection.instruction_text
 
 
+@pytest.mark.parametrize(
+    ("credential_type", "line"),
+    (
+        pytest.param(
+            "authorization_bearer",
+            "Authorization: Bearer fixture-token-value",
+            id="authorization-bearer",
+        ),
+        pytest.param(
+            "database_uri_userinfo",
+            "database_url = postgresql://fixture-user:fixture-password@db.invalid/app",
+            id="database-uri-userinfo",
+        ),
+        pytest.param(
+            "aws_access_key",
+            "AWS access key: AKIAIOSFODNN7EXAMPLE",
+            id="aws-access-key",
+        ),
+        pytest.param(
+            "aws_secret_access_key",
+            "aws_secret_access_key = fixture-secret-value",
+            id="aws-secret-access-key",
+        ),
+        pytest.param(
+            "google_api_key",
+            "Google credential: AIzaFixtureKeyMaterial0123456789",
+            id="google-api-key",
+        ),
+        pytest.param(
+            "github_token",
+            "GitHub credential: github_pat_fixtureTokenMaterial",
+            id="github-token",
+        ),
+        pytest.param(
+            "gitlab_token",
+            "GitLab credential: glpat-fixtureTokenMaterial",
+            id="gitlab-token",
+        ),
+        pytest.param(
+            "stripe_key",
+            "Stripe credential: sk_live_fixtureKeyMaterial",
+            id="stripe-key",
+        ),
+    ),
+)
+def test_credential_line_types_are_removed_fail_closed(
+    tmp_path, credential_type: str, line: str
+) -> None:
+    path = tmp_path / "USER.md"
+    path.write_text(
+        f"# Preferences\n\n결론 먼저\n{line}\n존댓말 선호",
+        encoding="utf-8",
+    )
+    persona = parse_markdown(path, FileType.USER, SourceScope.LOCAL)
+
+    projection = build_composition_persona_projection(
+        [persona], token_budget=2048
+    )
+
+    assert credential_type
+    assert "결론 먼저" in projection.instruction_text
+    assert "존댓말 선호" in projection.instruction_text
+    assert line not in projection.instruction_text
+
+
 def test_direct_policy_override_cannot_expand_the_maximum_allowlist(tmp_path) -> None:
     path = tmp_path / "AGENT.md"
     path.write_text(
