@@ -718,9 +718,10 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "mode": "schedule",
                 "status": "ok",
                 "items": [
-                    {
-                        "event_state": "scheduled",
-                        "status_code": "BEFORE",
+                        {
+                            "event_state": "scheduled",
+                            "status_code": "BEFORE",
+                            "status": "경기 예정",
                         "participants": {
                             "away": {"name": "두산"},
                             "home": {"name": "한화"},
@@ -729,11 +730,11 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                     }
                 ],
             },
-            "두산은 한화, 2026-08-08T18:30:00+09:00입니다.",
+            "경기 예정, 두산, 한화.",
             (
+                "data.items[0].status",
                 "data.items[0].participants.away.name",
                 "data.items[0].participants.home.name",
-                "data.items[0].started_at",
             ),
         ),
         (
@@ -744,7 +745,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "empty_reason": "no_scheduled_events",
                 "items": [],
             },
-            "예정된 경기가 없습니다.",
+            "empty, no_scheduled_events.",
             ("data.status", "data.empty_reason"),
         ),
         (
@@ -755,7 +756,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "empty_reason": "no_live_events",
                 "items": [],
             },
-            "현재 진행 중인 경기가 없습니다.",
+            "empty, no_live_events.",
             ("data.status", "data.empty_reason"),
         ),
     ],

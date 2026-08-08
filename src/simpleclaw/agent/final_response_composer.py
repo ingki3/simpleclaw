@@ -35,6 +35,13 @@ def _response_schema(value: CompositionInputV1) -> dict:
         for path, projected in concrete.items()
         if not isinstance(projected, dict | list)
     ]
+    structural_relation = (
+        value.structural_evidence_relations[0]
+        if value.structural_evidence_relations
+        else None
+    )
+    if structural_relation is not None:
+        cited_paths = list(structural_relation.evidence_paths)
     limitation_paths = [
         f"unresolved_claims[{index}]"
         for index in range(len(value.unresolved_claims))
@@ -49,6 +56,38 @@ def _response_schema(value: CompositionInputV1) -> dict:
     schema = DraftResponseV1.model_json_schema(by_alias=True)
     properties = schema["properties"]
     properties["cited_paths"]["items"]["enum"] = cited_paths
+    if structural_relation is not None:
+        properties["cited_paths"]["minItems"] = len(cited_paths)
+        properties["cited_paths"]["maxItems"] = len(cited_paths)
+        literals: list[str] = []
+        for path in cited_paths:
+            if path not in concrete:
+                raise FinalResponseComposerError(
+                    "structural evidence path is not projected"
+                )
+            projected = concrete[path]
+            if isinstance(projected, dict | list):
+                raise FinalResponseComposerError(
+                    "structural evidence must contain only scalar paths"
+                )
+            rendered = (
+                json.dumps(projected)
+                if projected is None or isinstance(projected, bool)
+                else str(projected).strip()
+            )
+            if not rendered:
+                raise FinalResponseComposerError(
+                    "structural evidence contains an empty literal"
+                )
+            literals.append(rendered)
+        properties["content"]["enum"] = list(
+            dict.fromkeys(
+                (
+                    f"{', '.join(literals)}.",
+                    f"{' · '.join(literals)}.",
+                )
+            )
+        )
     if limitation_paths:
         properties["limitation_paths"]["items"]["enum"] = limitation_paths
     else:

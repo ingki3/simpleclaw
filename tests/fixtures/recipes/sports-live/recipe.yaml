@@ -134,6 +134,17 @@ output_contract:
       - data.items[*].source_url
       - data.warnings[*]
       - data.source.urls[*]
+    x-simpleclaw-structural-evidence-relations:
+      - when: {path: data.status, equals: empty}
+        evidence_fields: [data.status, data.empty_reason]
+      - when: {path: data.mode, equals: schedule}
+        evidence_fields:
+          - "data.items[*].status"
+          - "data.items[*].participants.away.name"
+          - "data.items[*].participants.home.name"
+        identity_fields:
+          - "data.items[*].participants.away.name"
+          - "data.items[*].participants.home.name"
 
 step_bindings:
   - binding_id: naver-sports-query.v1

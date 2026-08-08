@@ -122,6 +122,17 @@ output_contract:
       - items[*].source_url
       - warnings[*]
       - source.urls[*]
+    x-simpleclaw-structural-evidence-relations:
+      - when: {path: status, equals: empty}
+        evidence_fields: [status, empty_reason]
+      - when: {path: mode, equals: schedule}
+        evidence_fields:
+          - "items[*].status"
+          - "items[*].participants.away.name"
+          - "items[*].participants.home.name"
+        identity_fields:
+          - "items[*].participants.away.name"
+          - "items[*].participants.home.name"
 argument_binding:
   binding_id: shell-argv.v1
   owner_ref: {type: skill, name: naver-sports-skill}
