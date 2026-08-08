@@ -7,6 +7,7 @@ import json
 import pytest
 
 from scripts.dev.validate_final_response_composer_no_send import (
+    _DIRECT_SKILL_SCENARIOS,
     _NATURAL_KBO_SCENARIO,
     _SCENARIOS,
     _bounded_backend_names,
@@ -107,6 +108,41 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
         "conversation_write": 0,
         "notifier": 0,
     }
+    assert result["conversation_store_message_delta"] == 0
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    _DIRECT_SKILL_SCENARIOS,
+    ids=lambda item: item.name,
+)
+@pytest.mark.asyncio
+async def test_direct_skill_probe_measures_separate_react_boundary(scenario) -> None:
+    counted_send = _OneCallSend(_draft_response)
+    composer = FinalResponseComposer(
+        send=counted_send,
+        persona_projection=_persona_projection("Answer only from the supplied facts."),
+        max_tokens=1200,
+        backend_name="offline-fixture",
+    )
+
+    result = await _connected_probe(
+        composer=composer,
+        counted_send=counted_send,
+        scenario=scenario,
+        timeout=10.0,
+    )
+
+    assert result["selected_asset_type"] == "skill"
+    assert result["source_mode"] == "production_direct_skill_fixed"
+    assert result["provider_calls"] == 1
+    assert result["composer_calls"] == 1
+    assert result["retry_calls"] == 0
+    assert result["guard_accepted"] is True
+    assert tuple(result["citations"]) == scenario.expected_citations
+    assert result["connected_target_dispatch_calls"] == 1
+    assert set(result["measured_side_effect_deltas"].values()) == {0}
+    assert set(result["measured_forbidden_boundary_calls"].values()) == {0}
     assert result["conversation_store_message_delta"] == 0
 
 

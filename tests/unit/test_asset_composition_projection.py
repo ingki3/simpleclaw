@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from simpleclaw.agent.composition_projection import (
@@ -14,7 +16,11 @@ from simpleclaw.graph_runtime.contracts import (
     ContractRefV1,
     NormalizedAssetResultV1,
 )
+from simpleclaw.graph_runtime.contracts_registry import build_contract_registry
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
+from simpleclaw.skills.discovery import discover_skills
+
+REPO_ROOT = Path(__file__).parents[2]
 
 
 def _values():
@@ -221,6 +227,208 @@ def test_projection_rejects_invalid_source_citable_path_membership(
             question="Return the record detail.",
             locale="en-US",
             selected_route="recipe",
+            normalized_result=result,
+            descriptor=descriptor,
+        )
+
+
+def _production_direct_sports_values(
+    *,
+    mode: str,
+    items: list[dict[str, object]],
+    resolved_claims: list[str] | None = None,
+) -> tuple[ContractDescriptorV1, NormalizedAssetResultV1]:
+    skill = next(
+        item
+        for item in discover_skills(
+            Path("/__missing_local_skills__"),
+            REPO_ROOT / "runtime_assets" / "skills",
+        )
+        if item.name == "naver-sports-skill"
+    )
+    registry = build_contract_registry((skill,))
+    entry = registry.asset(AssetRefV1(type="skill", name=skill.name))
+    assert entry is not None
+    descriptor = entry.output_descriptor
+    result = NormalizedAssetResultV1(
+        invocation_id=f"direct-sports-{mode}",
+        output_contract=descriptor.ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "ok": True,
+            "side_effect": False,
+            "mode": mode,
+            "status": "ok",
+            "items": items,
+            "resolved_claims": resolved_claims or [mode],
+            "unresolved_claims": [],
+        },
+        payload_hash=f"direct-sports-{mode}-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    return descriptor, result
+
+
+@pytest.mark.parametrize(
+    ("mode", "items", "expected_paths", "expected_identity_paths"),
+    [
+        (
+            "live",
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": 3},
+                },
+                {
+                    "participants": {
+                        "away": {"name": "gamma"},
+                        "home": {"name": "delta"},
+                    },
+                    "score": {"away": 1, "home": 0},
+                },
+            ],
+            tuple(
+                f"items[{index}].{field}"
+                for index in range(2)
+                for field in (
+                    "participants.away.name",
+                    "participants.home.name",
+                    "score.away",
+                    "score.home",
+                )
+            ),
+            (),
+        ),
+        (
+            "results",
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": 3},
+                    "winner": "beta",
+                },
+                {
+                    "participants": {
+                        "away": {"name": "gamma"},
+                        "home": {"name": "delta"},
+                    },
+                    "score": {"away": 1, "home": 0},
+                    "winner": "gamma",
+                },
+            ],
+            tuple(
+                f"items[{index}].{field}"
+                for index in range(2)
+                for field in (
+                    "participants.away.name",
+                    "participants.home.name",
+                    "score.away",
+                    "score.home",
+                    "winner",
+                )
+            ),
+            (),
+        ),
+        (
+            "standings",
+            [
+                {"team": "alpha", "wins": 60},
+                {"team": "beta", "wins": 58},
+            ],
+            tuple(
+                f"items[{index}].{field}"
+                for index in range(2)
+                for field in ("team", "wins")
+            ),
+            ("items[0].team", "items[1].team"),
+        ),
+    ],
+    ids=("live", "results", "standings"),
+)
+def test_production_direct_sports_contract_preserves_mode_path_identity_order(
+    mode: str,
+    items: list[dict[str, object]],
+    expected_paths: tuple[str, ...],
+    expected_identity_paths: tuple[str, ...],
+) -> None:
+    descriptor, result = _production_direct_sports_values(
+        mode=mode,
+        items=items,
+        resolved_claims=["claim-id-must-not-be-a-path"],
+    )
+
+    projection = build_composition_input(
+        request_id=f"direct-sports-{mode}-request",
+        question="Return the source facts.",
+        locale="en-US",
+        selected_route="react",
+        normalized_result=result,
+        descriptor=descriptor,
+    )
+
+    assert projection.resolved_claims == ("claim-id-must-not-be-a-path",)
+    if mode == "standings":
+        relation = projection.structural_evidence_relations[0]
+        assert relation.evidence_paths == expected_paths
+        assert relation.identity_paths == expected_identity_paths
+        assert projection.citable_paths == ()
+    else:
+        assert projection.citable_paths == expected_paths
+        assert projection.structural_evidence_relations == ()
+
+
+@pytest.mark.parametrize(
+    ("items", "code"),
+    [
+        (
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2},
+                }
+            ],
+            "projection.citable_path_incomplete",
+        ),
+        (
+            [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": None},
+                }
+            ],
+            "projection.citable_path_not_renderable",
+        ),
+        ([], "projection.citable_path_empty"),
+    ],
+    ids=("partial", "null", "empty"),
+)
+def test_production_direct_sports_citable_contract_fails_closed(
+    items: list[dict[str, object]],
+    code: str,
+) -> None:
+    descriptor, result = _production_direct_sports_values(
+        mode="live",
+        items=items,
+    )
+
+    with pytest.raises(CompositionProjectionError, match=code):
+        build_composition_input(
+            request_id="direct-sports-invalid-request",
+            question="Return the live score.",
+            locale="en-US",
+            selected_route="react",
             normalized_result=result,
             descriptor=descriptor,
         )

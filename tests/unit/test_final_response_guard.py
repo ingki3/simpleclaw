@@ -256,6 +256,92 @@ def test_guard_rejects_citations_when_non_structural_contract_is_empty() -> None
     assert result.code == "citable_path_citation_mismatch"
 
 
+def _direct_skill_live_input() -> CompositionInputV1:
+    return CompositionInputV1(
+        request_id="direct-skill-live-result",
+        question="Return the live result.",
+        locale="en-US",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="naver-sports-skill"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="direct-skill-live-result-payload-hash",
+        public_facts={
+            "mode": "live",
+            "items": [
+                {
+                    "participants": {
+                        "away": {"name": "alpha"},
+                        "home": {"name": "beta"},
+                    },
+                    "score": {"away": 2, "home": 3},
+                }
+            ],
+        },
+        resolved_claims=("score",),
+        citable_paths=(
+            "items[0].participants.away.name",
+            "items[0].participants.home.name",
+            "items[0].score.away",
+            "items[0].score.home",
+        ),
+        composition_list_root="items",
+    )
+
+
+def test_guard_accepts_exact_direct_skill_citable_path_contract() -> None:
+    value = _direct_skill_live_input()
+    draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
+    )
+
+    result = guard_final_response(value, draft)
+
+    assert draft.content == "alpha, beta, 2, 3."
+    assert draft.cited_paths == value.citable_paths
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "cited_paths",
+    [
+        (
+            "items[0].participants.away.name",
+            "items[0].participants.home.name",
+            "items[0].score.away",
+        ),
+        (
+            "items[0].participants.home.name",
+            "items[0].participants.away.name",
+            "items[0].score.away",
+            "items[0].score.home",
+        ),
+        (
+            "items[0].participants.away.name",
+            "items[0].participants.home.name",
+            "items[0].score.away",
+            "items[0].score.missing",
+        ),
+    ],
+    ids=("partial", "reordered", "unknown"),
+)
+def test_guard_rejects_invalid_direct_skill_citable_path_contract(
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _direct_skill_live_input()
+    draft = DraftResponseV1.model_construct(
+        content="alpha, beta, 2, 3.",
+        cited_paths=cited_paths,
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(value, draft)
+
+    assert result.accepted is False
+    assert result.code == "citable_path_citation_mismatch"
+
+
 @pytest.mark.parametrize(
     ("facts", "fields", "expected_content"),
     [

@@ -361,6 +361,7 @@ class _Scenario:
     locale: str = "en-US"
     source_mode: str = "deterministic_fixture"
     source_evidence: dict[str, object] | None = None
+    asset_type: str = "recipe"
 
 
 _NATURAL_KBO_SCENARIO = _Scenario(
@@ -397,6 +398,34 @@ _NATURAL_KBO_SCENARIO = _Scenario(
     ),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
+)
+
+_DIRECT_SKILL_KBO_SCENARIO = _Scenario(
+    name="production_direct_skill_natural_kbo",
+    question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+    payload={
+        "mode": "standings",
+        "category": "KBO",
+        "season": {"code": "2026", "title": "2026 KBO"},
+        "date": "2026-08-08",
+        "items": [
+            {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
+            {"rank": 2, "team": "한화", "wins": 55, "losses": 40},
+            {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
+        ],
+    },
+    resolved_claims=("standings",),
+    expected_citations=(
+        "items[0].team",
+        "items[0].wins",
+        "items[1].team",
+        "items[1].wins",
+        "items[2].team",
+        "items[2].wins",
+    ),
+    locale="ko-KR",
+    source_mode="production_direct_skill_fixed",
+    asset_type="skill",
 )
 
 _SCHEDULE_PRESENT_SCENARIO = _Scenario(
@@ -481,12 +510,14 @@ def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
             locale=base.locale,
             source_mode=base.source_mode,
             source_evidence=base.source_evidence,
+            asset_type=base.asset_type,
         )
         for run in range(1, 4)
     )
 
 
 _SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
+_DIRECT_SKILL_SCENARIOS = _independent_scenarios(_DIRECT_SKILL_KBO_SCENARIO)
 
 
 def _bounded_backend_names(
@@ -557,7 +588,11 @@ def _limit_three_argv() -> tuple[str, ...]:
     return tuple(argv)
 
 
-async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
+async def _real_kbo_scenario(
+    skill_dir: Path | None,
+    *,
+    direct_skill: bool = False,
+) -> _Scenario:
     result = await asyncio.to_thread(
         validate_production_asset,
         skill_dir,
@@ -566,25 +601,20 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
         expected_result_limit=3,
     )
     evidence = result.evidence
+    path_prefix = "" if direct_skill else "data."
     return _Scenario(
-        name="production_persona_natural_kbo",
-        question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
-        payload={"data": result.payload},
-        resolved_claims=(
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
-            "data.items[2].team",
-            "data.items[2].wins",
+        name=(
+            "production_direct_skill_natural_kbo"
+            if direct_skill
+            else "production_persona_natural_kbo"
         ),
-        expected_citations=(
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
-            "data.items[2].team",
-            "data.items[2].wins",
+        question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        payload=(result.payload if direct_skill else {"data": result.payload}),
+        resolved_claims=("standings",),
+        expected_citations=tuple(
+            f"{path_prefix}items[{index}].{field}"
+            for index in range(3)
+            for field in ("team", "wins")
         ),
         locale="ko-KR",
         source_mode="real_read_only",
@@ -601,12 +631,16 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
             "item_count": evidence.item_count,
             "requested_limit": evidence.requested_limit,
         },
+        asset_type="skill" if direct_skill else "recipe",
     )
 
 
 def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
-    recipe = next(item for item in definitions if item.name == "sports-live")
-    asset = AssetRef(asset_type="recipe", name=recipe.name)
+    target_name = (
+        "naver-sports-skill" if scenario.asset_type == "skill" else "sports-live"
+    )
+    target = next(item for item in definitions if item.name == target_name)
+    asset = AssetRef(asset_type=scenario.asset_type, name=target.name)
     return UnifiedTurnPlan(
         original_text=scenario.question,
         context=ContextSelection(
@@ -626,7 +660,11 @@ def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
             search_query="",
         ),
         execution=ExecutionPlan(
-            mode=ExecutionMode.DIRECT_ANSWER,
+            mode=(
+                ExecutionMode.ANSWER_WITH_EVIDENCE
+                if scenario.asset_type == "skill"
+                else ExecutionMode.DIRECT_ANSWER
+            ),
             primary_asset=asset,
             allowed_assets=(asset,),
         ),
@@ -637,7 +675,7 @@ def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
         ),
         confidence=1.0,
         decision_summary="synthetic connected citation activation gate",
-        approved_asset_fingerprint=recipe.definition_fingerprint,
+        approved_asset_fingerprint=target.definition_fingerprint,
     )
 
 
@@ -744,12 +782,21 @@ async def _connected_probe(
             telegram_adapter=TelegramDeliveryAdapter(forbidden_sender),
             notifier_adapter=CronDeliveryAdapter(forbidden_sender),
         )
+        target_is_skill = scenario.asset_type == "skill"
         runner = ConnectedShadowTurnRunner(
             facade=facade,
             definitions=definitions,
             conversation_store=store,
-            recipe_executor=target_executor,
-            skill_executor=forbidden_supporting_dispatch,
+            recipe_executor=(
+                forbidden_supporting_dispatch
+                if target_is_skill
+                else target_executor
+            ),
+            skill_executor=(
+                target_executor
+                if target_is_skill
+                else forbidden_supporting_dispatch
+            ),
             composition_mode="central_persona_v1",
             response_composer=compose,
             composer_fingerprint=composer.fingerprint,
@@ -909,6 +956,7 @@ async def _connected_probe(
         "connected_target_dispatch_calls": counters.target_dispatch,
         "retry_calls": max(0, counted_send.calls - 1),
         "source_mode": scenario.source_mode,
+        "selected_asset_type": scenario.asset_type,
         "source_evidence": scenario.source_evidence,
         "configured_sink_boundaries": [
             "telegram_adapter",
@@ -965,13 +1013,18 @@ async def _run(args: argparse.Namespace) -> int:
     langgraph_config = planner_config.get("langgraph_v4", {})
     composition_config = langgraph_config.get("composition", {})
     temperature = float(composition_config.get("temperature", 0.0))
-    base_scenario = _NATURAL_KBO_SCENARIO
+    base_scenario = (
+        _DIRECT_SKILL_KBO_SCENARIO
+        if args.direct_skill
+        else _NATURAL_KBO_SCENARIO
+    )
     if args.real_kbo:
         try:
             base_scenario = await _real_kbo_scenario(
                 None
                 if args.exact_checkout_install
-                else args.installed_skill_dir.expanduser()
+                else args.installed_skill_dir.expanduser(),
+                direct_skill=args.direct_skill,
             )
         except ProductionAssetValidationError as exc:
             print(
@@ -1019,7 +1072,9 @@ async def _run(args: argparse.Namespace) -> int:
     scenarios = (
         list(_independent_scenarios(base_scenario))
         if args.real_kbo
-        else list(_SCENARIOS)
+        else list(
+            _DIRECT_SKILL_SCENARIOS if args.direct_skill else _SCENARIOS
+        )
     )
     backend_results: list[dict[str, object]] = []
     provider_calls = 0
@@ -1181,6 +1236,14 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Evaluate exactly one configured backend without implicitly re-running "
             "the runtime default."
+        ),
+    )
+    parser.add_argument(
+        "--direct-skill",
+        action="store_true",
+        help=(
+            "Run the three independent probes through the direct "
+            "naver-sports-skill react boundary instead of the recipe boundary."
         ),
     )
     parser.add_argument(

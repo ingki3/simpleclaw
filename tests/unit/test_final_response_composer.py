@@ -344,6 +344,44 @@ async def test_composer_does_not_reinterpret_claim_id_as_fact_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_direct_skill_unknown_mode_claim_id_cannot_supply_citation_contract() -> (
+    None
+):
+    value = CompositionInputV1(
+        request_id="direct-skill-unknown-mode",
+        question="Return the current result.",
+        locale="en-US",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="naver-sports-skill"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="direct-skill-unknown-mode-payload-hash",
+        public_facts={
+            "mode": "unknown",
+            "items": [{"team": "alpha", "wins": 60}],
+        },
+        resolved_claims=("items[0].team", "items[0].wins"),
+        citable_paths=(),
+        composition_list_root="items",
+    )
+    send = AsyncMock()
+    composer = FinalResponseComposer(
+        send=send,
+        persona_projection=_persona_projection("Use concise grammar."),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    with pytest.raises(
+        FinalResponseComposerError,
+        match="no verified citable-path contract",
+    ):
+        await composer.compose(value)
+
+    assert send.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_composer_rejects_more_scalar_paths_than_draft_can_cite() -> None:
     send = AsyncMock()
     composer = FinalResponseComposer(
