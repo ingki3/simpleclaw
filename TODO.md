@@ -15,7 +15,7 @@
 
 ## In Progress
 
-- [>] **[BIZ-658](mention://issue/6689363f-fb13-443e-8dc9-7a2aef5b01a6): PR #714 alternate provider eval과 first-failure provenance를 보정** — Gemini alternate의 `composer_capture_missing`이 가린 실제 Composer/Provider 실패를 raw 응답 없이 stable code/type으로 보존하고, 지정 backend만 default 중복 없이 최대 3회 평가하는 validator 경계를 보강한다. final exact SHA의 default·GLM·Gemini bounded no-send와 fresh regression/CI/필수 재리뷰 전까지 merge·release·deploy·restart·send를 보류한다. (시작: 2026-08-08)
+- [x] **[BIZ-658](mention://issue/6689363f-fb13-443e-8dc9-7a2aef5b01a6): PR #714 alternate provider eval과 first-failure provenance를 보정** — `composer_capture_missing` 뒤 실제 Gemini 3/3 first-failure를 raw 응답 없이 `composer_response_invalid` / `ValidationError`와 `ending:literal_error`(일부 `schema:literal_error`)로 보존했다. provider가 소유할 필요 없는 schema version·terminal punctuation을 render plan에서 제거해 provider-facing 계약을 bounded `separator` 하나로 축소했고 Gemini fixed 3/3, provider/composer 1회, retry·sink 0을 확인했다. final exact SHA의 default·GLM·Gemini bounded no-send·default real·fresh regression/CI·필수 재리뷰 전까지 부모 PR의 merge·release·deploy·restart·send를 보류한다. (완료: 2026-08-08)
 
 - [>] **[BIZ-657](mention://issue/ae93d2a9-2b68-4175-9c85-fdf523e073fb): PR #714 lifecycle와 exact-head activation evidence를 보정** — terminal numeric punctuation 보정 뒤 독립 필수 리뷰가 core의 localized/semantic connector, Provider path-order authority, descriptor identity 없는 top-N heuristic을 재현해 기존 PASS를 철회했다. successor amendment에서 plan을 structural punctuation만 선택하도록 축소하고 source contract가 fact path set/order/identity를 소유하게 했으며, sports standings relation·identity와 Guard fail-closed 회귀를 보강해 focused/full local regression을 통과했다. 새 exact SHA의 3/3+3/3 no-send·CI·독립 필수 재리뷰 전까지 부모 PR의 merge·release·deploy·restart·Telegram 전송을 보류한다. (successor 재개: 2026-08-08)
 
