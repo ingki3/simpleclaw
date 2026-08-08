@@ -344,17 +344,17 @@ multica issue create \
 | 계층 | 대표 경로/책임 | 허용 | 금지 |
 |---|---|---|---|
 | `generic core/global prompt` | `src/simpleclaw/agent/**`, `src/simpleclaw/graph_runtime/**`의 공통 graph/runtime, `src/simpleclaw/config_sections/**`, `src/simpleclaw/production_assets.py`, `prompts/system/**` 및 여러 domain이 공유하는 planner/composer/guard/contract | descriptor/schema 기반의 domain-neutral 계약, 공통 orchestration·validation | concrete provider/domain 분기, enum·상태→localized sentence mapping, field/value/unit/domain word lexical allowlist, incident-specific 질문·예시 |
-| `domain adapter/runtime asset` | 명시적으로 경계 지어진 adapter, `runtime_assets/skills/**`, `runtime_assets/recipes/**`와 domain별 parser/presenter | provider schema/enum mapping, domain vocabulary, localized presentation, source-specific fallback | generic core의 암묵적 동작 변경, 다른 domain으로 새어 나가는 전역 규칙 |
+| `domain adapter/runtime asset` | 명시적으로 경계 지어진 adapter, `runtime_assets/skills/**`, `runtime_assets/recipes/**`와 domain별 parser/evidence adapter | provider schema/enum mapping, domain vocabulary, typed state/facts/provenance/limitations, source-specific collection/fallback | persona, tone, localized final-response sentence/template, Markdown/layout, presentation ownership, generic core의 암묵적 동작 변경, 다른 domain으로 새어 나가는 전역 규칙 |
 | `test/fixture` | `tests/**` | 대상 계층의 계약 검증 | core unit/contract fixture에 concrete incident 질문이나 provider/domain semantics 고정 |
 | `governance/docs` | `AGENTS.md`, 운영·설계 문서 | layer-independent 절차, gate, 근거 | runtime domain 분기, 특정 asset 구현, incident-specific runtime workaround |
 
-대표 경로는 최소 집합이며 allowlist가 아니다. 예를 들어 adapter 디렉터리 안의 코드라도 전역 routing/guard 동작을 바꾸면 `generic core/global prompt`다. 반대로 domain bug가 책임 있는 adapter/runtime asset만으로 해결되면 Plan에 core/global prompt를 out of scope로 명시하고 core 파일을 추가하지 않는다. Adapter-only 변경도 boundary 표를 생략하지 않으며 provider semantics의 소유 위치와 사용자 표시 문장의 presentation 위치를 각각 박제한다.
+대표 경로는 최소 집합이며 allowlist가 아니다. 예를 들어 adapter 디렉터리 안의 코드라도 전역 routing/guard 동작을 바꾸면 `generic core/global prompt`다. 반대로 domain bug가 책임 있는 adapter/runtime asset만으로 해결되면 Plan에 core/global prompt를 out of scope로 명시하고 core 파일을 추가하지 않는다. Adapter-only 변경도 boundary 표를 생략하지 않으며 provider semantics의 소유 위치와 최종 user-facing presentation의 소유자가 중앙 persona-aware Composer임을 각각 박제한다.
 
 **generic core/global prompt 변경의 필수 negative constraints:**
 
 1. Plan에 concrete provider/domain enum, 상태명, field/value/unit 이름, 고유명, localized output sentence 등 **quarantined domain vocabulary**를 변경 전 추출한다. concrete domain을 core에 허용하는 고정 allowlist를 만들지 않는다.
 2. 해당 vocabulary와 의미가 같은 domain lexical branch/allowlist가 adapter/runtime asset 경계 밖의 **변경 diff에서 0건**이어야 한다. repository 전체의 기존 부채와 이번 변경을 혼동하지 않도록 비교 기준 SHA/branch와 감사 대상 core/global prompt 경로를 기록한다.
-3. concrete state/reason을 localized domain sentence로 바꾸거나 concrete field/value/unit/domain word를 Guard·Composer·planner에 allowlist하는 Plan은 **이슈 생성 전에 반려**한다. 책임 있는 adapter/asset으로 옮기거나 descriptor-driven generic contract로 재설계한다.
+3. concrete state/reason을 localized domain sentence로 바꾸거나 concrete field/value/unit/domain word를 Guard·Composer·planner에 allowlist하는 Plan은 **이슈 생성 전에 반려**한다. Adapter/runtime asset은 typed evidence만 생산하고, 중앙 persona-aware Composer가 domain-neutral contract를 통해 최종 user-facing presentation을 전담하도록 재설계한다.
 4. abstract contract는 domain-neutral 입력·출력·불변조건으로 서술한다. 특정 사고 질문을 global prompt, core unit/contract test, core example에 복사하지 않는다.
 5. core unit/contract test는 `alpha/beta`, `kind_x/state_y`, `measure_a` 같은 synthetic-neutral fixture를 사용한다. concrete provider/domain 시나리오는 adapter/asset/integration 경계에서 검증한다.
 6. `git diff` 기반 scoped audit와 테스트가 모두 통과해야 한다. **CI green은 boundary audit나 독립 리뷰를 대체하지 않는다.**
