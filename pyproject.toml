@@ -49,6 +49,7 @@ dev = [
 "scripts/migrate_secrets.py" = ["E402"]
 "scripts/run_bot.py" = ["BLE001", "DTZ005", "S110"]
 "scripts/setup_admin_api.py" = ["E402"]
+"scripts/dev/validate_final_response_composer_no_send.py" = ["E402"]
 "scripts/dev/validate_langgraph_v4_no_send.py" = ["E402"]
 "scripts/dev/validate_langgraph_v4_shadow.py" = ["E402"]
 "scripts/dev/validate_naver_sports_asset.py" = ["E402"]

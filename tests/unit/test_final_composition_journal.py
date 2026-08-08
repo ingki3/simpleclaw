@@ -13,6 +13,7 @@ from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
+from simpleclaw.agent.final_response_composer import FinalResponseComposerError
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
 from simpleclaw.graph_runtime.composition_journal import (
@@ -76,7 +77,7 @@ def _draft() -> DraftResponseV1:
     )
 
 
-class _ComposerStop(RuntimeError):
+class _ComposerStop(FinalResponseComposerError):
     def __init__(self, stop_condition: str) -> None:
         self.stop_condition = stop_condition
         super().__init__(
@@ -171,6 +172,17 @@ async def test_deadline_signal_records_generic_fallback_and_replay_reuses_it(
         tmp_path,
         stop_condition="deadline",
         request_id="deadline-request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_citation_contract_failure_records_one_durable_generic_fallback(
+    tmp_path,
+) -> None:
+    await _assert_stop_records_generic_fallback_and_replay_reuses_it(
+        tmp_path,
+        stop_condition="citation_contract_invalid",
+        request_id="citation-contract-request",
     )
 
 
