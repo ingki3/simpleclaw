@@ -158,6 +158,84 @@ def test_guard_requires_exact_requested_top_n_classifier() -> None:
 
 
 @pytest.mark.parametrize(
+    ("question", "content"),
+    [
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3순서는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3현재는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀보다 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀처럼 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀의 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3결과입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "결과와 현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀team은 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3clubs는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+    ],
+)
+def test_guard_rejects_invalid_top_n_classifier_slot(
+    question: str,
+    content: str,
+) -> None:
+    value = _input().model_copy(update={"question": question})
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
     "content",
     [
         "KT는 59, 삼성은 58, LG는 57이며 3입니다.",
