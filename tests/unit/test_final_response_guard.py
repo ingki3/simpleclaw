@@ -176,6 +176,34 @@ def test_guard_accepts_declared_question_scoped_state() -> None:
     assert result.accepted is True
 
 
+@pytest.mark.parametrize("content", ["READY.", "Ready."])
+def test_guard_rejects_case_changed_opaque_string_evidence(content: str) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-case-change",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-case-change-payload-hash",
+        public_facts={"data": {"state": "ready"}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+    assert result.code == "cited_value_not_rendered"
+
+
 @pytest.mark.parametrize(
     "content",
     [

@@ -33,9 +33,8 @@ def projected_scalar_literal_pattern(
     if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]+", rendered):
         return re.compile(
             rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])",
-            re.IGNORECASE,
         )
-    return re.compile(escaped, re.IGNORECASE)
+    return re.compile(escaped)
 
 
 def projected_scalar_is_visible(content: str, value: JsonValue) -> bool:
