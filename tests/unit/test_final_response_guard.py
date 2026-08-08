@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from simpleclaw.agent.composition_citations import canonicalize_draft_citations
@@ -16,12 +18,7 @@ from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 
 def _input() -> CompositionInputV1:
-    evidence_paths = tuple(
-        f"data.items[{index}].{field}"
-        for index in range(3)
-        for field in ("team", "wins")
-    )
-    return CompositionInputV1(
+    value = CompositionInputV1(
         request_id="request-1",
         question="현재 KBO 상위 3팀과 승수만 알려줘",
         locale="ko-KR",
@@ -41,14 +38,43 @@ def _input() -> CompositionInputV1:
                 ]
             }
         },
-        structural_evidence_relations=(
-            StructuralEvidenceRelationV1(
-                evidence_paths=evidence_paths,
-                identity_paths=tuple(
-                    f"data.items[{index}].team" for index in range(3)
+    )
+    root = value.composition_list_root
+    assert root is not None
+    projected: object = json.loads(value.public_facts_json)
+    for segment in root.split("."):
+        assert isinstance(projected, dict)
+        projected = projected[segment]
+    assert isinstance(projected, list) and projected
+    first = projected[0]
+    assert isinstance(first, dict)
+    identity_fields = tuple(
+        field for field, scalar in first.items() if isinstance(scalar, str)
+    )
+    measure_fields = tuple(
+        field
+        for field, scalar in first.items()
+        if isinstance(scalar, (int, float)) and not isinstance(scalar, bool)
+    )[-1:]
+    evidence_paths = tuple(
+        f"{root}[{index}].{field}"
+        for index in range(len(projected))
+        for field in (*identity_fields, *measure_fields)
+    )
+    identity_paths = tuple(
+        f"{root}[{index}].{field}"
+        for index in range(len(projected))
+        for field in identity_fields
+    )
+    return value.model_copy(
+        update={
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=evidence_paths,
+                    identity_paths=identity_paths,
                 ),
-            ),
-        ),
+            )
+        }
     )
 
 
@@ -75,6 +101,43 @@ def _neutral_empty_input(
         structural_evidence_relations=(
             StructuralEvidenceRelationV1(
                 evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+
+def _neutral_records_input(
+    *,
+    question: str = "Return the first 3 records with their values.",
+) -> CompositionInputV1:
+    evidence_paths = tuple(
+        f"records[{index}].{field}"
+        for index in range(3)
+        for field in ("name", "value")
+    )
+    return CompositionInputV1(
+        request_id="request-neutral-records",
+        question=question,
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="neutral-records-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [
+                {"name": "alpha", "value": 59},
+                {"name": "beta", "value": 58},
+                {"name": "gamma", "value": 57},
+            ]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=evidence_paths,
+                identity_paths=tuple(
+                    f"records[{index}].name" for index in range(3)
+                ),
             ),
         ),
     )
@@ -821,37 +884,25 @@ def test_guard_rejects_visible_uncited_scalar_for_every_json_scalar_type(
 
 
 def test_guard_accepts_grounded_materializer_response() -> None:
+    value = _neutral_records_input()
     result = guard_final_response(
-        _input(),
+        value,
         DraftResponseV1(
-            content="KT, 59, 삼성, 58, LG, 57.",
-            cited_paths=(
-                "data.items[0].team",
-                "data.items[0].wins",
-                "data.items[1].team",
-                "data.items[1].wins",
-                "data.items[2].team",
-                "data.items[2].wins",
-            ),
+            content="alpha, 59, beta, 58, gamma, 57.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
 
     assert result.accepted is True
 
 
-def test_guard_rejects_korean_particles_between_projected_fields() -> None:
+def test_guard_rejects_semantic_residual_after_projected_fields() -> None:
+    value = _neutral_records_input()
     result = guard_final_response(
-        _input(),
+        value,
         DraftResponseV1(
-            content="KT가 59, 삼성은 58, LG는 57입니다.",
-            cited_paths=(
-                "data.items[0].team",
-                "data.items[0].wins",
-                "data.items[1].team",
-                "data.items[1].wins",
-                "data.items[2].team",
-                "data.items[2].wins",
-            ),
+            content="alpha, 59, beta, 58, gamma, 57 respectively.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
 
@@ -878,25 +929,19 @@ def test_guard_rejects_question_grounded_units_in_generic_list() -> None:
 
 
 def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
-    cited_paths = (
-        "data.items[0].team",
-        "data.items[0].wins",
-        "data.items[1].team",
-        "data.items[1].wins",
-        "data.items[2].team",
-        "data.items[2].wins",
-    )
+    value = _neutral_records_input()
+    cited_paths = value.structural_evidence_relations[0].evidence_paths
     accepted = guard_final_response(
-        _input(),
+        value,
         DraftResponseV1(
-            content="KT, 59, 삼성, 58, LG, 57.",
+            content="alpha, 59, beta, 58, gamma, 57.",
             cited_paths=cited_paths,
         ),
     )
     rejected = guard_final_response(
-        _input(),
+        value,
         DraftResponseV1(
-            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57이며 3입니다.",
+            content="alpha, 59, beta, 58, gamma, 57, 3.",
             cited_paths=cited_paths,
         ),
     )
@@ -906,29 +951,20 @@ def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
 
 
 def test_guard_requires_exact_requested_top_n_classifier() -> None:
-    value = _input().model_copy(
-        update={"question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"}
-    )
-    cited_paths = (
-        "data.items[0].team",
-        "data.items[0].wins",
-        "data.items[1].team",
-        "data.items[1].wins",
-        "data.items[2].team",
-        "data.items[2].wins",
-    )
+    value = _neutral_records_input()
+    cited_paths = value.structural_evidence_relations[0].evidence_paths
 
     accepted = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT, 59, 삼성, 58, LG, 57.",
+            content="alpha, 59, beta, 58, gamma, 57.",
             cited_paths=cited_paths,
         ),
     )
     rejected = guard_final_response(
         value,
         DraftResponseV1(
-            content="상위 3승은 KT는 59, 삼성은 58, LG는 57입니다.",
+            content="first 3 values: alpha, 59, beta, 58, gamma, 57.",
             cited_paths=cited_paths,
         ),
     )
@@ -1413,16 +1449,12 @@ def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
 
 
 def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
+    value = _neutral_records_input(question="What is alpha's value?")
     number = guard_final_response(
-        _input().model_copy(
-            update={
-                "question": "KT 승수를 알려줘",
-                "structural_evidence_relations": (),
-            }
-        ),
+        value.model_copy(update={"structural_evidence_relations": ()}),
         DraftResponseV1(
-            content="KT는 99입니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha is 99.",
+            cited_paths=("records[0].name",),
         ),
     )
     scope = guard_final_response(
@@ -1488,20 +1520,19 @@ def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> 
         ),
     )
     ungrounded = guard_final_response(
-        _input().model_copy(
+        _neutral_records_input(question="Return the first record.").model_copy(
             update={
-                "question": "현재 상위 1팀",
                 "structural_evidence_relations": (
                     StructuralEvidenceRelationV1(
-                        evidence_paths=("data.items[0].team",),
-                        identity_paths=("data.items[0].team",),
+                        evidence_paths=("records[0].name",),
+                        identity_paths=("records[0].name",),
                     ),
-                ),
+                )
             }
         ),
         DraftResponseV1(
-            content="KT가 확실한 우승 후보입니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha is certainly preferred.",
+            cited_paths=("records[0].name",),
         ),
     )
     partial_top_n = guard_final_response(
@@ -1532,21 +1563,20 @@ def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> 
 
 
 def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(question="List the records.").model_copy(
         update={
-            "question": "팀 목록을 알려줘",
-            "unresolved_claims": ("동률 여부",),
+            "unresolved_claims": ("missing detail",),
             "structural_evidence_relations": (),
         }
     )
     certain = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT, 삼성, LG.",
+            content="alpha, beta, gamma.",
             cited_paths=(
-                "data.items[0].team",
-                "data.items[1].team",
-                "data.items[2].team",
+                "records[0].name",
+                "records[1].name",
+                "records[2].name",
             ),
             limitation_paths=("unresolved_claims[0]",),
         ),
@@ -1556,10 +1586,9 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
 
 
 def test_guard_rejects_semantic_limitation_language() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(question="List the records.").model_copy(
         update={
-            "question": "팀 목록을 알려줘",
-            "unresolved_claims": ("동률 여부",),
+            "unresolved_claims": ("missing detail",),
             "structural_evidence_relations": (),
         }
     )
@@ -1567,11 +1596,11 @@ def test_guard_rejects_semantic_limitation_language() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT, 삼성, LG입니다. 확인할 수 없습니다.",
+            content="alpha, beta, gamma. Cannot verify.",
             cited_paths=(
-                "data.items[0].team",
-                "data.items[1].team",
-                "data.items[2].team",
+                "records[0].name",
+                "records[1].name",
+                "records[2].name",
             ),
             limitation_paths=("unresolved_claims[0]",),
         ),
@@ -1597,13 +1626,12 @@ def test_guard_rejects_provider_diagnostics() -> None:
 
 
 def test_guard_rejects_unprojected_name_and_korean_address() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(question="Return the first record.").model_copy(
         update={
-            "question": "현재 상위 1팀",
             "structural_evidence_relations": (
                 StructuralEvidenceRelationV1(
-                    evidence_paths=("data.items[0].team",),
-                    identity_paths=("data.items[0].team",),
+                    evidence_paths=("records[0].name",),
+                    identity_paths=("records[0].name",),
                 ),
             ),
         }
@@ -1611,15 +1639,15 @@ def test_guard_rejects_unprojected_name_and_korean_address() -> None:
     name = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 상위 팀은 KT이며 두산도 포함됩니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha and delta.",
+            cited_paths=("records[0].name",),
         ),
     )
     address = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 상위 팀은 KT입니다. 주소는 서울시 강남구 역삼동입니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha. Address: unprojected location.",
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1630,27 +1658,27 @@ def test_guard_rejects_unprojected_name_and_korean_address() -> None:
 def test_guard_accepts_grounded_english_multiword_name() -> None:
     value = CompositionInputV1(
         request_id="request-english",
-        question="Who is the top 1 team?",
+        question="What is the first record?",
         locale="en-US",
         selected_route="recipe",
-        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
-        composition_list_root="items",
-        public_facts={"items": [{"team": "New York Yankees"}]},
+        composition_list_root="records",
+        public_facts={"records": [{"name": "alpha beta"}]},
         structural_evidence_relations=(
             StructuralEvidenceRelationV1(
-                evidence_paths=("items[0].team",),
-                identity_paths=("items[0].team",),
+                evidence_paths=("records[0].name",),
+                identity_paths=("records[0].name",),
             ),
         ),
     )
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="New York Yankees.",
-            cited_paths=("items[0].team",),
+            content="alpha beta.",
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1658,14 +1686,14 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
 
 
 def test_guard_requires_string_identity_for_each_top_n_item() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input().model_copy(
         update={
             "structural_evidence_relations": (
                 StructuralEvidenceRelationV1(
                     evidence_paths=(
-                        "data.items[0].rank",
-                        "data.items[1].rank",
-                        "data.items[2].rank",
+                        "records[0].value",
+                        "records[1].value",
+                        "records[2].value",
                     ),
                     identity_paths=(),
                 ),
@@ -1675,11 +1703,11 @@ def test_guard_requires_string_identity_for_each_top_n_item() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="상위 3팀을 확인했습니다.",
+            content="59, 58, 57.",
             cited_paths=(
-                "data.items[0].rank",
-                "data.items[1].rank",
-                "data.items[2].rank",
+                "records[0].value",
+                "records[1].value",
+                "records[2].value",
             ),
         ),
     )
@@ -1693,15 +1721,14 @@ def test_guard_requires_string_identity_for_each_top_n_item() -> None:
 )
 def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
     result = guard_final_response(
-        _input().model_copy(
+        _neutral_records_input(question="Return alpha.").model_copy(
             update={
-                "question": "KT를 알려줘",
                 "structural_evidence_relations": (),
             }
         ),
         DraftResponseV1(
-            content=f"KT입니다. {suffix}",
-            cited_paths=("data.items[0].team",),
+            content=f"alpha. {suffix}",
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1709,24 +1736,23 @@ def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
 
 
 def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(question="Return alpha.").model_copy(
         update={
-            "question": "KT를 알려줘",
             "structural_evidence_relations": (),
         }
     )
     symbol = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT입니다. 🔐🏠",
-            cited_paths=("data.items[0].team",),
+            content="alpha. 🔐🏠",
+            cited_paths=("records[0].name",),
         ),
     )
     exclusion = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT는 현재 순위 외 팀입니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha is outside the requested set.",
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1818,9 +1844,10 @@ def test_guard_rejects_question_prefix_fact_expansion(
 
 
 def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(
+        question="Is alpha outside the requested set?"
+    ).model_copy(
         update={
-            "question": "KT가 순위 밖의 팀 맞나요?",
             "structural_evidence_relations": (),
         }
     )
@@ -1828,8 +1855,8 @@ def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT는 순위 밖의 팀입니다.",
-            cited_paths=("data.items[0].team",),
+            content="alpha is outside the requested set.",
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1838,21 +1865,20 @@ def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
 
 @pytest.mark.parametrize(
     "content",
-    ["KT는 확인할 수 없습니다.", "KT is unverified."],
+    ["alpha cannot be verified.", "alpha is unverified."],
 )
 def test_guard_rejects_limitation_language_without_unresolved_claims(
     content: str,
 ) -> None:
     result = guard_final_response(
-        _input().model_copy(
+        _neutral_records_input(question="Return alpha.").model_copy(
             update={
-                "question": "KT를 알려줘",
                 "structural_evidence_relations": (),
             }
         ),
         DraftResponseV1(
             content=content,
-            cited_paths=("data.items[0].team",),
+            cited_paths=("records[0].name",),
         ),
     )
 
@@ -1904,37 +1930,37 @@ def test_guard_enforces_domain_neutral_count_only_scope() -> None:
     ],
 )
 def test_guard_enforces_english_compact_top_n_scope(question: str) -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input().model_copy(
         update={
             "question": question,
             "public_facts_json": (
-                '{"data":{"items":['
-                '{"team":"KT","wins":59},'
-                '{"team":"삼성","wins":58},'
-                '{"team":"LG","wins":57},'
-                '{"team":"두산","wins":56}'
-                "]}}"
+                '{"records":['
+                '{"name":"alpha","value":59},'
+                '{"name":"beta","value":58},'
+                '{"name":"gamma","value":57},'
+                '{"name":"delta","value":56}'
+                "]}"
             ),
         }
     )
     four_paths = tuple(
-        f"data.items[{index}].{field}"
+        f"records[{index}].{field}"
         for index in range(4)
-        for field in ("team", "wins")
+        for field in ("name", "value")
     )
     three_paths = four_paths[:6]
 
     rejected = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT는 59, 삼성은 58, LG는 57, 두산은 56입니다.",
+            content="alpha, 59, beta, 58, gamma, 57, delta, 56.",
             cited_paths=four_paths,
         ),
     )
     accepted = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT, 59, 삼성, 58, LG, 57.",
+            content="alpha, 59, beta, 58, gamma, 57.",
             cited_paths=three_paths,
         ),
     )
@@ -1983,33 +2009,34 @@ def test_guard_rejects_english_top_n_classifier_mismatch(content: str) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        "KT 57, LG 59입니다.",
-        "KT는 LG입니다.",
-        "KT is LG.",
+        "alpha, 57, beta, 59.",
+        "alpha is beta.",
+        "alpha equals beta.",
     ],
 )
 def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(
+        question="Return the first 2 records with their values."
+    ).model_copy(
         update={
-            "question": "현재 상위 2팀과 승수",
             "public_facts_json": (
-                '{"data":{"items":['
-                '{"team":"KT","wins":59},'
-                '{"team":"LG","wins":57}'
-                "]}}"
+                '{"records":['
+                '{"name":"alpha","value":59},'
+                '{"name":"beta","value":57}'
+                "]}"
             ),
         }
     )
     cited_paths = (
-        "data.items[0].team",
-        "data.items[1].team",
+        "records[0].name",
+        "records[1].name",
     )
     if "57" in content:
         cited_paths = (
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
+            "records[0].name",
+            "records[0].value",
+            "records[1].name",
+            "records[1].value",
         )
     value = value.model_copy(
         update={
@@ -2017,7 +2044,7 @@ def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
                 StructuralEvidenceRelationV1(
                     evidence_paths=cited_paths,
                     identity_paths=tuple(
-                        path for path in cited_paths if path.endswith(".team")
+                        path for path in cited_paths if path.endswith(".name")
                     ),
                 ),
             )
@@ -2035,34 +2062,35 @@ def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        "KT, LG. KT는 LG입니다.",
-        "KT 59, LG 57, KT 57, LG 59입니다.",
+        "alpha, beta. alpha is beta.",
+        "alpha, 59, beta, 57, alpha, 57, beta, 59.",
     ],
 )
 def test_guard_rejects_canonical_decoy_prefix_and_duplicate_tail(
     content: str,
 ) -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(
+        question="Return the first 2 records with their values."
+    ).model_copy(
         update={
-            "question": "현재 상위 2팀과 승수",
             "public_facts_json": (
-                '{"data":{"items":['
-                '{"team":"KT","wins":59},'
-                '{"team":"LG","wins":57}'
-                "]}}"
+                '{"records":['
+                '{"name":"alpha","value":59},'
+                '{"name":"beta","value":57}'
+                "]}"
             ),
         }
     )
     cited_paths = (
-        "data.items[0].team",
-        "data.items[1].team",
+        "records[0].name",
+        "records[1].name",
     )
     if "59" in content:
         cited_paths = (
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
+            "records[0].name",
+            "records[0].value",
+            "records[1].name",
+            "records[1].value",
         )
     value = value.model_copy(
         update={
@@ -2070,7 +2098,7 @@ def test_guard_rejects_canonical_decoy_prefix_and_duplicate_tail(
                 StructuralEvidenceRelationV1(
                     evidence_paths=cited_paths,
                     identity_paths=tuple(
-                        path for path in cited_paths if path.endswith(".team")
+                        path for path in cited_paths if path.endswith(".name")
                     ),
                 ),
             )
@@ -2093,17 +2121,16 @@ def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
     rendered_number: str,
 ) -> None:
     result = guard_final_response(
-        _input().model_copy(
+        _neutral_records_input(question="What is alpha's value?").model_copy(
             update={
-                "question": "KT 승수를 알려줘",
                 "structural_evidence_relations": (),
             }
         ),
         DraftResponseV1(
-            content=f"KT {rendered_number}입니다.",
+            content=f"alpha, {rendered_number}.",
             cited_paths=(
-                "data.items[0].team",
-                "data.items[0].wins",
+                "records[0].name",
+                "records[0].value",
             ),
         ),
     )
@@ -2112,27 +2139,26 @@ def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
 
 
 @pytest.mark.parametrize(
-    ("teams", "content"),
-    [(("K", "T"), "KT입니다."), (("KT", "LG"), "KTLG입니다.")],
+    ("names", "content"),
+    [(("a", "b"), "ab."), (("alpha", "beta"), "alphabeta.")],
 )
 def test_guard_requires_separator_between_cited_literals(
-    teams: tuple[str, str],
+    names: tuple[str, str],
     content: str,
 ) -> None:
-    value = _input().model_copy(
+    value = _neutral_records_input(question="Return the first 2 records.").model_copy(
         update={
-            "question": "현재 상위 2팀",
-            "composition_list_root": "items",
+            "composition_list_root": "records",
             "public_facts_json": (
-                '{"items":['
-                f'{{"team":"{teams[0]}"}},'
-                f'{{"team":"{teams[1]}"}}'
+                '{"records":['
+                f'{{"name":"{names[0]}"}},'
+                f'{{"name":"{names[1]}"}}'
                 "]}"
             ),
             "structural_evidence_relations": (
                 StructuralEvidenceRelationV1(
-                    evidence_paths=("items[0].team", "items[1].team"),
-                    identity_paths=("items[0].team", "items[1].team"),
+                    evidence_paths=("records[0].name", "records[1].name"),
+                    identity_paths=("records[0].name", "records[1].name"),
                 ),
             ),
         }
@@ -2142,7 +2168,7 @@ def test_guard_requires_separator_between_cited_literals(
         value,
         DraftResponseV1(
             content=content,
-            cited_paths=("items[0].team", "items[1].team"),
+            cited_paths=("records[0].name", "records[1].name"),
         ),
     )
 

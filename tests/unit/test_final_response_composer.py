@@ -42,11 +42,6 @@ def _persona_projection(text: str) -> CompositionPersonaProjection:
 
 
 def _input() -> CompositionInputV1:
-    evidence_paths = tuple(
-        f"data.items[{index}].{field}"
-        for index in range(3)
-        for field in ("rank", "team")
-    )
     return CompositionInputV1(
         request_id="request-1",
         question="현재 KBO 상위 3팀만 알려줘",
@@ -66,51 +61,40 @@ def _input() -> CompositionInputV1:
                 ]
             }
         },
-        structural_evidence_relations=(
-            StructuralEvidenceRelationV1(
-                evidence_paths=evidence_paths,
-                identity_paths=tuple(
-                    f"data.items[{index}].team" for index in range(3)
-                ),
-            ),
-        ),
     )
 
 
 def _production_shaped_input() -> CompositionInputV1:
     evidence_paths = tuple(
-        f"data.items[{index}].{field}"
+        f"records[{index}].{field}"
         for index in range(3)
-        for field in ("team", "wins")
+        for field in ("name", "value")
     )
-    return _input().model_copy(
-        update={
-            "question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
-            "public_facts_json": json.dumps(
-                {
-                    "data": {
-                        "season": {"title": "2026 KBO"},
-                        "date": "2026-08-08",
-                        "items": [
-                            {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
-                            {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
-                            {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
-                        ],
-                    }
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-            "structural_evidence_relations": (
-                StructuralEvidenceRelationV1(
-                    evidence_paths=evidence_paths,
-                    identity_paths=tuple(
-                        f"data.items[{index}].team" for index in range(3)
-                    ),
+    return CompositionInputV1(
+        request_id="request-production-shaped",
+        question="Return the first 3 records with their values.",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="production-shaped-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [
+                {"name": "alpha", "value": 60, "extra": 38},
+                {"name": "beta", "value": 58, "extra": 40},
+                {"name": "gamma", "value": 55, "extra": 43},
+            ]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=evidence_paths,
+                identity_paths=tuple(
+                    f"records[{index}].name" for index in range(3)
                 ),
             ),
-        }
+        ),
     )
 
 
@@ -190,22 +174,7 @@ def test_draft_schema_requires_at_least_one_cited_path() -> None:
 
 @pytest.mark.asyncio
 async def test_composer_schema_excludes_fact_paths_and_sentence_connectors() -> None:
-    value = _input().model_copy(
-        update={
-            "structural_evidence_relations": (
-                StructuralEvidenceRelationV1(
-                    evidence_paths=(
-                        "data.items[0].team",
-                        "data.items[1].team",
-                    ),
-                    identity_paths=(
-                        "data.items[0].team",
-                        "data.items[1].team",
-                    ),
-                ),
-            )
-        }
-    )
+    value = _neutral_render_input()
     send = AsyncMock(
         return_value=LLMResponse(text=_provider_plan_json())
     )
@@ -254,7 +223,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
         backend_name="fixture-backend",
     )
 
-    draft = await composer.compose(_input())
+    draft = await composer.compose(_neutral_render_input())
 
     request = send.await_args.args[0]
     assert send.await_count == 1
@@ -267,7 +236,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "persona is not factual" in request.system_prompt
     assert set(request.response_schema["properties"]) == {"separator"}
-    assert draft.content == "1, KT, 2, 삼성, 3, LG."
+    assert draft.content == "alpha, ready, beta, ready."
 
 
 @pytest.mark.asyncio
@@ -288,14 +257,14 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
         "  token_budget: 4096\n",
         encoding="utf-8",
     )
-    content = "LG, 60, 한화, 58, 롯데, 55."
+    content = "alpha, 60, beta, 58, gamma, 55."
     paths = [
-        "data.items[0].team",
-        "data.items[0].wins",
-        "data.items[1].team",
-        "data.items[1].wins",
-        "data.items[2].team",
-        "data.items[2].wins",
+        "records[0].name",
+        "records[0].value",
+        "records[1].name",
+        "records[1].value",
+        "records[2].name",
+        "records[2].value",
     ]
     send = AsyncMock(return_value=LLMResponse(text=_provider_plan_json()))
     composer = FinalResponseComposer(
@@ -385,7 +354,7 @@ async def test_composer_does_not_retry_invalid_structured_output() -> None:
     )
 
     with pytest.raises(RuntimeError, match="invalid"):
-        await composer.compose(_input())
+        await composer.compose(_neutral_render_input())
 
     assert send.await_count == 1
 
@@ -410,7 +379,7 @@ async def test_composer_does_not_retry_legacy_segment_plan() -> None:
     )
 
     with pytest.raises(RuntimeError, match="invalid"):
-        await composer.compose(_input())
+        await composer.compose(_neutral_render_input())
 
     assert send.await_count == 1
     request = send.await_args.args[0]
@@ -421,16 +390,16 @@ async def test_composer_does_not_retry_legacy_segment_plan() -> None:
 @pytest.mark.asyncio
 async def test_composer_rejects_provider_owned_reordered_paths_without_retry() -> None:
     provider_paths = [
-        "data.items[2].losses",
-        "data.date",
-        "data.items[0].wins",
-        "data.items[0].team",
-        "data.items[0].losses",
-        "data.items[1].team",
-        "data.items[1].wins",
-        "data.items[2].team",
-        "data.items[2].wins",
-        "data.season.title",
+        "records[2].extra",
+        "metadata.date",
+        "records[0].value",
+        "records[0].name",
+        "records[0].extra",
+        "records[1].name",
+        "records[1].value",
+        "records[2].name",
+        "records[2].value",
+        "metadata.title",
     ]
     send = AsyncMock(
         return_value=LLMResponse(
@@ -462,7 +431,7 @@ async def test_composer_rejects_provider_owned_missing_path_subset() -> None:
             text=json.dumps(
                 {
                     "separator": "comma_space",
-                    "paths": ["data.items[0].team"],
+                    "paths": ["records[0].name"],
                 }
             )
         )
@@ -596,7 +565,7 @@ def test_render_plan_contract_forbids_provider_authored_content() -> None:
         CompositionRenderPlanV1.model_validate(
             {
                 "separator": "comma_space",
-                "content": "alpha on 2026-08-08 is rank 1.",
+                "content": "alpha has state ready.",
             }
         )
 

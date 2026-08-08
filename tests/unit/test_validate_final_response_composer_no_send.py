@@ -149,16 +149,16 @@ def test_only_backend_does_not_implicitly_repeat_default() -> None:
     assert _bounded_backend_names(
         "default",
         (),
-        ("default", "gemini", "glm"),
-        only_backend="gemini",
-    ) == ("gemini",)
+        ("default", "alternate_a", "alternate_b"),
+        only_backend="alternate_a",
+    ) == ("alternate_a",)
 
     with pytest.raises(RuntimeError, match="conflict"):
         _bounded_backend_names(
             "default",
-            ("glm",),
-            ("default", "gemini", "glm"),
-            only_backend="gemini",
+            ("alternate_b",),
+            ("default", "alternate_a", "alternate_b"),
+            only_backend="alternate_a",
         )
 
 
