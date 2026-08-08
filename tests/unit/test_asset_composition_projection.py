@@ -286,6 +286,35 @@ def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
         )
 
 
+def test_descriptor_rejects_relation_condition_outside_projection() -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+
+    with pytest.raises(ValueError, match="condition must be composition-visible"):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="recipe.neutral-records.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="neutral-hidden-condition-hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "properties": {"phase": {}, "state": {}}
+                    }
+                },
+                "x-simpleclaw-composition-fields": ["data.state"],
+                "x-simpleclaw-structural-evidence-relations": [
+                    {
+                        "when": {"path": "data.phase", "equals": "ready"},
+                        "evidence_fields": ["data.state"],
+                    }
+                ],
+            },
+        )
+
+
 def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> None:
     owner = AssetRefV1(type="recipe", name="neutral-records")
     ref = ContractRefV1(
@@ -383,6 +412,154 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
             normalized_result=sparse,
             descriptor=descriptor,
         )
+
+    empty = NormalizedAssetResultV1(
+        invocation_id="neutral-empty-wildcard",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"phase": "ready", "records": []},
+        },
+        payload_hash="neutral-empty-wildcard-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    with pytest.raises(
+        CompositionProjectionError,
+        match="structural_evidence_empty",
+    ):
+        build_composition_input(
+            request_id="neutral-empty-wildcard-request",
+            question="What are the record values?",
+            locale="en-US",
+            selected_route="recipe",
+            normalized_result=empty,
+            descriptor=descriptor,
+        )
+
+    fallback_descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            **descriptor.json_schema,
+            "properties": {
+                "data": {
+                    "properties": {
+                        "phase": {},
+                        "state": {},
+                        "records": {
+                            "type": "array",
+                            "items": {"properties": {"value": {}}},
+                        },
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.phase",
+                "data.state",
+                "data.records[*].value",
+            ],
+            "x-simpleclaw-structural-evidence-relations": [
+                *descriptor.json_schema[
+                    "x-simpleclaw-structural-evidence-relations"
+                ],
+                {
+                    "when": {"path": "data.state", "equals": "absent"},
+                    "evidence_fields": ["data.state"],
+                },
+            ],
+        },
+    )
+    fallback_result = NormalizedAssetResultV1(
+        invocation_id="neutral-empty-wildcard-fallback",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"phase": "ready", "state": "absent", "records": []},
+        },
+        payload_hash="neutral-empty-wildcard-fallback-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+
+    fallback_projection = build_composition_input(
+        request_id="neutral-empty-wildcard-fallback-request",
+        question="Are records available?",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=fallback_result,
+        descriptor=fallback_descriptor,
+    )
+
+    assert fallback_projection.structural_evidence_relations[0].evidence_paths == (
+        "data.state",
+    )
+
+
+@pytest.mark.parametrize(
+    ("when_equals", "payload_value", "active"),
+    [
+        (True, 1, False),
+        (False, 0, False),
+        (True, True, True),
+        (None, None, True),
+        (1, 1, True),
+        (1, 1.0, True),
+        ("1", "1", True),
+    ],
+)
+def test_structural_relation_condition_uses_json_scalar_identity(
+    when_equals: object,
+    payload_value: object,
+    active: bool,
+) -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-condition")
+    ref = ContractRefV1(
+        contract_id="recipe.neutral-condition.output",
+        version="1",
+        owner_ref=owner,
+        schema_hash="neutral-condition-hash",
+    )
+    descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {"properties": {"condition": {}, "value": {}}}
+            },
+            "x-simpleclaw-composition-fields": ["data.condition", "data.value"],
+            "x-simpleclaw-structural-evidence-relations": [
+                {
+                    "when": {"path": "data.condition", "equals": when_equals},
+                    "evidence_fields": ["data.value"],
+                }
+            ],
+        },
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="neutral-condition",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"condition": payload_value, "value": "visible"},
+        },
+        payload_hash="neutral-condition-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+
+    projection = build_composition_input(
+        request_id="neutral-condition-request",
+        question="What is the value?",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=result,
+        descriptor=descriptor,
+    )
+
+    assert bool(projection.structural_evidence_relations) is active
 
 
 @pytest.mark.parametrize(

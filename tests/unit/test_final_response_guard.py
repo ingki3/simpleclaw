@@ -430,6 +430,39 @@ def test_structural_relation_accepts_visible_identity_evidence_in_source_order()
     assert result.accepted is True
 
 
+def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-mixed-roots",
+        question="What are the top 2 records?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="mixed-roots-payload-hash",
+        public_facts={
+            "left": [{"name": "alpha"}],
+            "right": [{"name": "unused"}, {"name": "beta"}],
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("left[0].name", "right[1].name"),
+                identity_paths=("left[0].name", "right[1].name"),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha, beta.",
+            cited_paths=("left[0].name", "right[1].name"),
+        ),
+    )
+
+    assert result.code == "requested_scope_mixed_list_roots"
+
+
 def test_structural_relation_rejects_required_evidence_subset() -> None:
     value = _neutral_top_two_relation()
     subset = DraftResponseV1(

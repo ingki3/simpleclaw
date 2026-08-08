@@ -38,6 +38,15 @@ class CompositionProjectionError(ValueError):
         super().__init__(code)
 
 
+def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
+    """JSON scalar type을 보존하되 int/float는 하나의 number type으로 비교한다."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, int | float) and isinstance(right, int | float):
+        return left == right
+    return type(left) is type(right) and left == right
+
+
 def _validate_value(value: Any) -> None:
     """Composer-visible 값에 non-JSON·비정상 수·과대 scalar가 없게 한다."""
     if value is None or isinstance(value, bool | int):
@@ -213,8 +222,13 @@ def _structural_evidence_relations(
     """활성 relation의 모든 evidence를 source index 순서로 구체화한다."""
     concrete = flatten_public_facts(public_facts)
     activated: list[StructuralEvidenceRelationV1] = []
+    empty_active_relation = False
     for declaration in descriptor.structural_evidence_relations:
-        if concrete.get(declaration.when_path, _MISSING) != declaration.when_equals:
+        condition_value = concrete.get(declaration.when_path, _MISSING)
+        if condition_value is _MISSING or not _same_json_scalar(
+            condition_value,
+            declaration.when_equals,
+        ):
             continue
         patterns = tuple(
             _concrete_path_pattern(field) for field in declaration.evidence_fields
@@ -248,6 +262,7 @@ def _structural_evidence_relations(
                 "projection.structural_evidence_not_renderable"
             )
         if any(not matches for matches in matches_by_pattern):
+            empty_active_relation = True
             continue
         concrete_order = {path: index for index, path in enumerate(concrete)}
         evidence_paths = tuple(
@@ -280,6 +295,8 @@ def _structural_evidence_relations(
                     identity_paths=identity_paths,
                 )
             )
+    if empty_active_relation and not activated:
+        raise CompositionProjectionError("projection.structural_evidence_empty")
     return tuple(activated)
 
 

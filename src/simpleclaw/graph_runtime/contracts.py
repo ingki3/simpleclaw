@@ -186,6 +186,10 @@ def validate_structural_evidence_relations(
             raise ValueError(
                 "structural evidence relation condition cannot use a wildcard"
             )
+        if when_path not in composition_fields:
+            raise ValueError(
+                "structural relation condition must be composition-visible"
+            )
         when_equals = when["equals"]
         if isinstance(when_equals, dict | list):
             raise TypeError(
