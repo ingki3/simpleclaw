@@ -177,4 +177,3 @@ async def test_cli_rejects_required_temperature_before_execution() -> None:
 
     with pytest.raises(LLMProviderError, match="required temperature"):
         await provider.send("", "hello", temperature=0.0)
-
