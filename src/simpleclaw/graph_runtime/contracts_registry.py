@@ -33,9 +33,9 @@ from .contracts import (
     ContractDescriptorV1,
     ContractRefV1,
     RetryPolicyV1,
+    validate_citable_paths,
     validate_composition_fields,
     validate_composition_list_root,
-    validate_citable_paths,
     validate_structural_evidence_relations,
 )
 
