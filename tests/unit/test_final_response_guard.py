@@ -250,6 +250,45 @@ def test_materializer_rejects_same_item_typed_literal_collision() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("facts", "fields", "content"),
+    [
+        ({"flag": True, "number": 1}, ("flag", "number"), "true, 1."),
+        ({"number": 1, "flag": True}, ("number", "flag"), "1, true."),
+        ({"number": 1, "text": "1"}, ("number", "text"), "1, 1."),
+        ({"flag": True, "text": "true"}, ("flag", "text"), "true, true."),
+        ({"missing": None, "state": "ready"}, ("missing", "state"), "null, ready."),
+    ],
+    ids=(
+        "bool-to-number",
+        "number-to-bool",
+        "number-to-same-literal-string",
+        "bool-to-same-literal-string",
+        "null-to-string",
+    ),
+)
+def test_guard_rejects_exact_layout_materializer_inadmissible_sequence(
+    facts: dict[str, object],
+    fields: tuple[str, ...],
+    content: str,
+) -> None:
+    value = _same_item_render_input(facts, fields)
+    draft = DraftResponseV1(
+        content=content,
+        cited_paths=tuple(f"records[0].{field}" for field in fields),
+    )
+
+    with pytest.raises(FinalResponseComposerError):
+        materialize_render_plan(
+            value,
+            CompositionRenderPlanV1(separator="comma_space"),
+        )
+    result = guard_final_response(value, draft)
+
+    assert result.accepted is False
+    assert result.code == "cited_value_order_mismatch"
+
+
 def test_guard_accepts_visible_exact_structural_evidence() -> None:
     result = guard_final_response(
         _neutral_empty_input(),
@@ -925,7 +964,7 @@ def test_relation_canonicalizer_preserves_malformed_provider_citation() -> None:
     )
 
 
-def test_visible_boolean_number_and_null_citations_are_never_dropped() -> None:
+def test_visible_boolean_number_and_null_citations_are_preserved_then_rejected() -> None:
     value = _neutral_empty_input().model_copy(
         update={
             "question": "What are the three values?",
@@ -941,7 +980,9 @@ def test_visible_boolean_number_and_null_citations_are_never_dropped() -> None:
     canonical = canonicalize_draft_citations(value, draft)
 
     assert canonical is draft
-    assert guard_final_response(value, canonical).accepted is True
+    result = guard_final_response(value, canonical)
+    assert result.accepted is False
+    assert result.code == "ungrounded_symbol"
 
 
 def test_guard_uses_type_strict_literal_ownership_for_bool_and_number() -> None:

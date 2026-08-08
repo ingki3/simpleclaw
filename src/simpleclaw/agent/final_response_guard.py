@@ -163,10 +163,27 @@ def _matches_exact_materializer_layout(
     cited_values: dict[str, JsonValue],
 ) -> bool:
     """동일 structural separator와 terminal period만으로 된 exact 출력을 승인한다."""
-    literals = tuple(_projected_scalar_literal(value) for value in cited_values.values())
+    values = tuple(cited_values.values())
+    if any(value is None for value in values):
+        return False
+    bool_numbers = {int(value) for value in values if isinstance(value, bool)}
+    numbers = {
+        value
+        for value in values
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+    if any(number in bool_numbers for number in numbers):
+        return False
+    literals = tuple(_projected_scalar_literal(value) for value in values)
     if not literals or any(literal is None for literal in literals):
         return False
     canonical_literals = tuple(literal for literal in literals if literal is not None)
+    rendered_by_literal: dict[str, JsonValue] = {}
+    for literal, value in zip(canonical_literals, values, strict=True):
+        prior = rendered_by_literal.get(literal)
+        if prior is not None and not _same_json_scalar(prior, value):
+            return False
+        rendered_by_literal[literal] = value
     return any(
         content == separator.join(canonical_literals) + "."
         for separator in (" ", ", ", " · ", "; ")
