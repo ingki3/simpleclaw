@@ -190,6 +190,112 @@ def test_guard_accepts_declared_question_scoped_state() -> None:
     assert result.accepted is True
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "ready is.",
+        "ready with.",
+        "ready respectively.",
+        "ready 입니다.",
+    ],
+)
+def test_guard_rejects_semantic_or_localized_residual_connector(
+    content: str,
+) -> None:
+    value = _neutral_empty_input().model_copy(
+        update={'public_facts_json': '{"data":{"state":"ready"}}'}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+def test_guard_rejects_question_force_after_single_scalar() -> None:
+    value = _neutral_empty_input().model_copy(
+        update={'public_facts_json': '{"data":{"state":"ready"}}'}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content="ready?", cited_paths=("data.state",)),
+    )
+
+    assert result.code == "ungrounded_symbol"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "ready waiting.",
+        "ready, waiting.",
+        "ready · waiting.",
+        "ready; waiting.",
+    ],
+)
+def test_guard_accepts_exact_materializer_structural_separators(
+    content: str,
+) -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            'public_facts_json': '{"data":{"state":"ready","phase":"waiting"}}',
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=("data.state", "data.phase"),
+                ),
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=("data.state", "data.phase"),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "ready, waiting; paused.",
+        "ready, waiting, paused..",
+        " ready, waiting, paused.",
+        "ready, waiting, paused. ",
+    ],
+)
+def test_guard_rejects_non_materializer_punctuation_sequence(content: str) -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            'public_facts_json': (
+                '{"data":{"state":"ready","phase":"waiting",'
+                '"mode":"paused"}}'
+            ),
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=("data.state", "data.phase", "data.mode"),
+                ),
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=("data.state", "data.phase", "data.mode"),
+        ),
+    )
+
+    assert result.code == "ungrounded_symbol"
+
+
 @pytest.mark.parametrize("content", ["READY.", "Ready."])
 def test_guard_rejects_case_changed_opaque_string_evidence(content: str) -> None:
     value = CompositionInputV1(
@@ -466,7 +572,7 @@ def test_structural_relation_accepts_visible_identity_evidence_in_source_order()
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="alpha ready, beta waiting.",
+            content="alpha, ready, beta, waiting.",
             cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
@@ -480,7 +586,7 @@ def test_structural_relation_accepts_repeated_scalar_materialized_per_identity()
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="alpha ready, beta ready.",
+            content="alpha, ready, beta, ready.",
             cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
@@ -524,7 +630,7 @@ def test_structural_relation_accepts_repeated_number_before_terminal_punctuation
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="alpha 60, beta 55, gamma 55.",
+            content="alpha, 60, beta, 55, gamma, 55.",
             cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
@@ -714,11 +820,11 @@ def test_guard_rejects_visible_uncited_scalar_for_every_json_scalar_type(
     assert result.code == expected_code
 
 
-def test_guard_accepts_grounded_natural_response() -> None:
+def test_guard_accepts_grounded_materializer_response() -> None:
     result = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="KT 59, 삼성 58, LG 57입니다.",
+            content="KT, 59, 삼성, 58, LG, 57.",
             cited_paths=(
                 "data.items[0].team",
                 "data.items[0].wins",
@@ -733,7 +839,7 @@ def test_guard_accepts_grounded_natural_response() -> None:
     assert result.accepted is True
 
 
-def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> None:
+def test_guard_rejects_korean_particles_between_projected_fields() -> None:
     result = guard_final_response(
         _input(),
         DraftResponseV1(
@@ -749,10 +855,10 @@ def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> N
         ),
     )
 
-    assert result.accepted is True
+    assert result.code == "ungrounded_text"
 
 
-def test_guard_accepts_consistent_question_grounded_units_in_generic_list() -> None:
+def test_guard_rejects_question_grounded_units_in_generic_list() -> None:
     result = guard_final_response(
         _input(),
         DraftResponseV1(
@@ -768,7 +874,7 @@ def test_guard_accepts_consistent_question_grounded_units_in_generic_list() -> N
         ),
     )
 
-    assert result.accepted is True
+    assert result.code == "ungrounded_text"
 
 
 def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
@@ -783,7 +889,7 @@ def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
     accepted = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="상위 3팀은 KT 59, 삼성 58, LG 57입니다.",
+            content="KT, 59, 삼성, 58, LG, 57.",
             cited_paths=cited_paths,
         ),
     )
@@ -815,7 +921,7 @@ def test_guard_requires_exact_requested_top_n_classifier() -> None:
     accepted = guard_final_response(
         value,
         DraftResponseV1(
-            content="상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
+            content="KT, 59, 삼성, 58, LG, 57.",
             cited_paths=cited_paths,
         ),
     )
@@ -1051,7 +1157,7 @@ def test_guard_accepts_root_scalar_label_value_sequence() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="A는 3, B는 2입니다.",
+            content="A, 3, B, 2.",
             cited_paths=(
                 "first_label",
                 "first_value",
@@ -1089,10 +1195,10 @@ def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
         ),
     )
 
-    assert result.code == "cited_value_order_mismatch"
+    assert result.code == "ungrounded_text"
 
 
-def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> None:
+def test_guard_accepts_domain_neutral_label_value_materializer_sequence() -> None:
     value = _input().model_copy(
         update={
             "question": "두 항목의 개수를 알려줘",
@@ -1109,7 +1215,7 @@ def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> N
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="A는 3개, B는 2개입니다.",
+            content="A, 3, B, 2.",
             cited_paths=(
                 "records[0].label",
                 "records[0].value",
@@ -1436,7 +1542,7 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     certain = guard_final_response(
         value,
         DraftResponseV1(
-            content="KT, 삼성, LG입니다.",
+            content="KT, 삼성, LG.",
             cited_paths=(
                 "data.items[0].team",
                 "data.items[1].team",
@@ -1449,7 +1555,7 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     assert certain.code == "limitation_not_rendered"
 
 
-def test_guard_accepts_limitation_language_for_declared_unresolved_claim() -> None:
+def test_guard_rejects_semantic_limitation_language() -> None:
     value = _input().model_copy(
         update={
             "question": "팀 목록을 알려줘",
@@ -1471,7 +1577,7 @@ def test_guard_accepts_limitation_language_for_declared_unresolved_claim() -> No
         ),
     )
 
-    assert result.accepted is True
+    assert result.code == "ungrounded_text"
 
 
 def test_guard_rejects_provider_diagnostics() -> None:
@@ -1643,7 +1749,7 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="USD 200 Apple입니다.",
+            content="USD, 200, Apple.",
             cited_paths=("currency", "price", "symbol"),
         ),
     )
@@ -1659,7 +1765,7 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
     status_result = guard_final_response(
         status_value,
         DraftResponseV1(
-            content="정상입니다.",
+            content="정상.",
             cited_paths=("status",),
         ),
     )
@@ -1828,7 +1934,7 @@ def test_guard_enforces_english_compact_top_n_scope(question: str) -> None:
     accepted = guard_final_response(
         value,
         DraftResponseV1(
-            content="first 3 teams: KT는 59, 삼성은 58, LG는 57입니다.",
+            content="KT, 59, 삼성, 58, LG, 57.",
             cited_paths=three_paths,
         ),
     )

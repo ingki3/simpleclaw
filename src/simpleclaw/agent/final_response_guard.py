@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -107,35 +108,6 @@ _KOREAN_SUFFIXES = (
     "에",
     "야",
 )
-_SAFE_CONNECTOR_WORDS = frozenset(
-    {
-        "각각",
-        "이며",
-        "이고",
-        "입니다",
-        "은",
-        "는",
-        "이",
-        "가",
-        "을",
-        "를",
-        "와",
-        "과",
-        "도",
-        "로",
-        "에",
-        "the",
-        "a",
-        "an",
-        "and",
-        "is",
-        "are",
-        "was",
-        "were",
-        "with",
-        "respectively",
-    }
-)
 _LIMITATION_WORDS = frozenset(
     {
         "불확실",
@@ -169,6 +141,35 @@ def _guard_projected_scalar_literal_pattern(
         return None
     return re.compile(
         rf"(?<![\d.+%-]){re.escape(rendered)}(?![\d+%-]|\.\d)"
+    )
+
+
+def _projected_scalar_literal(value: JsonValue) -> str | None:
+    """중앙 materializer와 동일한 canonical scalar literal을 만든다."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return value if value and value == value.strip() else None
+    if isinstance(value, int | float):
+        rendered = str(value)
+        return rendered if rendered and rendered == rendered.strip() else None
+    return None
+
+
+def _matches_exact_materializer_layout(
+    content: str,
+    cited_values: dict[str, JsonValue],
+) -> bool:
+    """동일 structural separator와 terminal period만으로 된 exact 출력을 승인한다."""
+    literals = tuple(_projected_scalar_literal(value) for value in cited_values.values())
+    if not literals or any(literal is None for literal in literals):
+        return False
+    canonical_literals = tuple(literal for literal in literals if literal is not None)
+    return any(
+        content == separator.join(canonical_literals) + "."
+        for separator in (" ", ", ", " · ", "; ")
     )
 
 
@@ -436,8 +437,6 @@ def _list_boundary_unit(
         or not isinstance(previous_value, int | float)
         or isinstance(previous_value, bool)
         or not unit
-        or unit.casefold() in _SAFE_CONNECTOR_WORDS
-        or _word_stem(unit).casefold() in _SAFE_CONNECTOR_WORDS
     ):
         return None
     if unit_match.start() != 0 or unit.casefold() not in question.casefold():
@@ -623,7 +622,7 @@ def guard_final_response(
         value.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}
     ):
         return _rejected("unsafe_result")
-    content = draft.content.strip()
+    content = draft.content
     if not content or len(content) > 3_500:
         return _rejected("invalid_length")
     lowered = content.casefold()
@@ -665,6 +664,8 @@ def guard_final_response(
             and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
+    if content != content.strip():
+        return _rejected("ungrounded_symbol")
     if top_n is not None:
         cited_list_roots = {
             location[0]
@@ -723,6 +724,18 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
+    if not _matches_exact_materializer_layout(content, cited_values):
+        lexical_residual = _remove_cited_literals(content, cited_values)
+        symbol_residual = _WORD_RE.sub(
+            "",
+            _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
+        )
+        if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+            return _rejected("ungrounded_symbol")
+        if _WORD_RE.search(_URL_RE.sub("", lexical_residual)):
+            return _rejected("ungrounded_text")
+        return _rejected("ungrounded_symbol")
+
     scope_phrase_spans = _scope_phrase_spans(
         content,
         question=value.question,
@@ -736,9 +749,7 @@ def guard_final_response(
         _blank_spans(content, allowed_lexical_spans),
         cited_values,
     )
-    allowed_words = _SAFE_CONNECTOR_WORDS
-    if value.unresolved_claims:
-        allowed_words = allowed_words | _LIMITATION_WORDS
+    allowed_words = _LIMITATION_WORDS if value.unresolved_claims else frozenset()
     for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()

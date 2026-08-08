@@ -339,7 +339,7 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
     value, result = _values("record-deadline-request")
     db_path = tmp_path / "record-deadline.sqlite3"
     accepted_draft = DraftResponseV1(
-        content="KBO · KT · 59",
+        content="KBO · KT · 59.",
         cited_paths=(
             "data.category",
             "data.items[0].team",
@@ -552,7 +552,7 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
 ) -> None:
     value, result = _values("canonicalized-replay-request")
     provider_draft = DraftResponseV1(
-        content="KBO, KT, 59",
+        content="KBO, KT, 59.",
         cited_paths=(
             "data.category",
             "data.items[0].team",
