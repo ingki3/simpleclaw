@@ -16,8 +16,8 @@ from simpleclaw.persona.parser import parse_markdown
 from simpleclaw.persona.resolver import resolve_persona_files
 
 __all__ = [
-    "FileType",
     "CompositionPersonaProjection",
+    "FileType",
     "PersonaFile",
     "PromptAssembly",
     "Section",
