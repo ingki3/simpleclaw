@@ -1,13 +1,13 @@
 name: sports-live
-description: "Naver structured sports API로 라이브 점수·종료 경기 결과·팀/선수 순위를 KST 신선도와 출처 URL이 있는 typed evidence로 검증"
-trigger: "스포츠 라이브, 실시간 경기, 현재 결과, 어제 경기, 야구, 축구, 농구, 배구, 골프, LPGA, 리더보드, LoL, LCK, 순위, standings, ranking"
+description: "Naver structured sports API로 당일 일정·라이브 점수·종료 경기 결과·팀/선수 순위를 KST 신선도와 출처 URL이 있는 typed evidence로 검증"
+trigger: "스포츠 일정, 오늘 경기, 경기 있어, 스포츠 라이브, 실시간 경기, 현재 결과, 어제 경기, 야구, 축구, 농구, 배구, 골프, LPGA, 리더보드, LoL, LCK, 순위, standings, ranking"
 
 skills:
   - naver-sports-skill
 
 capability:
   domains: [sports]
-  intents: [current_result, completed_result, live_score, standings, ranking, leaderboard]
+  intents: [event_schedule, upcoming_event, current_result, completed_result, live_score, standings, ranking, leaderboard]
   read_only: true
   side_effects: false
   freshness_sensitive: true
@@ -46,6 +46,8 @@ output_contract:
       data:
         properties:
           mode: {}
+          status: {}
+          empty_reason: {}
           category: {}
           season:
             properties:
@@ -60,6 +62,8 @@ output_contract:
             type: array
             items:
               properties:
+                game_id: {}
+                category: {}
                 rank: {}
                 team: {}
                 name: {}
@@ -79,6 +83,7 @@ output_contract:
                     home:
                       properties:
                         name: {}
+                started_at: {}
                 score:
                   properties:
                     away: {}
@@ -97,12 +102,16 @@ output_contract:
                 items: {}
     x-simpleclaw-composition-fields:
       - data.mode
+      - data.status
+      - data.empty_reason
       - data.category
       - data.season.code
       - data.season.title
       - data.date
       - data.fetched_at
       - data.freshness.as_of
+      - data.items[*].game_id
+      - data.items[*].category
       - data.items[*].rank
       - data.items[*].team
       - data.items[*].name
@@ -116,6 +125,7 @@ output_contract:
       - data.items[*].status_code
       - data.items[*].participants.away.name
       - data.items[*].participants.home.name
+      - data.items[*].started_at
       - data.items[*].score.away
       - data.items[*].score.home
       - data.items[*].winner
@@ -157,11 +167,11 @@ parameters:
     required: false
     default: "kbo"
   - name: mode
-    description: "수동 실행 모드: auto, live, results, standings"
+    description: "수동 실행 모드: auto, schedule, live, results, standings"
     required: false
     default: "auto"
   - name: date
-    description: "수동 live/results 조회 날짜: today 또는 YYYY-MM-DD (KST)"
+    description: "수동 schedule/live/results 조회 날짜: today 또는 YYYY-MM-DD (KST)"
     required: false
     default: "today"
   - name: season
@@ -196,15 +206,16 @@ instructions: |
 
   helper args는 질문 또는 수동 입력을 recipe 내부에서 다음 형태로 정규화한다.
 
-  먼저 질문을 `live|completed_result|standings` typed intent로 정규화한다.
+  먼저 질문을 `schedule|live|completed_result|standings` typed intent로 정규화한다.
 
+  - 오늘·당일 경기의 존재/일정/시각 질문은 `schedule`
   - 현재 진행 중·실시간·라이브 점수는 `live`
   - 과거 날짜·어제·종료·최종 경기 점수/승패는 `completed_result`
   - 순위·랭킹·standings·leaderboard는 `standings`
 
   helper invocation은 typed intent를 다음 registered mode로만 전달한다.
 
-  `--mode <live|results|standings> --category <category> --date <today|YYYY-MM-DD> [--season <season>] --limit <1..20> --json`
+  `--mode <schedule|live|results|standings> --category <category> --date <today|YYYY-MM-DD> [--season <season>] --limit <1..20> --json`
 
   season을 trim한 뒤 `auto`이면 active/latest enabled season 자동 선택을 뜻하므로 helper
   args에서 `--season` 자체를 생략한다. `auto`가 아닌 값만 명시 provider season으로
@@ -215,15 +226,18 @@ instructions: |
   volleyball/kovo/wkovo, general/atp/wta/ufc, golf/pga/lpga/kpga/klpga,
   esports/lol/lck 별칭을 해석한다. 어제/오늘은 실행 시각 KST 기준 날짜로 만든다.
   미지원 명시 값은 KBO로 대체하지 않는다. mode가 auto이면 위 typed intent를 먼저
-  결정한 뒤 `live→live`, `completed_result→results`, `standings→standings`로 매핑한다.
+  결정한 뒤 `schedule→schedule`, `live→live`, `completed_result→results`,
+  `standings→standings`로 매핑한다. `오늘 경기 있어?`·`오늘 프로야구 하냐?`는
+  schedule이고, `지금 경기 중이야?`는 live다.
   `STARTED` empty를 과거 종료 경기 부재로 해석하거나 동일 asset/signature로 재시도하지
   않는다.
 
   helper stdout JSON의 `ok`, `items`, `error.retryable`을 엄격히 구분한다.
 
   - ok=true + items 존재: completed
-  - ok=true + items=[]: live는 live empty, results는 completed-result empty,
-    명시 대상/순위 부재는 not_found
+  - ok=true + status=empty + items=[]: `empty_reason`을 그대로 보존한다.
+    schedule은 `no_scheduled_events`, live는 `no_live_events`, results는
+    `no_completed_results`, standings는 `no_standings`다.
   - ok=false + retryable=true: failed_retryable
   - ok=false + retryable=false 또는 schema/JSON 오류: failed_terminal
 

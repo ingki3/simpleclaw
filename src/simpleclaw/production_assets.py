@@ -425,3 +425,37 @@ def install_runtime_asset(
             _remove_owned_tree(staged)
         raise
     return destination, resolved
+
+
+def verify_runtime_asset_installation(
+    asset: str | Path,
+    *,
+    destination_parent: Path | None = None,
+    config_path: Path | None = None,
+    assets_root: Path | None = None,
+) -> tuple[Path, ResolvedRuntimeAsset]:
+    """설치 destination이 canonical manifest tree와 exact match인지 검증한다."""
+    resolved = resolve_runtime_asset(asset, assets_root=assets_root)
+    manifest = resolved.manifest
+    parent = (
+        destination_parent.expanduser()
+        if destination_parent is not None
+        else _configured_parent(manifest, config_path=config_path)
+    )
+    destination = parent / manifest.name
+    expected = _expected_tree_state(
+        {
+            declared.destination.as_posix(): (
+                content,
+                0o755 if declared.executable else 0o644,
+            )
+            for declared, content in zip(
+                manifest.files,
+                resolved.source_bytes,
+                strict=True,
+            )
+        }
+    )
+    if _tree_state(destination) != expected:
+        raise ValueError(f"runtime asset installation drift: {manifest.ref}")
+    return destination, resolved

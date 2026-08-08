@@ -37,6 +37,84 @@ def _input() -> CompositionInputV1:
     )
 
 
+def _empty_input(reason: str = "no_scheduled_events") -> CompositionInputV1:
+    return CompositionInputV1(
+        request_id="request-empty",
+        question="오늘 프로야구 하냐?",
+        locale="ko-KR",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="empty-payload-hash",
+        public_facts={
+            "data": {
+                "mode": "schedule",
+                "status": "empty",
+                "empty_reason": reason,
+                "items": [],
+            }
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("reason", "content"),
+    [
+        ("no_scheduled_events", "예정된 경기가 없습니다."),
+        ("no_live_events", "현재 진행 중인 경기가 없습니다."),
+        ("no_completed_results", "확정된 경기 결과가 없습니다."),
+        ("no_standings", "순위 데이터가 없습니다."),
+    ],
+)
+def test_guard_accepts_domain_neutral_typed_empty_meaning(
+    reason: str,
+    content: str,
+) -> None:
+    result = guard_final_response(
+        _empty_input(reason),
+        DraftResponseV1(
+            content=content,
+            cited_paths=("data.status", "data.empty_reason"),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "두산 경기가 없습니다.",
+        "18시 경기가 없습니다.",
+        "5경기가 없습니다.",
+        "비 때문에 경기가 없습니다.",
+    ],
+)
+def test_guard_rejects_fabricated_typed_empty_details(content: str) -> None:
+    result = guard_final_response(
+        _empty_input(),
+        DraftResponseV1(
+            content=content,
+            cited_paths=("data.status", "data.empty_reason"),
+        ),
+    )
+
+    assert result.code == "typed_empty_ungrounded_fact"
+
+
+def test_guard_requires_exact_typed_empty_semantic_citations() -> None:
+    result = guard_final_response(
+        _empty_input(),
+        DraftResponseV1(
+            content="예정된 경기가 없습니다.",
+            cited_paths=("data.empty_reason",),
+        ),
+    )
+
+    assert result.code == "typed_empty_citations_required"
+
+
 def test_guard_accepts_grounded_natural_response() -> None:
     result = guard_final_response(
         _input(),

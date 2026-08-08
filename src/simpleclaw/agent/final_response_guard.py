@@ -167,6 +167,49 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
+_EMPTY_REASON_WORDS = {
+    "no_scheduled_events": frozenset(
+        {"예정된", "경기", "없습니다", "no", "events", "are", "scheduled"}
+    ),
+    "no_live_events": frozenset(
+        {
+            "현재",
+            "진행",
+            "중인",
+            "경기",
+            "없습니다",
+            "no",
+            "events",
+            "are",
+            "live",
+            "currently",
+        }
+    ),
+    "no_completed_results": frozenset(
+        {
+            "확정된",
+            "경기",
+            "결과",
+            "없습니다",
+            "no",
+            "completed",
+            "results",
+            "are",
+            "available",
+        }
+    ),
+    "no_standings": frozenset(
+        {
+            "순위",
+            "데이터",
+            "없습니다",
+            "no",
+            "standings",
+            "are",
+            "available",
+        }
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -582,6 +625,52 @@ def _cited_literal_order_error(
     return (None, tuple(allowed_unit_spans))
 
 
+def _typed_empty_paths(
+    concrete: dict[str, JsonValue],
+) -> tuple[str, str, str] | None:
+    """동일 payload object의 status/reason/empty items 경로를 찾는다."""
+    for status_path, status in concrete.items():
+        if status != "empty" or not status_path.endswith("status"):
+            continue
+        prefix = status_path.removesuffix("status")
+        reason_path = f"{prefix}empty_reason"
+        items_path = f"{prefix}items"
+        reason = concrete.get(reason_path)
+        if (
+            isinstance(reason, str)
+            and reason in _EMPTY_REASON_WORDS
+            and concrete.get(items_path) == []
+        ):
+            return status_path, reason_path, str(reason)
+    return None
+
+
+def _guard_typed_empty_response(
+    value: CompositionInputV1,
+    draft: DraftResponseV1,
+    empty_paths: tuple[str, str, str],
+) -> GuardResult:
+    """Stable empty enum의 제한된 자연어 의미만 domain-neutral하게 허용한다."""
+    status_path, reason_path, reason = empty_paths
+    if tuple(draft.cited_paths) != (status_path, reason_path):
+        return _rejected("typed_empty_citations_required")
+    if draft.limitation_paths or value.unresolved_claims:
+        return _rejected("typed_empty_unresolved")
+    content = draft.content.strip()
+    if _URL_RE.search(content) or _NUMBER_RE.search(content):
+        return _rejected("typed_empty_ungrounded_fact")
+    allowed_words = _EMPTY_REASON_WORDS[reason] | _SAFE_CONNECTOR_WORDS
+    for token in _WORD_RE.findall(content):
+        folded = token.casefold()
+        stem = _word_stem(token).casefold()
+        if folded not in allowed_words and stem not in allowed_words:
+            return _rejected("typed_empty_ungrounded_fact")
+    symbol_residual = _WORD_RE.sub("", content)
+    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+        return _rejected("ungrounded_symbol")
+    return GuardResult(accepted=True, code="accepted")
+
+
 def guard_final_response(
     value: CompositionInputV1,
     draft: DraftResponseV1,
@@ -607,6 +696,9 @@ def guard_final_response(
         return _rejected("citations_required")
     if len(draft.cited_paths) != len(set(draft.cited_paths)):
         return _rejected("duplicate_citation")
+    empty_paths = _typed_empty_paths(concrete)
+    if empty_paths is not None:
+        return _guard_typed_empty_response(value, draft, empty_paths)
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()

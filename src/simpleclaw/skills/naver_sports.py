@@ -1,8 +1,9 @@
-"""Fetch bounded live scores, completed results, and standings from Naver.
+"""Fetch bounded schedules, live scores, completed results, and standings.
 
-``live``와 ``results``를 provider의 구조화 상태 enum으로 분리한다. 전자는
-``STARTED``만, 후자는 ``ENDED``/``RESULT``만 수용하며 취소·중단·연기·알 수 없는
-상태를 확정 결과로 승격하지 않는다.
+``schedule``/``live``/``results``를 provider의 구조화 상태 enum으로 분리한다.
+``schedule``은 당일 예정·진행·종료 상태를 보존하고, ``live``는 ``STARTED``만,
+``results``는 ``ENDED``/``RESULT``만 수용한다. 취소·중단·연기·알 수 없는 상태를
+확정 결과로 승격하지 않는다.
 """
 
 from __future__ import annotations
@@ -321,6 +322,7 @@ def _base_payload(
             "urls": urls,
         },
         "mode": mode,
+        "status": "ok" if ok else "error",
         "category": category,
         "season": None,
         "date": selected_date,
@@ -777,6 +779,58 @@ def _tennis_game(game: dict[str, Any], source_url: str) -> dict[str, Any] | None
     return item
 
 
+def _schedule_event_state(game: dict[str, Any]) -> str:
+    """Provider flag/enum을 presentation 없는 stable schedule state로 만든다."""
+    if game.get("cancel") is True:
+        return "cancelled"
+    if game.get("suspended") is True:
+        return "suspended"
+    status_code = str(game.get("statusCode") or "")
+    if status_code in {"POSTPONED", "DELAYED"}:
+        return "postponed"
+    if status_code == "BEFORE":
+        return "scheduled"
+    if status_code == "STARTED":
+        return "live"
+    if status_code in {"ENDED", "RESULT"}:
+        return "final"
+    return "unknown"
+
+
+def _scheduled_game(
+    game: dict[str, Any],
+    source_url: str,
+) -> dict[str, Any] | None:
+    """Same-day conventional event의 typed state/fact/provenance만 투영한다."""
+    home = str(game.get("homeTeamName") or "").strip()
+    away = str(game.get("awayTeamName") or "").strip()
+    game_id = str(game.get("gameId") or "").strip()
+    if not game_id or not home or not away:
+        return None
+    status_code = str(game.get("statusCode") or "UNKNOWN")
+    item: dict[str, Any] = {
+        "game_id": game_id,
+        "category": str(game.get("categoryId") or ""),
+        "category_name": game.get("categoryName"),
+        "event_state": _schedule_event_state(game),
+        "status": game.get("statusInfo") or status_code,
+        "status_code": status_code,
+        "date": str(game.get("gameDate") or ""),
+        "started_at": _as_kst_iso(game.get("gameDateTime")),
+        "participants": {
+            "away": {"name": away},
+            "home": {"name": home},
+        },
+        "source_url": source_url,
+        "fetched_at": datetime.now(KST).isoformat(timespec="seconds"),
+    }
+    away_score = game.get("awayTeamScore")
+    home_score = game.get("homeTeamScore")
+    if away_score not in (None, "") and home_score not in (None, ""):
+        item["score"] = {"away": away_score, "home": home_score}
+    return item
+
+
 def _sports_live(
     category: str,
     selected_date: str,
@@ -817,6 +871,60 @@ def _sports_live(
         if len(items) >= limit:
             break
     return items, url
+
+
+def _sports_schedule(
+    category: str,
+    selected_date: str,
+    limit: int,
+    client: Any,
+) -> list[dict[str, Any]]:
+    """Same-day BEFORE/STARTED/ENDED/RESULT events를 한 typed 목록으로 합친다."""
+    allowed = set(_allowed_ids(category))
+    collected: list[dict[str, Any]] = []
+    seen_games: set[str] = set()
+    for requested_status in ("BEFORE", "STARTED", "ENDED", "RESULT"):
+        params = _schedule_params(
+            category,
+            selected_date,
+            limit,
+            status_code=requested_status,
+        )
+        url = f"{SPORTS_BASE}/schedule/games?{urlencode(params)}"
+        games = _sports_result(client.get_json(url)).get("games")
+        if not isinstance(games, list):
+            raise SportsError(
+                "SCHEMA_ERROR",
+                "네이버 스포츠 일정 응답의 games 배열이 없습니다.",
+                retryable=True,
+            )
+        for game in games:
+            if not isinstance(game, dict):
+                raise SportsError(
+                    "SCHEMA_ERROR",
+                    "네이버 스포츠 일정 game 형식이 올바르지 않습니다.",
+                    retryable=True,
+                )
+            game_id = str(game.get("gameId") or "")
+            if (
+                not game_id
+                or game_id in seen_games
+                or str(game.get("gameDate") or "") != selected_date
+                or str(game.get("categoryId") or "") not in allowed
+            ):
+                continue
+            item = _scheduled_game(game, url)
+            if item is None:
+                continue
+            seen_games.add(game_id)
+            collected.append(item)
+    collected.sort(
+        key=lambda item: (
+            str(item.get("started_at") or ""),
+            str(item.get("game_id") or ""),
+        )
+    )
+    return collected[:limit]
 
 
 def _sports_results(
@@ -1405,10 +1513,10 @@ def run(
     safe_category = raw_category.strip().lower()
     safe_date = str(date or "today")
     try:
-        if safe_mode not in {"live", "results", "standings"}:
+        if safe_mode not in {"schedule", "live", "results", "standings"}:
             raise SportsError(
                 "INVALID_ARGUMENT",
-                "mode는 live, results 또는 standings여야 합니다.",
+                "mode는 schedule, live, results 또는 standings여야 합니다.",
             )
         selected_category = _canonical_category(raw_category)
         selected_date = _normalize_date(date)
@@ -1421,7 +1529,25 @@ def run(
             selected_date=selected_date,
             client=client,
         )
-        if safe_mode == "live":
+        if safe_mode == "schedule":
+            if selected_category == "esports" or (
+                selected_category == "golf" or selected_category in _GOLF_IDS
+            ):
+                raise SportsError(
+                    "INVALID_ARGUMENT",
+                    "schedule mode는 구조화된 conventional schedule category만 지원합니다.",
+                )
+            items = _sports_schedule(
+                selected_category,
+                selected_date,
+                selected_limit,
+                client,
+            )
+            payload["items"] = items
+            if not items:
+                payload["status"] = "empty"
+                payload["empty_reason"] = "no_scheduled_events"
+        elif safe_mode == "live":
             if selected_category == "esports":
                 items = _esports_live(selected_date, selected_limit, client)
             elif selected_category == "golf" or selected_category in _GOLF_IDS:
@@ -1440,9 +1566,8 @@ def run(
                 )
             payload["items"] = items
             if not items:
-                payload["message"] = (
-                    "정상 조회했지만 엄격한 STARTED 기준의 라이브 경기가 없습니다."
-                )
+                payload["status"] = "empty"
+                payload["empty_reason"] = "no_live_events"
         elif safe_mode == "results":
             if selected_category == "esports" or (
                 selected_category == "golf" or selected_category in _GOLF_IDS
@@ -1464,9 +1589,8 @@ def run(
                     f"확정 결과가 아닌 이벤트 {len(excluded)}건을 제외했습니다."
                 )
             if not items:
-                payload["message"] = (
-                    "정상 조회했지만 ENDED/RESULT 기준의 확정 경기 결과가 없습니다."
-                )
+                payload["status"] = "empty"
+                payload["empty_reason"] = "no_completed_results"
         elif selected_category == "esports":
             selected_season, items = _lck_standings(
                 season, selected_limit, client
@@ -1488,9 +1612,8 @@ def run(
                     f"{selected_category} 기본 순위 리그로 {ranking_category}를 선택했습니다."
                 )
             if not items:
-                payload["message"] = (
-                    "정상 조회했지만 선택한 시즌의 순위 데이터가 비어 있습니다."
-                )
+                payload["status"] = "empty"
+                payload["empty_reason"] = "no_standings"
 
         now = datetime.now(KST).isoformat(timespec="seconds")
         payload["fetched_at"] = now
@@ -1571,6 +1694,7 @@ def dumps_bounded(payload: dict[str, Any]) -> str:
         "side_effect": False,
         "source": {"provider": "Naver Sports structured API", "urls": []},
         "mode": data.get("mode"),
+        "status": "error",
         "category": data.get("category"),
         "season": data.get("season"),
         "date": data.get("date"),
@@ -1595,13 +1719,13 @@ def dumps_bounded(payload: dict[str, Any]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Fetch bounded live scores, completed results, or standings from Naver."
+            "Fetch bounded schedules, live scores, completed results, or standings."
         ),
         allow_abbrev=False,
     )
     parser.add_argument(
         "--mode",
-        choices=("live", "results", "standings"),
+        choices=("schedule", "live", "results", "standings"),
         default="live",
     )
     parser.add_argument("--category", default="kbo")
