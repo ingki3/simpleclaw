@@ -124,6 +124,39 @@ def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
     assert rejected.code == "ungrounded_number"
 
 
+def test_guard_requires_exact_requested_top_n_classifier() -> None:
+    value = _input().model_copy(
+        update={"question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"}
+    )
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="상위 3승은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert accepted.accepted is True
+    assert rejected.accepted is False
+    assert rejected.code == "ungrounded_text"
+
+
 @pytest.mark.parametrize(
     "content",
     [

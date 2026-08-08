@@ -261,6 +261,38 @@ def _scope_number_spans(content: str, top_n: int | None) -> set[tuple[int, int]]
     }
 
 
+def _scope_classifier(
+    text: str,
+    match: re.Match[str],
+) -> tuple[str, tuple[int, int]] | None:
+    """top-N 표현 바로 뒤 classifier의 stem과 절대 span을 반환한다."""
+    suffix_end = match.end() if match.end() != match.end(1) else len(text)
+    classifier = re.match(
+        rf"\s*({_WORD_RE.pattern})",
+        text[match.end(1) : suffix_end],
+    )
+    if classifier is None:
+        return None
+    return (
+        _word_stem(classifier.group(1)).casefold(),
+        (
+            match.end(1) + classifier.start(1),
+            match.end(1) + classifier.end(1),
+        ),
+    )
+
+
+def _requested_scope_classifier_stems(question: str, top_n: int) -> set[str]:
+    """질문의 동일 top-N 표현에 직접 결합된 classifier stem만 수집한다."""
+    return {
+        classifier[0]
+        for pattern in _TOP_N_PATTERNS
+        for match in pattern.finditer(question)
+        if int(match.group(1)) == top_n
+        if (classifier := _scope_classifier(question, match)) is not None
+    }
+
+
 def _scope_phrase_spans(
     content: str,
     *,
@@ -270,27 +302,16 @@ def _scope_phrase_spans(
     """질문과 같은 requested top-N scope 표현만 lexical fact 검사에서 제외한다."""
     if top_n is None:
         return ()
+    requested_classifiers = _requested_scope_classifier_stems(question, top_n)
     spans: list[tuple[int, int]] = []
     for pattern in _TOP_N_PATTERNS:
         for match in pattern.finditer(content):
             if int(match.group(1)) != top_n:
                 continue
-            spans.append(match.span())
-            if match.end() != match.end(1):
-                continue
-            classifier = re.match(
-                rf"\s*({_WORD_RE.pattern})",
-                content[match.end() :],
-            )
-            if classifier is not None and (
-                _word_stem(classifier.group(1)).casefold() in question.casefold()
-            ):
-                spans.append(
-                    (
-                        match.end() + classifier.start(1),
-                        match.end() + classifier.end(1),
-                    )
-                )
+            spans.append((match.start(), match.end(1)))
+            classifier = _scope_classifier(content, match)
+            if classifier is not None and classifier[0] in requested_classifiers:
+                spans.append(classifier[1])
     return tuple(spans)
 
 
