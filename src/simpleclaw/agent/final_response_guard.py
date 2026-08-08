@@ -21,7 +21,7 @@ _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
 _NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
 _TOP_N_PATTERNS = (
     re.compile(r"(?:상위|앞)\s*(\d+)", re.IGNORECASE),
-    re.compile(r"\btop\s*(\d+)\b", re.IGNORECASE),
+    re.compile(r"\b(?:top|first)\s*(\d+)", re.IGNORECASE),
     re.compile(r"(?<!\d)(\d+)\s*[^\W\d_]+만\b", re.IGNORECASE),
 )
 _RAW_MARKERS = (

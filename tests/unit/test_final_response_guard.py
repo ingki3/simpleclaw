@@ -998,6 +998,93 @@ def test_guard_enforces_domain_neutral_count_only_scope() -> None:
 
 
 @pytest.mark.parametrize(
+    "question",
+    [
+        "Tell me the first 3 teams",
+        "Tell me the first3 teams",
+        "Tell me the first3teams",
+        "Tell me the top3teams",
+        "Tell me the top 3teams",
+    ],
+)
+def test_guard_enforces_english_compact_top_n_scope(question: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": question,
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+    four_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(4)
+        for field in ("team", "wins")
+    )
+    three_paths = four_paths[:6]
+
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT는 59, 삼성은 58, LG는 57, 두산은 56입니다.",
+            cited_paths=four_paths,
+        ),
+    )
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="first 3 teams: KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=three_paths,
+        ),
+    )
+
+    assert rejected.code == "citation_outside_requested_scope"
+    assert accepted.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "first 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+        "top 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_english_top_n_classifier_mismatch(content: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "Tell me the first 3 teams",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=tuple(
+                f"data.items[{index}].{field}"
+                for index in range(3)
+                for field in ("team", "wins")
+            ),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
     "content",
     [
         "KT 57, LG 59입니다.",
