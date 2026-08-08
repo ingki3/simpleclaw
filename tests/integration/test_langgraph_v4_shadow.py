@@ -120,13 +120,13 @@ from simpleclaw.llm.models import (
 )
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationMessage, ConversationStore, MessageRole
-from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 from simpleclaw.outbound_delivery import (
     PrimaryDeliveryCoordinator,
     PrimaryDeliveryMetadataV1,
     PrimaryPersistenceStatus,
     PrimaryResponseText,
 )
+from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 

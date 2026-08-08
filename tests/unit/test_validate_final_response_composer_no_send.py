@@ -9,11 +9,11 @@ import pytest
 from scripts.dev.validate_final_response_composer_no_send import (
     _NATURAL_KBO_SCENARIO,
     _SCENARIOS,
+    _bounded_backend_names,
     _connected_probe,
     _ConnectedProbeFacade,
-    _OneCallSend,
-    _bounded_backend_names,
     _first_failure,
+    _OneCallSend,
     _production_persona_projection,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
