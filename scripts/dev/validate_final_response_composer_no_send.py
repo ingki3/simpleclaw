@@ -262,8 +262,16 @@ _SCHEDULE_PRESENT_SCENARIO = _Scenario(
             ],
         }
     },
-    resolved_claims=("data.items[0].status",),
-    expected_citations=("data.items[0].status",),
+    resolved_claims=(
+        "data.items[0].status",
+        "data.items[0].participants.away.name",
+        "data.items[0].participants.home.name",
+    ),
+    expected_citations=(
+        "data.items[0].status",
+        "data.items[0].participants.away.name",
+        "data.items[0].participants.home.name",
+    ),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -650,11 +658,7 @@ async def _connected_probe(
             f"lexical_token_sha256={token_hashes}"
         )
     concrete = flatten_public_facts(capture.value.public_facts)
-    typed_empty = any(
-        isinstance(node, dict) and node.get("status") == "empty"
-        for node in capture.value.public_facts.values()
-    )
-    if not typed_empty and any(
+    if any(
         path not in concrete
         or not projected_scalar_is_visible(
             capture.draft.content,

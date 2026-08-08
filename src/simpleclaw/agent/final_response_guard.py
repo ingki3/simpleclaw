@@ -14,7 +14,11 @@ from .composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
 )
-from .composition_contracts import CompositionInputV1, DraftResponseV1
+from .composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+    StructuralEvidenceRelationV1,
+)
 from .composition_projection import flatten_public_facts
 
 _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
@@ -89,8 +93,6 @@ _KOREAN_SUFFIXES = (
     "에서",
     "까지",
     "부터",
-    "처럼",
-    "보다",
     "만",
     "은",
     "는",
@@ -102,17 +104,12 @@ _KOREAN_SUFFIXES = (
     "과",
     "도",
     "로",
-    "의",
     "에",
+    "야",
 )
 _SAFE_CONNECTOR_WORDS = frozenset(
     {
         "각각",
-        "결과",
-        "기준",
-        "다음",
-        "순서",
-        "현재",
         "이며",
         "이고",
         "입니다",
@@ -127,9 +124,7 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "과",
         "도",
         "로",
-        "의",
         "에",
-        "중",
         "the",
         "a",
         "an",
@@ -138,14 +133,8 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "are",
         "was",
         "were",
-        "current",
-        "currently",
         "with",
         "respectively",
-        "result",
-        "results",
-        "based",
-        "on",
     }
 )
 _LIMITATION_WORDS = frozenset(
@@ -167,51 +156,6 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
-_EMPTY_REASON_WORDS = {
-    "no_scheduled_events": frozenset(
-        {"예정된", "경기", "없습니다", "no", "events", "are", "scheduled"}
-    ),
-    "no_live_events": frozenset(
-        {
-            "현재",
-            "진행",
-            "중인",
-            "경기",
-            "없습니다",
-            "no",
-            "events",
-            "are",
-            "live",
-            "currently",
-        }
-    ),
-    "no_completed_results": frozenset(
-        {
-            "확정된",
-            "경기",
-            "결과",
-            "없습니다",
-            "no",
-            "completed",
-            "results",
-            "are",
-            "available",
-        }
-    ),
-    "no_standings": frozenset(
-        {
-            "순위",
-            "데이터",
-            "없습니다",
-            "no",
-            "standings",
-            "are",
-            "available",
-        }
-    ),
-}
-
-
 @dataclass(frozen=True, slots=True)
 class GuardResult:
     """Response guard의 명시적 승인 여부와 stable 거부 code다."""
@@ -230,6 +174,11 @@ def _tokens(value: Any) -> tuple[set[str], set[str]]:
     urls = set(_URL_RE.findall(text))
     without_urls = _URL_RE.sub("", text)
     return urls, set(_NUMBER_RE.findall(without_urls))
+
+
+def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
+    """Python의 bool/int equality collision 없이 scalar identity를 비교한다."""
+    return type(left) is type(right) and left == right
 
 
 def _requested_top_n(question: str) -> int | None:
@@ -261,14 +210,56 @@ def _item_location(path: str) -> tuple[str, int, str] | None:
 def _required_item_indices(
     concrete: dict[str, JsonValue],
     top_n: int,
+    *,
+    list_root: str,
 ) -> set[int]:
-    """실제 projection에 존재하는 top-N item index만 완전성 대상으로 삼는다."""
+    """하나의 list root에서 contiguous top-N index를 완전성 대상으로 삼는다."""
     available = {
         index
         for path in concrete
-        if (index := _item_index(path)) is not None and index < top_n
+        if (location := _item_location(path)) is not None
+        if location[0] == list_root
+        if (index := location[1]) < top_n
     }
-    return set(sorted(available)[:top_n])
+    if not available:
+        return set()
+    return set(range(min(top_n, max(available) + 1)))
+
+
+def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
+    pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
+    return re.fullmatch(pattern, concrete_root) is not None
+
+
+def _structurally_identified_paths(
+    concrete: dict[str, JsonValue],
+    required_indices: set[int],
+) -> set[str]:
+    """동일 상대 path에서 index별로 유일한 string literal을 identity로 본다."""
+    candidates: dict[tuple[str, str], dict[int, tuple[str, str]]] = {}
+    for path, value in concrete.items():
+        location = _item_location(path)
+        if (
+            location is None
+            or location[1] not in required_indices
+            or not isinstance(value, str)
+            or not value.strip()
+        ):
+            continue
+        container, index, field = location
+        candidates.setdefault((container, field), {})[index] = (
+            path,
+            value.strip().casefold(),
+        )
+    identified: set[str] = set()
+    for matches in candidates.values():
+        if set(matches) != required_indices:
+            continue
+        literals = [matches[index][1] for index in sorted(required_indices)]
+        if len(set(literals)) != len(literals):
+            continue
+        identified.update(matches[index][0] for index in required_indices)
+    return identified
 
 
 def _word_stem(token: str) -> str:
@@ -284,18 +275,18 @@ def _remove_cited_literals(
     content: str,
     cited_values: dict[str, JsonValue],
 ) -> str:
-    literals = sorted(
+    patterns = sorted(
         {
-            item.strip()
+            pattern.pattern: pattern
             for item in cited_values.values()
-            if isinstance(item, str) and item.strip()
-        },
-        key=len,
+            if (pattern := projected_scalar_literal_pattern(item)) is not None
+        }.values(),
+        key=lambda pattern: len(pattern.pattern),
         reverse=True,
     )
     residual = content
-    for literal in literals:
-        residual = re.sub(re.escape(literal), "", residual, flags=re.IGNORECASE)
+    for pattern in patterns:
+        residual = pattern.sub("", residual)
     return residual
 
 
@@ -519,9 +510,7 @@ def _cited_literal_order_error(
     matched_spans: list[tuple[int, int]] = []
     patterns: list[re.Pattern[str]] = []
     boundary_units: list[tuple[str | None, tuple[int, int] | None]] = []
-    for path, value in concrete.items():
-        if path not in cited_values:
-            continue
+    for path, value in cited_values.items():
         pattern = projected_scalar_literal_pattern(value)
         if pattern is None:
             return ("cited_value_order_mismatch", ())
@@ -625,50 +614,19 @@ def _cited_literal_order_error(
     return (None, tuple(allowed_unit_spans))
 
 
-def _typed_empty_paths(
-    concrete: dict[str, JsonValue],
-) -> tuple[str, str, str] | None:
-    """동일 payload object의 status/reason/empty items 경로를 찾는다."""
-    for status_path, status in concrete.items():
-        if status != "empty" or not status_path.endswith("status"):
-            continue
-        prefix = status_path.removesuffix("status")
-        reason_path = f"{prefix}empty_reason"
-        items_path = f"{prefix}items"
-        reason = concrete.get(reason_path)
-        if (
-            isinstance(reason, str)
-            and reason in _EMPTY_REASON_WORDS
-            and concrete.get(items_path) == []
-        ):
-            return status_path, reason_path, str(reason)
-    return None
-
-
-def _guard_typed_empty_response(
+def _matched_structural_evidence_relation(
     value: CompositionInputV1,
     draft: DraftResponseV1,
-    empty_paths: tuple[str, str, str],
-) -> GuardResult:
-    """Stable empty enum의 제한된 자연어 의미만 domain-neutral하게 허용한다."""
-    status_path, reason_path, reason = empty_paths
-    if tuple(draft.cited_paths) != (status_path, reason_path):
-        return _rejected("typed_empty_citations_required")
-    if draft.limitation_paths or value.unresolved_claims:
-        return _rejected("typed_empty_unresolved")
-    content = draft.content.strip()
-    if _URL_RE.search(content) or _NUMBER_RE.search(content):
-        return _rejected("typed_empty_ungrounded_fact")
-    allowed_words = _EMPTY_REASON_WORDS[reason] | _SAFE_CONNECTOR_WORDS
-    for token in _WORD_RE.findall(content):
-        folded = token.casefold()
-        stem = _word_stem(token).casefold()
-        if folded not in allowed_words and stem not in allowed_words:
-            return _rejected("typed_empty_ungrounded_fact")
-    symbol_residual = _WORD_RE.sub("", content)
-    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
-        return _rejected("ungrounded_symbol")
-    return GuardResult(accepted=True, code="accepted")
+) -> StructuralEvidenceRelationV1 | None:
+    """Provider citation 전체가 정확히 일치하는 structural relation을 찾는다."""
+    return next(
+        (
+            item
+            for item in value.structural_evidence_relations
+            if item.evidence_paths == tuple(draft.cited_paths)
+        ),
+        None,
+    )
 
 
 def guard_final_response(
@@ -696,13 +654,9 @@ def guard_final_response(
         return _rejected("citations_required")
     if len(draft.cited_paths) != len(set(draft.cited_paths)):
         return _rejected("duplicate_citation")
-    empty_paths = _typed_empty_paths(concrete)
-    if empty_paths is not None:
-        return _guard_typed_empty_response(value, draft, empty_paths)
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
-    cited_item_string_indices: set[int] = set()
     for path in draft.cited_paths:
         if "[*]" in path or path not in concrete:
             return _rejected("citation_not_projected")
@@ -714,22 +668,55 @@ def guard_final_response(
                 cited_item_indices.add(index)
         cited = concrete[path]
         cited_values[path] = cited
-        if index is not None and isinstance(cited, str) and cited.strip():
-            cited_item_string_indices.add(index)
+    structural_relation = _matched_structural_evidence_relation(value, draft)
+    if value.structural_evidence_relations and structural_relation is None:
+        return _rejected("structural_relation_citation_mismatch")
+    for cited in cited_values.values():
+        if projected_scalar_literal_pattern(cited) is None:
+            return _rejected("citation_not_scalar")
         if (
             isinstance(cited, str)
             and len(cited.strip()) >= 2
             and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
-    if top_n is not None and cited_item_indices != _required_item_indices(
-        concrete, top_n
-    ):
-        return _rejected("requested_scope_not_fully_cited")
-    if top_n is not None and cited_item_string_indices != _required_item_indices(
-        concrete, top_n
-    ):
-        return _rejected("requested_item_identity_not_cited")
+    if top_n is not None:
+        cited_list_roots = {
+            location[0]
+            for path in draft.cited_paths
+            if (location := _item_location(path)) is not None
+        }
+        if len(cited_list_roots) > 1:
+            return _rejected("requested_scope_mixed_list_roots")
+        if not cited_list_roots:
+            return _rejected("requested_scope_not_fully_cited")
+        list_root = next(iter(cited_list_roots))
+        declared_root = value.composition_list_root
+        if declared_root is None or not _matches_declared_list_root(
+            list_root,
+            declared_root,
+        ):
+            return _rejected("requested_scope_list_root_not_declared")
+        required_indices = _required_item_indices(
+            concrete,
+            top_n,
+            list_root=list_root,
+        )
+        if cited_item_indices != required_indices:
+            return _rejected("requested_scope_not_fully_cited")
+        identity_paths = (
+            set(structural_relation.identity_paths)
+            if structural_relation is not None
+            else _structurally_identified_paths(concrete, required_indices)
+        )
+        cited_identity_indices = {
+            index
+            for path in draft.cited_paths
+            if path in identity_paths
+            if (index := _item_index(path)) is not None
+        }
+        if cited_identity_indices != required_indices:
+            return _rejected("requested_item_identity_not_cited")
     literal_order_error, allowed_unit_spans = _cited_literal_order_error(
         content,
         concrete,
@@ -740,18 +727,14 @@ def guard_final_response(
     if literal_order_error is not None:
         return _rejected(literal_order_error)
 
-    # Content에 보이는 projected scalar는 해당 concrete path가 반드시 인용돼야 한다.
-    # 동일 값이 여러 path에 있을 수 있으므로 한 path라도 cited면 grounded로 본다.
+    # bool/null/string은 여기서, 숫자는 아래 top-N/number 집합에서 일관되게 본다.
     for path, projected in concrete.items():
-        if not isinstance(projected, str):
-            continue
-        rendered = str(projected).strip()
-        if len(rendered) < 2:
+        if isinstance(projected, int | float) and not isinstance(projected, bool):
             continue
         if (
-            rendered.casefold() in lowered
+            projected_scalar_is_visible(content, projected)
             and not any(
-                cited_value == projected
+                _same_json_scalar(cited_value, projected)
                 for cited_value in cited_values.values()
             )
         ):
@@ -776,10 +759,7 @@ def guard_final_response(
     for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
         folded = token.casefold()
         stem = _word_stem(token).casefold()
-        if (
-            folded not in allowed_words
-            and stem not in allowed_words
-        ):
+        if folded not in allowed_words and stem not in allowed_words:
             return _rejected("ungrounded_text")
     symbol_residual = _WORD_RE.sub(
         "",

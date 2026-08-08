@@ -2,30 +2,43 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 
 from pydantic import JsonValue
 
 from .composition_contracts import CompositionInputV1, DraftResponseV1
-from .composition_projection import flatten_public_facts
 
-CITATION_CANONICALIZATION_POLICY_VERSION = "visible_subset_v1"
+CITATION_CANONICALIZATION_POLICY_VERSION = "provider_order_no_prune_v3"
 
 
 def projected_scalar_literal_pattern(
     value: JsonValue,
 ) -> re.Pattern[str] | None:
     """Guard와 canonicalizer가 공유하는 exact-visible scalar pattern이다."""
-    if value is None or isinstance(value, dict | list):
+    if isinstance(value, dict | list):
         return None
-    rendered = str(value).strip()
+    if value is None or isinstance(value, bool):
+        rendered = json.dumps(value)
+    elif isinstance(value, str):
+        if value != value.strip():
+            return None
+        rendered = value
+    else:
+        rendered = str(value).strip()
     if not rendered:
         return None
     escaped = re.escape(rendered)
     if isinstance(value, int | float) and not isinstance(value, bool):
         return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
-    return re.compile(escaped, re.IGNORECASE)
+    if value is None or isinstance(value, bool):
+        return re.compile(rf"(?<![\w]){escaped}(?![\w])", re.IGNORECASE)
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]+", rendered):
+        return re.compile(
+            rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])",
+        )
+    return re.compile(escaped)
 
 
 def projected_scalar_is_visible(content: str, value: JsonValue) -> bool:
@@ -65,13 +78,5 @@ def canonicalize_draft_citations(
     value: CompositionInputV1,
     draft: DraftResponseV1,
 ) -> DraftResponseV1:
-    """본문 불변으로 provider citation의 safe visible subset만 반영한다."""
-    concrete = flatten_public_facts(value.public_facts)
-    cited_paths = canonical_visible_cited_paths(
-        draft.content,
-        draft.cited_paths,
-        concrete,
-    )
-    if not cited_paths or cited_paths == draft.cited_paths:
-        return draft
-    return draft.model_copy(update={"cited_paths": cited_paths})
+    """Guard 전 provider citation set/order를 변경하지 않는다."""
+    return draft

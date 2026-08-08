@@ -12,7 +12,12 @@ from simpleclaw.capability import (
     parse_owned_binding_metadata,
     parse_owned_contract_metadata,
 )
-from simpleclaw.graph_runtime.contracts import AssetBindingRefV1, AssetRefV1
+from simpleclaw.graph_runtime.contracts import (
+    COMPOSITION_FIELDS_EXTENSION,
+    STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
+    AssetBindingRefV1,
+    AssetRefV1,
+)
 from simpleclaw.graph_runtime.contracts_registry import (
     ContractRegistryError,
     build_contract_registry,
@@ -27,6 +32,7 @@ def _contract(
     owner: str = "fixture-skill",
     owner_type: str = "skill",
     additional_properties: object = False,
+    schema_extensions: dict[str, object] | None = None,
 ):
     schema = {
         "type": "object",
@@ -34,6 +40,8 @@ def _contract(
         "required": [name],
         "additionalProperties": additional_properties,
     }
+    if schema_extensions is not None:
+        schema.update(schema_extensions)
     value = parse_owned_contract_metadata(
         {
             "contract_id": f"fixture.{name}",
@@ -130,6 +138,45 @@ def test_malformed_additional_properties_is_rejected_before_candidate_build():
 
     with pytest.raises(ContractRegistryError, match="schema.invalid"):
         build_contract_registry([malformed])
+
+
+@pytest.mark.parametrize(
+    "relation",
+    [
+        {
+            "when": {"path": "record_state", "equals": "ready"},
+            "evidence_fields": ["record_state"],
+            "identity_fields": "record_state",
+        },
+        {
+            "when": {"path": "record_state", "equals": []},
+            "evidence_fields": ["record_state"],
+        },
+    ],
+    ids=("non_array_identity", "container_equals"),
+)
+def test_invalid_relation_types_are_normalized_at_registry_boundary(
+    relation: dict[str, object],
+) -> None:
+    malformed = replace(
+        _skill(),
+        output_contract=_contract(
+            "record_state",
+            schema_extensions={
+                COMPOSITION_FIELDS_EXTENSION: ["record_state"],
+                STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION: [relation],
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ContractRegistryError,
+        match="^schema.invalid_composition_fields$",
+    ) as captured:
+        build_contract_registry([malformed])
+
+    assert captured.value.code == "schema.invalid_composition_fields"
+    assert isinstance(captured.value.__cause__, ValueError | TypeError)
 
 
 def test_second_recipe_step_binding_owner_mismatch_is_rejected_by_registry():

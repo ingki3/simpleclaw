@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,12 +17,17 @@ from simpleclaw.graph_runtime.contracts import (
 )
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
-from .composition_contracts import CompositionInputV1
+from .composition_citations import projected_scalar_literal_pattern
+from .composition_contracts import (
+    CompositionInputV1,
+    StructuralEvidenceRelationV1,
+)
 
 MAX_COMPOSITION_ARRAY_ITEMS = 20
 MAX_COMPOSITION_SERIALIZED_CHARS = 12_000
 MAX_COMPOSITION_SCALAR_CHARS = 2_000
 _MISSING = object()
+_CONCRETE_INDEX_RE = re.compile(r"\[(\d+)\]")
 
 
 class CompositionProjectionError(ValueError):
@@ -30,6 +36,15 @@ class CompositionProjectionError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
+    """JSON scalar type을 보존하되 int/float는 하나의 number type으로 비교한다."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, int | float) and isinstance(right, int | float):
+        return left == right
+    return type(left) is type(right) and left == right
 
 
 def _validate_value(value: Any) -> None:
@@ -150,6 +165,147 @@ def _claims(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value)
 
 
+def _concrete_path_pattern(path: str) -> re.Pattern[str]:
+    escaped = re.escape(path).replace(r"\[\*\]", r"\[\d+\]")
+    return re.compile(rf"^{escaped}$")
+
+
+def _expand_structural_field(
+    value: object,
+    tokens: Sequence[tuple[str, bool]],
+    *,
+    prefix: str = "",
+) -> tuple[tuple[str, ...], bool]:
+    """Wildcard source item마다 required field가 존재하는지 함께 확장한다."""
+    if not tokens:
+        return ((prefix,), True)
+    key, wildcard = tokens[0]
+    if not isinstance(value, Mapping) or key not in value:
+        return ((), False)
+    child = value[key]
+    path = f"{prefix}.{key}" if prefix else key
+    if not wildcard:
+        return _expand_structural_field(child, tokens[1:], prefix=path)
+    if not isinstance(child, list):
+        return ((), False)
+    expanded: list[str] = []
+    for index, item in enumerate(child):
+        matches, complete = _expand_structural_field(
+            item,
+            tokens[1:],
+            prefix=f"{path}[{index}]",
+        )
+        if not complete:
+            return ((), False)
+        expanded.extend(matches)
+    return (tuple(expanded), True)
+
+
+def _evidence_path_order(
+    path: str,
+    *,
+    patterns: tuple[re.Pattern[str], ...],
+    concrete_order: dict[str, int],
+) -> tuple[tuple[int, ...], int, int]:
+    """List index를 먼저, descriptor field 순서를 다음으로 보존한다."""
+    indices = tuple(int(value) for value in _CONCRETE_INDEX_RE.findall(path))
+    pattern_index = next(
+        index for index, pattern in enumerate(patterns) if pattern.fullmatch(path)
+    )
+    return (indices, pattern_index, concrete_order[path])
+
+
+def _structural_evidence_relations(
+    public_facts: Mapping[str, JsonValue],
+    descriptor: ContractDescriptorV1,
+) -> tuple[StructuralEvidenceRelationV1, ...]:
+    """활성 relation의 모든 evidence를 source index 순서로 구체화한다."""
+    concrete = flatten_public_facts(public_facts)
+    activated: list[StructuralEvidenceRelationV1] = []
+    empty_relation_ids: set[str] = set()
+    empty_relation_without_id = False
+    active_fallback_targets: set[str] = set()
+    for declaration in descriptor.structural_evidence_relations:
+        condition_value = concrete.get(declaration.when_path, _MISSING)
+        if condition_value is _MISSING or not _same_json_scalar(
+            condition_value,
+            declaration.when_equals,
+        ):
+            continue
+        patterns = tuple(
+            _concrete_path_pattern(field) for field in declaration.evidence_fields
+        )
+        expanded_fields = tuple(
+            _expand_structural_field(
+                public_facts,
+                _path_tokens(field),
+            )
+            for field in declaration.evidence_fields
+        )
+        if any(not complete for _, complete in expanded_fields):
+            raise CompositionProjectionError(
+                "projection.structural_evidence_incomplete"
+            )
+        matches_by_pattern = tuple(paths for paths, _ in expanded_fields)
+        if any(
+            path not in concrete or isinstance(concrete[path], dict | list)
+            for paths in matches_by_pattern
+            for path in paths
+        ):
+            raise CompositionProjectionError(
+                "projection.structural_evidence_not_scalar"
+            )
+        if any(
+            projected_scalar_literal_pattern(concrete[path]) is None
+            for paths in matches_by_pattern
+            for path in paths
+        ):
+            raise CompositionProjectionError(
+                "projection.structural_evidence_not_renderable"
+            )
+        if any(not matches for matches in matches_by_pattern):
+            if declaration.relation_id is None:
+                empty_relation_without_id = True
+            else:
+                empty_relation_ids.add(declaration.relation_id)
+            continue
+        concrete_order = {path: index for index, path in enumerate(concrete)}
+        evidence_paths = tuple(
+            sorted(
+                {
+                    path
+                    for matches in matches_by_pattern
+                    for path in matches
+                },
+                key=lambda path: _evidence_path_order(
+                    path,
+                    patterns=patterns,
+                    concrete_order=concrete_order,
+                ),
+            )
+        )
+        if evidence_paths:
+            identity_patterns = tuple(
+                _concrete_path_pattern(field)
+                for field in declaration.identity_fields
+            )
+            identity_paths = tuple(
+                path
+                for path in evidence_paths
+                if any(pattern.fullmatch(path) for pattern in identity_patterns)
+            )
+            activated.append(
+                StructuralEvidenceRelationV1(
+                    evidence_paths=evidence_paths,
+                    identity_paths=identity_paths,
+                )
+            )
+            active_fallback_targets.update(declaration.fallback_for)
+    if empty_relation_without_id or not empty_relation_ids <= active_fallback_targets:
+        raise CompositionProjectionError("projection.structural_evidence_empty")
+    return tuple(activated)
+
+
 def build_composition_input(
     *,
     request_id: str,
@@ -184,6 +340,11 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
+        composition_list_root=descriptor.composition_list_root,
+        structural_evidence_relations=_structural_evidence_relations(
+            public_facts,
+            descriptor,
+        ),
     )
 
 

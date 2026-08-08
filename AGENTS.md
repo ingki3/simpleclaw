@@ -95,13 +95,16 @@ Multica 는 **칸반(Kanban) 방식**이다. 한 명의 에이전트가 전체 �
 **활동**
 1. 컨텍스트 수집 — 관련 코드 / 기존 이슈·코멘트 / 디자인 / 문서 (§8 우선순위 표).
 2. 모호한 부분 있으면 사용자에게 확인 — **추정 금지** (§2.1).
-3. Plan 작성 — §2.2 템플릿(배경 / file-by-file 변경 / Out of scope / Tests / DoD / Dependencies) 100% 채움.
-4. 테스트 코드 또는 테스트 케이스 명세 준비 (§2.3).
-5. Multica 이슈 생성 — `--project`, `--assignee`, `--requires`/`--then-runs`, `--attachment` 모두 채움 (§3.2).
-6. SimpleClaw 라벨 부착 (§3.3).
+3. Plan 작성 전에 변경 예정 파일을 모두 `generic core/global prompt`, `domain adapter/runtime asset`, `test/fixture`, `governance/docs` 중 하나로 분류하고 architecture boundary를 검증 (§2.4).
+4. Plan 작성 — §2.2 템플릿(배경 / file-by-file 변경 / Architecture boundary / Out of scope / Tests / DoD / Dependencies) 100% 채움.
+5. 테스트 코드 또는 테스트 케이스 명세 준비 (§2.3).
+6. Multica 이슈 생성 — `--project`, `--assignee`, `--requires`/`--then-runs`, `--attachment` 모두 채움 (§3.2).
+7. SimpleClaw 라벨 부착 (§3.3).
 
 **종료 조건 (DoD)**
 - [ ] 이슈가 생성되었고 본문에 §2.2 의 모든 항목이 박제되었다.
+- [ ] 변경 예정 파일 전부의 layer 분류와 허용/금지 책임이 `Architecture boundary / domain-neutrality` 표에 박제되었다.
+- [ ] generic core/global prompt 변경의 negative constraints·synthetic-neutral test·scoped diff audit·Hermes review/release gate가 명시되었거나, 해당 변경이 없음을 명시했다 (§2.4).
 - [ ] `--project` / `--assignee` / 의존성 / 첨부가 빠짐없이 들어갔다.
 - [ ] 라벨이 부착되었다.
 - [ ] 상태는 `todo` (즉시 진행이면 `in_progress`).
@@ -153,17 +156,19 @@ Multica 는 **칸반(Kanban) 방식**이다. 한 명의 에이전트가 전체 �
 **활동**
 1. `git push -u origin feature/biz-NNN-<slug>`.
 2. `gh pr create --base dev --title "BIZ-NNN — 요약" --body ...` (§4.3 템플릿).
-3. PR 상태 확인 — `gh pr view <num> --json url,state,baseRefName,mergeable,mergeStateStatus,statusCheckRollup`.
-4. CI 결과 확인 — `gh pr checks <num>`.
-5. CI red 처리:
+3. generic core/global prompt 변경이면 PR 본문과 이슈 코멘트에 `Hermes 필수 gate` 및 release 차단 범위를 명시한다 (§2.4).
+4. PR 상태 확인 — `gh pr view <num> --json url,state,baseRefName,mergeable,mergeStateStatus,statusCheckRollup`.
+5. CI 결과 확인 — `gh pr checks <num>`.
+6. CI red 처리:
    - **변경 자체가 원인** → fix 후 새 커밋 + push (같은 PR 에 누적).
    - **base(dev) 자체가 red** → 진단 후 별도 sub-issue 로 분기 (§4.7). 현재 PR 은 그대로 두고 코멘트에 base-red 사실 박제.
-6. 이슈 코멘트에 PR URL + CI state 박제 (§3.4) — HEREDOC 사용.
-7. 상태 전환: `multica issue status <id> in_review`.
+7. 이슈 코멘트에 PR URL + CI state 박제 (§3.4) — HEREDOC 사용.
+8. 상태 전환: `multica issue status <id> in_review`.
 
 **종료 조건 (DoD)**
 - [ ] PR 이 생성되었고 base 가 `dev` 이다.
 - [ ] PR CI 가 그린이다 (또는 base-red 진단 + sub-issue 분기 완료).
+- [ ] generic core/global prompt 변경이면 scoped diff audit 결과와 `Hermes 필수 gate`가 PR/이슈에 박제되었다.
 - [ ] PR URL + state 가 이슈 코멘트에 박제되었다.
 - [ ] 이슈 상태가 `in_review` 이다.
 - [ ] (UI 작업) 스크린샷이 코멘트에 첨부되었다.
@@ -171,6 +176,7 @@ Multica 는 **칸반(Kanban) 방식**이다. 한 명의 에이전트가 전체 �
 **핸드오프**
 - 코드, dependency, runtime, security, migration, CI-policy 변경은 **항상 `in_review` 를 거쳐야 하며 Dev Agent 가 self-merge 하지 않는다.** Review Agent / 운영자가 `in_review` 큐에서 픽업한다 (Stage D).
 - self-merge 예외는 운영자가 작업 시작 전에 명시 승인한 docs/metadata-only 변경으로 제한한다. runtime 또는 CI 동작 영향이 조금이라도 있거나 분류가 모호하면 예외가 아니며 사용자에게 확인한다 (§2.1).
+- **generic core/global prompt 변경은 docs/metadata-only 또는 검증 불필요 예외로 분류할 수 없다.** Dev Agent self-merge를 금지하며, 독립된 Hermes 필수 리뷰가 끝날 때까지 PR은 open/`in_review`로 유지한다 (§2.4).
 
 ---
 
@@ -184,16 +190,18 @@ Multica 는 **칸반(Kanban) 방식**이다. 한 명의 에이전트가 전체 �
 2. **DoD 재평가** — `done` 전환 후보 시, 원래 DoD 항목이 다른 이슈로 자연 해소됐는지 확인. 사라진 frame/모듈 은 mismatch 가능성 0. obsolete DoD 는 ~~취소선 + N/A 사유~~ 명시.
 3. PR 상태 재확인 — `gh pr view <num> --json mergeable,mergeStateStatus,statusCheckRollup`.
 4. (가능한 경우) 단위 테스트를 로컬 또는 CI 로 재실행 결과 확인.
-5. **DoD 충족 시:**
+5. generic core/global prompt 변경이면 §2.4의 boundary table, negative constraints, synthetic-neutral test, scoped diff audit와 **독립 Hermes 승인 기록**을 재확인한다. CI green만으로 이 gate를 대체하지 않는다.
+6. boundary 위반 correction이 `dev`에 아직 merge되지 않았으면 관련 `dev → main` release PR의 merge/release를 중단하고 correction 이슈/PR을 근거로 박제한다 (§2.4).
+7. **DoD 충족 시:**
    - 평가 코멘트 박제 — 각 DoD 항목별 근거 (§3.4 HEREDOC).
    - PR 머지 — Squash (§4.4). 머지 SHA 를 이슈에 박제.
    - `multica issue status <id> done`.
    - 머지 후 정리 (§4.6) — 로컬 dev 동기화 / feature 브랜치 삭제 / 워크트리 정리.
-6. **DoD 미충족 시:**
+8. **DoD 미충족 시:**
    - 평가 코멘트로 부족 항목과 근거 박제 (**Dev Agent 멘션 금지** — 자식 이슈로 위임).
    - 부족한 작업마다 sub-issue 생성 (§4.7) — `--parent` 로 현재 이슈에 연결, `--assignee` 는 적절한 담당 (보통 `Dev Agent`), `--requires` 로 의존 박제.
    - **부모 이슈는 `in_review` 유지** — `done` 으로 미충족 상태 임의 전환 금지.
-7. (해당 시) 릴리스 PR (`dev → main`) 작성 — §4.5 DoD 준수.
+9. (해당 시) 릴리스 PR (`dev → main`) 작성 — §4.5 DoD 및 §2.4 release gate 준수.
 
 **종료 조건**
 - DoD 충족: 이슈 `done` + PR `MERGED` + 머지 SHA 박제 + 머지 후 정리 완료.
@@ -278,6 +286,19 @@ Stage D 중 상위 에이전트(Review Agent, Dev Agent, 운영자 Hermes 등)�
   - 제거: <삭제할 코드/주석/import>
 - `path/to/other.py` …
 
+## Architecture boundary / domain-neutrality  ← 필수
+| 파일 | 계층 | 허용 | 금지 |
+|---|---|---|---|
+| `path/to/file.py` | `generic core/global prompt` / `domain adapter/runtime asset` / `test/fixture` / `governance/docs` | 이 계층이 소유할 책임 | 이 계층 밖으로 누출하면 안 되는 책임·어휘 |
+
+- generic core/global prompt 변경: 있음 / **없음**
+- abstract contract: `<domain-neutral contract 이름>` — concrete provider/domain과 무관한 입력·출력·불변조건
+- quarantined domain vocabulary: `<provider/domain enum, 상태명, 필드명, 값, 단위, 고유명, localized sentence 목록>` — adapter/runtime asset 경계 밖 변경 diff 0건
+- core negative constraints: `<core에 추가하지 않을 domain 분기·enum→문장 mapping·lexical allowlist·incident-specific example>`
+- test boundary: core는 synthetic-neutral fixture, concrete domain 시나리오는 adapter/asset/integration test
+- scoped diff audit: `<비교 기준 SHA/branch + core/global prompt 대상 경로 + vocabulary 0건 확인 방법>`
+- review/release gate: `<Hermes 필수 리뷰 대상 여부 + 미해결 boundary correction의 dev→main release 차단 여부>`
+
 ## 변경하지 않는 것 (Out of scope)
 - 의도적으로 손대지 않는 영역을 명시 — scope creep 방지
 
@@ -313,6 +334,36 @@ multica issue create \
 ```
 
 작성 가능한 테스트 코드가 아직 없으면, **테스트 케이스 명세(케이스명·입력·기대 결과)**를 본문 표로라도 박제한다.
+
+### 2.4. Architecture boundary / domain-neutrality gate
+
+이 gate는 Stage A의 **이슈 생성 전 필수 조건**이다. 경로 이름보다 실제 책임을 기준으로 분류하며, 한 파일에 책임이 섞였거나 분류가 모호하면 가장 엄격한 `generic core/global prompt`로 취급하고 §2.1로 확인한다.
+
+**계층 분류:**
+
+| 계층 | 대표 경로/책임 | 허용 | 금지 |
+|---|---|---|---|
+| `generic core/global prompt` | `src/simpleclaw/agent/**`, `src/simpleclaw/graph_runtime/**`의 공통 graph/runtime, `src/simpleclaw/config_sections/**`, `src/simpleclaw/production_assets.py`, `prompts/system/**` 및 여러 domain이 공유하는 planner/composer/guard/contract | descriptor/schema 기반의 domain-neutral 계약, 공통 orchestration·validation | concrete provider/domain 분기, enum·상태→localized sentence mapping, field/value/unit/domain word lexical allowlist, incident-specific 질문·예시 |
+| `domain adapter/runtime asset` | 명시적으로 경계 지어진 adapter, `runtime_assets/skills/**`, `runtime_assets/recipes/**`와 domain별 parser/evidence adapter | provider schema/enum mapping, domain vocabulary, typed state/facts/provenance/limitations, source-specific collection/fallback | persona, tone, localized final-response sentence/template, Markdown/layout, presentation ownership, generic core의 암묵적 동작 변경, 다른 domain으로 새어 나가는 전역 규칙 |
+| `test/fixture` | `tests/**` | 대상 계층의 계약 검증 | core unit/contract fixture에 concrete incident 질문이나 provider/domain semantics 고정 |
+| `governance/docs` | `AGENTS.md`, 운영·설계 문서 | layer-independent 절차, gate, 근거 | runtime domain 분기, 특정 asset 구현, incident-specific runtime workaround |
+
+대표 경로는 최소 집합이며 allowlist가 아니다. 예를 들어 adapter 디렉터리 안의 코드라도 전역 routing/guard 동작을 바꾸면 `generic core/global prompt`다. 반대로 domain bug가 책임 있는 adapter/runtime asset만으로 해결되면 Plan에 core/global prompt를 out of scope로 명시하고 core 파일을 추가하지 않는다. Adapter-only 변경도 boundary 표를 생략하지 않으며 provider semantics의 소유 위치와 최종 user-facing presentation의 소유자가 중앙 persona-aware Composer임을 각각 박제한다.
+
+**generic core/global prompt 변경의 필수 negative constraints:**
+
+1. Plan에 concrete provider/domain enum, 상태명, field/value/unit 이름, 고유명, localized output sentence 등 **quarantined domain vocabulary**를 변경 전 추출한다. concrete domain을 core에 허용하는 고정 allowlist를 만들지 않는다.
+2. 해당 vocabulary와 의미가 같은 domain lexical branch/allowlist가 adapter/runtime asset 경계 밖의 **변경 diff에서 0건**이어야 한다. repository 전체의 기존 부채와 이번 변경을 혼동하지 않도록 비교 기준 SHA/branch와 감사 대상 core/global prompt 경로를 기록한다.
+3. concrete state/reason을 localized domain sentence로 바꾸거나 concrete field/value/unit/domain word를 Guard·Composer·planner에 allowlist하는 Plan은 **이슈 생성 전에 반려**한다. Adapter/runtime asset은 typed evidence만 생산하고, 중앙 persona-aware Composer가 domain-neutral contract를 통해 최종 user-facing presentation을 전담하도록 재설계한다.
+4. abstract contract는 domain-neutral 입력·출력·불변조건으로 서술한다. 특정 사고 질문을 global prompt, core unit/contract test, core example에 복사하지 않는다.
+5. core unit/contract test는 `alpha/beta`, `kind_x/state_y`, `measure_a` 같은 synthetic-neutral fixture를 사용한다. concrete provider/domain 시나리오는 adapter/asset/integration 경계에서 검증한다.
+6. `git diff` 기반 scoped audit와 테스트가 모두 통과해야 한다. **CI green은 boundary audit나 독립 리뷰를 대체하지 않는다.**
+
+**독립 리뷰 / release gate:**
+
+- generic core/global prompt PR은 위험도가 docs-only로 보이더라도 Dev Agent self-merge 또는 검증 불필요 예외를 적용하지 않는다. 작성자와 독립된 Hermes가 boundary table, abstract contract, vocabulary 0건 audit, synthetic-neutral test를 승인한 기록이 PR 또는 이슈에 있어야 merge할 수 있다.
+- core boundary 위반이 이미 `dev`에 merge되어 correction 이슈/PR이 열린 경우, correction이 `dev`에 merge되고 Hermes가 gate 해소를 확인하기 전까지 `dev → main` release merge와 production deploy를 금지한다. 차단 범위와 correction 링크를 release PR/이슈에 박제한다.
+- Hermes 승인이 없거나 audit가 누락되면 PR은 open/`in_review`로 유지한다. Stage D는 `done`, release, deploy로 전환하지 않는다.
 
 ---
 
@@ -853,7 +904,10 @@ Multica 이슈가 작업 SSOT 이지만, 가볍게 기록할 백로그/메모는
 ## 11. 빠른 체크리스트 (작업 종료 전)
 
 - [ ] 사용자 요청을 모호함 없이 해석했는가? (모호하면 §2.1 — 질문 + default-option)
-- [ ] Plan 에 file-by-file 변경 / Out of scope / Tests / DoD / Dependencies 모두 박제했는가? (§2.2)
+- [ ] Plan 에 file-by-file 변경 / Architecture boundary / Out of scope / Tests / DoD / Dependencies 모두 박제했는가? (§2.2)
+- [ ] 변경 예정 파일 전부를 4개 layer로 분류하고 core/global prompt 여부를 명시했는가? (§2.4)
+- [ ] core/global prompt 변경이면 quarantined vocabulary 0건 scoped diff audit와 synthetic-neutral test를 확인했는가? (§2.4)
+- [ ] core/global prompt PR의 독립 Hermes 승인 및 미해결 correction의 release 차단 여부를 확인했는가? (§2.4)
 - [ ] 이슈 생성 시 `--project`, `--assignee`, `--requires`/`--then-runs`, `--attachment` 모두 채웠는가? (§3.2)
 - [ ] SimpleClaw 라벨을 부착했는가? (§3.3)
 - [ ] 작업 단위마다 커밋했는가? uncommitted 없음? (§4.2)

@@ -24,6 +24,8 @@ from simpleclaw.capability import (
 
 from .contracts import (
     COMPOSITION_FIELDS_EXTENSION,
+    COMPOSITION_LIST_ROOT_EXTENSION,
+    STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
     AssetRefV1,
@@ -31,6 +33,8 @@ from .contracts import (
     ContractRefV1,
     RetryPolicyV1,
     validate_composition_fields,
+    validate_composition_list_root,
+    validate_structural_evidence_relations,
 )
 
 
@@ -355,6 +359,8 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "anyOf",
         "oneOf",
         COMPOSITION_FIELDS_EXTENSION,
+        COMPOSITION_LIST_ROOT_EXTENSION,
+        STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     }
 )
 _SUPPORTED_SCHEMA_TYPES = frozenset(
@@ -369,11 +375,21 @@ def _validate_schema_definition(schema: object) -> None:
     if set(schema) - _SUPPORTED_SCHEMA_KEYWORDS:
         raise ContractRegistryError("schema.unsupported_keyword")
     try:
-        validate_composition_fields(
+        composition_fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
         )
-    except ValueError as exc:
+        validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
+        )
+        validate_structural_evidence_relations(
+            schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
+        )
+    except (TypeError, ValueError) as exc:
         raise ContractRegistryError("schema.invalid_composition_fields") from exc
 
     for keyword in ("$id", "$schema", "title", "description"):

@@ -45,14 +45,19 @@ async def _draft_response(request) -> LLMResponse:
     value = json.loads(request.user_message)
     data = value["public_facts"]["data"]
     if data.get("empty_reason") == "no_scheduled_events":
-        content = "예정된 경기가 없습니다."
+        content = "empty, no_scheduled_events."
         citation_paths = ["data.status", "data.empty_reason"]
     elif data.get("empty_reason") == "no_live_events":
-        content = "현재 진행 중인 경기가 없습니다."
+        content = "empty, no_live_events."
         citation_paths = ["data.status", "data.empty_reason"]
     else:
         assert value["question"] == "오늘 프로야구 하냐?"
-        content = "경기 예정입니다."
+        content = "경기 예정, 두산, 한화."
+        citation_paths = [
+            "data.items[0].status",
+            "data.items[0].participants.away.name",
+            "data.items[0].participants.home.name",
+        ]
     return LLMResponse(
         text=json.dumps(
             {

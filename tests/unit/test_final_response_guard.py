@@ -8,6 +8,7 @@ from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
+    StructuralEvidenceRelationV1,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.contracts import AssetRefV1
@@ -24,6 +25,7 @@ def _input() -> CompositionInputV1:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_root="data.items",
         public_facts={
             "data": {
                 "category": "KBO",
@@ -37,82 +39,580 @@ def _input() -> CompositionInputV1:
     )
 
 
-def _empty_input(reason: str = "no_scheduled_events") -> CompositionInputV1:
+def _neutral_empty_input(
+    *,
+    question: str = "Are any records available?",
+) -> CompositionInputV1:
     return CompositionInputV1(
-        request_id="request-empty",
-        question="오늘 프로야구 하냐?",
-        locale="ko-KR",
+        request_id="request-neutral-empty",
+        question=question,
+        locale="en-US",
         selected_route="recipe",
-        asset_ref=AssetRefV1(type="recipe", name="sports-live"),
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="empty-payload-hash",
         public_facts={
             "data": {
-                "mode": "schedule",
-                "status": "empty",
-                "empty_reason": reason,
-                "items": [],
+                "state": "absent",
+                "reason": "none_available",
+                "records": [],
             }
         },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
     )
 
 
-@pytest.mark.parametrize(
-    ("reason", "content"),
-    [
-        ("no_scheduled_events", "예정된 경기가 없습니다."),
-        ("no_live_events", "현재 진행 중인 경기가 없습니다."),
-        ("no_completed_results", "확정된 경기 결과가 없습니다."),
-        ("no_standings", "순위 데이터가 없습니다."),
-    ],
-)
-def test_guard_accepts_domain_neutral_typed_empty_meaning(
-    reason: str,
-    content: str,
-) -> None:
+def test_guard_accepts_visible_exact_structural_evidence() -> None:
     result = guard_final_response(
-        _empty_input(reason),
+        _neutral_empty_input(),
         DraftResponseV1(
-            content=content,
-            cited_paths=("data.status", "data.empty_reason"),
+            content="absent.",
+            cited_paths=("data.state",),
         ),
     )
 
     assert result.accepted is True
 
 
+def test_guard_rejects_undeclared_structural_relation_cause() -> None:
+    result = guard_final_response(
+        _neutral_empty_input(),
+        DraftResponseV1(
+            content="No records are available because maintenance.",
+            cited_paths=("data.state",),
+        ),
+    )
+
+    assert result.accepted is False
+
+
 @pytest.mark.parametrize(
     "content",
     [
-        "두산 경기가 없습니다.",
-        "18시 경기가 없습니다.",
-        "5경기가 없습니다.",
-        "비 때문에 경기가 없습니다.",
+        "ready unavailable.",
+        "ready is absent.",
+        "No records maintenance unavailable.",
+        "No records hacked unavailable.",
+        "No records are unavailable tomorrow.",
+        "No records corrupted unavailable.",
+        "No records unicorn available.",
+        "No records fabricated outage available.",
     ],
 )
-def test_guard_rejects_fabricated_typed_empty_details(content: str) -> None:
+def test_guard_rejects_undeclared_absence_relation_tokens(content: str) -> None:
+    value = _neutral_empty_input()
+    if content.startswith("ready"):
+        value = value.model_copy(
+            update={'public_facts_json': '{"data":{"state":"ready"}}'}
+        )
     result = guard_final_response(
-        _empty_input(),
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "No records are currently unavailable.",
+        "records absent.",
+    ],
+)
+def test_guard_rejects_implicit_or_question_derived_relation(content: str) -> None:
+    result = guard_final_response(
+        _neutral_empty_input(),
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+
+
+def test_canonicalizer_preserves_undeclared_relation_citation_for_rejection() -> None:
+    draft = DraftResponseV1(
+        content="absent.",
+        cited_paths=("data.state", "data.reason"),
+    )
+
+    canonical = canonicalize_draft_citations(_neutral_empty_input(), draft)
+
+    assert canonical is draft
+    assert guard_final_response(_neutral_empty_input(), canonical).code == (
+        "structural_relation_citation_mismatch"
+    )
+
+
+def test_guard_accepts_declared_question_scoped_state() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-payload-hash",
+        public_facts={"data": {"state": "ready"}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="ready.",
+            cited_paths=("data.state",),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize("content", ["READY.", "Ready."])
+def test_guard_rejects_case_changed_opaque_string_evidence(content: str) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-case-change",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-case-change-payload-hash",
+        public_facts={"data": {"state": "ready"}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+    assert result.code == "cited_value_not_rendered"
+
+
+@pytest.mark.parametrize("evidence", [" ready ", "ready ", " ready"])
+@pytest.mark.parametrize("content", ["ready.", " ready ."])
+def test_guard_rejects_edge_whitespace_string_evidence(
+    evidence: str,
+    content: str,
+) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-edge-whitespace",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-edge-whitespace-payload-hash",
+        public_facts={"data": {"state": evidence}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+    assert result.code == "citation_not_scalar"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "The record state is ready unicorn.",
+        "Fabricated outage says ready.",
+        "ready hacked tomorrow.",
+        "ready confidential internal.",
+        "ready corrupted.",
+    ],
+)
+def test_guard_rejects_undeclared_state_relation_tokens(content: str) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-mutation",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-mutation-payload-hash",
+        public_facts={"data": {"state": "ready"}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+
+
+def test_structural_relation_cannot_bypass_top_n_cardinality() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-top-two",
+        question="What are the top 2 record states?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="top-two-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [{"state": "alpha"}, {"state": "beta"}]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("records[0].state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="The record state is alpha.",
+            cited_paths=("records[0].state",),
+        ),
+    )
+
+    assert result.code == "requested_scope_not_fully_cited"
+
+
+def _neutral_top_two_relation(
+    *,
+    include_identity: bool = True,
+    repeated_state: bool = False,
+) -> CompositionInputV1:
+    second_state = "ready" if repeated_state else "waiting"
+    evidence_paths = (
+        "records[0].name",
+        "records[0].state",
+        "records[1].name",
+        "records[1].state",
+    )
+    if not include_identity:
+        evidence_paths = ("records[0].state", "records[1].state")
+    return CompositionInputV1(
+        request_id="request-neutral-top-two-relation",
+        question="What are the top 2 records?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="top-two-relation-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [
+                {"name": "alpha", "state": "ready"},
+                {"name": "beta", "state": second_state},
+            ]
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=evidence_paths,
+                identity_paths=(
+                    ("records[0].name", "records[1].name")
+                    if include_identity
+                    else ()
+                ),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "alpha is beta.",
+        "No record states are available.",
+        "record beta, alpha.",
+    ],
+)
+def test_structural_relation_rejects_shape_implicit_and_reversed_content(
+    content: str,
+) -> None:
+    value = _neutral_top_two_relation()
+    if content != "No record states are available.":
+        value = value.model_copy(
+            update={
+                "structural_evidence_relations": (
+                    StructuralEvidenceRelationV1(
+                        evidence_paths=(
+                            "records[0].name",
+                            "records[1].name",
+                        ),
+                        identity_paths=(
+                            "records[0].name",
+                            "records[1].name",
+                        ),
+                    ),
+                )
+            }
+        )
+
+    result = guard_final_response(
+        value,
         DraftResponseV1(
             content=content,
-            cited_paths=("data.status", "data.empty_reason"),
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
         ),
     )
 
-    assert result.code == "typed_empty_ungrounded_fact"
+    assert result.accepted is False
 
 
-def test_guard_requires_exact_typed_empty_semantic_citations() -> None:
+def test_structural_relation_rejects_semantic_korean_suffix() -> None:
+    value = _neutral_empty_input(question="알파 상태?").model_copy(
+        update={'public_facts_json': '{"data":{"state":"ready"}}'}
+    )
+
     result = guard_final_response(
-        _empty_input(),
+        value,
+        DraftResponseV1(content="알파보다 ready 입니다.", cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+
+
+def test_structural_relation_requires_declared_top_n_identity() -> None:
+    value = _neutral_top_two_relation(
+        include_identity=False,
+        repeated_state=True,
+    )
+
+    result = guard_final_response(
+        value,
         DraftResponseV1(
-            content="예정된 경기가 없습니다.",
-            cited_paths=("data.empty_reason",),
+            content="ready, ready.",
+            cited_paths=("records[0].state", "records[1].state"),
         ),
     )
 
-    assert result.code == "typed_empty_citations_required"
+    assert result.code == "requested_item_identity_not_cited"
+
+
+def test_structural_relation_accepts_visible_identity_evidence_in_source_order() -> None:
+    value = _neutral_top_two_relation()
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha ready, beta waiting.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-mixed-roots",
+        question="What are the top 2 records?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="mixed-roots-payload-hash",
+        composition_list_root="left",
+        public_facts={
+            "left": [{"name": "alpha"}],
+            "right": [{"name": "unused"}, {"name": "beta"}],
+        },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("left[0].name", "right[1].name"),
+                identity_paths=("left[0].name", "right[1].name"),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha, beta.",
+            cited_paths=("left[0].name", "right[1].name"),
+        ),
+    )
+
+    assert result.code == "requested_scope_mixed_list_roots"
+
+
+def test_top_n_rejects_list_root_not_declared_by_descriptor() -> None:
+    value = _neutral_top_two_relation().model_copy(
+        update={"composition_list_root": "other_records"}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha ready, beta waiting.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.code == "requested_scope_list_root_not_declared"
+
+
+def test_top_n_rejects_auxiliary_declared_wildcard_root() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-auxiliary-root",
+        question="What are the top 2 records?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="auxiliary-root-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [{"name": "real-a"}, {"name": "real-b"}],
+            "warnings": ["alpha", "beta"],
+        },
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="top 2 records alpha, beta.",
+            cited_paths=("warnings[0]", "warnings[1]"),
+        ),
+    )
+
+    assert result.code == "requested_scope_list_root_not_declared"
+
+
+def test_structural_relation_rejects_required_evidence_subset() -> None:
+    value = _neutral_top_two_relation()
+    subset = DraftResponseV1(
+        content="alpha.",
+        cited_paths=("records[0].name",),
+    )
+
+    result = guard_final_response(value, subset)
+
+    assert result.code == "structural_relation_citation_mismatch"
+
+
+def test_canonicalizer_preserves_full_required_set_when_literals_are_missing() -> None:
+    value = _neutral_top_two_relation()
+    provider_draft = DraftResponseV1(
+        content="alpha.",
+        cited_paths=value.structural_evidence_relations[0].evidence_paths,
+    )
+
+    canonical = canonicalize_draft_citations(value, provider_draft)
+
+    assert canonical is provider_draft
+    assert guard_final_response(value, canonical).code == "cited_value_not_rendered"
+
+
+def test_relation_canonicalizer_preserves_malformed_provider_citation() -> None:
+    draft = DraftResponseV1(
+        content="No records are available.",
+        cited_paths=("data.state", "bogus.path"),
+    )
+
+    canonical = canonicalize_draft_citations(_neutral_empty_input(), draft)
+
+    assert canonical is draft
+    assert guard_final_response(_neutral_empty_input(), canonical).code == (
+        "citation_not_projected"
+    )
+
+
+def test_visible_boolean_number_and_null_citations_are_never_dropped() -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What are the three values?",
+            "public_facts_json": '{"flag":true,"count":2,"missing":null}',
+            "structural_evidence_relations": (),
+        }
+    )
+    draft = DraftResponseV1(
+        content="true, 2, null.",
+        cited_paths=("flag", "count", "missing"),
+    )
+
+    canonical = canonicalize_draft_citations(value, draft)
+
+    assert canonical is draft
+    assert guard_final_response(value, canonical).accepted is True
+
+
+def test_guard_uses_type_strict_literal_ownership_for_bool_and_number() -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What is the value?",
+            "public_facts_json": '{"flag":true,"number":1}',
+            "structural_evidence_relations": (),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content="1 true.", cited_paths=("number",)),
+    )
+
+    assert result.code == "rendered_value_not_cited"
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "content", "expected_code"),
+    [
+        ('{"label":"alpha","value":true}', "alpha, true.", "rendered_value_not_cited"),
+        ('{"label":"alpha","value":null}', "alpha, null.", "rendered_value_not_cited"),
+        ('{"label":"alpha","value":2}', "alpha, 2.", "ungrounded_number"),
+    ],
+)
+def test_guard_rejects_visible_uncited_scalar_for_every_json_scalar_type(
+    public_facts_json: str,
+    content: str,
+    expected_code: str,
+) -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What is alpha?",
+            "public_facts_json": public_facts_json,
+            "structural_evidence_relations": (),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("label",)),
+    )
+
+    assert result.code == expected_code
 
 
 def test_guard_accepts_grounded_natural_response() -> None:
@@ -186,7 +686,7 @@ def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
     accepted = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57입니다.",
+            content="상위 3팀은 KT 59, 삼성 58, LG 57입니다.",
             cited_paths=cited_paths,
         ),
     )
@@ -218,7 +718,7 @@ def test_guard_requires_exact_requested_top_n_classifier() -> None:
     accepted = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
+            content="상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
             cited_paths=cited_paths,
         ),
     )
@@ -385,7 +885,10 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
         ),
     )
 
-    assert result.code == "cited_value_order_mismatch"
+    assert result.code in {
+        "cited_value_not_rendered",
+        "cited_value_order_mismatch",
+    }
 
 
 @pytest.mark.parametrize(
@@ -667,6 +1170,25 @@ def test_canonicalizer_does_not_hide_invalid_citations(
     assert guard_final_response(_input(), canonical).code == expected_code
 
 
+def test_canonicalizer_does_not_prune_out_of_scope_citation() -> None:
+    value = _input().model_copy(update={"question": "현재 상위 2팀"})
+    draft = DraftResponseV1(
+        content="KT, 삼성.",
+        cited_paths=(
+            "data.items[0].team",
+            "data.items[1].team",
+            "data.items[2].team",
+        ),
+    )
+
+    canonical = canonicalize_draft_citations(value, draft)
+
+    assert canonical is draft
+    assert guard_final_response(value, canonical).code == (
+        "citation_outside_requested_scope"
+    )
+
+
 def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
     result = guard_final_response(
         _input(),
@@ -858,6 +1380,7 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_root="items",
         public_facts={"items": [{"team": "New York Yankees"}]},
     )
     result = guard_final_response(
@@ -939,8 +1462,8 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
     result = guard_final_response(
         value,
         DraftResponseV1(
-            content="현재 USD 200 Apple입니다.",
-            cited_paths=("symbol", "price", "currency"),
+            content="USD 200 Apple입니다.",
+            cited_paths=("currency", "price", "symbol"),
         ),
     )
 
@@ -955,7 +1478,7 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
     status_result = guard_final_response(
         status_value,
         DraftResponseV1(
-            content="현재 정상입니다.",
+            content="정상입니다.",
             cited_paths=("status",),
         ),
     )
@@ -1272,6 +1795,7 @@ def test_guard_requires_separator_between_cited_literals(
     value = _input().model_copy(
         update={
             "question": "현재 상위 2팀",
+            "composition_list_root": "items",
             "public_facts_json": (
                 '{"items":['
                 f'{{"team":"{teams[0]}"}},'
@@ -1289,4 +1813,7 @@ def test_guard_requires_separator_between_cited_literals(
         ),
     )
 
-    assert result.code == "cited_value_order_mismatch"
+    assert result.code in {
+        "cited_value_not_rendered",
+        "cited_value_order_mismatch",
+    }
