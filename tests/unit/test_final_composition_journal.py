@@ -12,9 +12,13 @@ import pytest
 from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
-from simpleclaw.agent.final_response_composer import FinalResponseComposerError
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposerError,
+    materialize_render_plan,
+)
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.composition import FinalCompositionRuntime
 from simpleclaw.graph_runtime.composition_journal import (
@@ -49,7 +53,13 @@ def _values(request_id: str = "request-1"):
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_root="data.items",
         public_facts=facts,
+        resolved_claims=(
+            "data.category",
+            "data.items[0].team",
+            "data.items[0].wins",
+        ),
     )
     result = NormalizedAssetResultV1(
         invocation_id="invocation",
@@ -338,13 +348,9 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
 ) -> None:
     value, result = _values("record-deadline-request")
     db_path = tmp_path / "record-deadline.sqlite3"
-    accepted_draft = DraftResponseV1(
-        content="KBO · KT · 59.",
-        cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
-        ),
+    accepted_draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="middle_dot_space"),
     )
 
     deadline = asyncio.timeout(None)
@@ -551,15 +557,11 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
     tmp_path,
 ) -> None:
     value, result = _values("canonicalized-replay-request")
-    provider_draft = DraftResponseV1(
-        content="KBO, KT, 59.",
-        cited_paths=(
-            "data.category",
-            "data.items[0].team",
-            "data.items[0].wins",
-        ),
+    accepted_draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
     )
-    canonical = canonicalize_draft_citations(value, provider_draft)
+    canonical = canonicalize_draft_citations(value, accepted_draft)
     db_path = tmp_path / "canonicalized-replay.sqlite3"
     compose = AsyncMock(return_value=canonical)
 
@@ -589,14 +591,14 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
         composition_input=value,
     )
 
-    assert canonical.content == provider_draft.content
+    assert canonical.content == accepted_draft.content
     assert canonical.cited_paths == (
         "data.category",
         "data.items[0].team",
         "data.items[0].wins",
     )
     assert first is not None
-    assert first.content == provider_draft.content
+    assert first.content == accepted_draft.content
     assert replay == first
     assert compose.await_count == 1
     assert replay_compose.await_count == 0
