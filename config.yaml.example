@@ -223,6 +223,7 @@ agent:
         mode: asset_text_compat  # asset_text_compat | central_persona_v1
         max_tokens: 1200
         max_output_chars: 3500
+        temperature: 0.0  # trusted composer sampling policy (0.0–1.0)
         max_attempts: 1  # 다른 값을 넣어도 1로 fail-closed 정규화
       # graph/provider/contract/dispatch 불변식 실패 시 기본은 사용자 전송 전 차단.
       # legacy fallback은 target executor 진입 전 실패에만 허용된다. dispatch가

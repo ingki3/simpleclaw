@@ -2913,6 +2913,7 @@ class AgentOrchestrator:
                 max_output_chars=int(
                     composition_config.get("max_output_chars", 3500)
                 ),
+                temperature=float(composition_config.get("temperature", 0.0)),
                 # Explicit backend selection is the Router's no-retry path, so one
                 # composer send cannot silently become two provider calls.
                 backend_name=self._router.get_default_backend(),

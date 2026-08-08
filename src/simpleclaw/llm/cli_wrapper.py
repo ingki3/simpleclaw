@@ -61,6 +61,7 @@ class CLIProvider(LLMProvider):
         tools: list | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -75,6 +76,10 @@ class CLIProvider(LLMProvider):
         reasoning hint(BIZ-453)도 미지원 — 품질 힌트이므로 조용히 무시한다.
         """
         del reasoning
+        if temperature is not None:
+            raise LLMProviderError(
+                f"Provider '{self._name}' does not support required temperature"
+            )
         self._reject_required_structured_output(
             response_mime_type=response_mime_type,
             response_schema=response_schema,

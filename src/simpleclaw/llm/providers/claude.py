@@ -106,6 +106,7 @@ class ClaudeProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -145,6 +146,8 @@ class ClaudeProvider(LLMProvider):
                 kwargs["system"] = system_param
             if tools:
                 kwargs["tools"] = self._convert_tools(tools)
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             # 1h 캐시 TTL 은 베타 헤더로만 활성화된다. 캐시 마커가 없으면 헤더도 생략해
             # 베타 surface 노출을 최소화한다.
             if has_cached_block:
@@ -216,6 +219,7 @@ class ClaudeProvider(LLMProvider):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -259,6 +263,8 @@ class ClaudeProvider(LLMProvider):
             kwargs["system"] = system_param
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if has_cached_block:
             kwargs["extra_headers"] = {"anthropic-beta": _EXTENDED_CACHE_TTL_BETA}
 

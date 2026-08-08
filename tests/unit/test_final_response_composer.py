@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
+from scripts.dev.validate_final_response_composer_no_send import (
+    _production_persona_prompt,
+)
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -118,6 +121,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert request.backend_name == "fixture-backend"
     assert request.route_name is None
     assert request.usage_task == "langgraph_v4_composer"
+    assert request.temperature == 0.0
     assert request.require_structured_output is True
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert request.response_schema["properties"]["cited_paths"]["items"][
@@ -135,6 +139,64 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
         == 0
     )
     assert draft.content.startswith("현재 KBO")
+
+
+@pytest.mark.asyncio
+async def test_composer_keeps_contract_with_production_persona_assembly(
+    tmp_path,
+) -> None:
+    persona_dir = tmp_path / "persona"
+    persona_dir.mkdir()
+    (persona_dir / "SOUL.md").write_text(
+        "# SOUL\n\n따뜻하고 간결한 한국어 존댓말",
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "persona:\n"
+        f"  local_dir: {persona_dir}\n"
+        f"  global_dir: {tmp_path / 'missing'}\n"
+        "  token_budget: 4096\n",
+        encoding="utf-8",
+    )
+    content = "LG는 60, 한화는 58, 롯데는 55입니다."
+    paths = [
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    ]
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": content,
+                    "cited_paths": paths,
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_prompt=_production_persona_prompt(config),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    draft = await composer.compose(_production_shaped_input())
+
+    assert send.await_count == 1
+    request = send.await_args.args[0]
+    assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
+    assert "Persona에 사용자 호칭" in request.system_prompt
+    assert "projected 숫자 바로 뒤" in request.system_prompt
+    assert draft.content == content
+    assert draft.cited_paths == tuple(paths)
+    assert guard_final_response(_production_shaped_input(), draft).accepted is True
 
 
 @pytest.mark.asyncio
@@ -386,3 +448,19 @@ def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> N
     changed = FinalResponseComposer(**kwargs).fingerprint
 
     assert changed != original
+
+
+def test_composer_fingerprint_includes_effective_temperature() -> None:
+    kwargs = {
+        "send": AsyncMock(),
+        "persona_prompt": "간결하게",
+        "max_tokens": 1200,
+        "backend_name": "fixture-backend",
+    }
+
+    deterministic = FinalResponseComposer(**kwargs, temperature=0.0)
+    configured = FinalResponseComposer(**kwargs, temperature=0.2)
+
+    assert deterministic.temperature == 0.0
+    assert configured.temperature == 0.2
+    assert deterministic.fingerprint != configured.fingerprint
