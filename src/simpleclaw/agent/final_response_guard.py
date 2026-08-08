@@ -93,8 +93,6 @@ _KOREAN_SUFFIXES = (
     "에서",
     "까지",
     "부터",
-    "처럼",
-    "보다",
     "만",
     "은",
     "는",
@@ -106,18 +104,12 @@ _KOREAN_SUFFIXES = (
     "과",
     "도",
     "로",
-    "의",
     "에",
     "야",
 )
 _SAFE_CONNECTOR_WORDS = frozenset(
     {
         "각각",
-        "결과",
-        "기준",
-        "다음",
-        "순서",
-        "현재",
         "이며",
         "이고",
         "입니다",
@@ -132,9 +124,7 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "과",
         "도",
         "로",
-        "의",
         "에",
-        "중",
         "the",
         "a",
         "an",
@@ -143,14 +133,8 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "are",
         "was",
         "were",
-        "current",
-        "currently",
         "with",
         "respectively",
-        "result",
-        "results",
-        "based",
-        "on",
     }
 )
 _LIMITATION_WORDS = frozenset(
@@ -172,69 +156,6 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
-_CAUSAL_RELATION_WORDS = frozenset(
-    {
-        "because",
-        "cause",
-        "caused",
-        "due",
-        "reason",
-        "때문",
-        "때문에",
-        "원인",
-        "탓",
-    }
-)
-_STRUCTURAL_RELATION_GRAMMAR_WORDS = frozenset(
-    {
-        "a",
-        "an",
-        "absent",
-        "are",
-        "current",
-        "currently",
-        "is",
-        "아니야",
-        "안",
-        "no",
-        "none",
-        "not",
-        "the",
-        "there",
-        "unavailable",
-        "available",
-        "was",
-        "were",
-        "각각",
-        "결과",
-        "기준",
-        "다음",
-        "됩니다",
-        "로",
-        "를",
-        "만",
-        "에",
-        "와",
-        "은",
-        "의",
-        "이",
-        "이고",
-        "이며",
-        "입니다",
-        "중",
-        "현재",
-        "진행",
-        "해요",
-        "없",
-        "없는",
-        "없다",
-        "없습니다",
-        "없어요",
-        "없음",
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class GuardResult:
     """Response guard의 명시적 승인 여부와 stable 거부 code다."""
@@ -294,6 +215,37 @@ def _required_item_indices(
     return set(sorted(available)[:top_n])
 
 
+def _structurally_identified_paths(
+    concrete: dict[str, JsonValue],
+    required_indices: set[int],
+) -> set[str]:
+    """동일 상대 path에서 index별로 유일한 string literal을 identity로 본다."""
+    candidates: dict[tuple[str, str], dict[int, tuple[str, str]]] = {}
+    for path, value in concrete.items():
+        location = _item_location(path)
+        if (
+            location is None
+            or location[1] not in required_indices
+            or not isinstance(value, str)
+            or not value.strip()
+        ):
+            continue
+        container, index, field = location
+        candidates.setdefault((container, field), {})[index] = (
+            path,
+            value.strip().casefold(),
+        )
+    identified: set[str] = set()
+    for matches in candidates.values():
+        if set(matches) != required_indices:
+            continue
+        literals = [matches[index][1] for index in sorted(required_indices)]
+        if len(set(literals)) != len(literals):
+            continue
+        identified.update(matches[index][0] for index in required_indices)
+    return identified
+
+
 def _word_stem(token: str) -> str:
     if not re.fullmatch(r"[가-힣]+", token):
         return token.casefold()
@@ -301,11 +253,6 @@ def _word_stem(token: str) -> str:
         if token.endswith(suffix) and len(token) > len(suffix):
             return token[: -len(suffix)]
     return token
-
-
-def _word_forms(token: str) -> frozenset[str]:
-    """표면형과 공통 조사 제거형을 동일 lexical slot 후보로 취급한다."""
-    return frozenset({token.casefold(), _word_stem(token).casefold()})
 
 
 def _remove_cited_literals(
@@ -668,73 +615,6 @@ def _matched_structural_evidence_relation(
     )
 
 
-def _structural_relation_literal_order_error(
-    content: str,
-    cited_values: dict[str, JsonValue],
-    *,
-    evidence_must_be_visible: bool,
-) -> str | None:
-    """Visible evidence literal을 projection 순서·1회 노출로 제한한다."""
-    cursor = 0
-    matched_spans: list[tuple[int, int]] = []
-    patterns: list[re.Pattern[str]] = []
-    for value in cited_values.values():
-        pattern = projected_scalar_literal_pattern(value)
-        if pattern is None:
-            return "structural_relation_evidence_invalid"
-        match = pattern.search(content, cursor)
-        if match is None:
-            if evidence_must_be_visible:
-                return "cited_value_not_rendered"
-            continue
-        matched_spans.append(match.span())
-        patterns.append(pattern)
-        cursor = match.end()
-    unmatched = _blank_spans(content, tuple(matched_spans))
-    if any(pattern.search(unmatched) for pattern in patterns):
-        return "cited_value_order_mismatch"
-    return None
-
-
-def _guard_structural_evidence_relation_text(
-    value: CompositionInputV1,
-    draft: DraftResponseV1,
-    cited_values: dict[str, JsonValue],
-    *,
-    evidence_must_be_visible: bool,
-    allowed_scope_words: tuple[str, ...],
-) -> GuardResult | None:
-    """Relation text를 question scope와 bounded grammar로만 제한한다."""
-    if draft.limitation_paths or value.unresolved_claims:
-        return _rejected("structural_relation_unresolved")
-    content = draft.content.strip()
-    if _URL_RE.search(content):
-        return _rejected("structural_relation_ungrounded_fact")
-    residual = _remove_cited_literals(content, cited_values)
-    if _NUMBER_RE.search(residual):
-        return _rejected("structural_relation_ungrounded_fact")
-    question_words = {
-        form for token in allowed_scope_words for form in _word_forms(token)
-    }
-    residual_tokens = tuple(_WORD_RE.findall(residual))
-    residual_words = {
-        form for token in residual_tokens for form in _word_forms(token)
-    }
-    if residual_words & _CAUSAL_RELATION_WORDS:
-        return _rejected("structural_relation_ungrounded_fact")
-    if len(residual_tokens) > max(8, len(_WORD_RE.findall(value.question)) + 4):
-        return _rejected("structural_relation_ungrounded_fact")
-    allowed_words = question_words | _STRUCTURAL_RELATION_GRAMMAR_WORDS
-    if any(not (_word_forms(token) & allowed_words) for token in residual_tokens):
-        return _rejected("structural_relation_ungrounded_fact")
-    if not evidence_must_be_visible and not residual_words & question_words:
-        return _rejected("structural_relation_scope_missing")
-    symbol_residual = _WORD_RE.sub("", residual)
-    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
-        return _rejected("ungrounded_symbol")
-    return None
-
-
 def guard_final_response(
     value: CompositionInputV1,
     draft: DraftResponseV1,
@@ -763,7 +643,6 @@ def guard_final_response(
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
-    cited_item_string_indices: set[int] = set()
     for path in draft.cited_paths:
         if "[*]" in path or path not in concrete:
             return _rejected("citation_not_projected")
@@ -775,44 +654,42 @@ def guard_final_response(
                 cited_item_indices.add(index)
         cited = concrete[path]
         cited_values[path] = cited
-        if index is not None and isinstance(cited, str) and cited.strip():
-            cited_item_string_indices.add(index)
     structural_relation = _matched_structural_evidence_relation(value, draft)
+    if value.structural_evidence_relations and structural_relation is None:
+        return _rejected("structural_relation_citation_mismatch")
     for cited in cited_values.values():
         if projected_scalar_literal_pattern(cited) is None:
             return _rejected("citation_not_scalar")
         if (
-            structural_relation is None
-            and isinstance(cited, str)
+            isinstance(cited, str)
             and len(cited.strip()) >= 2
             and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
-    if top_n is not None and cited_item_indices != _required_item_indices(
-        concrete, top_n
-    ):
-        return _rejected("requested_scope_not_fully_cited")
-    if top_n is not None and cited_item_string_indices != _required_item_indices(
-        concrete, top_n
-    ):
-        return _rejected("requested_item_identity_not_cited")
-    allowed_unit_spans: tuple[tuple[int, int], ...] = ()
-    if structural_relation is not None:
-        literal_order_error = _structural_relation_literal_order_error(
-            content,
-            cited_values,
-            evidence_must_be_visible=(
-                structural_relation.evidence_must_be_visible
-            ),
+    if top_n is not None:
+        required_indices = _required_item_indices(concrete, top_n)
+        if cited_item_indices != required_indices:
+            return _rejected("requested_scope_not_fully_cited")
+        identity_paths = (
+            set(structural_relation.identity_paths)
+            if structural_relation is not None
+            else _structurally_identified_paths(concrete, required_indices)
         )
-    else:
-        literal_order_error, allowed_unit_spans = _cited_literal_order_error(
-            content,
-            concrete,
-            cited_values,
-            top_n=top_n,
-            question=value.question,
-        )
+        cited_identity_indices = {
+            index
+            for path in draft.cited_paths
+            if path in identity_paths
+            if (index := _item_index(path)) is not None
+        }
+        if cited_identity_indices != required_indices:
+            return _rejected("requested_item_identity_not_cited")
+    literal_order_error, allowed_unit_spans = _cited_literal_order_error(
+        content,
+        concrete,
+        cited_values,
+        top_n=top_n,
+        question=value.question,
+    )
     if literal_order_error is not None:
         return _rejected(literal_order_error)
 
@@ -829,46 +706,33 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
-    if structural_relation is not None:
-        relation_error = _guard_structural_evidence_relation_text(
-            value,
-            draft,
-            cited_values,
-            evidence_must_be_visible=(
-                structural_relation.evidence_must_be_visible
-            ),
-            allowed_scope_words=structural_relation.allowed_scope_words,
-        )
-        if relation_error is not None:
-            return relation_error
-    else:
-        scope_phrase_spans = _scope_phrase_spans(
-            content,
-            question=value.question,
-            top_n=top_n,
-            cited_values=cited_values,
-        )
-        if scope_phrase_spans is None:
+    scope_phrase_spans = _scope_phrase_spans(
+        content,
+        question=value.question,
+        top_n=top_n,
+        cited_values=cited_values,
+    )
+    if scope_phrase_spans is None:
+        return _rejected("ungrounded_text")
+    allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
+    lexical_residual = _remove_cited_literals(
+        _blank_spans(content, allowed_lexical_spans),
+        cited_values,
+    )
+    allowed_words = _SAFE_CONNECTOR_WORDS
+    if value.unresolved_claims:
+        allowed_words = allowed_words | _LIMITATION_WORDS
+    for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
+        folded = token.casefold()
+        stem = _word_stem(token).casefold()
+        if folded not in allowed_words and stem not in allowed_words:
             return _rejected("ungrounded_text")
-        allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
-        lexical_residual = _remove_cited_literals(
-            _blank_spans(content, allowed_lexical_spans),
-            cited_values,
-        )
-        allowed_words = _SAFE_CONNECTOR_WORDS
-        if value.unresolved_claims:
-            allowed_words = allowed_words | _LIMITATION_WORDS
-        for token in _WORD_RE.findall(_URL_RE.sub("", lexical_residual)):
-            folded = token.casefold()
-            stem = _word_stem(token).casefold()
-            if folded not in allowed_words and stem not in allowed_words:
-                return _rejected("ungrounded_text")
-        symbol_residual = _WORD_RE.sub(
-            "",
-            _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
-        )
-        if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
-            return _rejected("ungrounded_symbol")
+    symbol_residual = _WORD_RE.sub(
+        "",
+        _NUMBER_RE.sub("", _URL_RE.sub("", lexical_residual)),
+    )
+    if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
+        return _rejected("ungrounded_symbol")
 
     limitation_values = {
         f"unresolved_claims[{index}]": claim

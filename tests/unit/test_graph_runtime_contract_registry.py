@@ -146,15 +146,14 @@ def test_malformed_additional_properties_is_rejected_before_candidate_build():
         {
             "when": {"path": "record_state", "equals": "ready"},
             "evidence_fields": ["record_state"],
-            "evidence_must_be_visible": "false",
+            "identity_fields": "record_state",
         },
         {
             "when": {"path": "record_state", "equals": []},
             "evidence_fields": ["record_state"],
-            "evidence_must_be_visible": False,
         },
     ],
-    ids=("non_boolean_visibility", "container_equals"),
+    ids=("non_array_identity", "container_equals"),
 )
 def test_invalid_relation_types_are_normalized_at_registry_boundary(
     relation: dict[str, object],
@@ -177,7 +176,7 @@ def test_invalid_relation_types_are_normalized_at_registry_boundary(
         build_contract_registry([malformed])
 
     assert captured.value.code == "schema.invalid_composition_fields"
-    assert isinstance(captured.value.__cause__, TypeError)
+    assert isinstance(captured.value.__cause__, ValueError | TypeError)
 
 
 def test_second_recipe_step_binding_owner_mismatch_is_rejected_by_registry():

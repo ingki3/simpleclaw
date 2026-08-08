@@ -744,8 +744,8 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "empty_reason": "no_scheduled_events",
                 "items": [],
             },
-            "오늘 프로야구는 없습니다.",
-            ("data.status",),
+            "no_scheduled_events, empty.",
+            ("data.empty_reason", "data.status"),
         ),
         (
             "지금 KBO 경기 중이야?",
@@ -755,8 +755,8 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "empty_reason": "no_live_events",
                 "items": [],
             },
-            "지금 KBO 경기는 없습니다.",
-            ("data.status",),
+            "no_live_events, empty.",
+            ("data.empty_reason", "data.status"),
         ),
     ],
 )

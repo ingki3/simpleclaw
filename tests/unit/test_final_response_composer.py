@@ -85,14 +85,15 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     """BIZ-643 안전 계약과 BIZ-644 typed-persona prompt를 함께 보존한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 9
-    assert "STRUCTURAL EVIDENCE RELATIONS" in prompt.system_prompt
+    assert prompt.version == 10
+    assert "VISIBLE STRUCTURAL EVIDENCE" in prompt.system_prompt
     assert "TYPED EMPTY RESULTS" not in prompt.system_prompt
     assert "no_scheduled_events" not in prompt.system_prompt
     assert "경기 예정입니다" not in prompt.system_prompt
     assert "question_scope_absent" not in prompt.system_prompt
     assert "question_scope_state" not in prompt.system_prompt
-    assert "evidence_must_be_visible" in prompt.system_prompt
+    assert "implicit evidence" not in prompt.system_prompt
+    assert "identity_paths" in prompt.system_prompt
     assert "typed persona projection only" in prompt.system_prompt
     assert "Treat ordered cited_paths" in prompt.system_prompt
     assert "as a one-way render plan" in prompt.system_prompt

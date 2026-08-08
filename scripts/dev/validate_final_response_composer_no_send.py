@@ -262,8 +262,16 @@ _SCHEDULE_PRESENT_SCENARIO = _Scenario(
             ],
         }
     },
-    resolved_claims=("data.items[0].status",),
-    expected_citations=("data.items[0].status",),
+    resolved_claims=(
+        "data.items[0].status",
+        "data.items[0].participants.away.name",
+        "data.items[0].participants.home.name",
+    ),
+    expected_citations=(
+        "data.items[0].participants.away.name",
+        "data.items[0].participants.home.name",
+        "data.items[0].status",
+    ),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -280,7 +288,7 @@ _SCHEDULE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.status",),
+    expected_citations=("data.empty_reason", "data.status"),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -297,7 +305,7 @@ _LIVE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.status",),
+    expected_citations=("data.empty_reason", "data.status"),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -650,20 +658,11 @@ async def _connected_probe(
             f"lexical_token_sha256={token_hashes}"
         )
     concrete = flatten_public_facts(capture.value.public_facts)
-    implicit_evidence = {
-        path
-        for relation in capture.value.structural_evidence_relations
-        if not relation.evidence_must_be_visible
-        for path in relation.evidence_paths
-    }
     if any(
         path not in concrete
-        or (
-            path not in implicit_evidence
-            and not projected_scalar_is_visible(
-                capture.draft.content,
-                concrete[path],
-            )
+        or not projected_scalar_is_visible(
+            capture.draft.content,
+            concrete[path],
         )
         for path in capture.draft.cited_paths
     ):

@@ -147,7 +147,7 @@ class StructuralEvidenceRelationDeclaration:
     when_path: str
     when_equals: JsonValue
     evidence_fields: tuple[str, ...]
-    evidence_must_be_visible: bool
+    identity_fields: tuple[str, ...] = ()
 
 
 def validate_structural_evidence_relations(
@@ -165,21 +165,15 @@ def validate_structural_evidence_relations(
             f"{MAX_COMPOSITION_RELATIONS} relations"
         )
     declarations: list[StructuralEvidenceRelationDeclaration] = []
-    seen: dict[tuple[str, str, tuple[str, ...]], bool] = {}
+    seen: dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]] = {}
     for raw in value:
-        if not isinstance(raw, dict) or set(raw) != {
-            "when",
-            "evidence_fields",
-            "evidence_must_be_visible",
-        }:
+        if not isinstance(raw, dict) or set(raw) not in (
+            {"when", "evidence_fields"},
+            {"when", "evidence_fields", "identity_fields"},
+        ):
             raise ValueError("structural evidence relation has invalid fields")
         when = raw["when"]
         evidence = raw["evidence_fields"]
-        evidence_must_be_visible = raw["evidence_must_be_visible"]
-        if not isinstance(evidence_must_be_visible, bool):
-            raise TypeError(
-                "structural evidence visibility policy must be a boolean"
-            )
         if not isinstance(when, dict) or set(when) != {"path", "equals"}:
             raise ValueError(
                 "structural evidence relation when must contain path and equals"
@@ -209,7 +203,19 @@ def validate_structural_evidence_relations(
             raise ValueError(
                 "structural relation evidence must be composition-visible"
             )
-        identity = (
+        identity_fields = (
+            validate_composition_fields(
+                raw["identity_fields"],
+                json_schema=json_schema,
+            )
+            if "identity_fields" in raw
+            else ()
+        )
+        if any(path not in evidence_fields for path in identity_fields):
+            raise ValueError(
+                "structural relation identity must be required evidence"
+            )
+        condition_identity = (
             when_path,
             json.dumps(
                 when_equals,
@@ -218,20 +224,23 @@ def validate_structural_evidence_relations(
                 sort_keys=True,
                 separators=(",", ":"),
             ),
-            evidence_fields,
         )
-        previous_policy = seen.get(identity)
-        if previous_policy is not None:
-            if previous_policy == evidence_must_be_visible:
+        canonical_declaration = (
+            tuple(sorted(evidence_fields)),
+            tuple(sorted(identity_fields)),
+        )
+        previous = seen.get(condition_identity)
+        if previous is not None:
+            if previous == canonical_declaration:
                 raise ValueError("duplicate structural evidence relation")
             raise ValueError("conflicting structural evidence relation")
-        seen[identity] = evidence_must_be_visible
+        seen[condition_identity] = canonical_declaration
         declarations.append(
             StructuralEvidenceRelationDeclaration(
                 when_path=when_path,
                 when_equals=when_equals,
                 evidence_fields=evidence_fields,
-                evidence_must_be_visible=evidence_must_be_visible,
+                identity_fields=identity_fields,
             )
         )
     return tuple(declarations)

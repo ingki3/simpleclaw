@@ -162,14 +162,9 @@ def _concrete_path_pattern(path: str) -> re.Pattern[str]:
 def _structural_evidence_relations(
     public_facts: Mapping[str, JsonValue],
     descriptor: ContractDescriptorV1,
-    *,
-    question: str,
 ) -> tuple[StructuralEvidenceRelationV1, ...]:
     """활성 relation의 모든 evidence를 source index 순서로 구체화한다."""
     concrete = flatten_public_facts(public_facts)
-    allowed_scope_words = tuple(
-        dict.fromkeys(re.findall(r"[^\W\d_]+", question, re.UNICODE))
-    )
     activated: list[StructuralEvidenceRelationV1] = []
     for declaration in descriptor.structural_evidence_relations:
         if concrete.get(declaration.when_path, _MISSING) != declaration.when_equals:
@@ -189,13 +184,19 @@ def _structural_evidence_relations(
             if any(pattern.fullmatch(path) for pattern in patterns)
         )
         if evidence_paths:
+            identity_patterns = tuple(
+                _concrete_path_pattern(field)
+                for field in declaration.identity_fields
+            )
+            identity_paths = tuple(
+                path
+                for path in evidence_paths
+                if any(pattern.fullmatch(path) for pattern in identity_patterns)
+            )
             activated.append(
                 StructuralEvidenceRelationV1(
                     evidence_paths=evidence_paths,
-                    evidence_must_be_visible=(
-                        declaration.evidence_must_be_visible
-                    ),
-                    allowed_scope_words=allowed_scope_words,
+                    identity_paths=identity_paths,
                 )
             )
     return tuple(activated)
@@ -238,7 +239,6 @@ def build_composition_input(
         structural_evidence_relations=_structural_evidence_relations(
             public_facts,
             descriptor,
-            question=question,
         ),
     )
 

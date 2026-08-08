@@ -140,7 +140,6 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
                 {
                     "when": {"path": "data.state", "equals": "absent"},
                     "evidence_fields": ["data.state"],
-                    "evidence_must_be_visible": False,
                 }
             ],
         },
@@ -172,8 +171,7 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
     ] == [
         {
             "evidence_paths": ("data.state",),
-            "evidence_must_be_visible": False,
-            "allowed_scope_words": ("Are", "records", "available"),
+            "identity_paths": (),
         }
     ]
 
@@ -223,7 +221,6 @@ def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
                     {
                         "when": {"path": "data.state", "equals": "absent"},
                         "evidence_fields": ["data.reason"],
-                        "evidence_must_be_visible": False,
                     }
                 ],
             },
@@ -261,7 +258,7 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
                 {
                     "when": {"path": "data.phase", "equals": "ready"},
                     "evidence_fields": ["data.records[*].value"],
-                    "evidence_must_be_visible": True,
+                    "identity_fields": ["data.records[*].value"],
                 }
             ],
         },
@@ -295,24 +292,30 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
         "data.records[0].value",
         "data.records[1].value",
     )
+    assert projection.structural_evidence_relations[0].identity_paths == (
+        "data.records[0].value",
+        "data.records[1].value",
+    )
 
 
 @pytest.mark.parametrize(
-    ("second_policy", "message"),
+    ("second_fields", "message"),
     [
-        (False, "duplicate structural evidence relation"),
-        (True, "conflicting structural evidence relation"),
+        (
+            ["data.other", "data.value"],
+            "duplicate structural evidence relation",
+        ),
+        (["data.value"], "conflicting structural evidence relation"),
     ],
 )
 def test_descriptor_rejects_duplicate_or_conflicting_structural_relations(
-    second_policy: bool,
+    second_fields: list[str],
     message: str,
 ) -> None:
     owner = AssetRefV1(type="recipe", name="neutral-records")
     relation = {
         "when": {"path": "data.phase", "equals": "ready"},
-        "evidence_fields": ["data.value"],
-        "evidence_must_be_visible": False,
+        "evidence_fields": ["data.value", "data.other"],
     }
 
     with pytest.raises(ValueError, match=message):
@@ -326,17 +329,24 @@ def test_descriptor_rejects_duplicate_or_conflicting_structural_relations(
             json_schema={
                 "type": "object",
                 "properties": {
-                    "data": {"properties": {"phase": {}, "value": {}}}
+                    "data": {
+                        "properties": {
+                            "phase": {},
+                            "value": {},
+                            "other": {},
+                        }
+                    }
                 },
                 "x-simpleclaw-composition-fields": [
                     "data.phase",
                     "data.value",
+                    "data.other",
                 ],
                 "x-simpleclaw-structural-evidence-relations": [
                     relation,
                     {
                         **relation,
-                        "evidence_must_be_visible": second_policy,
+                        "evidence_fields": second_fields,
                     },
                 ],
             },

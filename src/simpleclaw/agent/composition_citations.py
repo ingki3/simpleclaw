@@ -11,7 +11,7 @@ from pydantic import JsonValue
 from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
-CITATION_CANONICALIZATION_POLICY_VERSION = "validated_visible_subset_v2"
+CITATION_CANONICALIZATION_POLICY_VERSION = "validated_visible_subset_v3"
 
 
 def projected_scalar_literal_pattern(
@@ -31,6 +31,11 @@ def projected_scalar_literal_pattern(
         return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
     if value is None or isinstance(value, bool):
         return re.compile(rf"(?<![\w]){escaped}(?![\w])", re.IGNORECASE)
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]+", rendered):
+        return re.compile(
+            rf"(?<![A-Za-z0-9_]){escaped}(?![A-Za-z0-9_])",
+            re.IGNORECASE,
+        )
     return re.compile(escaped, re.IGNORECASE)
 
 
@@ -81,15 +86,7 @@ def canonicalize_draft_citations(
     )
     if visible_paths is None:
         return draft
-    selected = set(provider_paths)
-    preserved = set(visible_paths)
-    for relation in value.structural_evidence_relations:
-        if (
-            not relation.evidence_must_be_visible
-            and set(relation.evidence_paths) <= selected
-        ):
-            preserved.update(relation.evidence_paths)
-    cited_paths = tuple(path for path in concrete if path in preserved)
+    cited_paths = tuple(path for path in concrete if path in set(visible_paths))
     if not cited_paths or cited_paths == draft.cited_paths:
         return draft
     return draft.model_copy(update={"cited_paths": cited_paths})
