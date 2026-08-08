@@ -17,6 +17,7 @@ from simpleclaw.agent.composition_contracts import (
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.final_response_guard import guard_final_response
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 from simpleclaw.llm.models import LLMResponse
@@ -66,6 +67,21 @@ def _production_shaped_input() -> CompositionInputV1:
             ),
         }
     )
+
+
+def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
+    """BIZ-643의 v6 안전 계약이 후속 merge에서 삭제되지 않아야 한다."""
+    prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
+
+    assert prompt.version == 6
+    assert "ordered cited_paths as a one-way render plan" in prompt.system_prompt
+    assert "strictly increasing in cited_paths order" in prompt.system_prompt
+    assert "Complete every selected field" in prompt.system_prompt
+    assert "for items[0] before writing any selected field for items[1]" in (
+        prompt.system_prompt
+    )
+    assert "As a final mechanical check" in prompt.system_prompt
+    assert "no cited literal occurs twice" in prompt.system_prompt
 
 
 def test_draft_schema_requires_at_least_one_cited_path() -> None:
