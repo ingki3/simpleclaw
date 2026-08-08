@@ -326,6 +326,7 @@ class GeminiProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -360,6 +361,8 @@ class GeminiProvider(LLMProvider):
             # max_output_tokens 를 비워 두고 모델 기본값에 맡긴다 (회귀 0).
             if max_tokens:
                 config.max_output_tokens = max_tokens
+            if temperature is not None:
+                config.temperature = temperature
 
             # BIZ-427 — structured output 매핑. 미지정이면 기존 동작 그대로.
             if response_mime_type:
@@ -462,6 +465,7 @@ class GeminiProvider(LLMProvider):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -498,6 +502,8 @@ class GeminiProvider(LLMProvider):
         # BIZ-297 — stream() 도 send() 와 동일하게 max_tokens 를 그대로 매핑.
         if max_tokens:
             config.max_output_tokens = max_tokens
+        if temperature is not None:
+            config.temperature = temperature
         # BIZ-453 — reasoning hint 도 send() 와 동일하게 매핑 (미지원 시 no-op).
         self._apply_reasoning(config, reasoning)
         if tools:

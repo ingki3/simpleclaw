@@ -10,6 +10,10 @@ from pydantic import JsonValue
 
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
+from .composition_citations import (
+    projected_scalar_is_visible,
+    projected_scalar_literal_pattern,
+)
 from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
@@ -17,7 +21,7 @@ _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
 _NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
 _TOP_N_PATTERNS = (
     re.compile(r"(?:상위|앞)\s*(\d+)", re.IGNORECASE),
-    re.compile(r"\btop\s*(\d+)\b", re.IGNORECASE),
+    re.compile(r"\b(?:top|first)\s*(\d+)", re.IGNORECASE),
     re.compile(r"(?<!\d)(\d+)\s*[^\W\d_]+만\b", re.IGNORECASE),
 )
 _RAW_MARKERS = (
@@ -57,6 +61,21 @@ _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECA
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/+]*$")
 _LIST_SEPARATOR_WORD_RE = re.compile(r"(?:와|과|and)", re.IGNORECASE)
+_ITEM_INDEX_RE = re.compile(r"\[(\d+)\]")
+_TOPIC_PARTICLES = frozenset({"은", "는", "이", "가"})
+_SCOPE_CLASSIFIER_PARTICLES = (
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "와",
+    "과",
+    "도",
+    "만",
+)
+_SCOPE_RELATION_SUFFIXES = ("보다", "처럼", "의")
 _KOREAN_SUFFIXES = (
     "이었습니다",
     "였습니다",
@@ -170,18 +189,6 @@ def _tokens(value: Any) -> tuple[set[str], set[str]]:
     return urls, set(_NUMBER_RE.findall(without_urls))
 
 
-def _list_lengths(value: JsonValue) -> set[str]:
-    lengths: set[str] = set()
-    if isinstance(value, list):
-        lengths.add(str(len(value)))
-        for item in value:
-            lengths.update(_list_lengths(item))
-    elif isinstance(value, dict):
-        for item in value.values():
-            lengths.update(_list_lengths(item))
-    return lengths
-
-
 def _requested_top_n(question: str) -> int | None:
     for pattern in _TOP_N_PATTERNS:
         match = pattern.search(question)
@@ -191,8 +198,21 @@ def _requested_top_n(question: str) -> int | None:
 
 
 def _item_index(path: str) -> int | None:
-    match = re.search(r"(?:^|\.)items\[(\d+)\]", path)
-    return int(match.group(1)) if match else None
+    location = _item_location(path)
+    return location[1] if location is not None else None
+
+
+def _item_location(path: str) -> tuple[str, int, str] | None:
+    """마지막 concrete list segment의 container/index/field를 반환한다."""
+    matches = tuple(_ITEM_INDEX_RE.finditer(path))
+    if not matches:
+        return None
+    match = matches[-1]
+    return (
+        path[: match.start()],
+        int(match.group(1)),
+        path[match.end() :].removeprefix("."),
+    )
 
 
 def _required_item_indices(
@@ -236,59 +256,330 @@ def _remove_cited_literals(
     return residual
 
 
-def _literal_pattern(value: JsonValue) -> re.Pattern[str] | None:
-    if value is None or isinstance(value, dict | list):
+def _blank_spans(content: str, spans: tuple[tuple[int, int], ...]) -> str:
+    chars = list(content)
+    for start, end in spans:
+        chars[start:end] = " " * (end - start)
+    return "".join(chars)
+
+
+def _scope_number_spans(content: str, top_n: int | None) -> set[tuple[int, int]]:
+    if top_n is None:
+        return set()
+    return {
+        match.span(1)
+        for pattern in _TOP_N_PATTERNS
+        for match in pattern.finditer(content)
+        if int(match.group(1)) == top_n
+    }
+
+
+def _scope_classifier(
+    text: str,
+    match: re.Match[str],
+) -> tuple[str | None, tuple[int, int]] | None:
+    """top-N 표현 바로 뒤 classifier의 stem과 절대 span을 반환한다."""
+    suffix_end = match.end() if match.end() != match.end(1) else len(text)
+    classifier = re.match(
+        rf"\s*({_WORD_RE.pattern})",
+        text[match.end(1) : suffix_end],
+    )
+    if classifier is None:
         return None
-    rendered = str(value).strip()
-    if not rendered:
+    token = classifier.group(1)
+    stem: str | None = token.casefold()
+    if re.fullmatch(r"[가-힣]+", token):
+        if any(
+            token.endswith(suffix) and len(token) > len(suffix)
+            for suffix in _SCOPE_RELATION_SUFFIXES
+        ):
+            stem = None
+        else:
+            for suffix in _SCOPE_CLASSIFIER_PARTICLES:
+                if token.endswith(suffix) and len(token) > len(suffix):
+                    stem = token[: -len(suffix)].casefold()
+                    break
+    return (
+        stem,
+        (
+            match.end(1) + classifier.start(1),
+            match.end(1) + classifier.end(1),
+        ),
+    )
+
+
+def _top_n_scope_matches(text: str, top_n: int) -> tuple[re.Match[str], ...]:
+    """겹치는 pattern은 같은 numeric slot 하나로 정규화한다."""
+    matches_by_number_span: dict[tuple[int, int], re.Match[str]] = {}
+    for pattern in _TOP_N_PATTERNS:
+        for match in pattern.finditer(text):
+            if int(match.group(1)) != top_n:
+                continue
+            number_span = match.span(1)
+            previous = matches_by_number_span.get(number_span)
+            if previous is None or match.start() < previous.start():
+                matches_by_number_span[number_span] = match
+    return tuple(
+        matches_by_number_span[span] for span in sorted(matches_by_number_span)
+    )
+
+
+def _requested_scope_classifier_stems(question: str, top_n: int) -> set[str]:
+    """질문의 동일 top-N 표현에 직접 결합된 classifier stem만 수집한다."""
+    return {
+        classifier[0]
+        for match in _top_n_scope_matches(question, top_n)
+        if (classifier := _scope_classifier(question, match)) is not None
+        if classifier[0] is not None
+    }
+
+
+def _first_cited_literal_start(
+    content: str,
+    cited_values: dict[str, JsonValue],
+) -> int | None:
+    starts = [
+        match.start()
+        for value in cited_values.values()
+        if (match := projected_scalar_literal_pattern(value).search(content))
+        is not None
+    ]
+    return min(starts, default=None)
+
+
+def _scope_phrase_spans(
+    content: str,
+    *,
+    question: str,
+    top_n: int | None,
+    cited_values: dict[str, JsonValue],
+) -> tuple[tuple[int, int], ...] | None:
+    """질문과 같은 requested top-N scope 표현만 lexical fact 검사에서 제외한다."""
+    if top_n is None:
+        return ()
+    requested_classifiers = _requested_scope_classifier_stems(question, top_n)
+    scope_matches = _top_n_scope_matches(content, top_n)
+    if len(scope_matches) > 1:
         return None
-    escaped = re.escape(rendered)
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
-    return re.compile(escaped, re.IGNORECASE)
+    first_cited_start = _first_cited_literal_start(content, cited_values)
+    spans: list[tuple[int, int]] = []
+    for match in scope_matches:
+        if first_cited_start is not None and match.start() >= first_cited_start:
+            return None
+        spans.append((match.start(), match.end(1)))
+        classifier = _scope_classifier(content, match)
+        if classifier is None:
+            continue
+        if classifier[0] is None or classifier[0] not in requested_classifiers:
+            return None
+        spans.append(classifier[1])
+    return tuple(spans)
+
+
+def _safe_topic_separator(separator: str) -> bool:
+    words = _WORD_RE.findall(separator)
+    if words and (len(words) != 1 or words[0] not in _TOPIC_PARTICLES):
+        return False
+    return _SAFE_PUNCTUATION_RE.fullmatch(_WORD_RE.sub("", separator)) is not None
+
+
+def _list_boundary_unit(
+    separator: str,
+    *,
+    previous_value: JsonValue,
+    question: str,
+) -> tuple[str | None, tuple[int, int] | None] | None:
+    """목록 경계에서 구두점/열거와 질문에 근거한 compact unit만 허용한다."""
+    if _SAFE_PUNCTUATION_RE.fullmatch(_WORD_RE.sub("", separator)) is None:
+        return None
+    word_matches = tuple(_WORD_RE.finditer(separator))
+    if not word_matches:
+        return (None, None)
+
+    words = [match.group() for match in word_matches]
+    unit_match: re.Match[str] | None = None
+    unit = ""
+    if len(words) == 1 and words[0].casefold() in {"와", "과", "and"}:
+        return (None, None)
+    if len(words) == 2 and words[1].casefold() == "and":
+        unit_match = word_matches[0]
+        unit = words[0]
+    elif len(words) == 1:
+        unit_match = word_matches[0]
+        unit = words[0]
+        if len(unit) > 1 and unit[-1] in {"와", "과"}:
+            unit = unit[:-1]
+    else:
+        return None
+
+    if (
+        unit_match is None
+        or not isinstance(previous_value, int | float)
+        or isinstance(previous_value, bool)
+        or not unit
+        or unit.casefold() in _SAFE_CONNECTOR_WORDS
+        or _word_stem(unit).casefold() in _SAFE_CONNECTOR_WORDS
+    ):
+        return None
+    if unit_match.start() != 0 or unit.casefold() not in question.casefold():
+        return (None, None)
+    return (unit, (unit_match.start(), unit_match.start() + len(unit)))
+
+
+def _fallback_transition_boundary(
+    separator: str,
+    *,
+    previous_value: JsonValue,
+    current_value: JsonValue,
+    question: str,
+) -> tuple[str | None, tuple[int, int] | None] | None:
+    """list 위치가 없는 연속 scalar도 관계 재조합 없이 연결한다."""
+    previous_is_number = isinstance(previous_value, int | float) and not isinstance(
+        previous_value, bool
+    )
+    current_is_number = isinstance(current_value, int | float) and not isinstance(
+        current_value, bool
+    )
+    if isinstance(previous_value, str) and current_is_number:
+        return (None, None) if _safe_topic_separator(separator) else None
+    if previous_is_number and isinstance(current_value, str):
+        return _list_boundary_unit(
+            separator,
+            previous_value=previous_value,
+            question=question,
+        )
+    if (
+        isinstance(previous_value, str)
+        and isinstance(current_value, str)
+        and _safe_topic_separator(separator)
+    ):
+        return (None, None)
+    separator_without_conjunction = _LIST_SEPARATOR_WORD_RE.sub("", separator)
+    if _SAFE_PUNCTUATION_RE.fullmatch(separator_without_conjunction) is None:
+        return None
+    return (None, None)
 
 
 def _cited_literal_order_error(
     content: str,
     concrete: dict[str, JsonValue],
     cited_values: dict[str, JsonValue],
-) -> str | None:
-    """인용 scalar를 canonical path 순서의 list로만 배치하게 제한한다."""
+    *,
+    top_n: int | None,
+    question: str,
+) -> tuple[str | None, tuple[tuple[int, int], ...]]:
+    """인용 scalar 순서와 concrete item 관계 shape를 함께 검증한다."""
     cursor = 0
     previous_end: int | None = None
+    previous_path: str | None = None
+    previous_value: JsonValue = None
     matched_spans: list[tuple[int, int]] = []
     patterns: list[re.Pattern[str]] = []
+    boundary_units: list[tuple[str | None, tuple[int, int] | None]] = []
     for path, value in concrete.items():
         if path not in cited_values:
             continue
-        pattern = _literal_pattern(value)
+        pattern = projected_scalar_literal_pattern(value)
         if pattern is None:
-            return "cited_value_order_mismatch"
+            return ("cited_value_order_mismatch", ())
         match = pattern.search(content, cursor)
         if match is None:
-            return "cited_value_order_mismatch"
+            return ("cited_value_order_mismatch", ())
         if previous_end is not None:
             separator = content[previous_end : match.start()]
             if not separator:
-                return "cited_value_order_mismatch"
-            separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
-            if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
-                return "cited_value_order_mismatch"
+                return ("cited_value_order_mismatch", ())
+            previous_location = (
+                _item_location(previous_path) if previous_path is not None else None
+            )
+            current_location = _item_location(path)
+            if (
+                previous_location is not None
+                and current_location is not None
+                and previous_location[:2] == current_location[:2]
+            ):
+                if not isinstance(previous_value, str) or not _safe_topic_separator(
+                    separator
+                ):
+                    return ("cited_value_order_mismatch", ())
+            elif (
+                previous_location is not None
+                and current_location is not None
+                and previous_location[0] == current_location[0]
+                and previous_location[1] != current_location[1]
+            ):
+                boundary = _list_boundary_unit(
+                    separator,
+                    previous_value=previous_value,
+                    question=question,
+                )
+                if boundary is None:
+                    return ("cited_value_order_mismatch", ())
+                unit, relative_span = boundary
+                absolute_span = None
+                if relative_span is not None:
+                    absolute_span = (
+                        previous_end + relative_span[0],
+                        previous_end + relative_span[1],
+                    )
+                boundary_units.append((unit, absolute_span))
+            else:
+                boundary = _fallback_transition_boundary(
+                    separator,
+                    previous_value=previous_value,
+                    current_value=value,
+                    question=question,
+                )
+                if boundary is None:
+                    return ("cited_value_order_mismatch", ())
+                unit, relative_span = boundary
+                absolute_span = None
+                if relative_span is not None:
+                    absolute_span = (
+                        previous_end + relative_span[0],
+                        previous_end + relative_span[1],
+                    )
+                boundary_units.append((unit, absolute_span))
         cursor = match.end()
         previous_end = match.end()
+        previous_path = path
+        previous_value = value
         matched_spans.append(match.span())
         patterns.append(pattern)
     if previous_end is None:
-        return "cited_value_order_mismatch"
+        return ("cited_value_order_mismatch", ())
+
+    allowed_unit_spans: list[tuple[int, int]] = []
+    rendered_units = [unit for unit, _ in boundary_units if unit is not None]
+    if rendered_units:
+        expected_unit = rendered_units[0]
+        units_are_consistent = len(rendered_units) == len(boundary_units) and all(
+            unit == expected_unit for unit in rendered_units
+        )
+        tail = content[previous_end:]
+        if units_are_consistent and tail.startswith(expected_unit):
+            allowed_unit_spans.extend(
+                span for _, span in boundary_units if span is not None
+            )
+            allowed_unit_spans.append(
+                (previous_end, previous_end + len(expected_unit))
+            )
+
     unmatched_chars = list(content)
     for start, end in matched_spans:
         unmatched_chars[start:end] = " " * (end - start)
     unmatched = "".join(unmatched_chars)
     if any(pattern.search(unmatched) for pattern in patterns):
-        return "cited_value_order_mismatch"
-    if _NUMBER_RE.search(_URL_RE.sub("", unmatched)) is not None:
-        return "ungrounded_number"
-    return None
+        return ("cited_value_order_mismatch", ())
+    allowed_scope_spans = _scope_number_spans(content, top_n)
+    unmatched_without_urls = _URL_RE.sub(
+        lambda match: " " * (match.end() - match.start()),
+        unmatched,
+    )
+    for match in _NUMBER_RE.finditer(unmatched_without_urls):
+        if match.span() not in allowed_scope_spans:
+            return ("ungrounded_number", ())
+    return (None, tuple(allowed_unit_spans))
 
 
 def guard_final_response(
@@ -336,7 +627,7 @@ def guard_final_response(
         if (
             isinstance(cited, str)
             and len(cited.strip()) >= 2
-            and cited.strip().casefold() not in lowered
+            and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
     if top_n is not None and cited_item_indices != _required_item_indices(
@@ -347,10 +638,12 @@ def guard_final_response(
         concrete, top_n
     ):
         return _rejected("requested_item_identity_not_cited")
-    literal_order_error = _cited_literal_order_error(
+    literal_order_error, allowed_unit_spans = _cited_literal_order_error(
         content,
         concrete,
         cited_values,
+        top_n=top_n,
+        question=value.question,
     )
     if literal_order_error is not None:
         return _rejected(literal_order_error)
@@ -372,7 +665,19 @@ def guard_final_response(
         ):
             return _rejected("rendered_value_not_cited")
 
-    lexical_residual = _remove_cited_literals(content, cited_values)
+    scope_phrase_spans = _scope_phrase_spans(
+        content,
+        question=value.question,
+        top_n=top_n,
+        cited_values=cited_values,
+    )
+    if scope_phrase_spans is None:
+        return _rejected("ungrounded_text")
+    allowed_lexical_spans = allowed_unit_spans + scope_phrase_spans
+    lexical_residual = _remove_cited_literals(
+        _blank_spans(content, allowed_lexical_spans),
+        cited_values,
+    )
     allowed_words = _SAFE_CONNECTOR_WORDS
     if value.unresolved_claims:
         allowed_words = allowed_words | _LIMITATION_WORDS
@@ -409,7 +714,9 @@ def guard_final_response(
         return _rejected("limitation_not_rendered")
 
     allowed_urls: set[str] = set()
-    allowed_numbers: set[str] = _list_lengths(value.public_facts)
+    allowed_numbers: set[str] = set()
+    if top_n is not None:
+        allowed_numbers.add(str(top_n))
     for projected in cited_values.values():
         urls, numbers = _tokens(projected)
         allowed_urls.update(urls)

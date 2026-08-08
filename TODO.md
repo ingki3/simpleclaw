@@ -15,6 +15,14 @@
 
 ## In Progress
 
+- [>] **[BIZ-645](mention://issue/4e305f23-136d-48fa-896c-c7fb77fafd4d): Composer 요청에 deterministic sampling 경계를 추가** — PR #700 merge SHA `352b58219b9701cd09e92eea1aba27c29749054c`에 BIZ-643 Guard·prompt·validator semantic, provider-neutral request-scoped `temperature=0.0`, provider native mapping과 BIZ-646 lease waiter 안정화를 통합했다. Corrective PR #704에서 classifier slot 즉시 fail-closed, ordinary 조사 전용 정규화, scope 1회·cited literal 이전 위치 계약을 보완했으며, 후속 required review의 English `first N` 및 compact `first3teams`/`top3teams` requested-scope 누락을 domain-neutral top-N parser와 exact classifier 회귀로 추가 보정한다. 새 exact head의 full CI·actual-provider no-send·필수 리뷰 전 merge, production activation, release, restart, 사용자 전송은 수행하지 않는다. (재개: 2026-08-08)
+
+- [>] **[BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307): divergent composer gate를 canonical PR에 통합** — [PR #696](https://github.com/ingki3/simpleclaw/pull/696)을 canonical target으로 삼아 dynamic concrete-path enum·root-relative prompt와 scalar/top-3 connected production no-send gate를 함께 유지한다. 시나리오별 provider 1회, retry 0, Telegram/Cron adapter·ConversationStore writer·supporting dispatch per-run delta 0을 fail-closed spy로 고정하고 source 통합 커밋 이후 Graphify를 재생성한다. exact-head CI·필수 review·squash merge 전에는 production activation·restart·Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
+
+- [>] **[BIZ-640](mention://issue/29e9c2b4-9703-4479-94ce-1d2702841d0e): projected citation path를 schema allowlist로 고정** — input별 scalar leaf만 `cited_paths` enum으로 허용하고 prefixed/wildcard/container/unknown path를 schema·Guard에서 fail-closed한다. 최종 검증·병합은 BIZ-641이 통합하는 canonical [PR #696](https://github.com/ingki3/simpleclaw/pull/696)이 소유한다. (진행: 2026-08-08)
+
+- [>] **[BIZ-639](mention://issue/dd59d5fa-09be-4db0-9c3f-18373b44231c): 중앙 composer citation schema를 activation gate로 강화** — required non-empty citation, invalid citation fail-closed, provider 1-call/no-retry, durable generic fallback 계약을 완성했다. [PR #695](https://github.com/ingki3/simpleclaw/pull/695)의 connected sink-spy 보강은 BIZ-641이 PR #696에 통합하며, canonical merge 후 #695를 superseded로 종료한다. (진행: 2026-08-08)
+
 - [>] **[BIZ-619](mention://issue/676488c0-4e71-4474-a585-ae564192206b): Payload-origin architecture guard의 wrapper·비제어식 우회를 차단** — BIZ-618 PR #663 merge 직전 late finding을 corrective lifecycle로 분리했다. opaque payload identity를 보존하는 `dict`·`cast`·method/module copy wrapper를 추적하고, protected Core 전체에서 return·assignment·formatting을 포함한 static-key read를 architecture violation으로 차단한다. 현재 Core false positive 0, 전체 contracts/unit/Ruff, deterministic full Graphify와 corrective PR exact-head CI·독립 Stage D PASS 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
 
 - [>] **[BIZ-618](mention://issue/a29f937a-fc6b-42de-9c75-313b832519c2): Naver Sports read-only effect metadata와 V4 typed renderer를 정렬** — production helper의 정상·empty·error·compact payload에 top-level `side_effect=false`를 명시하고, Naver Sports asset이 allowlisted 정규화 필드로 deterministic·bounded `answer`를 소유한다. Core 밖 generic presentation 경계는 typed status/effect/side-effect 안전 gate를 preferred text보다 먼저 적용하고 Core는 opaque payload 의미를 해석하지 않는다. payload alias/data-flow와 sports vocabulary의 Core 재유입을 architecture mutation guard로 차단하며 confirmation·idempotency·exactly-once 경계와 raw diagnostic 비노출을 유지한다. Corrective PR의 fresh exact-head CI와 독립 Stage D 리뷰 전에는 merge·release·live 재배포·V4 primary 재활성화·Telegram smoke를 수행하지 않는다. (진행: 2026-08-07)
@@ -218,6 +226,14 @@
 ---
 
 ## Done
+
+### 2026-08-08
+
+- [x] **[BIZ-644](mention://issue/60170922-f331-4310-8fb2-60c702334f51): 중앙 Composer runtime persona projection 완료** — runtime SOUL/AGENT/USER의 allowlisted presentation 섹션만 immutable typed projection으로 전달하고 MEMORY·repo AGENTS·운영 AGENT 섹션·managed Dreaming·HTML comment·credential line을 fail-closed 제외했다. Stage D에서 credential 경계의 AWS access-key·Authorization Bearer·credential-bearing URI 누락을 발견해 전체 줄 제거와 합성 회귀를 추가했으며 exact head `e453372e5e15f92c42953edc9d973a6c37b33ae2`에서 focused `19 passed`, 전체 unit `3704 passed, 3 xfailed`, Ruff·diff-check 및 CI 3종을 통과했다. Exact-checkout actual-provider natural KBO no-send도 live `soul/agent/user` projection으로 3/3 PASS(provider 1회/run, retry 0, Guard 3/3, Telegram/Cron/ConversationStore/supporting dispatch delta 0)했고 [PR #702](https://github.com/ingki3/simpleclaw/pull/702)을 squash merge(SHA `643c7d06fe3eb0f58d892e81e034b864c74a7ddc`)했다. Release·production activation·restart·승인된 Telegram smoke는 후속 release 단계 소유로 남긴다. (완료: 2026-08-08)
+
+- [x] **[BIZ-643](mention://issue/6e01190d-8c4e-4c10-a208-9044abb05d09): production persona 자연 질문 composer gate 통과** — actual configured SOUL-only production persona assembly와 자연 질문을 사용하는 독립 3-run connected no-send gate를 구현하고, KBO/스포츠 전용 분기·단위 allowlist·provider retry 없이 canonical order·uncited/ungrounded/top-N/unsafe 차단을 유지했다. Clean exact head `25c79da965604df5df2c87195101308597e3dc20`에서 focused `61 passed`, Ruff·diff-check, CI 3종과 production-shaped 및 exact-checkout real KBO 각각 3/3(provider 1회/run, retry 0, Telegram/Cron/ConversationStore/supporting dispatch delta 0)을 독립 재검증한 뒤 [PR #699](https://github.com/ingki3/simpleclaw/pull/699)을 squash merge(SHA `168575c49a0a54f5d531d3916cdb210c7648c8b9`)했다. 후속 [BIZ-644](mention://issue/60170922-f331-4310-8fb2-60c702334f51)이 runtime AGENT/USER persona projection을 별도 소유하며, release·production activation·restart·Telegram smoke는 본 이슈에서 수행하지 않았다. (완료: 2026-08-08)
+
+- [x] **[BIZ-642](mention://issue/f5c8b31e-46a5-4ef7-97c8-435a57885a01): visible citation canonical subset으로 실제 KBO gate 통과** — provider가 반환한 valid concrete citation을 response content에 보이는 path만으로 결정적으로 축소하는 code/offline 범위를 [PR #697](https://github.com/ingki3/simpleclaw/pull/697)로 완료하고 squash merge(SHA `fbd7b472b7c25b664098d896fb769ee0e744aad3`)했다. 이 완료는 [BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307)이 별도 소유하는 release·production activation·restart·Telegram smoke 완료를 뜻하지 않으며, 부모 BIZ-641은 계속 진행 중이다. (완료: 2026-08-08)
 
 
 ### 2026-08-07

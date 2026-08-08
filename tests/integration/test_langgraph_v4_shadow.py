@@ -1609,6 +1609,35 @@ async def _seed_terminal(checkpoint: Path, invocation: AssetInvocationV1) -> Non
     owner.mark_terminal(invocation, _terminal_response(invocation))
 
 
+def _durable_lease_expiry(checkpoint: Path, invocation_id: str) -> float:
+    database = checkpoint.with_name(f"{checkpoint.name}.invocations.sqlite3")
+    with sqlite3.connect(database) as conn:
+        row = conn.execute(
+            "SELECT lease_expires_at FROM graph_invocation_claims "
+            "WHERE invocation_id = ?",
+            (invocation_id,),
+        ).fetchone()
+    assert row is not None
+    assert row[0] is not None
+    return float(row[0])
+
+
+async def _wait_for_durable_lease_renewal(
+    checkpoint: Path,
+    invocation_id: str,
+    *,
+    initial_expiry: float,
+    timeout: float,
+) -> float:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        renewed_expiry = _durable_lease_expiry(checkpoint, invocation_id)
+        if renewed_expiry > initial_expiry:
+            return renewed_expiry
+        await asyncio.sleep(0.01)
+    pytest.fail("durable invocation lease was not renewed before timeout")
+
+
 @pytest.mark.asyncio
 @pytest.mark.offline
 async def test_durable_active_owner_waiter_reuses_terminal_without_ambiguity(
@@ -1616,11 +1645,19 @@ async def test_durable_active_owner_waiter_reuses_terminal_without_ambiguity(
 ) -> None:
     invocation = _invocation(_registry())
     checkpoint = tmp_path / "active-owner.sqlite3"
-    owner = _DurableInvocationClaims(checkpoint, lease_seconds=0.03)
-    waiter = _DurableInvocationClaims(checkpoint, lease_seconds=0.03)
+    owner = _DurableInvocationClaims(checkpoint, lease_seconds=1.0)
+    waiter = _DurableInvocationClaims(checkpoint, lease_seconds=1.0)
     assert await owner.claim("claim-request", invocation) is None
     owner.mark_executed(invocation.invocation_id)
+    initial_expiry = _durable_lease_expiry(checkpoint, invocation.invocation_id)
     heartbeat = asyncio.create_task(owner.renew_lease(invocation.invocation_id))
+    renewed_expiry = await _wait_for_durable_lease_renewal(
+        checkpoint,
+        invocation.invocation_id,
+        initial_expiry=initial_expiry,
+        timeout=2.0,
+    )
+    assert renewed_expiry > initial_expiry
 
     waiting = asyncio.create_task(waiter.claim("claim-request", invocation))
     await asyncio.sleep(0.08)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -54,6 +55,538 @@ def test_guard_accepts_grounded_natural_response() -> None:
     )
 
     assert result.accepted is True
+
+
+def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KBO는 KT가 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=(
+                "data.category",
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_accepts_consistent_question_grounded_units_in_generic_list() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT는 59승, 삼성은 58승, LG는 57승입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+    accepted = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+    rejected = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57이며 3입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert accepted.accepted is True
+    assert rejected.code == "ungrounded_number"
+
+
+def test_guard_requires_exact_requested_top_n_classifier() -> None:
+    value = _input().model_copy(
+        update={"question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"}
+    )
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="상위 3승은 KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert accepted.accepted is True
+    assert rejected.accepted is False
+    assert rejected.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
+    ("question", "content"),
+    [
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3순서는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3현재는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀보다 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀처럼 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀의 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3결과입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀은 KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "KT는 59, 삼성은 58, LG는 57이며 상위 3팀입니다.",
+        ),
+        (
+            "결과와 현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3결과는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3팀team은 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+        (
+            "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+            "상위 3clubs는 KT는 59, 삼성은 58, LG는 57입니다.",
+        ),
+    ],
+)
+def test_guard_rejects_invalid_top_n_classifier_slot(
+    question: str,
+    content: str,
+) -> None:
+    value = _input().model_copy(update={"question": question})
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.code == "ungrounded_text"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT는 59, 삼성은 58, LG는 57이며 3입니다.",
+        "KT의 59는 삼성의 58입니다. LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_security_amendment_exact_regressions(content: str) -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.code in {
+        "cited_value_order_mismatch",
+        "ungrounded_number",
+        "ungrounded_text",
+    }
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "cited_paths"),
+    [
+        (
+            '{"records":[{"label":"A","value":3},{"label":"B","value":2}]}',
+            (
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+        (
+            '{"entries":[{"name":"A","count":3},{"name":"B","count":2}]}',
+            (
+                "entries[0].name",
+                "entries[0].count",
+                "entries[1].name",
+                "entries[1].count",
+            ),
+        ),
+    ],
+)
+def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
+    public_facts_json: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": public_facts_json,
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A의 3은 B의 2입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "cited_paths"),
+    [
+        (
+            (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
+            ("first_label", "first_value", "second_label", "second_value"),
+        ),
+        (
+            (
+                '{"metrics":{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}}'
+            ),
+            (
+                "metrics.first_label",
+                "metrics.first_value",
+                "metrics.second_label",
+                "metrics.second_value",
+            ),
+        ),
+    ],
+)
+def test_guard_rejects_relation_reassembly_without_list_locations(
+    public_facts_json: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": public_facts_json,
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A의 3은 B의 2입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+def test_guard_accepts_root_scalar_label_value_sequence() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3, B는 2입니다.",
+            cited_paths=(
+                "first_label",
+                "first_value",
+                "second_label",
+                "second_value",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"left":[{"label":"A","value":3}],'
+                '"right":[{"label":"B","value":2}]}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3은 B는 2입니다.",
+            cited_paths=(
+                "left[0].label",
+                "left[0].value",
+                "right[0].label",
+                "right[0].value",
+            ),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": (
+                '{"records":['
+                '{"label":"A","value":3},'
+                '{"label":"B","value":2}'
+                "]}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3개, B는 2개입니다.",
+            cited_paths=(
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "A는 3입니다. B는 2입니다.",
+        "A는 3개, B는 2건입니다.",
+        "A는 3kg, B는 2kg입니다.",
+    ],
+)
+def test_guard_rejects_cross_item_predicate_or_ungrounded_units(
+    content: str,
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": (
+                '{"records":['
+                '{"label":"A","value":3},'
+                '{"label":"B","value":2}'
+                "]}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+    )
+
+    assert result.code in {"cited_value_order_mismatch", "ungrounded_text"}
+
+
+def test_guard_rejects_reversed_value_to_label_relation_within_item() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "항목의 개수를 알려줘",
+            "public_facts_json": '{"items":[{"value":3,"label":"A"}]}',
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="3은 A입니다.",
+            cited_paths=("items[0].value", "items[0].label"),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT는 59승, 삼성은 58, LG는 57입니다.",
+        "KT는 59 우승, 삼성은 58, LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_unprojected_unit_or_domain_term(content: str) -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
+def test_guard_defensively_rejects_empty_citations() -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=(),
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(_input(), draft)
+
+    assert result.code == "citations_required"
+
+
+@pytest.mark.parametrize(
+    ("cited_paths", "expected_code"),
+    [
+        (("data.items[*].team",), "citation_not_projected"),
+        (("data.items[99].team",), "citation_not_projected"),
+        (("public_facts.data.items[0].team",), "citation_not_projected"),
+        (
+            ("data.items[0].team", "data.items[0].team"),
+            "duplicate_citation",
+        ),
+    ],
+)
+def test_guard_rejects_wildcard_unknown_and_duplicate_citations(
+    cited_paths: tuple[str, ...],
+    expected_code: str,
+) -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=cited_paths,
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(_input(), draft)
+
+    assert result.code == expected_code
+
+
+@pytest.mark.parametrize(
+    ("cited_paths", "expected_code"),
+    [
+        (("data.items[*].team",), "citation_not_projected"),
+        (("data.items[99].team",), "citation_not_projected"),
+        (
+            ("data.items[0].team", "data.items[0].team"),
+            "duplicate_citation",
+        ),
+    ],
+)
+def test_canonicalizer_does_not_hide_invalid_citations(
+    cited_paths: tuple[str, ...],
+    expected_code: str,
+) -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=cited_paths,
+        limitation_paths=(),
+    )
+
+    canonical = canonicalize_draft_citations(_input(), draft)
+
+    assert canonical is draft
+    assert guard_final_response(_input(), canonical).code == expected_code
 
 
 def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
@@ -123,6 +656,45 @@ def test_guard_rejects_partial_top_n_uncited_fact_and_private_identifier() -> No
     assert partial.code == "requested_scope_not_fully_cited"
     assert uncited.code == "ungrounded_number"
     assert private.code == "raw_contract_exposed"
+
+
+def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> None:
+    """Persona는 guard 입력 자체가 아니므로 충돌 지시에도 이 판정은 불변이다."""
+    unknown_citation = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="두산입니다.", cited_paths=("data.items[99].team",)
+        ),
+    )
+    ungrounded = guard_final_response(
+        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        DraftResponseV1(
+            content="KT가 확실한 우승 후보입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+    partial_top_n = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT입니다.", cited_paths=("data.items[0].team",)
+        ),
+    )
+    unsafe_effect = guard_final_response(
+        _input().model_copy(update={"effect_status": EffectStatus.AUTHORIZED}),
+        DraftResponseV1(
+            content="KT, 삼성, LG입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        ),
+    )
+
+    assert unknown_citation.code == "citation_not_projected"
+    assert ungrounded.code == "ungrounded_text"
+    assert partial_top_n.code == "requested_scope_not_fully_cited"
+    assert unsafe_effect.code == "unsafe_result"
 
 
 def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
@@ -423,6 +995,93 @@ def test_guard_enforces_domain_neutral_count_only_scope() -> None:
     )
 
     assert result.code == "citation_outside_requested_scope"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Tell me the first 3 teams",
+        "Tell me the first3 teams",
+        "Tell me the first3teams",
+        "Tell me the top3teams",
+        "Tell me the top 3teams",
+    ],
+)
+def test_guard_enforces_english_compact_top_n_scope(question: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": question,
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+    four_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(4)
+        for field in ("team", "wins")
+    )
+    three_paths = four_paths[:6]
+
+    rejected = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="KT는 59, 삼성은 58, LG는 57, 두산은 56입니다.",
+            cited_paths=four_paths,
+        ),
+    )
+    accepted = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="first 3 teams: KT는 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=three_paths,
+        ),
+    )
+
+    assert rejected.code == "citation_outside_requested_scope"
+    assert accepted.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "first 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+        "top 3 wins: KT는 59, 삼성은 58, LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_english_top_n_classifier_mismatch(content: str) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "Tell me the first 3 teams",
+            "public_facts_json": (
+                '{"data":{"items":['
+                '{"team":"KT","wins":59},'
+                '{"team":"삼성","wins":58},'
+                '{"team":"LG","wins":57},'
+                '{"team":"두산","wins":56}'
+                "]}}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=tuple(
+                f"data.items[{index}].{field}"
+                for index in range(3)
+                for field in ("team", "wins")
+            ),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
 
 
 @pytest.mark.parametrize(
