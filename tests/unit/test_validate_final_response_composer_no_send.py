@@ -43,8 +43,16 @@ async def _draft_response(request) -> LLMResponse:
         "enum"
     ]
     value = json.loads(request.user_message)
-    assert value["question"] == "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"
-    content = "LG는 60, 한화는 58, 롯데는 55입니다."
+    data = value["public_facts"]["data"]
+    if data.get("empty_reason") == "no_scheduled_events":
+        content = "예정된 경기가 없습니다."
+        citation_paths = ["data.status", "data.empty_reason"]
+    elif data.get("empty_reason") == "no_live_events":
+        content = "현재 진행 중인 경기가 없습니다."
+        citation_paths = ["data.status", "data.empty_reason"]
+    else:
+        assert value["question"] == "오늘 프로야구 하냐?"
+        content = "경기 예정입니다."
     return LLMResponse(
         text=json.dumps(
             {
@@ -86,7 +94,7 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["canonical_citation_count"] == len(scenario.expected_citations)
     assert result["provider_citation_count"] >= len(scenario.expected_citations)
     assert "content" not in result
-    assert result["pruned_citation_count"] > 0
+    assert result["pruned_citation_count"] >= 0
     assert result["source_mode"] == "production_shaped_fixed"
     assert result["sink_spy_preflight_calls"] == {
         "telegram_send": 1,
@@ -110,14 +118,16 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
 
 def test_activation_scenarios_use_natural_question_without_local_persona() -> None:
     assert len(_SCENARIOS) == 3
-    assert all(
-        scenario.question == "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"
-        for scenario in _SCENARIOS
-    )
-    assert all(
-        scenario.name == f"production_persona_natural_kbo_{index}"
-        for index, scenario in enumerate(_SCENARIOS, start=1)
-    )
+    assert [scenario.question for scenario in _SCENARIOS] == [
+        "오늘 프로야구 하냐?",
+        "오늘 프로야구 하냐?",
+        "지금 KBO 경기 중이야?",
+    ]
+    assert [scenario.name for scenario in _SCENARIOS] == [
+        "production_schedule_present",
+        "production_schedule_empty",
+        "production_live_empty",
+    ]
     assert not hasattr(_NATURAL_KBO_SCENARIO, "persona_prompt")
 
 

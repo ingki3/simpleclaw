@@ -21,6 +21,7 @@ from scripts.install_sports_live_recipe import (
 from scripts.install_sports_live_recipe import (
     install as install_sports_live_recipe,
 )
+from scripts.install_sports_live_recipe import verify as verify_sports_live_recipe
 from simpleclaw.agent.planner_catalog import build_planner_catalog
 from simpleclaw.agent.tool_schemas import ToolScope, build_native_tool_registry
 from simpleclaw.agent.turn_plan import AssetRef
@@ -75,6 +76,17 @@ def test_production_installers_match_canonical_and_fixture_contracts(
     assert _skill_frontmatter(installed_skill) == _skill_frontmatter(fixture_skill)
     assert installed_recipe.read_bytes() == CANONICAL_RECIPE.read_bytes()
     assert installed_recipe.read_bytes() == fixture_recipe.read_bytes()
+
+
+def test_sports_recipe_activation_gate_rejects_stale_installed_asset(
+    tmp_path: Path,
+) -> None:
+    recipes_dir = tmp_path / "recipes"
+    installed = install_sports_live_recipe(recipes_dir) / "recipe.yaml"
+    installed.write_text("name: stale-sports-live\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="runtime asset installation drift"):
+        verify_sports_live_recipe(recipes_dir)
 
 
 def _sports_recipe(tmp_path: Path):

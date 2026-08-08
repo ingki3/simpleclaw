@@ -26,6 +26,11 @@ from scripts.dev.validate_naver_sports_asset import (
     ProductionAssetValidationError,
     validate_production_asset,
 )
+from scripts.install_naver_sports_skill import install as install_naver_sports_skill
+from scripts.install_sports_live_recipe import (
+    install as install_sports_live_recipe,
+)
+from scripts.install_sports_live_recipe import verify as verify_sports_live_recipe
 from simpleclaw.agent.composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
@@ -171,11 +176,11 @@ class _ConnectedProbeFacade(LangGraphV4RolloutFacade):
         )
 
 
-def _definitions():
-    recipes = discover_recipes(REPO_ROOT / "runtime_assets" / "recipes")
+def _definitions(recipes_dir: Path, skills_dir: Path):
+    recipes = discover_recipes(recipes_dir)
     skills = discover_skills(
         Path("/__missing_local_skills__"),
-        REPO_ROOT / "runtime_assets" / "skills",
+        skills_dir,
     )
     selected = tuple(
         item
@@ -235,6 +240,68 @@ _NATURAL_KBO_SCENARIO = _Scenario(
     source_mode="production_shaped_fixed",
 )
 
+_SCHEDULE_PRESENT_SCENARIO = _Scenario(
+    name="production_schedule_present",
+    question="오늘 프로야구 하냐?",
+    payload={
+        "data": {
+            "mode": "schedule",
+            "status": "ok",
+            "items": [
+                {
+                    "event_state": "scheduled",
+                    "status_code": "BEFORE",
+                    "status": "경기 예정",
+                    "started_at": "2026-08-08T18:30:00+09:00",
+                    "participants": {
+                        "away": {"name": "두산"},
+                        "home": {"name": "한화"},
+                    },
+                    "source_url": "https://api-gw.sports.naver.com/schedule/games",
+                }
+            ],
+        }
+    },
+    resolved_claims=("data.items[0].status",),
+    expected_citations=("data.items[0].status",),
+    locale="ko-KR",
+    source_mode="production_shaped_fixed",
+)
+
+_SCHEDULE_EMPTY_SCENARIO = _Scenario(
+    name="production_schedule_empty",
+    question="오늘 프로야구 하냐?",
+    payload={
+        "data": {
+            "mode": "schedule",
+            "status": "empty",
+            "empty_reason": "no_scheduled_events",
+            "items": [],
+        }
+    },
+    resolved_claims=("data.status", "data.empty_reason"),
+    expected_citations=("data.status", "data.empty_reason"),
+    locale="ko-KR",
+    source_mode="production_shaped_fixed",
+)
+
+_LIVE_EMPTY_SCENARIO = _Scenario(
+    name="production_live_empty",
+    question="지금 KBO 경기 중이야?",
+    payload={
+        "data": {
+            "mode": "live",
+            "status": "empty",
+            "empty_reason": "no_live_events",
+            "items": [],
+        }
+    },
+    resolved_claims=("data.status", "data.empty_reason"),
+    expected_citations=("data.status", "data.empty_reason"),
+    locale="ko-KR",
+    source_mode="production_shaped_fixed",
+)
+
 
 def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
     return tuple(
@@ -252,7 +319,11 @@ def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
     )
 
 
-_SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
+_SCENARIOS = (
+    _SCHEDULE_PRESENT_SCENARIO,
+    _SCHEDULE_EMPTY_SCENARIO,
+    _LIVE_EMPTY_SCENARIO,
+)
 
 
 def _production_persona_projection(
@@ -394,7 +465,6 @@ async def _connected_probe(
     scenario: _Scenario,
     timeout: float,
 ) -> dict[str, object]:
-    definitions = _definitions()
     counters = _BoundaryCounters()
     capture = _ComposerCapture()
     preflight: dict[str, int]
@@ -442,6 +512,12 @@ async def _connected_probe(
         prefix=f"simpleclaw-biz-643-{scenario.name}-"
     ) as directory:
         temp = Path(directory)
+        recipes_dir = temp / "runtime-recipes"
+        skills_dir = temp / "runtime-skills"
+        install_sports_live_recipe(recipes_dir)
+        install_naver_sports_skill(skills_dir)
+        verify_sports_live_recipe(recipes_dir)
+        definitions = _definitions(recipes_dir, skills_dir)
         store = ConversationStore(temp / "conversation.db")
         baseline_messages = len(store.get_recent())
         facade = _ConnectedProbeFacade(
@@ -574,7 +650,11 @@ async def _connected_probe(
             f"lexical_token_sha256={token_hashes}"
         )
     concrete = flatten_public_facts(capture.value.public_facts)
-    if any(
+    typed_empty = any(
+        isinstance(node, dict) and node.get("status") == "empty"
+        for node in capture.value.public_facts.values()
+    )
+    if not typed_empty and any(
         path not in concrete
         or not projected_scalar_is_visible(
             capture.draft.content,
@@ -724,7 +804,11 @@ async def _run(args: argparse.Namespace) -> int:
             )
         )
         return 1
-    scenarios = list(_independent_scenarios(base_scenario))
+    scenarios = (
+        list(_independent_scenarios(base_scenario))
+        if args.real_kbo
+        else list(_SCENARIOS)
+    )
     scenario_results: list[dict[str, object]] = []
     provider_calls = 0
     retry_calls = 0

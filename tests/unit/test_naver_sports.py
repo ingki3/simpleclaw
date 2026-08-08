@@ -30,7 +30,7 @@ def test_installer_materializes_version_controlled_wrapper(tmp_path):
     skill_dir = install(tmp_path)
 
     assert (skill_dir / "SKILL.md").is_file()
-    assert "--mode live|results|standings" in (
+    assert "--mode schedule|live|results|standings" in (
         skill_dir / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert (skill_dir / "scripts" / "naver_sports.py").read_text(
@@ -122,6 +122,91 @@ def test_live_filters_non_started_cancelled_and_wrong_category():
     )
 
     assert [item["game_id"] for item in result["items"]] == ["valid"]
+
+
+def test_schedule_preserves_same_day_before_started_and_ended_states():
+    def game(game_id, status_code, started_at, **extra):
+        return {
+            "gameId": game_id,
+            "categoryId": "kbo",
+            "categoryName": "KBO리그",
+            "gameDate": "2026-08-08",
+            "gameDateTime": started_at,
+            "homeTeamName": f"홈-{game_id}",
+            "awayTeamName": f"원정-{game_id}",
+            "statusCode": status_code,
+            "statusInfo": status_code,
+            "cancel": False,
+            "suspended": False,
+            **extra,
+        }
+
+    scheduled = game("scheduled", "BEFORE", "2026-08-08T18:30:00")
+    live = game(
+        "live",
+        "STARTED",
+        "2026-08-08T14:00:00",
+        awayTeamScore=2,
+        homeTeamScore=1,
+    )
+    final = game(
+        "final",
+        "ENDED",
+        "2026-08-08T13:00:00",
+        awayTeamScore=3,
+        homeTeamScore=4,
+    )
+    stale = {**scheduled, "gameId": "stale", "gameDate": "2026-08-07"}
+    result = naver_sports.run(
+        mode="schedule",
+        category="kbo",
+        date="2026-08-08",
+        limit=10,
+        client=FakeClient(
+            [
+                sports_response(scheduled, stale),
+                sports_response(live),
+                sports_response(final),
+                sports_response(final),
+            ]
+        ),
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "ok"
+    assert "empty_reason" not in result
+    assert [item["game_id"] for item in result["items"]] == [
+        "final",
+        "live",
+        "scheduled",
+    ]
+    assert [item["event_state"] for item in result["items"]] == [
+        "final",
+        "live",
+        "scheduled",
+    ]
+    assert result["items"][1]["score"] == {"away": 2, "home": 1}
+    assert result["items"][2]["started_at"] == "2026-08-08T18:30:00+09:00"
+    assert result["items"][2]["participants"] == {
+        "away": {"name": "원정-scheduled"},
+        "home": {"name": "홈-scheduled"},
+    }
+    assert len(result["source"]["urls"]) == 4
+
+
+def test_schedule_empty_is_typed_and_not_presentation_text():
+    result = naver_sports.run(
+        mode="schedule",
+        category="kbo",
+        date="2026-08-08",
+        client=FakeClient([sports_response()] * 4),
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "empty"
+    assert result["empty_reason"] == "no_scheduled_events"
+    assert result["items"] == []
+    assert "message" not in result
 
 
 @pytest.mark.parametrize("status_code", ("ENDED", "RESULT"))
@@ -307,7 +392,9 @@ def test_results_valid_empty_is_not_upstream_failure():
     assert result["ok"] is True
     assert result["items"] == []
     assert result["error"] is None
-    assert "ENDED/RESULT" in result["message"]
+    assert result["status"] == "empty"
+    assert result["empty_reason"] == "no_completed_results"
+    assert "message" not in result
 
 
 def test_results_schema_failure_is_typed_error_without_score():
@@ -895,6 +982,8 @@ def test_all_outputs_keep_public_schema_keys():
         "side_effect",
         "source",
         "mode",
+        "status",
+        "empty_reason",
         "category",
         "season",
         "date",
@@ -907,7 +996,9 @@ def test_all_outputs_keep_public_schema_keys():
     assert result["ok"] is True
     assert result["side_effect"] is False
     assert result["items"] == []
-    assert result["message"]
+    assert result["status"] == "empty"
+    assert result["empty_reason"] == "no_live_events"
+    assert "message" not in result
 
 
 def test_error_and_compact_outputs_keep_explicit_no_effect_contract():

@@ -61,3 +61,17 @@ def test_central_composer_never_imports_compat_presentation() -> None:
         "asset_result_presentation" not in path.read_text(encoding="utf-8")
         for path in central_sources
     )
+
+
+def test_sports_assets_keep_empty_result_as_typed_state_only() -> None:
+    skill = (ROOT / "runtime_assets/skills/naver-sports-skill/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    recipe = (ROOT / "runtime_assets/recipes/sports-live/recipe.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "empty_reason" in skill
+    assert "empty_reason" in recipe
+    assert "data.message" not in recipe
+    assert "plus an explicit `message`" not in skill

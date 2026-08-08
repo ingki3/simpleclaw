@@ -709,6 +709,137 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     assert store.get_recent() == []
 
 
+@pytest.mark.parametrize(
+    ("prompt", "data", "content", "citations"),
+    [
+        (
+            "오늘 프로야구 하냐?",
+            {
+                "mode": "schedule",
+                "status": "ok",
+                "items": [
+                    {
+                        "event_state": "scheduled",
+                        "status_code": "BEFORE",
+                        "participants": {
+                            "away": {"name": "두산"},
+                            "home": {"name": "한화"},
+                        },
+                        "started_at": "2026-08-08T18:30:00+09:00",
+                    }
+                ],
+            },
+            "두산은 한화, 2026-08-08T18:30:00+09:00입니다.",
+            (
+                "data.items[0].participants.away.name",
+                "data.items[0].participants.home.name",
+                "data.items[0].started_at",
+            ),
+        ),
+        (
+            "오늘 프로야구 하냐?",
+            {
+                "mode": "schedule",
+                "status": "empty",
+                "empty_reason": "no_scheduled_events",
+                "items": [],
+            },
+            "예정된 경기가 없습니다.",
+            ("data.status", "data.empty_reason"),
+        ),
+        (
+            "지금 KBO 경기 중이야?",
+            {
+                "mode": "live",
+                "status": "empty",
+                "empty_reason": "no_live_events",
+                "items": [],
+            },
+            "현재 진행 중인 경기가 없습니다.",
+            ("data.status", "data.empty_reason"),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.offline
+async def test_installed_sports_schedule_and_empty_complete_central_no_send(
+    tmp_path: Path,
+    prompt: str,
+    data: dict[str, object],
+    content: str,
+    citations: tuple[str, ...],
+) -> None:
+    recipe, skill = _production_sports_definitions(tmp_path)
+    catalog = build_planner_catalog(
+        skills=(skill,),
+        recipes=(recipe,),
+        native_specs=(),
+    )
+    gate = PlanGate().evaluate(
+        _kbo_incident_plan(catalog.fingerprint, prompt=prompt),
+        candidates=ContextCandidateSet((), 0, False),
+        catalog=catalog,
+    )
+    assert gate.status is GateStatus.PASS
+    assert gate.effective_plan is not None
+    provider_calls = 0
+    composer_calls = 0
+
+    async def executor(_definition, _bound_steps):
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "status": "completed",
+            "side_effect": False,
+            "data": data,
+            "resolved_claims": list(citations),
+            "unresolved_claims": [],
+        }
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        assert value.public_facts["data"]["mode"] == data["mode"]
+        return DraftResponseV1(content=content, cited_paths=citations)
+
+    runner = ConnectedShadowTurnRunner(
+        facade=LangGraphV4RolloutFacade(
+            architecture="langgraph_v4",
+            mode="primary",
+            shadow_no_send=True,
+            budget=_budget_with(),
+            checkpoint_path=tmp_path / "sports-schedule-checkpoint.sqlite3",
+            conversations_db_path=tmp_path / "sports-schedule-conversation.db",
+        ),
+        definitions=(recipe, skill),
+        conversation_store=ConversationStore(
+            tmp_path / "sports-schedule-conversation.db"
+        ),
+        recipe_executor=executor,
+        composition_mode="central_persona_v1",
+        response_composer=compose,
+        composer_fingerprint="sports-schedule-composer-v1",
+        locale="ko-KR",
+    )
+
+    result = await runner.run(
+        plan=gate.effective_plan,
+        legacy=None,
+        request_id="sports-schedule-empty-no-send",
+        session_key="sports-schedule-empty-no-send",
+        planner_model_calls=1,
+        planner_tokens=100,
+    )
+
+    assert result.execution.final_content == content
+    assert result.telemetry.delivery_status is DeliveryStatus.SHADOWED
+    assert result.execution.dispatch_trace.exactly_once is True
+    assert result.execution.rollback_required is False
+    assert result.execution.side_effect_counts.total == 0
+    assert provider_calls == 1
+    assert composer_calls == 1
+
+
 @pytest.mark.asyncio
 @pytest.mark.offline
 async def test_connected_composer_hard_deadline_records_and_replays_fallback(

@@ -1,9 +1,9 @@
 ---
 name: naver-sports-skill
-description: "Retrieve Naver Sports structured live scores, completed results, and standings with typed event states and source provenance."
+description: "Retrieve Naver Sports structured same-day schedules, live scores, completed results, and standings with typed event states and source provenance."
 capability:
   domains: [sports]
-  intents: [current_result, completed_result, live_score, standings, ranking, leaderboard]
+  intents: [event_schedule, upcoming_event, current_result, completed_result, live_score, standings, ranking, leaderboard]
   read_only: true
   side_effects: false
   freshness_sensitive: true
@@ -21,7 +21,7 @@ input_contract:
   json_schema:
     type: object
     examples:
-      - args: --mode results --category kbo --date 2026-08-02 --limit 10 --json
+      - args: --mode schedule --category kbo --date today --limit 10 --json
     properties:
       args: {type: string, minLength: 1}
     required: [args]
@@ -34,6 +34,8 @@ output_contract:
     type: object
     properties:
       mode: {}
+      status: {}
+      empty_reason: {}
       category: {}
       season:
         properties:
@@ -48,6 +50,8 @@ output_contract:
         type: array
         items:
           properties:
+            game_id: {}
+            category: {}
             rank: {}
             team: {}
             name: {}
@@ -67,6 +71,7 @@ output_contract:
                 home:
                   properties:
                     name: {}
+            started_at: {}
             score:
               properties:
                 away: {}
@@ -85,12 +90,16 @@ output_contract:
             items: {}
     x-simpleclaw-composition-fields:
       - mode
+      - status
+      - empty_reason
       - category
       - season.code
       - season.title
       - date
       - fetched_at
       - freshness.as_of
+      - items[*].game_id
+      - items[*].category
       - items[*].rank
       - items[*].team
       - items[*].name
@@ -104,6 +113,7 @@ output_contract:
       - items[*].status_code
       - items[*].participants.away.name
       - items[*].participants.home.name
+      - items[*].started_at
       - items[*].score.away
       - items[*].score.home
       - items[*].winner
@@ -130,6 +140,7 @@ Call the registered skill with `args`; do not put a bare subcommand in `command`
 
 ```text
 execute_skill(skill_name="naver-sports-skill", args="--mode live --category kbo --date today --limit 10 --json")
+execute_skill(skill_name="naver-sports-skill", args="--mode schedule --category kbo --date today --limit 10 --json")
 execute_skill(skill_name="naver-sports-skill", args="--mode results --category kbo --date 2026-08-02 --limit 10 --json")
 execute_skill(skill_name="naver-sports-skill", args="--mode standings --category epl --limit 10 --json")
 execute_skill(skill_name="naver-sports-skill", args="--mode standings --category kbo --date today --season auto --limit 10 --json")
@@ -137,7 +148,8 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
 
 ## Inputs
 
-- `--mode live|results|standings`
+- `--mode schedule|live|results|standings`
+  - `schedule`: same-day conventional events across provider `BEFORE|STARTED|ENDED|RESULT` states.
   - `live`: current events with provider `STARTED` state only.
   - `results`: completed conventional schedule events with provider `ENDED|RESULT` only.
   - `standings`: team/player rankings for the selected season.
@@ -153,8 +165,9 @@ execute_skill(skill_name="naver-sports-skill", args="--mode standings --category
 
 ## Output contract
 
-The helper emits one JSON object with `ok`, `side_effect`, `source`, `mode`, `category`, `season`,
-`date`, `fetched_at`, `freshness`, `items`, `warnings`, and `error`. It returns typed
+The helper emits one JSON object with `ok`, `side_effect`, `source`, `mode`, `status`,
+`empty_reason`, `category`, `season`, `date`, `fetched_at`, `freshness`, `items`,
+`warnings`, and `error`. It returns typed
 facts and provenance only; the central persona-aware composer owns final presentation.
 
 - Every success, normal-empty, error, and compact fallback result declares the
@@ -165,7 +178,8 @@ facts and provenance only; the central persona-aware composer owns final present
   `fetched_at`, and `source_url`.
 - Cancelled, suspended, postponed, unknown, or score-incomplete events are never
   promoted to final results; `results` preserves their typed state in `excluded_events`.
-- Normal empty is `ok=true`, `items=[]`, plus an explicit `message`.
+- Normal empty is `ok=true`, `status=empty`, `items=[]`, plus a stable typed
+  `empty_reason`; it never contains presentation prose.
 - Upstream/input/schema failure is `ok=false` with stable `error.code`,
   `error.message`, and `error.retryable`.
 - Naver data can lag the venue. State this limitation when answering.
@@ -174,6 +188,7 @@ facts and provenance only; the central persona-aware composer owns final present
 
 ```bash
 python3 scripts/naver_sports.py --mode live --category kbo --date today --json
+python3 scripts/naver_sports.py --mode schedule --category kbo --date today --json
 python3 scripts/naver_sports.py --mode results --category kbo --date 2026-08-02 --json
 python3 scripts/naver_sports.py --mode standings --category pga --limit 10 --json
 ```

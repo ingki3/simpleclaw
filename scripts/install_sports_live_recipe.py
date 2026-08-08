@@ -9,6 +9,7 @@ from simpleclaw.production_assets import (
     ResolvedRuntimeAsset,
     install_runtime_asset,
     resolve_runtime_asset,
+    verify_runtime_asset_installation,
 )
 
 ASSET_REF = "recipe:sports-live"
@@ -37,19 +38,40 @@ def install(
     return path
 
 
+def verify(
+    recipes_dir: Path | None = None,
+    *,
+    config_path: Path | None = None,
+) -> Path:
+    """Activation 전에 installed recipe의 exact canonical tree를 검증한다."""
+    path, _ = verify_runtime_asset_installation(
+        ASSET_REF,
+        destination_parent=recipes_dir,
+        config_path=config_path,
+    )
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     """기존 CLI 표면을 유지하면서 generic installer를 호출한다."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipes-dir", type=Path)
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args(argv)
-    path, resolved = install_runtime_asset(
+    operation = (
+        verify_runtime_asset_installation
+        if args.verify_only
+        else install_runtime_asset
+    )
+    path, resolved = operation(
         ASSET_REF,
         destination_parent=args.recipes_dir,
         config_path=args.config,
     )
     print(
-        f"installed {resolved.manifest.ref} at {path} "
+        f"{'verified' if args.verify_only else 'installed'} "
+        f"{resolved.manifest.ref} at {path} "
         f"(source={resolved.provenance}, "
         f"manifest_sha256={resolved.manifest.fingerprint})"
     )
