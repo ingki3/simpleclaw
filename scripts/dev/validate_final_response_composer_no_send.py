@@ -14,15 +14,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from simpleclaw.agent.composition_contracts import CompositionInputV1  # noqa: E402
-from simpleclaw.agent.final_response_composer import FinalResponseComposer  # noqa: E402
-from simpleclaw.agent.final_response_guard import guard_final_response  # noqa: E402
-from simpleclaw.graph_runtime.contracts import AssetRefV1  # noqa: E402
-from simpleclaw.graph_runtime.status import (  # noqa: E402
+from simpleclaw.agent.composition_contracts import CompositionInputV1
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposer,
+    FinalResponseComposerError,
+)
+from simpleclaw.agent.final_response_guard import guard_final_response
+from simpleclaw.graph_runtime.contracts import AssetRefV1
+from simpleclaw.graph_runtime.status import (
     AssetResultStatus,
     EffectStatus,
 )
-from simpleclaw.llm.router import create_router  # noqa: E402
+from simpleclaw.llm.router import create_router
 
 
 class _OneCallSend:
@@ -82,7 +85,7 @@ async def _run(args: argparse.Namespace) -> int:
         draft = await asyncio.wait_for(
             composer.compose(value), timeout=args.timeout
         )
-    except Exception as exc:
+    except (FinalResponseComposerError, TimeoutError) as exc:
         result = {
             "error_type": type(exc).__name__,
             "provider_calls": counted_send.calls,
