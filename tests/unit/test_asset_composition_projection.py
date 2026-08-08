@@ -297,6 +297,34 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
         "data.records[1].value",
     )
 
+    sparse = NormalizedAssetResultV1(
+        invocation_id="neutral-sparse-wildcard",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {
+                "phase": "ready",
+                "records": [{"value": "alpha"}, {}],
+            },
+        },
+        payload_hash="neutral-sparse-wildcard-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    with pytest.raises(
+        CompositionProjectionError,
+        match="structural_evidence_incomplete",
+    ):
+        build_composition_input(
+            request_id="neutral-sparse-wildcard-request",
+            question="What are the two record values?",
+            locale="en-US",
+            selected_route="recipe",
+            normalized_result=sparse,
+            descriptor=descriptor,
+        )
+
 
 @pytest.mark.parametrize(
     ("second_fields", "message"),

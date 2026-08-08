@@ -555,7 +555,6 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
         content="KBO, KT, 59",
         cited_paths=(
             "data.category",
-            "data.items[0].rank",
             "data.items[0].team",
             "data.items[0].wins",
         ),

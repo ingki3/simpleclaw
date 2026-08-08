@@ -268,9 +268,9 @@ _SCHEDULE_PRESENT_SCENARIO = _Scenario(
         "data.items[0].participants.home.name",
     ),
     expected_citations=(
+        "data.items[0].status",
         "data.items[0].participants.away.name",
         "data.items[0].participants.home.name",
-        "data.items[0].status",
     ),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
@@ -288,7 +288,7 @@ _SCHEDULE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.empty_reason", "data.status"),
+    expected_citations=("data.status", "data.empty_reason"),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -305,7 +305,7 @@ _LIVE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.empty_reason", "data.status"),
+    expected_citations=("data.status", "data.empty_reason"),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )

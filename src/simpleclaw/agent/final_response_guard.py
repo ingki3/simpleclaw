@@ -176,6 +176,11 @@ def _tokens(value: Any) -> tuple[set[str], set[str]]:
     return urls, set(_NUMBER_RE.findall(without_urls))
 
 
+def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
+    """Python의 bool/int equality collision 없이 scalar identity를 비교한다."""
+    return type(left) is type(right) and left == right
+
+
 def _requested_top_n(question: str) -> int | None:
     for pattern in _TOP_N_PATTERNS:
         match = pattern.search(question)
@@ -494,9 +499,7 @@ def _cited_literal_order_error(
     matched_spans: list[tuple[int, int]] = []
     patterns: list[re.Pattern[str]] = []
     boundary_units: list[tuple[str | None, tuple[int, int] | None]] = []
-    for path, value in concrete.items():
-        if path not in cited_values:
-            continue
+    for path, value in cited_values.items():
         pattern = projected_scalar_literal_pattern(value)
         if pattern is None:
             return ("cited_value_order_mismatch", ())
@@ -700,7 +703,7 @@ def guard_final_response(
         if (
             projected_scalar_is_visible(content, projected)
             and not any(
-                cited_value == projected
+                _same_json_scalar(cited_value, projected)
                 for cited_value in cited_values.values()
             )
         ):

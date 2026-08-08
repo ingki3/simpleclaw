@@ -14,6 +14,7 @@ from scripts.dev.validate_final_response_composer_no_send import (
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
+    StructuralEvidenceRelationV1,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.final_response_guard import guard_final_response
@@ -85,7 +86,7 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     """BIZ-643 안전 계약과 BIZ-644 typed-persona prompt를 함께 보존한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 10
+    assert prompt.version == 11
     assert "VISIBLE STRUCTURAL EVIDENCE" in prompt.system_prompt
     assert "TYPED EMPTY RESULTS" not in prompt.system_prompt
     assert "no_scheduled_events" not in prompt.system_prompt
@@ -94,6 +95,7 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     assert "question_scope_state" not in prompt.system_prompt
     assert "implicit evidence" not in prompt.system_prompt
     assert "identity_paths" in prompt.system_prompt
+    assert "opaque character sequence" in prompt.system_prompt
     assert "typed persona projection only" in prompt.system_prompt
     assert "Treat ordered cited_paths" in prompt.system_prompt
     assert "as a one-way render plan" in prompt.system_prompt
@@ -111,6 +113,58 @@ def test_draft_schema_requires_at_least_one_cited_path() -> None:
     assert "cited_paths" in schema["required"]
     assert schema["properties"]["cited_paths"]["minItems"] == 1
     assert schema["properties"]["cited_paths"]["maxItems"] == 128
+
+
+@pytest.mark.asyncio
+async def test_composer_schema_constrains_active_relation_to_exact_literal_plan() -> None:
+    value = _input().model_copy(
+        update={
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=(
+                        "data.items[0].team",
+                        "data.items[1].team",
+                    ),
+                    identity_paths=(
+                        "data.items[0].team",
+                        "data.items[1].team",
+                    ),
+                ),
+            )
+        }
+    )
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": "KT, 삼성.",
+                    "cited_paths": [
+                        "data.items[0].team",
+                        "data.items[1].team",
+                    ],
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_projection=_persona_projection("간결하게"),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    await composer.compose(value)
+
+    properties = send.await_args.args[0].response_schema["properties"]
+    assert properties["cited_paths"]["items"]["enum"] == [
+        "data.items[0].team",
+        "data.items[1].team",
+    ]
+    assert properties["cited_paths"]["minItems"] == 2
+    assert properties["cited_paths"]["maxItems"] == 2
+    assert properties["content"]["enum"] == ["KT, 삼성.", "KT · 삼성."]
 
 
 @pytest.mark.parametrize(
@@ -404,16 +458,8 @@ async def test_composer_prunes_only_valid_unrendered_citations() -> None:
 
     assert send.await_count == 1
     assert draft.content == content
-    assert draft.cited_paths == (
-        "data.items[0].team",
-        "data.items[0].wins",
-        "data.items[1].team",
-        "data.items[1].wins",
-        "data.items[2].team",
-        "data.items[2].wins",
-    )
-    assert set(draft.cited_paths) < set(provider_paths)
-    assert guard_final_response(_production_shaped_input(), draft).accepted is True
+    assert draft.cited_paths == tuple(provider_paths)
+    assert guard_final_response(_production_shaped_input(), draft).accepted is False
 
 
 @pytest.mark.asyncio

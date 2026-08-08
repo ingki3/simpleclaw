@@ -9,9 +9,8 @@ from collections.abc import Mapping, Sequence
 from pydantic import JsonValue
 
 from .composition_contracts import CompositionInputV1, DraftResponseV1
-from .composition_projection import flatten_public_facts
 
-CITATION_CANONICALIZATION_POLICY_VERSION = "validated_visible_subset_v3"
+CITATION_CANONICALIZATION_POLICY_VERSION = "provider_order_no_prune_v3"
 
 
 def projected_scalar_literal_pattern(
@@ -76,17 +75,5 @@ def canonicalize_draft_citations(
     value: CompositionInputV1,
     draft: DraftResponseV1,
 ) -> DraftResponseV1:
-    """본문 불변으로 provider citation의 safe visible subset만 반영한다."""
-    concrete = flatten_public_facts(value.public_facts)
-    provider_paths = tuple(draft.cited_paths)
-    visible_paths = canonical_visible_cited_paths(
-        draft.content,
-        provider_paths,
-        concrete,
-    )
-    if visible_paths is None:
-        return draft
-    cited_paths = tuple(path for path in concrete if path in set(visible_paths))
-    if not cited_paths or cited_paths == draft.cited_paths:
-        return draft
-    return draft.model_copy(update={"cited_paths": cited_paths})
+    """Guard 전 provider citation set/order를 변경하지 않는다."""
+    return draft

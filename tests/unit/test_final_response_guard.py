@@ -133,7 +133,7 @@ def test_guard_rejects_implicit_or_question_derived_relation(content: str) -> No
     assert result.accepted is False
 
 
-def test_canonicalizer_keeps_only_declared_absence_evidence() -> None:
+def test_canonicalizer_preserves_undeclared_relation_citation_for_rejection() -> None:
     draft = DraftResponseV1(
         content="absent.",
         cited_paths=("data.state", "data.reason"),
@@ -141,8 +141,10 @@ def test_canonicalizer_keeps_only_declared_absence_evidence() -> None:
 
     canonical = canonicalize_draft_citations(_neutral_empty_input(), draft)
 
-    assert canonical.cited_paths == ("data.state",)
-    assert guard_final_response(_neutral_empty_input(), canonical).accepted is True
+    assert canonical is draft
+    assert guard_final_response(_neutral_empty_input(), canonical).code == (
+        "structural_relation_citation_mismatch"
+    )
 
 
 def test_guard_accepts_declared_question_scoped_state() -> None:
@@ -368,7 +370,19 @@ def test_structural_relation_accepts_visible_identity_evidence_in_source_order()
     assert result.accepted is True
 
 
-def test_structural_relation_rejects_required_evidence_subset_after_canonicalization() -> None:
+def test_structural_relation_rejects_required_evidence_subset() -> None:
+    value = _neutral_top_two_relation()
+    subset = DraftResponseV1(
+        content="alpha.",
+        cited_paths=("records[0].name",),
+    )
+
+    result = guard_final_response(value, subset)
+
+    assert result.code == "structural_relation_citation_mismatch"
+
+
+def test_canonicalizer_preserves_full_required_set_when_literals_are_missing() -> None:
     value = _neutral_top_two_relation()
     provider_draft = DraftResponseV1(
         content="alpha.",
@@ -376,10 +390,9 @@ def test_structural_relation_rejects_required_evidence_subset_after_canonicaliza
     )
 
     canonical = canonicalize_draft_citations(value, provider_draft)
-    result = guard_final_response(value, canonical)
 
-    assert canonical.cited_paths == ("records[0].name",)
-    assert result.code == "structural_relation_citation_mismatch"
+    assert canonical is provider_draft
+    assert guard_final_response(value, canonical).code == "cited_value_not_rendered"
 
 
 def test_relation_canonicalizer_preserves_malformed_provider_citation() -> None:
@@ -413,6 +426,23 @@ def test_visible_boolean_number_and_null_citations_are_never_dropped() -> None:
 
     assert canonical is draft
     assert guard_final_response(value, canonical).accepted is True
+
+
+def test_guard_uses_type_strict_literal_ownership_for_bool_and_number() -> None:
+    value = _neutral_empty_input().model_copy(
+        update={
+            "question": "What is the value?",
+            "public_facts_json": '{"flag":true,"number":1}',
+            "structural_evidence_relations": (),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content="1 true.", cited_paths=("number",)),
+    )
+
+    assert result.code == "rendered_value_not_cited"
 
 
 @pytest.mark.parametrize(
@@ -999,6 +1029,25 @@ def test_canonicalizer_does_not_hide_invalid_citations(
     assert guard_final_response(_input(), canonical).code == expected_code
 
 
+def test_canonicalizer_does_not_prune_out_of_scope_citation() -> None:
+    value = _input().model_copy(update={"question": "현재 상위 2팀"})
+    draft = DraftResponseV1(
+        content="KT, 삼성.",
+        cited_paths=(
+            "data.items[0].team",
+            "data.items[1].team",
+            "data.items[2].team",
+        ),
+    )
+
+    canonical = canonicalize_draft_citations(value, draft)
+
+    assert canonical is draft
+    assert guard_final_response(value, canonical).code == (
+        "citation_outside_requested_scope"
+    )
+
+
 def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
     result = guard_final_response(
         _input(),
@@ -1272,7 +1321,7 @@ def test_guard_accepts_domain_neutral_projected_literals() -> None:
         value,
         DraftResponseV1(
             content="USD 200 Apple입니다.",
-            cited_paths=("symbol", "price", "currency"),
+            cited_paths=("currency", "price", "symbol"),
         ),
     )
 
