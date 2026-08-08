@@ -7,18 +7,20 @@ import json
 import pytest
 
 from scripts.dev.validate_final_response_composer_no_send import (
-    _ConnectedProbeFacade,
-    _OneCallSend,
     _SCENARIOS,
     _connected_probe,
+    _ConnectedProbeFacade,
+    _OneCallSend,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     TelegramDeliveryAdapter,
 )
-from simpleclaw.graph_runtime.runtime import InMemoryDeliveryJournal
-from simpleclaw.graph_runtime.runtime import ShadowBudgetUsageV1
+from simpleclaw.graph_runtime.runtime import (
+    InMemoryDeliveryJournal,
+    ShadowBudgetUsageV1,
+)
 from simpleclaw.llm.models import LLMResponse
 
 
