@@ -136,8 +136,10 @@ output_contract:
       - data.source.urls[*]
     x-simpleclaw-structural-evidence-relations:
       - when: {path: data.status, equals: empty}
+        fallback_for: [schedule_items]
         evidence_fields: [data.status, data.empty_reason]
       - when: {path: data.mode, equals: schedule}
+        relation_id: schedule_items
         evidence_fields:
           - "data.items[*].status"
           - "data.items[*].participants.away.name"

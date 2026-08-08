@@ -222,7 +222,9 @@ def _structural_evidence_relations(
     """활성 relation의 모든 evidence를 source index 순서로 구체화한다."""
     concrete = flatten_public_facts(public_facts)
     activated: list[StructuralEvidenceRelationV1] = []
-    empty_active_relation = False
+    empty_relation_ids: set[str] = set()
+    empty_relation_without_id = False
+    active_fallback_targets: set[str] = set()
     for declaration in descriptor.structural_evidence_relations:
         condition_value = concrete.get(declaration.when_path, _MISSING)
         if condition_value is _MISSING or not _same_json_scalar(
@@ -262,7 +264,10 @@ def _structural_evidence_relations(
                 "projection.structural_evidence_not_renderable"
             )
         if any(not matches for matches in matches_by_pattern):
-            empty_active_relation = True
+            if declaration.relation_id is None:
+                empty_relation_without_id = True
+            else:
+                empty_relation_ids.add(declaration.relation_id)
             continue
         concrete_order = {path: index for index, path in enumerate(concrete)}
         evidence_paths = tuple(
@@ -295,9 +300,22 @@ def _structural_evidence_relations(
                     identity_paths=identity_paths,
                 )
             )
-    if empty_active_relation and not activated:
+            active_fallback_targets.update(declaration.fallback_for)
+    if empty_relation_without_id or not empty_relation_ids <= active_fallback_targets:
         raise CompositionProjectionError("projection.structural_evidence_empty")
     return tuple(activated)
+
+
+def _composition_list_roots(paths: Sequence[str]) -> tuple[str, ...]:
+    """Descriptor wildcard path가 선언한 마지막 list container를 보존한다."""
+    roots: list[str] = []
+    for path in paths:
+        if "[*]" not in path:
+            continue
+        root = path.rsplit("[*]", maxsplit=1)[0]
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
 
 
 def build_composition_input(
@@ -334,6 +352,9 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
+        composition_list_roots=_composition_list_roots(
+            descriptor.composition_fields
+        ),
         structural_evidence_relations=_structural_evidence_relations(
             public_facts,
             descriptor,

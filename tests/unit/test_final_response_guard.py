@@ -25,6 +25,7 @@ def _input() -> CompositionInputV1:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_roots=("data.items",),
         public_facts={
             "data": {
                 "category": "KBO",
@@ -282,6 +283,7 @@ def test_structural_relation_cannot_bypass_top_n_cardinality() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="top-two-payload-hash",
+        composition_list_roots=("records",),
         public_facts={
             "records": [{"state": "alpha"}, {"state": "beta"}]
         },
@@ -326,6 +328,7 @@ def _neutral_top_two_relation(
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="top-two-relation-payload-hash",
+        composition_list_roots=("records",),
         public_facts={
             "records": [
                 {"name": "alpha", "state": "ready"},
@@ -440,6 +443,7 @@ def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="mixed-roots-payload-hash",
+        composition_list_roots=("left", "right"),
         public_facts={
             "left": [{"name": "alpha"}],
             "right": [{"name": "unused"}, {"name": "beta"}],
@@ -461,6 +465,22 @@ def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
     )
 
     assert result.code == "requested_scope_mixed_list_roots"
+
+
+def test_top_n_rejects_list_root_not_declared_by_descriptor() -> None:
+    value = _neutral_top_two_relation().model_copy(
+        update={"composition_list_roots": ("other_records",)}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha ready, beta waiting.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.code == "requested_scope_list_root_not_declared"
 
 
 def test_structural_relation_rejects_required_evidence_subset() -> None:
@@ -1332,6 +1352,7 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_roots=("items",),
         public_facts={"items": [{"team": "New York Yankees"}]},
     )
     result = guard_final_response(
@@ -1746,6 +1767,7 @@ def test_guard_requires_separator_between_cited_literals(
     value = _input().model_copy(
         update={
             "question": "현재 상위 2팀",
+            "composition_list_roots": ("items",),
             "public_facts_json": (
                 '{"items":['
                 f'{{"team":"{teams[0]}"}},'

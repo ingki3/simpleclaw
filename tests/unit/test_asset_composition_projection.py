@@ -384,6 +384,7 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
         "data.records[0].value",
         "data.records[1].value",
     )
+    assert projection.composition_list_roots == ("data.records",)
 
     sparse = NormalizedAssetResultV1(
         invocation_id="neutral-sparse-wildcard",
@@ -460,11 +461,15 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
                 "data.records[*].value",
             ],
             "x-simpleclaw-structural-evidence-relations": [
-                *descriptor.json_schema[
-                    "x-simpleclaw-structural-evidence-relations"
-                ],
+                {
+                    **descriptor.json_schema[
+                        "x-simpleclaw-structural-evidence-relations"
+                    ][0],
+                    "relation_id": "records",
+                },
                 {
                     "when": {"path": "data.state", "equals": "absent"},
+                    "fallback_for": ["records"],
                     "evidence_fields": ["data.state"],
                 },
             ],
@@ -495,6 +500,34 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
     assert fallback_projection.structural_evidence_relations[0].evidence_paths == (
         "data.state",
     )
+
+
+def test_descriptor_rejects_unknown_structural_fallback_target() -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-fallback")
+
+    with pytest.raises(ValueError, match="fallback target is not declared"):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="recipe.neutral-fallback.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="neutral-fallback-hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "data": {"properties": {"state": {}, "value": {}}}
+                },
+                "x-simpleclaw-composition-fields": ["data.state", "data.value"],
+                "x-simpleclaw-structural-evidence-relations": [
+                    {
+                        "when": {"path": "data.state", "equals": "absent"},
+                        "fallback_for": ["missing_relation"],
+                        "evidence_fields": ["data.value"],
+                    }
+                ],
+            },
+        )
 
 
 @pytest.mark.parametrize(

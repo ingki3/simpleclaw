@@ -46,6 +46,7 @@ def _input() -> CompositionInputV1:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
+        composition_list_roots=("data.items",),
         public_facts={
             "data": {
                 "items": [

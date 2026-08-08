@@ -226,6 +226,11 @@ def _required_item_indices(
     return set(range(min(top_n, max(available) + 1)))
 
 
+def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
+    pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
+    return re.fullmatch(pattern, concrete_root) is not None
+
+
 def _structurally_identified_paths(
     concrete: dict[str, JsonValue],
     required_indices: set[int],
@@ -686,6 +691,13 @@ def guard_final_response(
         if not cited_list_roots:
             return _rejected("requested_scope_not_fully_cited")
         list_root = next(iter(cited_list_roots))
+        matching_declared_roots = {
+            declared_root
+            for declared_root in value.composition_list_roots
+            if _matches_declared_list_root(list_root, declared_root)
+        }
+        if len(matching_declared_roots) != 1:
+            return _rejected("requested_scope_list_root_not_declared")
         required_indices = _required_item_indices(
             concrete,
             top_n,
