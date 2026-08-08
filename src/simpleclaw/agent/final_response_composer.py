@@ -93,10 +93,10 @@ def _citable_paths(
     if relation is not None:
         allowed = relation.evidence_paths
     else:
-        allowed = tuple(value.resolved_claims)
+        allowed = tuple(value.citable_paths)
         if not allowed or any(path not in available for path in allowed):
             raise FinalResponseComposerError(
-                "composer input has no verified resolved-claim path contract"
+                "composer input has no verified citable-path contract"
             )
     if not allowed:
         raise FinalResponseComposerError("composer input has no citable scalar paths")

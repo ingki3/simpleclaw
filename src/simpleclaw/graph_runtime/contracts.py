@@ -27,6 +27,7 @@ PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
 COMPOSITION_LIST_ROOT_EXTENSION = "x-simpleclaw-composition-list-root"
+CITABLE_PATHS_EXTENSION = "x-simpleclaw-citable-paths"
 STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION = (
     "x-simpleclaw-structural-evidence-relations"
 )
@@ -169,6 +170,78 @@ class StructuralEvidenceRelationDeclaration:
     identity_fields: tuple[str, ...] = ()
     relation_id: str | None = None
     fallback_for: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CitablePathDeclaration:
+    """Descriptor가 source-owned citation path와 순서를 선언하는 조건이다."""
+
+    when_path: str
+    when_equals: JsonValue
+    paths: tuple[str, ...]
+
+
+def validate_citable_paths(
+    value: object,
+    *,
+    json_schema: dict[str, object],
+    composition_fields: tuple[str, ...],
+) -> tuple[CitablePathDeclaration, ...]:
+    """조건별 citation path를 bounded·composition-visible 계약으로 검증한다."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_COMPOSITION_RELATIONS:
+        raise ValueError(
+            f"{CITABLE_PATHS_EXTENSION} must contain 1.."
+            f"{MAX_COMPOSITION_RELATIONS} declarations"
+        )
+    declarations: list[CitablePathDeclaration] = []
+    seen_conditions: set[tuple[str, str]] = set()
+    for raw in value:
+        if not isinstance(raw, dict) or set(raw) != {"when", "paths"}:
+            raise ValueError("citable path declaration has invalid fields")
+        when = raw["when"]
+        if not isinstance(when, dict) or set(when) != {"path", "equals"}:
+            raise ValueError("citable path when must contain path and equals")
+        when_path = validate_composition_fields(
+            [when["path"]],
+            json_schema=json_schema,
+        )[0]
+        if "[*]" in when_path:
+            raise ValueError("citable path condition cannot use a wildcard")
+        if when_path not in composition_fields:
+            raise ValueError("citable path condition must be composition-visible")
+        when_equals = when["equals"]
+        if isinstance(when_equals, dict | list):
+            raise TypeError("citable path condition must use a scalar value")
+        _validate_json_value(when_equals, path="citable path condition")
+        paths = validate_composition_fields(
+            raw["paths"],
+            json_schema=json_schema,
+        )
+        if any(path not in composition_fields for path in paths):
+            raise ValueError("citable path must be composition-visible")
+        condition = (
+            when_path,
+            json.dumps(
+                when_equals,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        if condition in seen_conditions:
+            raise ValueError("duplicate citable path condition")
+        seen_conditions.add(condition)
+        declarations.append(
+            CitablePathDeclaration(
+                when_path=when_path,
+                when_equals=when_equals,
+                paths=paths,
+            )
+        )
+    return tuple(declarations)
 
 
 def validate_structural_evidence_relations(
@@ -484,6 +557,20 @@ class ContractDescriptorV1(ContractModel):
         )
 
     @property
+    def citable_paths(self) -> tuple[CitablePathDeclaration, ...]:
+        """계약이 선언한 조건별 source-owned citation path를 반환한다."""
+        schema = self.json_schema
+        fields = validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
+        return validate_citable_paths(
+            schema.get(CITABLE_PATHS_EXTENSION),
+            json_schema=schema,
+            composition_fields=fields,
+        )
+
+    @property
     def composition_list_root(self) -> str | None:
         """Top-N scope에 사용할 descriptor-declared primary list root다."""
         schema = self.json_schema
@@ -512,6 +599,11 @@ class ContractDescriptorV1(ContractModel):
         )
         validate_composition_list_root(
             schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
+        )
+        validate_citable_paths(
+            schema.get(CITABLE_PATHS_EXTENSION),
             json_schema=schema,
             composition_fields=composition_fields,
         )

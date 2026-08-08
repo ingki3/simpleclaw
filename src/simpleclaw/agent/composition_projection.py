@@ -306,6 +306,65 @@ def _structural_evidence_relations(
     return tuple(activated)
 
 
+def _citable_paths(
+    public_facts: Mapping[str, JsonValue],
+    descriptor: ContractDescriptorV1,
+) -> tuple[str, ...]:
+    """활성 descriptor 선언을 concrete source order의 scalar path로 투영한다."""
+    concrete = flatten_public_facts(public_facts)
+    concrete_order = {path: index for index, path in enumerate(concrete)}
+    activated: list[tuple[str, ...]] = []
+    for declaration in descriptor.citable_paths:
+        condition_value = concrete.get(declaration.when_path, _MISSING)
+        if condition_value is _MISSING or not _same_json_scalar(
+            condition_value,
+            declaration.when_equals,
+        ):
+            continue
+        patterns = tuple(_concrete_path_pattern(path) for path in declaration.paths)
+        expanded_fields = tuple(
+            _expand_structural_field(public_facts, _path_tokens(path))
+            for path in declaration.paths
+        )
+        if any(not complete for _, complete in expanded_fields):
+            raise CompositionProjectionError("projection.citable_path_incomplete")
+        matches_by_pattern = tuple(paths for paths, _ in expanded_fields)
+        if any(not paths for paths in matches_by_pattern):
+            raise CompositionProjectionError("projection.citable_path_empty")
+        if any(
+            path not in concrete or isinstance(concrete[path], dict | list)
+            for paths in matches_by_pattern
+            for path in paths
+        ):
+            raise CompositionProjectionError("projection.citable_path_not_scalar")
+        if any(
+            concrete[path] is None
+            or projected_scalar_literal_pattern(concrete[path]) is None
+            for paths in matches_by_pattern
+            for path in paths
+        ):
+            raise CompositionProjectionError("projection.citable_path_not_renderable")
+        activated.append(
+            tuple(
+                sorted(
+                    {
+                        path
+                        for paths in matches_by_pattern
+                        for path in paths
+                    },
+                    key=lambda path: _evidence_path_order(
+                        path,
+                        patterns=patterns,
+                        concrete_order=concrete_order,
+                    ),
+                )
+            )
+        )
+    if len(activated) > 1:
+        raise CompositionProjectionError("projection.citable_path_conflict")
+    return activated[0] if activated else ()
+
+
 def build_composition_input(
     *,
     request_id: str,
@@ -328,6 +387,10 @@ def build_composition_input(
     if not descriptor.composition_fields:
         raise CompositionProjectionError("projection.fields_not_declared")
     public_facts = project_declared_paths(payload, descriptor.composition_fields)
+    structural_evidence_relations = _structural_evidence_relations(
+        public_facts,
+        descriptor,
+    )
     return CompositionInputV1(
         request_id=request_id,
         question=question,
@@ -340,11 +403,13 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
-        composition_list_root=descriptor.composition_list_root,
-        structural_evidence_relations=_structural_evidence_relations(
-            public_facts,
-            descriptor,
+        citable_paths=(
+            ()
+            if structural_evidence_relations
+            else _citable_paths(public_facts, descriptor)
         ),
+        composition_list_root=descriptor.composition_list_root,
+        structural_evidence_relations=structural_evidence_relations,
     )
 
 

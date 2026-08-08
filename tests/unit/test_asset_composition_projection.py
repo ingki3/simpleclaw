@@ -109,6 +109,123 @@ def test_projection_includes_only_declared_typed_facts() -> None:
     assert "RAW" not in serialized
 
 
+def _citable_projection_values(
+    record: dict[str, object] | None = None,
+) -> tuple[ContractDescriptorV1, NormalizedAssetResultV1]:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+    ref = ContractRefV1(
+        contract_id="recipe.neutral-records.output",
+        version="1",
+        owner_ref=owner,
+        schema_hash="neutral-citable-schema-hash",
+    )
+    descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "mode": {},
+                        "records": {
+                            "type": "array",
+                            "items": {
+                                "properties": {
+                                    "name": {},
+                                    "measure_a": {},
+                                }
+                            },
+                        },
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.mode",
+                "data.records[*].name",
+                "data.records[*].measure_a",
+            ],
+            "x-simpleclaw-citable-paths": [
+                {
+                    "when": {"path": "data.mode", "equals": "detail"},
+                    "paths": [
+                        "data.records[*].name",
+                        "data.records[*].measure_a",
+                    ],
+                }
+            ],
+        },
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="neutral-citable-invocation",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {
+                "mode": "detail",
+                "records": [record or {"name": "alpha", "measure_a": 3}],
+            },
+            "resolved_claims": ["aggregate"],
+            "unresolved_claims": [],
+        },
+        payload_hash="neutral-citable-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    return descriptor, result
+
+
+def test_projection_keeps_claim_ids_separate_from_source_citable_paths() -> None:
+    descriptor, result = _citable_projection_values()
+
+    projection = build_composition_input(
+        request_id="neutral-citable-request",
+        question="Return the record detail.",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=result,
+        descriptor=descriptor,
+    )
+
+    assert projection.resolved_claims == ("aggregate",)
+    assert projection.citable_paths == (
+        "data.records[0].name",
+        "data.records[0].measure_a",
+    )
+
+
+@pytest.mark.parametrize(
+    ("record", "code"),
+    [
+        ({"name": "alpha"}, "projection.citable_path_incomplete"),
+        (
+            {"name": "alpha", "measure_a": None},
+            "projection.citable_path_not_renderable",
+        ),
+        (
+            {"name": "alpha", "measure_a": {"nested": 3}},
+            "projection.citable_path_not_scalar",
+        ),
+    ],
+    ids=("missing", "null", "container"),
+)
+def test_projection_rejects_invalid_source_citable_path_membership(
+    record: dict[str, object],
+    code: str,
+) -> None:
+    descriptor, result = _citable_projection_values(record)
+
+    with pytest.raises(CompositionProjectionError, match=code):
+        build_composition_input(
+            request_id="neutral-invalid-citable-request",
+            question="Return the record detail.",
+            locale="en-US",
+            selected_route="recipe",
+            normalized_result=result,
+            descriptor=descriptor,
+        )
+
+
 def test_projection_activates_descriptor_declared_neutral_relation() -> None:
     owner = AssetRefV1(type="recipe", name="neutral-records")
     ref = ContractRefV1(

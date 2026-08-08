@@ -38,38 +38,28 @@ from simpleclaw.graph_runtime.status import (
 
 
 def _values(request_id: str = "request-1"):
-    facts = {
-        "data": {
-            "field_alpha": "token_alpha",
-            "items": [
-                {
-                    "field_beta": "token_beta",
-                    "field_gamma": 37,
-                }
-            ],
-        }
-    }
+    facts = {"records": [{"name": "alpha", "measure_a": 59}]}
     value = CompositionInputV1(
         request_id=request_id,
-        question="Return the projected fields.",
+        question="Return the first record.",
         locale="en-US",
         selected_route="recipe",
-        asset_ref=AssetRefV1(type="recipe", name="neutral-record"),
+        asset_ref=AssetRefV1(type="recipe", name="neutral-records"),
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
-        composition_list_root="data.items",
+        composition_list_root="records",
         public_facts=facts,
-        resolved_claims=(
-            "data.field_alpha",
-            "data.items[0].field_beta",
-            "data.items[0].field_gamma",
+        resolved_claims=("aggregate",),
+        citable_paths=(
+            "records[0].name",
+            "records[0].measure_a",
         ),
     )
     result = NormalizedAssetResultV1(
         invocation_id="invocation",
         output_contract=ContractRefV1(
-            contract_id="recipe.neutral-record.output",
+            contract_id="recipe.neutral-records.output",
             version="1",
             owner_ref=value.asset_ref,
             schema_hash="schema-hash",
@@ -84,11 +74,10 @@ def _values(request_id: str = "request-1"):
 
 def _draft() -> DraftResponseV1:
     return DraftResponseV1(
-        content="token_alpha, token_beta, 37.",
+        content="alpha, 59.",
         cited_paths=(
-            "data.field_alpha",
-            "data.items[0].field_beta",
-            "data.items[0].field_gamma",
+            "records[0].name",
+            "records[0].measure_a",
         ),
     )
 
@@ -97,8 +86,7 @@ class _ComposerStop(FinalResponseComposerError):
     def __init__(self, stop_condition: str) -> None:
         self.stop_condition = stop_condition
         super().__init__(
-            "provider raw diagnostic: "
-            f"{stop_condition}; token_alpha token_beta 37"
+            f"provider raw diagnostic: {stop_condition}; alpha measure 59"
         )
 
 
@@ -152,9 +140,8 @@ async def _assert_stop_records_generic_fallback_and_replay_reuses_it(
             "provider",
             "raw diagnostic",
             stop_condition,
-            "token_alpha",
-            "token_beta",
-            "37",
+            "alpha",
+            "59",
         )
     )
     with sqlite3.connect(db_path) as connection:
@@ -262,13 +249,7 @@ async def test_actual_asyncio_timeout_records_generic_fallback_and_replay_reuses
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in (
-            "provider",
-            "raw",
-            "token_alpha",
-            "token_beta",
-            "37",
-        )
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -339,13 +320,7 @@ async def test_actual_guard_timeout_records_generic_fallback_and_replay_reuses_i
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in (
-            "provider",
-            "raw",
-            "token_alpha",
-            "token_beta",
-            "37",
-        )
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -428,13 +403,7 @@ async def test_actual_record_timeout_records_generic_fallback_and_replay_reuses_
     assert safe_render.call_count == 1
     assert all(
         forbidden not in first.content
-        for forbidden in (
-            "provider",
-            "raw",
-            "token_alpha",
-            "token_beta",
-            "37",
-        )
+        for forbidden in ("provider", "raw", "alpha", "59")
     )
     with sqlite3.connect(db_path) as connection:
         assert connection.execute(
@@ -616,9 +585,8 @@ async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
 
     assert canonical.content == accepted_draft.content
     assert canonical.cited_paths == (
-        "data.field_alpha",
-        "data.items[0].field_beta",
-        "data.items[0].field_gamma",
+        "records[0].name",
+        "records[0].measure_a",
     )
     assert first is not None
     assert first.content == accepted_draft.content

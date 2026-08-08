@@ -25,10 +25,14 @@ from scripts.install_naver_sports_skill import install as install_naver_sports_s
 from scripts.install_sports_live_recipe import install as install_sports_live_recipe
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
 )
 from simpleclaw.agent.context_candidates import ContextCandidateSet
-from simpleclaw.agent.final_response_composer import FinalResponseComposer
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposer,
+    materialize_render_plan,
+)
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
     _allow_v4_legacy_fallback,
@@ -740,7 +744,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
 
 
 @pytest.mark.parametrize(
-    ("prompt", "data", "content", "citations"),
+    ("prompt", "data", "content", "citations", "resolved_claims"),
     [
         (
             "오늘 프로야구 하냐?",
@@ -766,6 +770,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
                 "data.items[0].participants.away.name",
                 "data.items[0].participants.home.name",
             ),
+            ("schedule",),
         ),
         (
             "오늘 프로야구 하냐?",
@@ -777,6 +782,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             },
             "empty, no_scheduled_events.",
             ("data.status", "data.empty_reason"),
+            ("schedule",),
         ),
         (
             "지금 KBO 경기 중이야?",
@@ -788,6 +794,57 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             },
             "empty, no_live_events.",
             ("data.status", "data.empty_reason"),
+            ("score",),
+        ),
+        (
+            "지금 KBO 경기 중이야?",
+            {
+                "mode": "live",
+                "status": "ok",
+                "items": [
+                    {
+                        "participants": {
+                            "away": {"name": "alpha"},
+                            "home": {"name": "beta"},
+                        },
+                        "score": {"away": 2, "home": 3},
+                    }
+                ],
+            },
+            "alpha, beta, 2, 3.",
+            (
+                "data.items[0].participants.away.name",
+                "data.items[0].participants.home.name",
+                "data.items[0].score.away",
+                "data.items[0].score.home",
+            ),
+            ("score",),
+        ),
+        (
+            "어제 KBO 경기 결과 알려줘",
+            {
+                "mode": "results",
+                "status": "ok",
+                "items": [
+                    {
+                        "participants": {
+                            "away": {"name": "alpha"},
+                            "home": {"name": "beta"},
+                        },
+                        "score": {"away": 2, "home": 3},
+                        "winner": "beta",
+                    }
+                ],
+            },
+            "alpha, beta, 2, 3, beta.",
+            (
+                "data.items[0].participants.away.name",
+                "data.items[0].participants.home.name",
+                "data.items[0].score.away",
+                "data.items[0].score.home",
+                "data.items[0].winner",
+            ),
+            ("game_result", "score", "winner"),
         ),
     ],
 )
@@ -799,6 +856,7 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
     data: dict[str, object],
     content: str,
     citations: tuple[str, ...],
+    resolved_claims: tuple[str, ...],
 ) -> None:
     recipe, skill = _production_sports_definitions(tmp_path)
     catalog = build_planner_catalog(
@@ -823,7 +881,7 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
             "status": "completed",
             "side_effect": False,
             "data": data,
-            "resolved_claims": list(citations),
+            "resolved_claims": list(resolved_claims),
             "unresolved_claims": [],
         }
 
@@ -831,7 +889,14 @@ async def test_installed_sports_schedule_and_empty_complete_central_no_send(
         nonlocal composer_calls
         composer_calls += 1
         assert value.public_facts["data"]["mode"] == data["mode"]
-        return DraftResponseV1(content=content, cited_paths=citations)
+        assert value.resolved_claims == resolved_claims
+        draft = materialize_render_plan(
+            value,
+            CompositionRenderPlanV1(separator="comma_space"),
+        )
+        assert draft.cited_paths == citations
+        assert draft.content == content
+        return draft
 
     runner = ConnectedShadowTurnRunner(
         facade=LangGraphV4RolloutFacade(

@@ -297,7 +297,8 @@ async def test_composer_fails_closed_instead_of_materializing_limitation_sentenc
                 '{"label":"second","value":null}]}'
             ),
             "unresolved_claims": ("missing score", "missing source"),
-            "resolved_claims": ("alpha.nested[0].name",),
+            "resolved_claims": ("aggregate",),
+            "citable_paths": ("alpha.nested[0].name",),
             "composition_list_root": "alpha.nested",
             "structural_evidence_relations": (),
         }
@@ -311,6 +312,32 @@ async def test_composer_fails_closed_instead_of_materializing_limitation_sentenc
     )
 
     with pytest.raises(FinalResponseComposerError, match="fact-free fallback"):
+        await composer.compose(value)
+
+    assert send.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_composer_does_not_reinterpret_claim_id_as_fact_path() -> None:
+    value = _input().model_copy(
+        update={
+            "resolved_claims": ("aggregate",),
+            "citable_paths": ("aggregate",),
+            "structural_evidence_relations": (),
+        }
+    )
+    send = AsyncMock()
+    composer = FinalResponseComposer(
+        send=send,
+        persona_projection=_persona_projection("Use concise grammar."),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    with pytest.raises(
+        FinalResponseComposerError,
+        match="no verified citable-path contract",
+    ):
         await composer.compose(value)
 
     assert send.await_count == 0
@@ -332,7 +359,7 @@ async def test_composer_rejects_more_scalar_paths_than_draft_can_cite() -> None:
                 separators=(",", ":"),
                 sort_keys=True,
             ),
-            "resolved_claims": tuple(f"field_{index:03d}" for index in range(129)),
+            "citable_paths": tuple(f"field_{index:03d}" for index in range(129)),
             "structural_evidence_relations": (),
         }
     )
@@ -696,7 +723,7 @@ def test_render_plan_rejects_unsafe_scalar_or_list_root(
                 separators=(",", ":"),
                 sort_keys=True,
             ),
-            "resolved_claims": paths,
+            "citable_paths": paths,
             "structural_evidence_relations": (),
         }
     )

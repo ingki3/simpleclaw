@@ -655,8 +655,8 @@ def guard_final_response(
     concrete = flatten_public_facts(value.public_facts)
     if not value.structural_evidence_relations and tuple(
         draft.cited_paths
-    ) != tuple(value.resolved_claims):
-        return _rejected("resolved_claim_citation_mismatch")
+    ) != tuple(value.citable_paths):
+        return _rejected("citable_path_citation_mismatch")
     if not draft.cited_paths:
         return _rejected("citations_required")
     if len(draft.cited_paths) != len(set(draft.cited_paths)):

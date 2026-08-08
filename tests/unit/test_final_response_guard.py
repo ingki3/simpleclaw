@@ -170,9 +170,9 @@ def _same_item_render_input(
     )
 
 
-def _non_structural_resolved_claim_input(
+def _non_structural_citable_input(
     *,
-    resolved_claims: tuple[str, ...] = ("record.first", "record.second"),
+    citable_paths: tuple[str, ...] = ("record.first", "record.second"),
 ) -> CompositionInputV1:
     return CompositionInputV1(
         request_id="request-non-structural-resolved-claims",
@@ -190,19 +190,20 @@ def _non_structural_resolved_claim_input(
                 "third": "gamma",
             }
         },
-        resolved_claims=resolved_claims,
+        resolved_claims=("aggregate",),
+        citable_paths=citable_paths,
     )
 
 
-def test_guard_accepts_exact_non_structural_resolved_claim_citations() -> None:
-    value = _non_structural_resolved_claim_input()
+def test_guard_accepts_exact_non_structural_citable_path_citations() -> None:
+    value = _non_structural_citable_input()
 
     draft = materialize_render_plan(
         value,
         CompositionRenderPlanV1(separator="comma_space"),
     )
 
-    assert draft.cited_paths == value.resolved_claims
+    assert draft.cited_paths == value.citable_paths
     assert draft.content == "alpha, beta."
     assert guard_final_response(value, draft).accepted is True
 
@@ -226,10 +227,10 @@ def test_guard_accepts_exact_non_structural_resolved_claim_citations() -> None:
         "omitted",
     ),
 )
-def test_guard_rejects_non_structural_resolved_claim_citation_mismatch(
+def test_guard_rejects_non_structural_citable_path_citation_mismatch(
     cited_paths: tuple[str, ...],
 ) -> None:
-    value = _non_structural_resolved_claim_input()
+    value = _non_structural_citable_input()
     draft = DraftResponseV1.model_construct(
         content="alpha, beta.",
         cited_paths=cited_paths,
@@ -239,11 +240,11 @@ def test_guard_rejects_non_structural_resolved_claim_citation_mismatch(
     result = guard_final_response(value, draft)
 
     assert result.accepted is False
-    assert result.code == "resolved_claim_citation_mismatch"
+    assert result.code == "citable_path_citation_mismatch"
 
 
 def test_guard_rejects_citations_when_non_structural_contract_is_empty() -> None:
-    value = _non_structural_resolved_claim_input(resolved_claims=())
+    value = _non_structural_citable_input(citable_paths=())
     draft = DraftResponseV1(
         content="alpha.",
         cited_paths=("record.first",),
@@ -252,7 +253,7 @@ def test_guard_rejects_citations_when_non_structural_contract_is_empty() -> None
     result = guard_final_response(value, draft)
 
     assert result.accepted is False
-    assert result.code == "resolved_claim_citation_mismatch"
+    assert result.code == "citable_path_citation_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -997,7 +998,7 @@ def test_top_n_rejects_auxiliary_declared_wildcard_root() -> None:
             "records": [{"name": "real-a"}, {"name": "real-b"}],
             "warnings": ["alpha", "beta"],
         },
-        resolved_claims=("warnings[0]", "warnings[1]"),
+        citable_paths=("warnings[0]", "warnings[1]"),
     )
 
     result = guard_final_response(
@@ -1055,7 +1056,7 @@ def test_visible_boolean_number_and_null_citations_are_preserved_then_rejected()
         update={
             "question": "What are the three values?",
             "public_facts_json": '{"flag":true,"count":2,"missing":null}',
-            "resolved_claims": ("flag", "count", "missing"),
+            "citable_paths": ("flag", "count", "missing"),
             "structural_evidence_relations": (),
         }
     )
@@ -1077,7 +1078,7 @@ def test_guard_uses_type_strict_literal_ownership_for_bool_and_number() -> None:
         update={
             "question": "What is the value?",
             "public_facts_json": '{"flag":true,"number":1}',
-            "resolved_claims": ("number",),
+            "citable_paths": ("number",),
             "structural_evidence_relations": (),
         }
     )
@@ -1107,7 +1108,7 @@ def test_guard_rejects_visible_uncited_scalar_for_every_json_scalar_type(
         update={
             "question": "What is alpha?",
             "public_facts_json": public_facts_json,
-            "resolved_claims": ("label",),
+            "citable_paths": ("label",),
             "structural_evidence_relations": (),
         }
     )
@@ -1350,7 +1351,7 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
         update={
             "question": "두 항목의 개수를 알려줘",
             "public_facts_json": public_facts_json,
-            "resolved_claims": cited_paths,
+            "citable_paths": cited_paths,
             "structural_evidence_relations": (),
         }
     )
@@ -1401,7 +1402,7 @@ def test_guard_rejects_relation_reassembly_without_list_locations(
         update={
             "question": "두 지표 값을 알려줘",
             "public_facts_json": public_facts_json,
-            "resolved_claims": cited_paths,
+            "citable_paths": cited_paths,
             "structural_evidence_relations": (),
         }
     )
@@ -1425,7 +1426,7 @@ def test_guard_accepts_root_scalar_label_value_sequence() -> None:
                 '{"first_label":"A","first_value":3,'
                 '"second_label":"B","second_value":2}'
             ),
-            "resolved_claims": (
+            "citable_paths": (
                 "first_label",
                 "first_value",
                 "second_label",
@@ -1459,7 +1460,7 @@ def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
                 '{"left":[{"label":"A","value":3}],'
                 '"right":[{"label":"B","value":2}]}'
             ),
-            "resolved_claims": (
+            "citable_paths": (
                 "left[0].label",
                 "left[0].value",
                 "right[0].label",
@@ -1495,7 +1496,7 @@ def test_guard_accepts_domain_neutral_label_value_materializer_sequence() -> Non
                 '{"label":"B","value":2}'
                 "]}"
             ),
-            "resolved_claims": (
+            "citable_paths": (
                 "records[0].label",
                 "records[0].value",
                 "records[1].label",
@@ -1541,7 +1542,7 @@ def test_guard_rejects_cross_item_predicate_or_ungrounded_units(
                 '{"label":"B","value":2}'
                 "]}"
             ),
-            "resolved_claims": (
+            "citable_paths": (
                 "records[0].label",
                 "records[0].value",
                 "records[1].label",
@@ -1572,7 +1573,7 @@ def test_guard_rejects_reversed_value_to_label_relation_within_item() -> None:
         update={
             "question": "항목의 개수를 알려줘",
             "public_facts_json": '{"items":[{"value":3,"label":"A"}]}',
-            "resolved_claims": ("items[0].value", "items[0].label"),
+            "citable_paths": ("items[0].value", "items[0].label"),
             "structural_evidence_relations": (),
         }
     )
@@ -1717,7 +1718,7 @@ def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
     number = guard_final_response(
         value.model_copy(
             update={
-                "resolved_claims": ("records[0].name",),
+                "citable_paths": ("records[0].name",),
                 "structural_evidence_relations": (),
             }
         ),
@@ -1834,7 +1835,7 @@ def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> 
 def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     value = _neutral_records_input(question="List the records.").model_copy(
         update={
-            "resolved_claims": (
+            "citable_paths": (
                 "records[0].name",
                 "records[1].name",
                 "records[2].name",
@@ -1862,7 +1863,7 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
 def test_guard_rejects_semantic_limitation_language() -> None:
     value = _neutral_records_input(question="List the records.").model_copy(
         update={
-            "resolved_claims": (
+            "citable_paths": (
                 "records[0].name",
                 "records[1].name",
                 "records[2].name",
@@ -2002,7 +2003,7 @@ def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
     result = guard_final_response(
         _neutral_records_input(question="Return alpha.").model_copy(
             update={
-                "resolved_claims": ("records[0].name",),
+                "citable_paths": ("records[0].name",),
                 "structural_evidence_relations": (),
             }
         ),
@@ -2018,7 +2019,7 @@ def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
 def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
     value = _neutral_records_input(question="Return alpha.").model_copy(
         update={
-            "resolved_claims": ("records[0].name",),
+            "citable_paths": ("records[0].name",),
             "structural_evidence_relations": (),
         }
     )
@@ -2056,7 +2057,8 @@ def test_guard_accepts_synthetic_neutral_projected_literals() -> None:
             "field_beta": 200,
             "field_gamma": "token_gamma",
         },
-        resolved_claims=("field_alpha", "field_beta", "field_gamma"),
+        resolved_claims=("aggregate",),
+        citable_paths=("field_alpha", "field_beta", "field_gamma"),
     )
     result = guard_final_response(
         value,
@@ -2070,16 +2072,16 @@ def test_guard_accepts_synthetic_neutral_projected_literals() -> None:
 
     status_value = value.model_copy(
         update={
-            "question": "현재 상태를 알려줘",
-            "public_facts_json": '{"status":"정상"}',
-            "resolved_claims": ("status",),
+            "question": "Return the current state.",
+            "public_facts_json": '{"state":"ready"}',
+            "citable_paths": ("state",),
         }
     )
     status_result = guard_final_response(
         status_value,
         DraftResponseV1(
-            content="정상.",
-            cited_paths=("status",),
+            content="ready.",
+            cited_paths=("state",),
         ),
     )
 
@@ -2120,7 +2122,7 @@ def test_guard_rejects_question_prefix_fact_expansion(
             "currency": "USD",
             "status": "정상",
         },
-        resolved_claims=cited_paths,
+        citable_paths=cited_paths,
     )
 
     result = guard_final_response(
@@ -2136,7 +2138,7 @@ def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
         question="Is alpha outside the requested set?"
     ).model_copy(
         update={
-            "resolved_claims": ("records[0].name",),
+            "citable_paths": ("records[0].name",),
             "structural_evidence_relations": (),
         }
     )
@@ -2162,7 +2164,7 @@ def test_guard_rejects_limitation_language_without_unresolved_claims(
     result = guard_final_response(
         _neutral_records_input(question="Return alpha.").model_copy(
             update={
-                "resolved_claims": ("records[0].name",),
+                "citable_paths": ("records[0].name",),
                 "structural_evidence_relations": (),
             }
         ),
@@ -2413,7 +2415,7 @@ def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
     result = guard_final_response(
         _neutral_records_input(question="What is alpha's value?").model_copy(
             update={
-                "resolved_claims": (
+                "citable_paths": (
                     "records[0].name",
                     "records[0].value",
                 ),

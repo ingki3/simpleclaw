@@ -50,6 +50,7 @@ class CompositionInputV1(ContractModel):
     public_facts_json: CanonicalJsonObject = Field(alias="public_facts")
     resolved_claims: tuple[NonEmptyStr, ...] = ()
     unresolved_claims: tuple[NonEmptyStr, ...] = ()
+    citable_paths: tuple[NonEmptyStr, ...] = Field(default=(), max_length=128)
     composition_list_root: NonEmptyStr | None = None
     structural_evidence_relations: tuple[StructuralEvidenceRelationV1, ...] = ()
 
@@ -69,6 +70,8 @@ class CompositionInputV1(ContractModel):
             raise ValueError("composition input public_facts must not be empty")
         if len(self.structural_evidence_relations) > 1:
             raise ValueError("conflicting active structural evidence relations")
+        if len(set(self.citable_paths)) != len(self.citable_paths):
+            raise ValueError("citable_paths must be unique")
         return self
 
 
