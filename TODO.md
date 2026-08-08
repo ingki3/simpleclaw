@@ -231,6 +231,8 @@
 
 ### 2026-08-08
 
+- [x] **[BIZ-643](mention://issue/6e01190d-8c4e-4c10-a208-9044abb05d09): production persona 자연 질문 composer gate 통과** — actual configured SOUL-only production persona assembly와 자연 질문을 사용하는 독립 3-run connected no-send gate를 구현하고, KBO/스포츠 전용 분기·단위 allowlist·provider retry 없이 canonical order·uncited/ungrounded/top-N/unsafe 차단을 유지했다. Clean exact head `25c79da965604df5df2c87195101308597e3dc20`에서 focused `61 passed`, Ruff·diff-check, CI 3종과 production-shaped 및 exact-checkout real KBO 각각 3/3(provider 1회/run, retry 0, Telegram/Cron/ConversationStore/supporting dispatch delta 0)을 독립 재검증한 뒤 [PR #699](https://github.com/ingki3/simpleclaw/pull/699)을 squash merge(SHA `168575c49a0a54f5d531d3916cdb210c7648c8b9`)했다. 후속 [BIZ-644](mention://issue/60170922-f331-4310-8fb2-60c702334f51)이 runtime AGENT/USER persona projection을 별도 소유하며, release·production activation·restart·Telegram smoke는 본 이슈에서 수행하지 않았다. (완료: 2026-08-08)
+
 - [x] **[BIZ-642](mention://issue/f5c8b31e-46a5-4ef7-97c8-435a57885a01): visible citation canonical subset으로 실제 KBO gate 통과** — provider가 반환한 valid concrete citation을 response content에 보이는 path만으로 결정적으로 축소하는 code/offline 범위를 [PR #697](https://github.com/ingki3/simpleclaw/pull/697)로 완료하고 squash merge(SHA `fbd7b472b7c25b664098d896fb769ee0e744aad3`)했다. 이 완료는 [BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307)이 별도 소유하는 release·production activation·restart·Telegram smoke 완료를 뜻하지 않으며, 부모 BIZ-641은 계속 진행 중이다. (완료: 2026-08-08)
 
 
