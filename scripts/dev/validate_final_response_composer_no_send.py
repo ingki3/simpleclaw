@@ -80,6 +80,7 @@ from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
 
+
 class _ProbeInvariantError(RuntimeError):
     """원문을 포함하지 않는 stable activation-gate 실패다."""
 
