@@ -210,14 +210,25 @@ def _item_location(path: str) -> tuple[str, int, str] | None:
 def _required_item_indices(
     concrete: dict[str, JsonValue],
     top_n: int,
+    *,
+    list_root: str,
 ) -> set[int]:
-    """실제 projection에 존재하는 top-N item index만 완전성 대상으로 삼는다."""
+    """하나의 list root에서 contiguous top-N index를 완전성 대상으로 삼는다."""
     available = {
         index
         for path in concrete
-        if (index := _item_index(path)) is not None and index < top_n
+        if (location := _item_location(path)) is not None
+        if location[0] == list_root
+        if (index := location[1]) < top_n
     }
-    return set(sorted(available)[:top_n])
+    if not available:
+        return set()
+    return set(range(min(top_n, max(available) + 1)))
+
+
+def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
+    pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
+    return re.fullmatch(pattern, concrete_root) is not None
 
 
 def _structurally_identified_paths(
@@ -670,7 +681,27 @@ def guard_final_response(
         ):
             return _rejected("cited_value_not_rendered")
     if top_n is not None:
-        required_indices = _required_item_indices(concrete, top_n)
+        cited_list_roots = {
+            location[0]
+            for path in draft.cited_paths
+            if (location := _item_location(path)) is not None
+        }
+        if len(cited_list_roots) > 1:
+            return _rejected("requested_scope_mixed_list_roots")
+        if not cited_list_roots:
+            return _rejected("requested_scope_not_fully_cited")
+        list_root = next(iter(cited_list_roots))
+        declared_root = value.composition_list_root
+        if declared_root is None or not _matches_declared_list_root(
+            list_root,
+            declared_root,
+        ):
+            return _rejected("requested_scope_list_root_not_declared")
+        required_indices = _required_item_indices(
+            concrete,
+            top_n,
+            list_root=list_root,
+        )
         if cited_item_indices != required_indices:
             return _rejected("requested_scope_not_fully_cited")
         identity_paths = (

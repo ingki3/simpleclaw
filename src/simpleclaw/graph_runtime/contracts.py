@@ -26,6 +26,7 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
+COMPOSITION_LIST_ROOT_EXTENSION = "x-simpleclaw-composition-list-root"
 STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION = (
     "x-simpleclaw-structural-evidence-relations"
 )
@@ -36,6 +37,7 @@ _COMPOSITION_PATH_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?)*$"
 )
+_COMPOSITION_RELATION_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 _FORBIDDEN_COMPOSITION_SEGMENT_MARKERS = frozenset(
     {
         "answer",
@@ -140,6 +142,23 @@ def validate_composition_fields(
     return tuple(paths)
 
 
+def validate_composition_list_root(
+    value: object,
+    *,
+    json_schema: dict[str, object],
+    composition_fields: tuple[str, ...],
+) -> str | None:
+    """Top-N 대상 list root를 descriptor의 단일 explicit path로 검증한다."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError(f"{COMPOSITION_LIST_ROOT_EXTENSION} must be a path")
+    root = validate_composition_fields([value], json_schema=json_schema)[0]
+    if not any(path.startswith(f"{root}[*]") for path in composition_fields):
+        raise ValueError("composition list root must own a visible wildcard path")
+    return root
+
+
 @dataclass(frozen=True, slots=True)
 class StructuralEvidenceRelationDeclaration:
     """Descriptor가 선언한 domain-neutral evidence relation 조건이다."""
@@ -148,6 +167,8 @@ class StructuralEvidenceRelationDeclaration:
     when_equals: JsonValue
     evidence_fields: tuple[str, ...]
     identity_fields: tuple[str, ...] = ()
+    relation_id: str | None = None
+    fallback_for: tuple[str, ...] = ()
 
 
 def validate_structural_evidence_relations(
@@ -165,11 +186,20 @@ def validate_structural_evidence_relations(
             f"{MAX_COMPOSITION_RELATIONS} relations"
         )
     declarations: list[StructuralEvidenceRelationDeclaration] = []
-    seen: dict[tuple[str, str], tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    seen: dict[tuple[str, str], tuple[object, ...]] = {}
+    relation_ids: set[str] = set()
     for raw in value:
-        if not isinstance(raw, dict) or set(raw) not in (
-            {"when", "evidence_fields"},
-            {"when", "evidence_fields", "identity_fields"},
+        if (
+            not isinstance(raw, dict)
+            or not {"when", "evidence_fields"} <= set(raw)
+            or not set(raw)
+            <= {
+                "when",
+                "evidence_fields",
+                "identity_fields",
+                "relation_id",
+                "fallback_for",
+            }
         ):
             raise ValueError("structural evidence relation has invalid fields")
         when = raw["when"]
@@ -185,6 +215,10 @@ def validate_structural_evidence_relations(
         if "[*]" in when_path:
             raise ValueError(
                 "structural evidence relation condition cannot use a wildcard"
+            )
+        if when_path not in composition_fields:
+            raise ValueError(
+                "structural relation condition must be composition-visible"
             )
         when_equals = when["equals"]
         if isinstance(when_equals, dict | list):
@@ -215,6 +249,31 @@ def validate_structural_evidence_relations(
             raise ValueError(
                 "structural relation identity must be required evidence"
             )
+        relation_id = raw.get("relation_id")
+        if relation_id is not None and (
+            not isinstance(relation_id, str)
+            or not _COMPOSITION_RELATION_ID_RE.fullmatch(relation_id)
+        ):
+            raise ValueError("structural relation id is invalid")
+        if relation_id is not None:
+            if relation_id in relation_ids:
+                raise ValueError("structural relation ids must be unique")
+            relation_ids.add(relation_id)
+        raw_fallback_for = raw.get("fallback_for", [])
+        if (
+            not isinstance(raw_fallback_for, list)
+            or len(raw_fallback_for) > MAX_COMPOSITION_RELATIONS
+            or any(
+                not isinstance(item, str)
+                or not _COMPOSITION_RELATION_ID_RE.fullmatch(item)
+                for item in raw_fallback_for
+            )
+            or len(set(raw_fallback_for)) != len(raw_fallback_for)
+        ):
+            raise ValueError("structural relation fallback_for is invalid")
+        fallback_for = tuple(raw_fallback_for)
+        if relation_id is not None and relation_id in fallback_for:
+            raise ValueError("structural relation cannot fall back for itself")
         condition_identity = (
             when_path,
             json.dumps(
@@ -228,6 +287,8 @@ def validate_structural_evidence_relations(
         canonical_declaration = (
             tuple(sorted(evidence_fields)),
             tuple(sorted(identity_fields)),
+            relation_id,
+            tuple(sorted(fallback_for)),
         )
         previous = seen.get(condition_identity)
         if previous is not None:
@@ -241,8 +302,17 @@ def validate_structural_evidence_relations(
                 when_equals=when_equals,
                 evidence_fields=evidence_fields,
                 identity_fields=identity_fields,
+                relation_id=relation_id,
+                fallback_for=fallback_for,
             )
         )
+    referenced_ids = {
+        relation_id
+        for declaration in declarations
+        for relation_id in declaration.fallback_for
+    }
+    if not referenced_ids <= relation_ids:
+        raise ValueError("structural relation fallback target is not declared")
     return tuple(declarations)
 
 
@@ -413,6 +483,20 @@ class ContractDescriptorV1(ContractModel):
             composition_fields=fields,
         )
 
+    @property
+    def composition_list_root(self) -> str | None:
+        """Top-N scope에 사용할 descriptor-declared primary list root다."""
+        schema = self.json_schema
+        fields = validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
+        return validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=fields,
+        )
+
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
         """binding과 contract가 서로 다른 owner를 가리키는 상태를 차단한다."""
@@ -425,6 +509,11 @@ class ContractDescriptorV1(ContractModel):
         composition_fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
+        )
+        validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
         )
         validate_structural_evidence_relations(
             schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),

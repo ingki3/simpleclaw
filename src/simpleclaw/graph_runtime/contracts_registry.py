@@ -24,6 +24,7 @@ from simpleclaw.capability import (
 
 from .contracts import (
     COMPOSITION_FIELDS_EXTENSION,
+    COMPOSITION_LIST_ROOT_EXTENSION,
     STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     AssetBindingRefV1,
     AssetDefinitionSnapshotV1,
@@ -32,6 +33,7 @@ from .contracts import (
     ContractRefV1,
     RetryPolicyV1,
     validate_composition_fields,
+    validate_composition_list_root,
     validate_structural_evidence_relations,
 )
 
@@ -357,6 +359,7 @@ _SUPPORTED_SCHEMA_KEYWORDS = frozenset(
         "anyOf",
         "oneOf",
         COMPOSITION_FIELDS_EXTENSION,
+        COMPOSITION_LIST_ROOT_EXTENSION,
         STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION,
     }
 )
@@ -375,6 +378,11 @@ def _validate_schema_definition(schema: object) -> None:
         composition_fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
+        )
+        validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
         )
         validate_structural_evidence_relations(
             schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),

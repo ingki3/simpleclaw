@@ -50,6 +50,7 @@ class CompositionInputV1(ContractModel):
     public_facts_json: CanonicalJsonObject = Field(alias="public_facts")
     resolved_claims: tuple[NonEmptyStr, ...] = ()
     unresolved_claims: tuple[NonEmptyStr, ...] = ()
+    composition_list_root: NonEmptyStr | None = None
     structural_evidence_relations: tuple[StructuralEvidenceRelationV1, ...] = ()
 
     @property
