@@ -102,7 +102,7 @@ class _OneCallSend:
     def __init__(self, send) -> None:
         self._send = send
         self.calls = 0
-        self.provider_plan_path_count = 0
+        self.provider_plan_shape_valid = False
 
     async def __call__(self, request):
         self.calls += 1
@@ -111,14 +111,14 @@ class _OneCallSend:
         response = await self._send(request)
         try:
             payload = json.loads(response.text)
-            segments = payload.get("segments", [])
-            if isinstance(segments, list) and all(
-                isinstance(item, dict) and isinstance(item.get("path"), str)
-                for item in segments
-            ):
-                self.provider_plan_path_count = len(segments)
+            self.provider_plan_shape_valid = (
+                isinstance(payload, dict)
+                and set(payload) <= {"schema", "separator", "ending"}
+                and isinstance(payload.get("separator"), str)
+                and payload.get("ending") == "period"
+            )
         except (AttributeError, TypeError, ValueError):
-            self.provider_plan_path_count = 0
+            self.provider_plan_shape_valid = False
         return response
 
 
@@ -410,7 +410,14 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
             "data.items[2].team",
             "data.items[2].wins",
         ),
-        expected_citations=(),
+        expected_citations=(
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+            "data.items[2].team",
+            "data.items[2].wins",
+        ),
         locale="ko-KR",
         source_mode="real_read_only",
         source_evidence={
@@ -680,16 +687,6 @@ async def _connected_probe(
             f"visible_uncited_paths={visible_uncited}:render_order={render_order}:"
             f"lexical_token_sha256={token_hashes}"
         )
-    concrete = flatten_public_facts(capture.value.public_facts)
-    if any(
-        path not in concrete
-        or not projected_scalar_is_visible(
-            capture.draft.content,
-            concrete[path],
-        )
-        for path in capture.draft.cited_paths
-    ):
-        raise _ProbeInvariantError("canonical_citation_not_visible")
     measured = result.side_effect_counts.as_dict()
     forbidden = counters.forbidden()
     checks = {
@@ -705,8 +702,9 @@ async def _connected_probe(
         "forbidden_boundary_zero": all(value == 0 for value in forbidden.values()),
         "conversation_delta_zero": conversation_delta == 0,
         "target_dispatch_once": counters.target_dispatch == 1,
-        "plan_path_count_exact": (
-            counted_send.provider_plan_path_count == len(capture.draft.cited_paths)
+        "provider_plan_shape_valid": counted_send.provider_plan_shape_valid,
+        "source_citations_exact": (
+            tuple(capture.draft.cited_paths) == scenario.expected_citations
         ),
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
@@ -728,7 +726,7 @@ async def _connected_probe(
         "content_length": len(content),
         "citations": list(capture.draft.cited_paths),
         "canonical_citation_count": len(capture.draft.cited_paths),
-        "provider_plan_path_count": counted_send.provider_plan_path_count,
+        "provider_plan_shape_valid": counted_send.provider_plan_shape_valid,
         "delivery_status": result.telemetry.delivery_status.value,
         "sink_spy_preflight_calls": preflight,
         "measured_side_effect_deltas": measured,

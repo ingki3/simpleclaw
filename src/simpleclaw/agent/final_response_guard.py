@@ -113,7 +113,6 @@ _SAFE_CONNECTOR_WORDS = frozenset(
         "이며",
         "이고",
         "입니다",
-        "됩니다",
         "은",
         "는",
         "이",
@@ -246,37 +245,6 @@ def _required_item_indices(
 def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
     pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
     return re.fullmatch(pattern, concrete_root) is not None
-
-
-def _structurally_identified_paths(
-    concrete: dict[str, JsonValue],
-    required_indices: set[int],
-) -> set[str]:
-    """동일 상대 path에서 index별로 유일한 string literal을 identity로 본다."""
-    candidates: dict[tuple[str, str], dict[int, tuple[str, str]]] = {}
-    for path, value in concrete.items():
-        location = _item_location(path)
-        if (
-            location is None
-            or location[1] not in required_indices
-            or not isinstance(value, str)
-            or not value.strip()
-        ):
-            continue
-        container, index, field = location
-        candidates.setdefault((container, field), {})[index] = (
-            path,
-            value.strip().casefold(),
-        )
-    identified: set[str] = set()
-    for matches in candidates.values():
-        if set(matches) != required_indices:
-            continue
-        literals = [matches[index][1] for index in sorted(required_indices)]
-        if len(set(literals)) != len(literals):
-            continue
-        identified.update(matches[index][0] for index in required_indices)
-    return identified
 
 
 def _word_stem(token: str) -> str:
@@ -721,11 +689,9 @@ def guard_final_response(
         )
         if cited_item_indices != required_indices:
             return _rejected("requested_scope_not_fully_cited")
-        identity_paths = (
-            set(structural_relation.identity_paths)
-            if structural_relation is not None
-            else _structurally_identified_paths(concrete, required_indices)
-        )
+        if structural_relation is None or not structural_relation.identity_paths:
+            return _rejected("requested_item_identity_not_cited")
+        identity_paths = set(structural_relation.identity_paths)
         cited_identity_indices = {
             index
             for path in draft.cited_paths

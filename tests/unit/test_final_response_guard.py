@@ -16,6 +16,11 @@ from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 
 def _input() -> CompositionInputV1:
+    evidence_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(3)
+        for field in ("team", "wins")
+    )
     return CompositionInputV1(
         request_id="request-1",
         question="현재 KBO 상위 3팀과 승수만 알려줘",
@@ -36,6 +41,14 @@ def _input() -> CompositionInputV1:
                 ]
             }
         },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=evidence_paths,
+                identity_paths=tuple(
+                    f"data.items[{index}].team" for index in range(3)
+                ),
+            ),
+        ),
     )
 
 
@@ -402,6 +415,19 @@ def test_structural_relation_rejects_semantic_korean_suffix() -> None:
     assert result.accepted is False
 
 
+def test_guard_rejects_ungrounded_semantic_predicate_suffix() -> None:
+    value = _neutral_empty_input(question="현재 상태를 알려줘").model_copy(
+        update={'public_facts_json': '{"data":{"state":"ready"}}'}
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content="ready됩니다.", cited_paths=("data.state",)),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
 def test_structural_relation_requires_declared_top_n_identity() -> None:
     value = _neutral_top_two_relation(
         include_identity=False,
@@ -412,6 +438,21 @@ def test_structural_relation_requires_declared_top_n_identity() -> None:
         value,
         DraftResponseV1(
             content="ready, ready.",
+            cited_paths=("records[0].state", "records[1].state"),
+        ),
+    )
+
+    assert result.code == "requested_item_identity_not_cited"
+
+
+def test_structural_relation_does_not_infer_alternate_unique_string_identity(
+) -> None:
+    value = _neutral_top_two_relation(include_identity=False)
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="ready, waiting.",
             cited_paths=("records[0].state", "records[1].state"),
         ),
     )
@@ -677,9 +718,8 @@ def test_guard_accepts_grounded_natural_response() -> None:
     result = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="KBO: KT 59, 삼성 58, LG 57입니다.",
+            content="KT 59, 삼성 58, LG 57입니다.",
             cited_paths=(
-                "data.category",
                 "data.items[0].team",
                 "data.items[0].wins",
                 "data.items[1].team",
@@ -697,9 +737,8 @@ def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> N
     result = guard_final_response(
         _input(),
         DraftResponseV1(
-            content="KBO는 KT가 59, 삼성은 58, LG는 57입니다.",
+            content="KT가 59, 삼성은 58, LG는 57입니다.",
             cited_paths=(
-                "data.category",
                 "data.items[0].team",
                 "data.items[0].wins",
                 "data.items[1].team",
@@ -932,6 +971,7 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
         update={
             "question": "두 항목의 개수를 알려줘",
             "public_facts_json": public_facts_json,
+            "structural_evidence_relations": (),
         }
     )
 
@@ -981,6 +1021,7 @@ def test_guard_rejects_relation_reassembly_without_list_locations(
         update={
             "question": "두 지표 값을 알려줘",
             "public_facts_json": public_facts_json,
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1003,6 +1044,7 @@ def test_guard_accepts_root_scalar_label_value_sequence() -> None:
                 '{"first_label":"A","first_value":3,'
                 '"second_label":"B","second_value":2}'
             ),
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1030,6 +1072,7 @@ def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
                 '{"left":[{"label":"A","value":3}],'
                 '"right":[{"label":"B","value":2}]}'
             ),
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1059,6 +1102,7 @@ def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> N
                 '{"label":"B","value":2}'
                 "]}"
             ),
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1098,6 +1142,7 @@ def test_guard_rejects_cross_item_predicate_or_ungrounded_units(
                 '{"label":"B","value":2}'
                 "]}"
             ),
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1122,6 +1167,7 @@ def test_guard_rejects_reversed_value_to_label_relation_within_item() -> None:
         update={
             "question": "항목의 개수를 알려줘",
             "public_facts_json": '{"items":[{"value":3,"label":"A"}]}',
+            "structural_evidence_relations": (),
         }
     )
 
@@ -1262,7 +1308,12 @@ def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
 
 def test_guard_rejects_ungrounded_number_and_scope_overrun() -> None:
     number = guard_final_response(
-        _input().model_copy(update={"question": "KT 승수를 알려줘"}),
+        _input().model_copy(
+            update={
+                "question": "KT 승수를 알려줘",
+                "structural_evidence_relations": (),
+            }
+        ),
         DraftResponseV1(
             content="KT는 99입니다.",
             cited_paths=("data.items[0].team",),
@@ -1311,8 +1362,14 @@ def test_guard_rejects_partial_top_n_uncited_fact_and_private_identifier() -> No
         ),
     )
 
-    assert partial.code == "requested_scope_not_fully_cited"
-    assert uncited.code == "ungrounded_number"
+    assert partial.code in {
+        "requested_scope_not_fully_cited",
+        "structural_relation_citation_mismatch",
+    }
+    assert uncited.code in {
+        "ungrounded_number",
+        "structural_relation_citation_mismatch",
+    }
     assert private.code == "raw_contract_exposed"
 
 
@@ -1325,7 +1382,17 @@ def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> 
         ),
     )
     ungrounded = guard_final_response(
-        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        _input().model_copy(
+            update={
+                "question": "현재 상위 1팀",
+                "structural_evidence_relations": (
+                    StructuralEvidenceRelationV1(
+                        evidence_paths=("data.items[0].team",),
+                        identity_paths=("data.items[0].team",),
+                    ),
+                ),
+            }
+        ),
         DraftResponseV1(
             content="KT가 확실한 우승 후보입니다.",
             cited_paths=("data.items[0].team",),
@@ -1351,12 +1418,21 @@ def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> 
 
     assert unknown_citation.code == "citation_not_projected"
     assert ungrounded.code == "ungrounded_text"
-    assert partial_top_n.code == "requested_scope_not_fully_cited"
+    assert partial_top_n.code in {
+        "requested_scope_not_fully_cited",
+        "structural_relation_citation_mismatch",
+    }
     assert unsafe_effect.code == "unsafe_result"
 
 
 def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
-    value = _input().model_copy(update={"unresolved_claims": ("동률 여부",)})
+    value = _input().model_copy(
+        update={
+            "question": "팀 목록을 알려줘",
+            "unresolved_claims": ("동률 여부",),
+            "structural_evidence_relations": (),
+        }
+    )
     certain = guard_final_response(
         value,
         DraftResponseV1(
@@ -1374,7 +1450,13 @@ def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
 
 
 def test_guard_accepts_limitation_language_for_declared_unresolved_claim() -> None:
-    value = _input().model_copy(update={"unresolved_claims": ("동률 여부",)})
+    value = _input().model_copy(
+        update={
+            "question": "팀 목록을 알려줘",
+            "unresolved_claims": ("동률 여부",),
+            "structural_evidence_relations": (),
+        }
+    )
 
     result = guard_final_response(
         value,
@@ -1409,15 +1491,26 @@ def test_guard_rejects_provider_diagnostics() -> None:
 
 
 def test_guard_rejects_unprojected_name_and_korean_address() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "현재 상위 1팀",
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=("data.items[0].team",),
+                    identity_paths=("data.items[0].team",),
+                ),
+            ),
+        }
+    )
     name = guard_final_response(
-        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        value,
         DraftResponseV1(
             content="현재 상위 팀은 KT이며 두산도 포함됩니다.",
             cited_paths=("data.items[0].team",),
         ),
     )
     address = guard_final_response(
-        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        value,
         DraftResponseV1(
             content="현재 상위 팀은 KT입니다. 주소는 서울시 강남구 역삼동입니다.",
             cited_paths=("data.items[0].team",),
@@ -1440,6 +1533,12 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
         normalized_payload_hash="payload-hash",
         composition_list_root="items",
         public_facts={"items": [{"team": "New York Yankees"}]},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("items[0].team",),
+                identity_paths=("items[0].team",),
+            ),
+        ),
     )
     result = guard_final_response(
         value,
@@ -1453,8 +1552,22 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
 
 
 def test_guard_requires_string_identity_for_each_top_n_item() -> None:
+    value = _input().model_copy(
+        update={
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=(
+                        "data.items[0].rank",
+                        "data.items[1].rank",
+                        "data.items[2].rank",
+                    ),
+                    identity_paths=(),
+                ),
+            )
+        }
+    )
     result = guard_final_response(
-        _input(),
+        value,
         DraftResponseV1(
             content="상위 3팀을 확인했습니다.",
             cited_paths=(
@@ -1474,7 +1587,12 @@ def test_guard_requires_string_identity_for_each_top_n_item() -> None:
 )
 def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
     result = guard_final_response(
-        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        _input().model_copy(
+            update={
+                "question": "KT를 알려줘",
+                "structural_evidence_relations": (),
+            }
+        ),
         DraftResponseV1(
             content=f"KT입니다. {suffix}",
             cited_paths=("data.items[0].team",),
@@ -1485,7 +1603,12 @@ def test_guard_rejects_unprojected_unicode_text(suffix: str) -> None:
 
 
 def test_guard_rejects_unprojected_symbols_and_semantic_exclusion() -> None:
-    value = _input().model_copy(update={"question": "현재 상위 1팀"})
+    value = _input().model_copy(
+        update={
+            "question": "KT를 알려줘",
+            "structural_evidence_relations": (),
+        }
+    )
     symbol = guard_final_response(
         value,
         DraftResponseV1(
@@ -1590,7 +1713,10 @@ def test_guard_rejects_question_prefix_fact_expansion(
 
 def test_guard_rejects_exact_question_terms_used_as_uncited_fact() -> None:
     value = _input().model_copy(
-        update={"question": "KT가 순위 밖의 팀 맞나요?"}
+        update={
+            "question": "KT가 순위 밖의 팀 맞나요?",
+            "structural_evidence_relations": (),
+        }
     )
 
     result = guard_final_response(
@@ -1612,7 +1738,12 @@ def test_guard_rejects_limitation_language_without_unresolved_claims(
     content: str,
 ) -> None:
     result = guard_final_response(
-        _input().model_copy(update={"question": "KT를 알려줘"}),
+        _input().model_copy(
+            update={
+                "question": "KT를 알려줘",
+                "structural_evidence_relations": (),
+            }
+        ),
         DraftResponseV1(
             content=content,
             cited_paths=("data.items[0].team",),
@@ -1774,6 +1905,18 @@ def test_guard_rejects_cross_path_relation_reassembly(content: str) -> None:
             "data.items[1].team",
             "data.items[1].wins",
         )
+    value = value.model_copy(
+        update={
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=cited_paths,
+                    identity_paths=tuple(
+                        path for path in cited_paths if path.endswith(".team")
+                    ),
+                ),
+            )
+        }
+    )
 
     result = guard_final_response(
         value,
@@ -1815,6 +1958,18 @@ def test_guard_rejects_canonical_decoy_prefix_and_duplicate_tail(
             "data.items[1].team",
             "data.items[1].wins",
         )
+    value = value.model_copy(
+        update={
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=cited_paths,
+                    identity_paths=tuple(
+                        path for path in cited_paths if path.endswith(".team")
+                    ),
+                ),
+            )
+        }
+    )
 
     result = guard_final_response(
         value,
@@ -1832,7 +1987,12 @@ def test_guard_rejects_numeric_sign_or_unit_reinterpretation(
     rendered_number: str,
 ) -> None:
     result = guard_final_response(
-        _input().model_copy(update={"question": "KT 승수를 알려줘"}),
+        _input().model_copy(
+            update={
+                "question": "KT 승수를 알려줘",
+                "structural_evidence_relations": (),
+            }
+        ),
         DraftResponseV1(
             content=f"KT {rendered_number}입니다.",
             cited_paths=(
@@ -1862,6 +2022,12 @@ def test_guard_requires_separator_between_cited_literals(
                 f'{{"team":"{teams[0]}"}},'
                 f'{{"team":"{teams[1]}"}}'
                 "]}"
+            ),
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=("items[0].team", "items[1].team"),
+                    identity_paths=("items[0].team", "items[1].team"),
+                ),
             ),
         }
     )

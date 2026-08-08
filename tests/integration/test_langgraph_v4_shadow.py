@@ -665,30 +665,16 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         provider_calls += 1
         assert request.tools is None
         assert request.require_structured_output is True
-        paths = (
-            "data.items[0].team",
-            "data.items[1].team",
-            "data.items[2].team",
-        )
-        segment_schema = request.response_schema["$defs"][
-            "CompositionRenderSegmentV1"
-        ]
-        assert set(paths) <= set(segment_schema["properties"]["path"]["enum"])
+        assert set(request.response_schema["properties"]) == {
+            "schema",
+            "separator",
+            "ending",
+        }
         return LLMResponse(
             text=json.dumps(
                 {
-                    "segments": [
-                        {
-                            "path": path,
-                            "connector": (
-                                "period"
-                                if index == len(paths) - 1
-                                else "comma_space"
-                            ),
-                        }
-                        for index, path in enumerate(paths)
-                    ],
-                    "limitation_paths": [],
+                    "separator": "comma_space",
+                    "ending": "period",
                 },
                 ensure_ascii=False,
             )
@@ -743,7 +729,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
-        assert result.execution.final_content == "LG, 한화, 롯데."
+        assert result.execution.final_content == "LG, 60, 한화, 58, 롯데, 55."
         assert "asset_result.v1" not in result.execution.final_content
         assert "status" not in result.execution.final_content
         assert "error" not in result.execution.final_content

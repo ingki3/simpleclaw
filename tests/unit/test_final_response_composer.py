@@ -14,7 +14,6 @@ from scripts.dev.validate_final_response_composer_no_send import (
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     CompositionRenderPlanV1,
-    CompositionRenderSegmentV1,
     DraftResponseV1,
     StructuralEvidenceRelationV1,
 )
@@ -43,6 +42,11 @@ def _persona_projection(text: str) -> CompositionPersonaProjection:
 
 
 def _input() -> CompositionInputV1:
+    evidence_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(3)
+        for field in ("rank", "team")
+    )
     return CompositionInputV1(
         request_id="request-1",
         question="현재 KBO 상위 3팀만 알려줘",
@@ -62,10 +66,23 @@ def _input() -> CompositionInputV1:
                 ]
             }
         },
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=evidence_paths,
+                identity_paths=tuple(
+                    f"data.items[{index}].team" for index in range(3)
+                ),
+            ),
+        ),
     )
 
 
 def _production_shaped_input() -> CompositionInputV1:
+    evidence_paths = tuple(
+        f"data.items[{index}].{field}"
+        for index in range(3)
+        for field in ("team", "wins")
+    )
     return _input().model_copy(
         update={
             "question": "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
@@ -84,6 +101,14 @@ def _production_shaped_input() -> CompositionInputV1:
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
+            ),
+            "structural_evidence_relations": (
+                StructuralEvidenceRelationV1(
+                    evidence_paths=evidence_paths,
+                    identity_paths=tuple(
+                        f"data.items[{index}].team" for index in range(3)
+                    ),
+                ),
             ),
         }
     )
@@ -123,47 +148,19 @@ def _neutral_render_input() -> CompositionInputV1:
 
 def _neutral_render_plan(
     *,
-    paths: tuple[str, ...] | None = None,
-    connectors: tuple[str, ...] = (
-        "space",
-        "comma_space",
-        "space",
-        "period",
-    ),
+    separator: str = "comma_space",
 ) -> CompositionRenderPlanV1:
-    selected = (
-        paths or _neutral_render_input().structural_evidence_relations[0].evidence_paths
-    )
-    return CompositionRenderPlanV1(
-        segments=tuple(
-            CompositionRenderSegmentV1(path=path, connector=connector)
-            for path, connector in zip(selected, connectors, strict=True)
-        )
-    )
+    return CompositionRenderPlanV1(separator=separator, ending="period")
 
 
 def _provider_plan_json(
-    paths: list[str] | tuple[str, ...],
-    *,
-    connectors: list[str] | tuple[str, ...] | None = None,
-    limitation_paths: list[str] | tuple[str, ...] = (),
+    *, separator: str = "comma_space"
 ) -> str:
-    selected_connectors = connectors or tuple(
-        "period" if index == len(paths) - 1 else "comma_space"
-        for index in range(len(paths))
-    )
     return json.dumps(
         {
             "schema": "composition_render_plan.v1",
-            "segments": [
-                {"path": path, "connector": connector}
-                for path, connector in zip(
-                    paths,
-                    selected_connectors,
-                    strict=True,
-                )
-            ],
-            "limitation_paths": list(limitation_paths),
+            "separator": separator,
+            "ending": "period",
         },
         ensure_ascii=False,
     )
@@ -173,13 +170,11 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     """Typed plan 외 final literal 작성 경로가 prompt에 없음을 고정한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 12
-    assert "CompositionRenderPlanV1" in prompt.system_prompt
-    assert "bounded grammar enum" in prompt.system_prompt
+    assert prompt.version == 13
+    assert "structural-punctuation selector" in prompt.system_prompt
     assert "central materializer" in prompt.system_prompt
-    assert "identity_paths" in prompt.system_prompt
-    assert "typed persona projection" in prompt.system_prompt
-    assert "never content or" in prompt.system_prompt
+    assert "never select or return fact paths" in prompt.system_prompt
+    assert "separator and ending only" in prompt.system_prompt
     assert "provider" not in prompt.system_prompt.casefold()
     assert "recipe" not in prompt.system_prompt.casefold()
     assert "skill" not in prompt.system_prompt.casefold()
@@ -196,9 +191,7 @@ def test_draft_schema_requires_at_least_one_cited_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_composer_schema_constrains_active_relation_to_exact_literal_plan() -> (
-    None
-):
+async def test_composer_schema_excludes_fact_paths_and_sentence_connectors() -> None:
     value = _input().model_copy(
         update={
             "structural_evidence_relations": (
@@ -216,9 +209,7 @@ async def test_composer_schema_constrains_active_relation_to_exact_literal_plan(
         }
     )
     send = AsyncMock(
-        return_value=LLMResponse(
-            text=_provider_plan_json(("data.items[0].team", "data.items[1].team"))
-        )
+        return_value=LLMResponse(text=_provider_plan_json())
     )
     composer = FinalResponseComposer(
         send=send,
@@ -231,13 +222,13 @@ async def test_composer_schema_constrains_active_relation_to_exact_literal_plan(
 
     schema = send.await_args.args[0].response_schema
     properties = schema["properties"]
-    segment = schema["$defs"]["CompositionRenderSegmentV1"]["properties"]
-    assert segment["path"]["enum"] == [
-        "data.items[0].team",
-        "data.items[1].team",
-    ]
-    assert properties["segments"]["minItems"] == 2
-    assert properties["segments"]["maxItems"] == 2
+    assert set(properties) == {"schema", "separator", "ending"}
+    assert "segments" not in schema.get("$defs", {})
+    assert all("path" not in name for name in properties)
+    encoded = json.dumps(schema, sort_keys=True)
+    assert "polite_become_period" not in encoded
+    assert "english_is_space" not in encoded
+    assert "limitation_uncertain_period" not in encoded
     assert "content" not in properties
 
 
@@ -256,15 +247,7 @@ def test_draft_contract_rejects_missing_or_empty_citations(payload: dict) -> Non
 @pytest.mark.asyncio
 async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     send = AsyncMock(
-        return_value=LLMResponse(
-            text=_provider_plan_json(
-                (
-                    "data.items[0].team",
-                    "data.items[1].team",
-                    "data.items[2].team",
-                )
-            )
-        )
+        return_value=LLMResponse(text=_provider_plan_json())
     )
     composer = FinalResponseComposer(
         send=send,
@@ -285,17 +268,12 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert request.require_structured_output is True
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "persona is not factual" in request.system_prompt
-    segment = request.response_schema["$defs"]["CompositionRenderSegmentV1"]
-    assert segment["properties"]["path"]["enum"] == [
-        "data.items[0].rank",
-        "data.items[0].team",
-        "data.items[1].rank",
-        "data.items[1].team",
-        "data.items[2].rank",
-        "data.items[2].team",
-    ]
-    assert request.response_schema["properties"]["limitation_paths"]["maxItems"] == 0
-    assert draft.content == "KT, 삼성, LG."
+    assert set(request.response_schema["properties"]) == {
+        "schema",
+        "separator",
+        "ending",
+    }
+    assert draft.content == "1, KT, 2, 삼성, 3, LG."
 
 
 @pytest.mark.asyncio
@@ -316,7 +294,7 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
         "  token_budget: 4096\n",
         encoding="utf-8",
     )
-    content = "LG, 60, 한화, 58, 롯데, 55입니다."
+    content = "LG, 60, 한화, 58, 롯데, 55."
     paths = [
         "data.items[0].team",
         "data.items[0].wins",
@@ -325,21 +303,7 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
         "data.items[2].team",
         "data.items[2].wins",
     ]
-    send = AsyncMock(
-        return_value=LLMResponse(
-            text=_provider_plan_json(
-                paths,
-                connectors=(
-                    "comma_space",
-                    "comma_space",
-                    "comma_space",
-                    "comma_space",
-                    "comma_space",
-                    "polite_copula_period",
-                ),
-            )
-        )
-    )
+    send = AsyncMock(return_value=LLMResponse(text=_provider_plan_json()))
     composer = FinalResponseComposer(
         send=send,
         persona_projection=_production_persona_projection(config),
@@ -352,14 +316,16 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
     assert send.await_count == 1
     request = send.await_args.args[0]
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
-    assert "bounded grammar" in request.system_prompt
+    assert "structural separator" in request.system_prompt
     assert draft.content == content
     assert draft.cited_paths == tuple(paths)
     assert guard_final_response(_production_shaped_input(), draft).accepted is True
 
 
 @pytest.mark.asyncio
-async def test_composer_schema_allows_only_root_relative_scalar_leaf_paths() -> None:
+async def test_composer_fails_closed_instead_of_materializing_limitation_sentence() -> (
+    None
+):
     value = _input().model_copy(
         update={
             "public_facts_json": (
@@ -368,21 +334,12 @@ async def test_composer_schema_allows_only_root_relative_scalar_leaf_paths() -> 
                 '{"label":"second","value":null}]}'
             ),
             "unresolved_claims": ("missing score", "missing source"),
+            "resolved_claims": ("alpha.nested[0].name",),
             "composition_list_root": "alpha.nested",
+            "structural_evidence_relations": (),
         }
     )
-    send = AsyncMock(
-        return_value=LLMResponse(
-            text=_provider_plan_json(
-                ("alpha.nested[0].name",),
-                connectors=("limitation_uncertain_period",),
-                limitation_paths=(
-                    "unresolved_claims[0]",
-                    "unresolved_claims[1]",
-                ),
-            )
-        )
-    )
+    send = AsyncMock(return_value=LLMResponse(text=_provider_plan_json()))
     composer = FinalResponseComposer(
         send=send,
         persona_projection=_persona_projection("간결하게"),
@@ -390,26 +347,10 @@ async def test_composer_schema_allows_only_root_relative_scalar_leaf_paths() -> 
         backend_name="fixture-backend",
     )
 
-    await composer.compose(value)
+    with pytest.raises(FinalResponseComposerError, match="fact-free fallback"):
+        await composer.compose(value)
 
-    schema = send.await_args.args[0].response_schema
-    segment = schema["$defs"]["CompositionRenderSegmentV1"]["properties"]
-    assert segment["path"]["enum"] == [
-        "alpha.nested[0].active",
-        "alpha.nested[0].name",
-        "items[0].label",
-        "items[0].value",
-        "items[1].label",
-    ]
-    assert schema["properties"]["limitation_paths"]["items"]["enum"] == [
-        "unresolved_claims[0]",
-        "unresolved_claims[1]",
-    ]
-    encoded = json.dumps(schema, sort_keys=True)
-    assert "public_facts." not in encoded
-    assert "[*]" not in encoded
-    assert "alpha.empty" not in encoded
-    assert '"items"' not in segment["path"]["enum"]
+    assert send.await_count == 0
 
 
 @pytest.mark.asyncio
@@ -427,7 +368,9 @@ async def test_composer_rejects_more_scalar_paths_than_draft_can_cite() -> None:
                 {f"field_{index:03d}": index for index in range(129)},
                 separators=(",", ":"),
                 sort_keys=True,
-            )
+            ),
+            "resolved_claims": tuple(f"field_{index:03d}" for index in range(129)),
+            "structural_evidence_relations": (),
         }
     )
 
@@ -454,13 +397,12 @@ async def test_composer_does_not_retry_invalid_structured_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_composer_does_not_retry_empty_segments() -> None:
+async def test_composer_does_not_retry_legacy_segment_plan() -> None:
     send = AsyncMock(
         return_value=LLMResponse(
             text=json.dumps(
                 {
                     "segments": [],
-                    "limitation_paths": [],
                 },
                 ensure_ascii=False,
             )
@@ -478,12 +420,13 @@ async def test_composer_does_not_retry_empty_segments() -> None:
 
     assert send.await_count == 1
     request = send.await_args.args[0]
-    assert "segments" in request.response_schema["required"]
-    assert request.response_schema["properties"]["segments"]["minItems"] == 1
+    assert "separator" in request.response_schema["required"]
+    assert "ending" in request.response_schema["required"]
+    assert "segments" not in request.response_schema["properties"]
 
 
 @pytest.mark.asyncio
-async def test_composer_rejects_reordered_paths_without_retry() -> None:
+async def test_composer_rejects_provider_owned_reordered_paths_without_retry() -> None:
     provider_paths = [
         "data.items[2].losses",
         "data.date",
@@ -496,44 +439,15 @@ async def test_composer_rejects_reordered_paths_without_retry() -> None:
         "data.items[2].wins",
         "data.season.title",
     ]
-    send = AsyncMock(return_value=LLMResponse(text=_provider_plan_json(provider_paths)))
-    composer = FinalResponseComposer(
-        send=send,
-        persona_projection=_persona_projection("간결하게"),
-        max_tokens=1200,
-        backend_name="fixture-backend",
-    )
-
-    with pytest.raises(FinalResponseComposerError, match="canonical"):
-        await composer.compose(_production_shaped_input())
-
-    assert send.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_composer_never_adds_visible_citations_missing_from_provider() -> None:
-    send = AsyncMock(
-        return_value=LLMResponse(text=_provider_plan_json(("data.items[0].team",)))
-    )
-    composer = FinalResponseComposer(
-        send=send,
-        persona_projection=_persona_projection("간결하게"),
-        max_tokens=1200,
-        backend_name="fixture-backend",
-    )
-
-    draft = await composer.compose(_production_shaped_input())
-
-    assert draft.cited_paths == ("data.items[0].team",)
-    assert draft.content == "LG."
-    assert guard_final_response(_production_shaped_input(), draft).accepted is False
-
-
-@pytest.mark.asyncio
-async def test_composer_keeps_selected_citations_for_guard_scope_rejection() -> None:
     send = AsyncMock(
         return_value=LLMResponse(
-            text=_provider_plan_json(("data.date", "data.season.title"))
+            text=json.dumps(
+                {
+                    "separator": "comma_space",
+                    "ending": "period",
+                    "paths": provider_paths,
+                }
+            )
         )
     )
     composer = FinalResponseComposer(
@@ -543,12 +457,57 @@ async def test_composer_keeps_selected_citations_for_guard_scope_rejection() -> 
         backend_name="fixture-backend",
     )
 
+    with pytest.raises(FinalResponseComposerError, match="invalid"):
+        await composer.compose(_production_shaped_input())
+
+    assert send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_composer_rejects_provider_owned_missing_path_subset() -> None:
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "separator": "comma_space",
+                    "ending": "period",
+                    "paths": ["data.items[0].team"],
+                }
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_projection=_persona_projection("간결하게"),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    with pytest.raises(FinalResponseComposerError, match="invalid"):
+        await composer.compose(_production_shaped_input())
+
+    assert send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_composer_uses_source_contract_canonical_order_only() -> None:
+    send = AsyncMock(
+        return_value=LLMResponse(text=_provider_plan_json())
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_projection=_persona_projection("간결하게"),
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
     draft = await composer.compose(_production_shaped_input())
 
-    assert draft.cited_paths == ("data.date", "data.season.title")
+    assert draft.cited_paths == _production_shaped_input().structural_evidence_relations[
+        0
+    ].evidence_paths
     result = guard_final_response(_production_shaped_input(), draft)
-    assert result.accepted is False
-    assert result.code == "requested_scope_not_fully_cited"
+    assert result.accepted is True
 
 
 def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> None:
@@ -618,7 +577,7 @@ def test_render_plan_materializes_repeated_scalars_once_per_path() -> None:
 
     draft = materialize_render_plan(value, _neutral_render_plan())
 
-    assert draft.content == "alpha ready, beta ready."
+    assert draft.content == "alpha, ready, beta, ready."
     assert draft.cited_paths == value.structural_evidence_relations[0].evidence_paths
     assert draft.content.count("ready") == 2
     assert guard_final_response(value, draft).accepted is True
@@ -636,7 +595,7 @@ def test_render_plan_preserves_projected_case_exactly() -> None:
 
     draft = materialize_render_plan(value, _neutral_render_plan())
 
-    assert draft.content == "Alpha READY, Beta READY."
+    assert draft.content == "Alpha, READY, Beta, READY."
     assert "alpha" not in draft.content
     assert "ready" not in draft.content
 
@@ -645,35 +604,19 @@ def test_render_plan_contract_forbids_provider_authored_content() -> None:
     with pytest.raises(ValidationError):
         CompositionRenderPlanV1.model_validate(
             {
-                "segments": [
-                    {
-                        "path": "records[0].name",
-                        "connector": "period",
-                    }
-                ],
+                "separator": "comma_space",
+                "ending": "period",
                 "content": "alpha on 2026-08-08 is rank 1.",
             }
         )
 
 
-def test_render_plan_materializes_typed_limitation_ending() -> None:
+def test_render_plan_rejects_semantic_limitation_sentence_mapping() -> None:
     value = _neutral_render_input().model_copy(
         update={"unresolved_claims": ("missing detail",)}
     )
-    plan = CompositionRenderPlanV1(
-        segments=tuple(
-            segment.model_copy(update={"connector": "limitation_uncertain_period"})
-            if index == 3
-            else segment
-            for index, segment in enumerate(_neutral_render_plan().segments)
-        ),
-        limitation_paths=("unresolved_claims[0]",),
-    )
-
-    draft = materialize_render_plan(value, plan)
-
-    assert draft.content == "alpha ready, beta ready uncertain."
-    assert guard_final_response(value, draft).accepted is True
+    with pytest.raises(FinalResponseComposerError, match="fact-free fallback"):
+        materialize_render_plan(value, _neutral_render_plan())
 
 
 @pytest.mark.parametrize(
@@ -711,23 +654,21 @@ def test_render_plan_materializes_typed_limitation_ending() -> None:
     ],
     ids=("reordered", "duplicate", "missing", "wildcard", "invalid"),
 )
-def test_render_plan_rejects_noncanonical_relation_paths(
+def test_render_plan_contract_rejects_provider_owned_paths(
     paths: tuple[str, ...],
 ) -> None:
-    connectors = tuple(
-        "period" if index == len(paths) - 1 else "comma_space"
-        for index in range(len(paths))
-    )
-
-    with pytest.raises(FinalResponseComposerError):
-        materialize_render_plan(
-            _neutral_render_input(),
-            _neutral_render_plan(paths=paths, connectors=connectors),
+    with pytest.raises(ValidationError):
+        CompositionRenderPlanV1.model_validate(
+            {
+                "separator": "comma_space",
+                "ending": "period",
+                "paths": paths,
+            }
         )
 
 
 @pytest.mark.parametrize(
-    "connector",
+    "separator",
     (
         " detail ",
         " 3 ",
@@ -736,16 +677,12 @@ def test_render_plan_rejects_noncanonical_relation_paths(
         " before ",
     ),
 )
-def test_render_plan_rejects_free_form_connector_literals(connector: str) -> None:
+def test_render_plan_rejects_free_form_or_semantic_separator(separator: str) -> None:
     with pytest.raises(ValidationError):
         CompositionRenderPlanV1.model_validate(
             {
-                "segments": [
-                    {
-                        "path": "records[0].name",
-                        "connector": connector,
-                    }
-                ]
+                "separator": separator,
+                "ending": "period",
             }
         )
 
@@ -785,21 +722,13 @@ def test_render_plan_rejects_unsafe_scalar_or_list_root(
                 separators=(",", ":"),
                 sort_keys=True,
             ),
+            "resolved_claims": paths,
             "structural_evidence_relations": (),
         }
     )
-    plan = CompositionRenderPlanV1(
-        segments=tuple(
-            CompositionRenderSegmentV1(
-                path=path,
-                connector="period" if index == len(paths) - 1 else "comma_space",
-            )
-            for index, path in enumerate(paths)
-        )
-    )
 
     with pytest.raises(FinalResponseComposerError):
-        materialize_render_plan(value, plan)
+        materialize_render_plan(value, _neutral_render_plan())
 
 
 def test_render_plan_rejects_mixed_list_roots() -> None:
@@ -816,21 +745,8 @@ def test_render_plan_rejects_mixed_list_roots() -> None:
             ),
         }
     )
-    plan = CompositionRenderPlanV1(
-        segments=(
-            CompositionRenderSegmentV1(
-                path="left[0].name",
-                connector="comma_space",
-            ),
-            CompositionRenderSegmentV1(
-                path="right[0].name",
-                connector="period",
-            ),
-        )
-    )
-
     with pytest.raises(FinalResponseComposerError, match="mixes list roots"):
-        materialize_render_plan(value, plan)
+        materialize_render_plan(value, _neutral_render_plan())
 
 
 @pytest.mark.asyncio
@@ -852,8 +768,9 @@ async def test_composer_parses_plan_and_centrally_materializes_literals() -> Non
     request = send.await_args.args[0]
     encoded_schema = json.dumps(request.response_schema, sort_keys=True)
     assert send.await_count == 1
-    assert draft.content == "alpha ready, beta ready."
-    assert "segments" in request.response_schema["properties"]
+    assert draft.content == "alpha, ready, beta, ready."
+    assert "separator" in request.response_schema["properties"]
+    assert "segments" not in request.response_schema["properties"]
     assert "content" not in request.response_schema["properties"]
     assert '"content"' not in encoded_schema
 
@@ -862,13 +779,8 @@ async def test_composer_parses_plan_and_centrally_materializes_literals() -> Non
 async def test_composer_does_not_retry_invalid_render_plan() -> None:
     invalid = json.dumps(
         {
-            "segments": [
-                {
-                    "path": "records[0].name",
-                    "connector": "rank 1 on 2026-08-08",
-                }
-            ],
-            "limitation_paths": [],
+            "separator": "ready becomes",
+            "ending": "period",
         }
     )
     send = AsyncMock(return_value=LLMResponse(text=invalid))

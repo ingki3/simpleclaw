@@ -41,27 +41,13 @@ def _persona_projection(text: str) -> CompositionPersonaProjection:
 
 
 async def _draft_response(request) -> LLMResponse:
-    segment = request.response_schema["$defs"]["CompositionRenderSegmentV1"]
-    allowed_paths = segment["properties"]["path"]["enum"]
-    citation_paths = list(_NATURAL_KBO_SCENARIO.expected_citations)
-    assert set(citation_paths) <= set(allowed_paths)
     value = json.loads(request.user_message)
     assert value["question"] == "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"
     return LLMResponse(
         text=json.dumps(
             {
-                "segments": [
-                    {
-                        "path": path,
-                        "connector": (
-                            "polite_copula_period"
-                            if index == len(citation_paths) - 1
-                            else "comma_space"
-                        ),
-                    }
-                    for index, path in enumerate(citation_paths)
-                ],
-                "limitation_paths": [],
+                "separator": "comma_space",
+                "ending": "period",
             }
         )
     )
@@ -93,7 +79,7 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["guard_accepted"] is True
     assert tuple(result["citations"]) == scenario.expected_citations
     assert result["canonical_citation_count"] == len(scenario.expected_citations)
-    assert result["provider_plan_path_count"] == len(scenario.expected_citations)
+    assert result["provider_plan_shape_valid"] is True
     assert "content" not in result
     assert result["source_mode"] == "production_shaped_fixed"
     assert result["sink_spy_preflight_calls"] == {

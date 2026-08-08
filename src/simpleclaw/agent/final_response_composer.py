@@ -26,97 +26,14 @@ from .composition_projection import flatten_public_facts
 
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]
 _MAX_CITATION_PATHS = 128
-_MAX_LIMITATION_PATHS = 64
 _SAMPLING_POLICY_VERSION = "request_temperature_v1"
-_RENDER_PLAN_POLICY_VERSION = "typed_path_segments_v1"
-_URL_RE = re.compile(r"https?://[^\s)>\]}]+", re.IGNORECASE)
-_NUMBER_RE = re.compile(r"(?<![\w])[-+]?\d+(?:[.,]\d+)?")
-_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-_SAFE_PUNCTUATION_RE = re.compile(r"^[\s.,!?;:'\"()\[\]{}\-–—·/+]*$")
-_SAFE_CONNECTOR_WORDS = frozenset(
-    {
-        "각각",
-        "이며",
-        "이고",
-        "입니다",
-        "됩니다",
-        "은",
-        "는",
-        "이",
-        "가",
-        "을",
-        "를",
-        "와",
-        "과",
-        "도",
-        "로",
-        "에",
-        "불확실",
-        "확인되지",
-        "확인할",
-        "알",
-        "수",
-        "없습니다",
-        "제한",
-        "추정",
-        "불확실합니다",
-        "the",
-        "a",
-        "an",
-        "and",
-        "is",
-        "are",
-        "was",
-        "were",
-        "with",
-        "respectively",
-        "unknown",
-        "uncertain",
-        "unverified",
-        "could",
-        "not",
-        "verify",
-        "cannot",
-    }
-)
-_CONNECTOR_TEXT = {
+_RENDER_PLAN_POLICY_VERSION = "source_order_structural_punctuation_v2"
+_STRUCTURAL_SEPARATOR_TEXT = {
     "space": " ",
     "comma_space": ", ",
     "middle_dot_space": " · ",
     "semicolon_space": "; ",
-    "period": ".",
-    "question_mark": "?",
-    "topic_eun_space": "은 ",
-    "topic_neun_space": "는 ",
-    "subject_i_space": "이 ",
-    "subject_ga_space": "가 ",
-    "object_eul_space": "을 ",
-    "object_reul_space": "를 ",
-    "and_wa_space": "와 ",
-    "and_gwa_space": "과 ",
-    "also_do_space": "도 ",
-    "to_ro_space": "로 ",
-    "at_e_space": "에 ",
-    "copula_imyeo_space": "이며 ",
-    "copula_igo_space": "이고 ",
-    "polite_copula_period": "입니다.",
-    "polite_become_period": "됩니다.",
-    "english_and_space": " and ",
-    "english_is_space": " is ",
-    "english_are_space": " are ",
-    "english_with_space": " with ",
-    "english_respectively_period": " respectively.",
-    "limitation_uncertain_period": " uncertain.",
-    "limitation_unverified_period": " unverified.",
-    "limitation_korean_uncertain_period": " 불확실합니다.",
 }
-_LIMITATION_CONNECTORS = frozenset(
-    {
-        "limitation_uncertain_period",
-        "limitation_unverified_period",
-        "limitation_korean_uncertain_period",
-    }
-)
 
 
 class FinalResponseComposerError(RuntimeError):
@@ -156,36 +73,10 @@ def _list_root(path: str) -> str | None:
     return None if match is None else path[: match.start()]
 
 
-def _validate_connector(
-    connector: str,
-    *,
-    concrete: dict[str, JsonValue],
-) -> None:
-    """Connector가 새 literal·관계·진단을 운반하지 못하게 한다."""
-    if _URL_RE.search(connector) or _NUMBER_RE.search(connector):
-        raise FinalResponseComposerError("render plan connector contains a literal")
-    for token in _WORD_RE.findall(connector):
-        if token.casefold() not in _SAFE_CONNECTOR_WORDS:
-            raise FinalResponseComposerError(
-                "render plan connector contains a content word"
-            )
-    symbols = _WORD_RE.sub("", connector)
-    if not _SAFE_PUNCTUATION_RE.fullmatch(symbols):
-        raise FinalResponseComposerError(
-            "render plan connector contains unsafe symbols"
-        )
-    for projected in concrete.values():
-        pattern = projected_scalar_literal_pattern(projected)
-        if pattern is not None and pattern.search(connector) is not None:
-            raise FinalResponseComposerError(
-                "render plan connector copied a projected literal"
-            )
-
-
 def _citable_paths(
     value: CompositionInputV1,
-) -> tuple[dict[str, JsonValue], tuple[str, ...], tuple[str, ...]]:
-    """현재 projection과 active relation에서 provider가 선택 가능한 path를 만든다."""
+) -> tuple[dict[str, JsonValue], tuple[str, ...]]:
+    """Source contract가 소유하는 exact fact path set/order를 반환한다."""
     concrete = flatten_public_facts(value.public_facts)
     available = tuple(
         path
@@ -199,7 +90,14 @@ def _citable_paths(
         if value.structural_evidence_relations
         else None
     )
-    allowed = relation.evidence_paths if relation is not None else available
+    if relation is not None:
+        allowed = relation.evidence_paths
+    else:
+        allowed = tuple(value.resolved_claims)
+        if not allowed or any(path not in available for path in allowed):
+            raise FinalResponseComposerError(
+                "composer input has no verified resolved-claim path contract"
+            )
     if not allowed:
         raise FinalResponseComposerError("composer input has no citable scalar paths")
     if len(allowed) > _MAX_CITATION_PATHS:
@@ -208,31 +106,17 @@ def _citable_paths(
         raise FinalResponseComposerError(
             "structural evidence contains an unsafe scalar path"
         )
-    limitations = tuple(
-        f"unresolved_claims[{index}]" for index in range(len(value.unresolved_claims))
-    )
-    if len(limitations) > _MAX_LIMITATION_PATHS:
-        raise FinalResponseComposerError("composer input has too many limitation paths")
-    return concrete, tuple(allowed), limitations
+    if value.unresolved_claims:
+        raise FinalResponseComposerError(
+            "unresolved claims require a fact-free fallback"
+        )
+    return concrete, tuple(allowed)
 
 
 def _response_schema(value: CompositionInputV1) -> dict:
-    """현재 projection의 path와 bounded connector만 허용하는 schema를 만든다."""
-    _, cited_paths, limitation_paths = _citable_paths(value)
-    schema = CompositionRenderPlanV1.model_json_schema(by_alias=True)
-    properties = schema["properties"]
-    segment_schema = schema.get("$defs", {}).get("CompositionRenderSegmentV1")
-    if not isinstance(segment_schema, dict):
-        raise FinalResponseComposerError("render plan schema is incomplete")
-    segment_schema["properties"]["path"]["enum"] = list(cited_paths)
-    if value.structural_evidence_relations:
-        properties["segments"]["minItems"] = len(cited_paths)
-        properties["segments"]["maxItems"] = len(cited_paths)
-    if limitation_paths:
-        properties["limitation_paths"]["items"]["enum"] = list(limitation_paths)
-    else:
-        properties["limitation_paths"]["maxItems"] = 0
-    return schema
+    """Fact/path authority를 노출하지 않는 domain-neutral plan schema다."""
+    _citable_paths(value)
+    return CompositionRenderPlanV1.model_json_schema(by_alias=True)
 
 
 def materialize_render_plan(
@@ -241,24 +125,8 @@ def materialize_render_plan(
     *,
     max_output_chars: int = 3_500,
 ) -> DraftResponseV1:
-    """검증된 plan 순서대로 projected literal을 중앙에서 exactly-once 삽입한다."""
-    concrete, allowed_paths, limitation_paths = _citable_paths(value)
-    paths = tuple(segment.path for segment in plan.segments)
-    if len(paths) != len(set(paths)):
-        raise FinalResponseComposerError("render plan contains duplicate paths")
-    if any("[*]" in path or path not in concrete for path in paths):
-        raise FinalResponseComposerError("render plan contains an invalid path")
-    if value.structural_evidence_relations:
-        if paths != allowed_paths:
-            raise FinalResponseComposerError(
-                "render plan does not match structural evidence order"
-            )
-    else:
-        order = {path: index for index, path in enumerate(allowed_paths)}
-        if any(path not in order for path in paths) or [
-            order[path] for path in paths
-        ] != sorted(order[path] for path in paths):
-            raise FinalResponseComposerError("render plan paths are not canonical")
+    """Source-owned canonical path order로 projected literal을 exactly-once 삽입한다."""
+    concrete, paths = _citable_paths(value)
     list_roots = {root for path in paths if (root := _list_root(path)) is not None}
     if len(list_roots) > 1:
         raise FinalResponseComposerError("render plan mixes list roots")
@@ -267,23 +135,6 @@ def materialize_render_plan(
         or list_roots != {value.composition_list_root}
     ):
         raise FinalResponseComposerError("render plan uses an auxiliary list root")
-    if tuple(plan.limitation_paths) != limitation_paths:
-        raise FinalResponseComposerError("render plan limitation paths are incomplete")
-    limitation_segments = tuple(
-        index
-        for index, segment in enumerate(plan.segments)
-        if segment.connector in _LIMITATION_CONNECTORS
-    )
-    if limitation_paths:
-        if limitation_segments != (len(plan.segments) - 1,):
-            raise FinalResponseComposerError(
-                "render plan requires one final limitation ending"
-            )
-    elif limitation_segments:
-        raise FinalResponseComposerError(
-            "render plan has an ungrounded limitation ending"
-        )
-
     selected_values = tuple(concrete[path] for path in paths)
     bool_numbers = {int(item) for item in selected_values if isinstance(item, bool)}
     numbers = {
@@ -295,7 +146,7 @@ def materialize_render_plan(
         raise FinalResponseComposerError("render plan has a bool-number collision")
     rendered_by_literal: dict[str, JsonValue] = {}
     chunks: list[str] = []
-    for segment, projected in zip(plan.segments, selected_values, strict=True):
+    for projected in selected_values:
         literal = _scalar_literal(projected)
         prior = rendered_by_literal.get(literal)
         if prior is not None and not _same_json_scalar(prior, projected):
@@ -303,18 +154,15 @@ def materialize_render_plan(
                 "render plan has a typed literal collision"
             )
         rendered_by_literal[literal] = projected
-        connector = _CONNECTOR_TEXT.get(segment.connector)
-        if connector is None:
-            raise FinalResponseComposerError("render plan connector is unknown")
-        _validate_connector(connector, concrete=concrete)
-        chunks.extend((literal, connector))
-    content = "".join(chunks)
+        chunks.append(literal)
+    separator = _STRUCTURAL_SEPARATOR_TEXT[plan.separator]
+    content = separator.join(chunks) + "."
     if content != content.strip() or len(content) > max_output_chars:
         raise FinalResponseComposerError("materialized content has an invalid length")
     return DraftResponseV1(
         content=content,
         cited_paths=paths,
-        limitation_paths=plan.limitation_paths,
+        limitation_paths=(),
     )
 
 
