@@ -193,6 +193,15 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "Persona에 사용자 호칭" in request.system_prompt
     assert "projected 숫자 바로 뒤" in request.system_prompt
+    assert "Treat the ordered cited_paths as a one-way render plan" in (
+        request.system_prompt
+    )
+    assert "A는 10, B는 9, C는 8입니다." in request.system_prompt
+    assert "A, B, C는 각각 10, 9, 8입니다." in request.system_prompt
+    assert (
+        "the cited literal offsets are\nstrictly increasing"
+        in request.system_prompt
+    )
     assert draft.content == content
     assert draft.cited_paths == tuple(paths)
     assert guard_final_response(_production_shaped_input(), draft).accepted is True
