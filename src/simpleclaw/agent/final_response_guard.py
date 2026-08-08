@@ -245,9 +245,10 @@ def _cited_literal_order_error(
     concrete: dict[str, JsonValue],
     cited_values: dict[str, JsonValue],
 ) -> str | None:
-    """인용 scalar를 canonical path 순서의 list로만 배치하게 제한한다."""
+    """인용 scalar 순서·중복을 검증하되 field 간 문법은 lexical Guard에 맡긴다."""
     cursor = 0
     previous_end: int | None = None
+    previous_path: str | None = None
     matched_spans: list[tuple[int, int]] = []
     patterns: list[re.Pattern[str]] = []
     for path, value in concrete.items():
@@ -263,11 +264,19 @@ def _cited_literal_order_error(
             separator = content[previous_end : match.start()]
             if not separator:
                 return "cited_value_order_mismatch"
-            separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
-            if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
-                return "cited_value_order_mismatch"
+            # 동일 field의 scalar끼리는 list conjunction만 허용해
+            # ``A는 B`` 같은 cross-path 관계 재조합을 계속 차단한다. 서로 다른
+            # field 사이의 조사는 아래 lexical/symbol Guard가 domain-neutral하게
+            # 검증한다(예: ``A는 10, B는 9입니다``).
+            if previous_path is not None and (
+                previous_path.rsplit(".", 1)[-1] == path.rsplit(".", 1)[-1]
+            ):
+                separator = _LIST_SEPARATOR_WORD_RE.sub("", separator)
+                if not _SAFE_PUNCTUATION_RE.fullmatch(separator):
+                    return "cited_value_order_mismatch"
         cursor = match.end()
         previous_end = match.end()
+        previous_path = path
         matched_spans.append(match.span())
         patterns.append(pattern)
     if previous_end is None:
@@ -278,8 +287,6 @@ def _cited_literal_order_error(
     unmatched = "".join(unmatched_chars)
     if any(pattern.search(unmatched) for pattern in patterns):
         return "cited_value_order_mismatch"
-    if _NUMBER_RE.search(_URL_RE.sub("", unmatched)) is not None:
-        return "ungrounded_number"
     return None
 
 

@@ -57,6 +57,52 @@ def test_guard_accepts_grounded_natural_response() -> None:
     assert result.accepted is True
 
 
+def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KBO는 KT가 59, 삼성은 58, LG는 57입니다.",
+            cited_paths=(
+                "data.category",
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT는 59승, 삼성은 58, LG는 57입니다.",
+        "KT는 59 우승, 삼성은 58, LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_unprojected_unit_or_domain_term(content: str) -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.code == "ungrounded_text"
+
+
 def test_guard_defensively_rejects_empty_citations() -> None:
     draft = DraftResponseV1.model_construct(
         content="KT입니다.",
