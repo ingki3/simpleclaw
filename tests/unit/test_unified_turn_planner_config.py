@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from simpleclaw.config import load_agent_config
 
 
@@ -244,6 +246,7 @@ agent:
             "mode": "central_persona_v1",
             "max_tokens": 900,
             "max_output_chars": 2400,
+            "temperature": 0.0,
             "max_attempts": 1,
         },
         "on_failure": "fail_closed",
@@ -281,6 +284,33 @@ agent:
             "rollback_reason",
         ),
     }
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(-1, 0.0), (0.25, 0.25), (2, 1.0), ("nan", 0.0)],
+)
+def test_langgraph_v4_composition_temperature_is_bounded(
+    tmp_path, raw, expected
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"""\
+agent:
+  unified_turn_planner:
+    architecture: langgraph_v4
+    langgraph_v4:
+      composition:
+        temperature: {raw}
+""",
+        encoding="utf-8",
+    )
+
+    composition = load_agent_config(config)["unified_turn_planner"]["langgraph_v4"][
+        "composition"
+    ]
+
+    assert composition["temperature"] == expected
 
 
 def test_langgraph_v4_invalid_budget_does_not_silently_fallback_to_legacy(

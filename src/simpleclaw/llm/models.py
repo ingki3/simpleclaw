@@ -126,6 +126,11 @@ class LLMRequest:
     프로바이더(현재 Gemini)는 native thinking config 로 매핑하고, 미지원
     프로바이더는 조용히 무시한다. 이 값은 config 로더에서만 채워지며
     사용자/runtime tool 입력으로 설정되어서는 안 된다.
+
+    BIZ-645 — ``temperature`` 는 trusted caller/config 전용 sampling 계약이다.
+    None 은 기존 provider 기본 동작을 보존하고, explicit 값은 provider가 native
+    필드로 적용하거나 지원 불가 시 명확히 거부해야 한다. runtime/user/tool
+    입력으로 직접 설정되어서는 안 된다.
     """
     system_prompt: str = ""
     user_message: str = ""
@@ -135,6 +140,7 @@ class LLMRequest:
     tools: list[ToolDefinition] | None = None
     system_blocks: list[SystemBlock] | None = None
     max_tokens: int | None = None
+    temperature: float | None = None
     response_mime_type: str | None = None
     response_schema: dict | type | None = None
     require_structured_output: bool = False

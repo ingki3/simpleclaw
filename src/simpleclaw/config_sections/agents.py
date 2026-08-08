@@ -261,6 +261,7 @@ _LANGGRAPH_V4_DEFAULTS: dict = {
         "mode": "asset_text_compat",
         "max_tokens": 1200,
         "max_output_chars": 3500,
+        "temperature": 0.0,
         "max_attempts": 1,
     },
     "on_failure": "fail_closed",
@@ -890,6 +891,14 @@ def _agent_with_defaults(agent: dict) -> dict:
                                 composition_defaults["max_output_chars"],
                                 minimum=256,
                             ),
+                            "temperature": _coerce_float_config(
+                                v4_composition.get(
+                                    "temperature", composition_defaults["temperature"]
+                                ),
+                                composition_defaults["temperature"],
+                                minimum=0.0,
+                                maximum=1.0,
+                            ),
                             # 중앙 composer는 provider/parse 실패에도 재시도하지 않는다.
                             "max_attempts": composition_defaults["max_attempts"],
                         },
@@ -1088,6 +1097,8 @@ def _coerce_float_config(
     try:
         value = float(raw)
     except (TypeError, ValueError):
+        return default
+    if not math.isfinite(value):
         return default
     return min(max(value, minimum), maximum)
 

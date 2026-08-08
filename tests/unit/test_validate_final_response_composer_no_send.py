@@ -80,6 +80,7 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["provider_calls"] == 1
     assert result["retry_calls"] == 0
     assert result["composer_calls"] == 1
+    assert result["temperature"] == 0.0
     assert result["guard_accepted"] is True
     assert tuple(result["citations"]) == scenario.expected_citations
     assert result["canonical_citation_count"] == len(scenario.expected_citations)

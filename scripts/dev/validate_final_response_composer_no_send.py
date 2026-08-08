@@ -55,7 +55,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
-from simpleclaw.config_sections.agents import load_persona_config
+from simpleclaw.config_sections.agents import load_agent_config, load_persona_config
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     NullDeliveryAdapter,
@@ -616,6 +616,7 @@ async def _connected_probe(
         "boundary_proof": "connected_primary_no_send_fail_closed_sinks",
         "provider_calls": counted_send.calls,
         "composer_calls": capture.calls,
+        "temperature": composer.temperature,
         "guard_accepted": guard.accepted,
         "guard_code": guard.code,
         "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
@@ -667,6 +668,11 @@ async def _run(args: argparse.Namespace) -> int:
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
     backend = router.get_default_backend()
+    agent_config = load_agent_config(config_path)
+    planner_config = agent_config.get("unified_turn_planner", {})
+    langgraph_config = planner_config.get("langgraph_v4", {})
+    composition_config = langgraph_config.get("composition", {})
+    temperature = float(composition_config.get("temperature", 0.0))
     base_scenario = _NATURAL_KBO_SCENARIO
     if args.real_kbo:
         try:
@@ -729,6 +735,7 @@ async def _run(args: argparse.Namespace) -> int:
             persona_projection=persona_projection,
             max_tokens=args.max_tokens,
             backend_name=backend,
+            temperature=temperature,
         )
         try:
             scenario_result = await asyncio.wait_for(
@@ -782,6 +789,7 @@ async def _run(args: argparse.Namespace) -> int:
         "retry_calls": retry_calls,
         "scenario_count": len(scenarios),
         "scenarios": scenario_results,
+        "temperature": temperature,
         "persona_source_types": [
             source_type.value for source_type in persona_projection.source_types
         ],

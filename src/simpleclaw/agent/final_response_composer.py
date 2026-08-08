@@ -20,6 +20,7 @@ from .composition_projection import flatten_public_facts
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]
 _MAX_CITATION_PATHS = 128
 _MAX_LIMITATION_PATHS = 64
+_SAMPLING_POLICY_VERSION = "request_temperature_v1"
 
 
 class FinalResponseComposerError(RuntimeError):
@@ -66,16 +67,20 @@ class FinalResponseComposer:
         max_tokens: int,
         backend_name: str,
         max_output_chars: int = 3_500,
+        temperature: float = 0.0,
     ) -> None:
         if not backend_name.strip():
             raise ValueError("composer backend_name is required")
         if max_tokens <= 0:
             raise ValueError("composer max_tokens must be positive")
+        if not 0.0 <= temperature <= 1.0:
+            raise ValueError("composer temperature must be between 0.0 and 1.0")
         self._send = send
         self._persona_projection = persona_projection
         self._max_tokens = max_tokens
         self._backend_name = backend_name.strip()
         self._max_output_chars = max(256, min(int(max_output_chars), 3_500))
+        self._temperature = float(temperature)
         self._prompt = load_system_prompt(
             "langgraph_v4_composer", refresh=True
         ).system_prompt
@@ -99,6 +104,8 @@ class FinalResponseComposer:
                     self._persona_projection.fingerprint
                 ),
                 "prompt": self._prompt,
+                "sampling_policy": _SAMPLING_POLICY_VERSION,
+                "temperature": self._temperature,
                 "version": "central_persona_v1",
             },
             ensure_ascii=False,
@@ -106,6 +113,11 @@ class FinalResponseComposer:
             sort_keys=True,
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def temperature(self) -> float:
+        """검증된 request-scoped sampling 값을 노출한다."""
+        return self._temperature
 
     async def compose(self, value: CompositionInputV1) -> DraftResponseV1:
         """Repair·retry·asset 호출 없이 provider를 정확히 한 번 호출한다."""
@@ -120,6 +132,7 @@ class FinalResponseComposer:
             backend_name=self._backend_name,
             tools=None,
             max_tokens=self._max_tokens,
+            temperature=self._temperature,
             response_mime_type="application/json",
             response_schema=_response_schema(value),
             require_structured_output=True,

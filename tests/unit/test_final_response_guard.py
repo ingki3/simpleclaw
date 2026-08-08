@@ -77,6 +77,315 @@ def test_guard_accepts_grounded_korean_particles_between_projected_fields() -> N
     assert result.accepted is True
 
 
+def test_guard_accepts_consistent_question_grounded_units_in_generic_list() -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT는 59승, 삼성은 58승, LG는 57승입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_allows_requested_top_n_only_inside_scope_phrase() -> None:
+    cited_paths = (
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
+    )
+    accepted = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+    rejected = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="현재 상위 3팀은 KT 59, 삼성 58, LG 57이며 3입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert accepted.accepted is True
+    assert rejected.code == "ungrounded_number"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "KT는 59, 삼성은 58, LG는 57이며 3입니다.",
+        "KT의 59는 삼성의 58입니다. LG는 57입니다.",
+    ],
+)
+def test_guard_rejects_security_amendment_exact_regressions(content: str) -> None:
+    result = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[0].wins",
+                "data.items[1].team",
+                "data.items[1].wins",
+                "data.items[2].team",
+                "data.items[2].wins",
+            ),
+        ),
+    )
+
+    assert result.code in {
+        "cited_value_order_mismatch",
+        "ungrounded_number",
+        "ungrounded_text",
+    }
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "cited_paths"),
+    [
+        (
+            '{"records":[{"label":"A","value":3},{"label":"B","value":2}]}',
+            (
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+        (
+            '{"entries":[{"name":"A","count":3},{"name":"B","count":2}]}',
+            (
+                "entries[0].name",
+                "entries[0].count",
+                "entries[1].name",
+                "entries[1].count",
+            ),
+        ),
+    ],
+)
+def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
+    public_facts_json: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": public_facts_json,
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A의 3은 B의 2입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("public_facts_json", "cited_paths"),
+    [
+        (
+            (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
+            ("first_label", "first_value", "second_label", "second_value"),
+        ),
+        (
+            (
+                '{"metrics":{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}}'
+            ),
+            (
+                "metrics.first_label",
+                "metrics.first_value",
+                "metrics.second_label",
+                "metrics.second_value",
+            ),
+        ),
+    ],
+)
+def test_guard_rejects_relation_reassembly_without_list_locations(
+    public_facts_json: str,
+    cited_paths: tuple[str, ...],
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": public_facts_json,
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A의 3은 B의 2입니다.",
+            cited_paths=cited_paths,
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+def test_guard_accepts_root_scalar_label_value_sequence() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3, B는 2입니다.",
+            cited_paths=(
+                "first_label",
+                "first_value",
+                "second_label",
+                "second_value",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 지표 값을 알려줘",
+            "public_facts_json": (
+                '{"left":[{"label":"A","value":3}],'
+                '"right":[{"label":"B","value":2}]}'
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3은 B는 2입니다.",
+            cited_paths=(
+                "left[0].label",
+                "left[0].value",
+                "right[0].label",
+                "right[0].value",
+            ),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
+def test_guard_accepts_domain_neutral_label_value_list_with_grounded_unit() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": (
+                '{"records":['
+                '{"label":"A","value":3},'
+                '{"label":"B","value":2}'
+                "]}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="A는 3개, B는 2개입니다.",
+            cited_paths=(
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+    )
+
+    assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "A는 3입니다. B는 2입니다.",
+        "A는 3개, B는 2건입니다.",
+        "A는 3kg, B는 2kg입니다.",
+    ],
+)
+def test_guard_rejects_cross_item_predicate_or_ungrounded_units(
+    content: str,
+) -> None:
+    value = _input().model_copy(
+        update={
+            "question": "두 항목의 개수를 알려줘",
+            "public_facts_json": (
+                '{"records":['
+                '{"label":"A","value":3},'
+                '{"label":"B","value":2}'
+                "]}"
+            ),
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content=content,
+            cited_paths=(
+                "records[0].label",
+                "records[0].value",
+                "records[1].label",
+                "records[1].value",
+            ),
+        ),
+    )
+
+    assert result.code in {"cited_value_order_mismatch", "ungrounded_text"}
+
+
+def test_guard_rejects_reversed_value_to_label_relation_within_item() -> None:
+    value = _input().model_copy(
+        update={
+            "question": "항목의 개수를 알려줘",
+            "public_facts_json": '{"items":[{"value":3,"label":"A"}]}',
+        }
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="3은 A입니다.",
+            cited_paths=("items[0].value", "items[0].label"),
+        ),
+    )
+
+    assert result.code == "cited_value_order_mismatch"
+
+
 @pytest.mark.parametrize(
     "content",
     [

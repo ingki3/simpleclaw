@@ -17,6 +17,7 @@ from simpleclaw.agent.composition_contracts import (
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.final_response_guard import guard_final_response
+from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 from simpleclaw.llm.models import LLMResponse
@@ -80,6 +81,22 @@ def _production_shaped_input() -> CompositionInputV1:
     )
 
 
+def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
+    """BIZ-643 안전 계약과 BIZ-644 typed-persona prompt를 함께 보존한다."""
+    prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
+
+    assert prompt.version == 7
+    assert "typed persona projection only" in prompt.system_prompt
+    assert "ordered cited_paths as a one-way render plan" in prompt.system_prompt
+    assert "strictly increasing in cited_paths order" in prompt.system_prompt
+    assert "Complete every selected field" in prompt.system_prompt
+    assert "for items[0] before writing any selected field for items[1]" in (
+        prompt.system_prompt
+    )
+    assert "As a final mechanical check" in prompt.system_prompt
+    assert "no cited literal occurs twice" in prompt.system_prompt
+
+
 def test_draft_schema_requires_at_least_one_cited_path() -> None:
     schema = DraftResponseV1.model_json_schema(by_alias=True)
 
@@ -133,6 +150,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert request.backend_name == "fixture-backend"
     assert request.route_name is None
     assert request.usage_task == "langgraph_v4_composer"
+    assert request.temperature == 0.0
     assert request.require_structured_output is True
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "not factual or citation evidence" in request.system_prompt
@@ -209,15 +227,6 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "Persona에 사용자 호칭" in request.system_prompt
     assert "projected 숫자 바로 뒤" in request.system_prompt
-    assert "Treat the ordered cited_paths as a one-way render plan" in (
-        request.system_prompt
-    )
-    assert "A는 10, B는 9, C는 8입니다." in request.system_prompt
-    assert "A, B, C는 각각 10, 9, 8입니다." in request.system_prompt
-    assert (
-        "the cited literal offsets are\nstrictly increasing"
-        in request.system_prompt
-    )
     assert draft.content == content
     assert draft.cited_paths == tuple(paths)
     assert guard_final_response(_production_shaped_input(), draft).accepted is True
@@ -472,6 +481,22 @@ def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> N
     changed = FinalResponseComposer(**kwargs).fingerprint
 
     assert changed != original
+
+
+def test_composer_fingerprint_includes_effective_temperature() -> None:
+    kwargs = {
+        "send": AsyncMock(),
+        "persona_projection": _persona_projection("간결하게"),
+        "max_tokens": 1200,
+        "backend_name": "fixture-backend",
+    }
+
+    deterministic = FinalResponseComposer(**kwargs, temperature=0.0)
+    configured = FinalResponseComposer(**kwargs, temperature=0.2)
+
+    assert deterministic.temperature == 0.0
+    assert configured.temperature == 0.2
+    assert deterministic.fingerprint != configured.fingerprint
 
 
 def test_composer_fingerprint_includes_projection_policy_and_content_hash() -> None:

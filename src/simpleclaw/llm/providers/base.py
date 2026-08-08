@@ -63,6 +63,7 @@ class LLMProvider(ABC):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -79,6 +80,8 @@ class LLMProvider(ABC):
                 ``cache=True`` 블록 끝에 prompt caching 경계 마커를 부착한다.
                 그 외 프로바이더는 모든 블록을 단일 문자열로 합친다.
             max_tokens: 출력 토큰 cap. None 이면 프로바이더 기본값을 사용한다 (BIZ-297).
+            temperature: trusted caller가 지정한 provider-native sampling 값.
+                None이면 기존 provider 기본 동작을 보존한다 (BIZ-645).
             response_mime_type: structured output MIME 힌트 (BIZ-427, 예:
                 ``application/json``). 미지원 프로바이더는 무시할 수 있다.
             response_schema: structured output JSON Schema (BIZ-427). 지원
@@ -105,6 +108,7 @@ class LLMProvider(ABC):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -127,6 +131,7 @@ class LLMProvider(ABC):
             tools=tools,
             system_blocks=system_blocks,
             max_tokens=max_tokens,
+            temperature=temperature,
             response_mime_type=response_mime_type,
             response_schema=response_schema,
             require_structured_output=require_structured_output,

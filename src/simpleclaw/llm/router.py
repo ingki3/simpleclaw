@@ -174,6 +174,8 @@ class LLMRouter:
         extra_kwargs: dict = {}
         if request.reasoning:
             extra_kwargs["reasoning"] = request.reasoning
+        if request.temperature is not None:
+            extra_kwargs["temperature"] = request.temperature
 
         started = time.monotonic()
         response: LLMResponse | None = None

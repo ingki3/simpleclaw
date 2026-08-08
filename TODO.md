@@ -15,6 +15,8 @@
 
 ## In Progress
 
+- [>] **[BIZ-645](mention://issue/4e305f23-136d-48fa-896c-c7fb77fafd4d): Composer 요청에 deterministic sampling 경계를 추가** — PR #700에 BIZ-643 Guard·prompt·validator semantic과 provider-neutral request-scoped `temperature=0.0`을 통합하고, OpenAI/OpenRouter·Gemini/Vertex·Claude native mapping, CLI fail-closed, send/stream 전달, static `extra_body` 충돌 제거, effective sampling fingerprint/validator 출력과 기존 caller `None` 호환을 고정했다. default backend `openrouter_deepseek_v4_pro`의 exact-checkout real KBO natural-query 3회는 모두 Guard accepted, provider 1회/run, retry 0, sink delta 0을 통과했다. 별도 CI timing 자식 [BIZ-646](mention://issue/f414c7a7-5f5b-4e95-8a89-14b1c4e9f904)에서 durable lease waiter 계측을 결정적으로 보완했으며, PR #700 fresh CI 3종·필수 리뷰 전에는 merge, release, production activation, restart, Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
+
 - [>] **[BIZ-641](mention://issue/9b359807-b364-40e8-a646-81a4bcd93307): divergent composer gate를 canonical PR에 통합** — [PR #696](https://github.com/ingki3/simpleclaw/pull/696)을 canonical target으로 삼아 dynamic concrete-path enum·root-relative prompt와 scalar/top-3 connected production no-send gate를 함께 유지한다. 시나리오별 provider 1회, retry 0, Telegram/Cron adapter·ConversationStore writer·supporting dispatch per-run delta 0을 fail-closed spy로 고정하고 source 통합 커밋 이후 Graphify를 재생성한다. exact-head CI·필수 review·squash merge 전에는 production activation·restart·Telegram 전송을 수행하지 않는다. (진행: 2026-08-08)
 
 - [>] **[BIZ-640](mention://issue/29e9c2b4-9703-4479-94ce-1d2702841d0e): projected citation path를 schema allowlist로 고정** — input별 scalar leaf만 `cited_paths` enum으로 허용하고 prefixed/wildcard/container/unknown path를 schema·Guard에서 fail-closed한다. 최종 검증·병합은 BIZ-641이 통합하는 canonical [PR #696](https://github.com/ingki3/simpleclaw/pull/696)이 소유한다. (진행: 2026-08-08)

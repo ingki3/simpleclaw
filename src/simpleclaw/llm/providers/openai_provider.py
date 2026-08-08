@@ -213,10 +213,16 @@ class OpenAIProvider(LLMProvider):
         )
         self._name = name
 
-    def _request_extra_body(self, reasoning: dict | None) -> dict:
+    def _request_extra_body(
+        self, reasoning: dict | None, temperature: float | None = None
+    ) -> dict:
         """Merge profile defaults with trusted static backend configuration."""
         extras = self._profile.build_request_extras(reasoning)
         extras.update(self._extra_body)
+        if temperature is not None:
+            # Request-scoped trusted policy owns the native top-level key. Keeping
+            # the static extra_body copy would produce two conflicting values.
+            extras.pop("temperature", None)
         return extras
 
     @staticmethod
@@ -424,6 +430,7 @@ class OpenAIProvider(LLMProvider):
         tools: list[ToolDefinition] | None = None,
         system_blocks: list[SystemBlock] | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -470,7 +477,7 @@ class OpenAIProvider(LLMProvider):
                 kwargs["response_format"] = response_format
             # BIZ-448 — OpenRouter 등 OpenAI-compatible endpoint 확장 필드 주입
             # (예: GLM reasoning budget 이 답변 토큰을 잠식하지 않도록 비활성화).
-            extra_body = self._request_extra_body(reasoning)
+            extra_body = self._request_extra_body(reasoning, temperature)
             if extra_body:
                 kwargs["extra_body"] = extra_body
             if tools:
@@ -479,6 +486,8 @@ class OpenAIProvider(LLMProvider):
             # 박는다. None 이면 기존 동작(필드 미지정 → API 기본값) 유지.
             if max_tokens:
                 kwargs[_max_tokens_field(self._model)] = max_tokens
+            if temperature is not None:
+                kwargs["temperature"] = temperature
 
             response = await self._client.chat.completions.create(**kwargs)
         except openai.AuthenticationError as e:
@@ -567,6 +576,7 @@ class OpenAIProvider(LLMProvider):
         system_blocks: list[SystemBlock] | None = None,
         on_text_delta: TextDeltaCallback | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
         response_mime_type: str | None = None,
         response_schema: dict | type | None = None,
         require_structured_output: bool = False,
@@ -619,7 +629,7 @@ class OpenAIProvider(LLMProvider):
         if response_format is not None:
             kwargs["response_format"] = response_format
         # BIZ-448 — send() 와 동일하게 endpoint 확장 필드를 스트리밍에도 주입.
-        extra_body = self._request_extra_body(reasoning)
+        extra_body = self._request_extra_body(reasoning, temperature)
         if extra_body:
             kwargs["extra_body"] = extra_body
         if tools:
@@ -627,6 +637,8 @@ class OpenAIProvider(LLMProvider):
         # BIZ-297 — send() 와 동일하게 모델 종류에 맞는 cap 필드 매핑.
         if max_tokens:
             kwargs[_max_tokens_field(self._model)] = max_tokens
+        if temperature is not None:
+            kwargs["temperature"] = temperature
 
         text_parts: list[str] = []
         # index 별 누적 슬롯. OpenAI 는 tool_call 의 id/name/arguments 를 첫 청크
