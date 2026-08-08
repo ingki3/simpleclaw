@@ -27,7 +27,7 @@ from .composition_projection import flatten_public_facts
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]
 _MAX_CITATION_PATHS = 128
 _SAMPLING_POLICY_VERSION = "request_temperature_v1"
-_RENDER_PLAN_POLICY_VERSION = "source_order_structural_punctuation_v2"
+_RENDER_PLAN_POLICY_VERSION = "source_order_structural_punctuation_v3"
 _STRUCTURAL_SEPARATOR_TEXT = {
     "space": " ",
     "comma_space": ", ",

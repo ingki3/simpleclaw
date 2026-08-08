@@ -150,7 +150,7 @@ def _neutral_render_plan(
     *,
     separator: str = "comma_space",
 ) -> CompositionRenderPlanV1:
-    return CompositionRenderPlanV1(separator=separator, ending="period")
+    return CompositionRenderPlanV1(separator=separator)
 
 
 def _provider_plan_json(
@@ -158,9 +158,7 @@ def _provider_plan_json(
 ) -> str:
     return json.dumps(
         {
-            "schema": "composition_render_plan.v1",
             "separator": separator,
-            "ending": "period",
         },
         ensure_ascii=False,
     )
@@ -170,11 +168,11 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     """Typed plan 외 final literal 작성 경로가 prompt에 없음을 고정한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 13
+    assert prompt.version == 14
     assert "structural-punctuation selector" in prompt.system_prompt
     assert "central materializer" in prompt.system_prompt
     assert "never select or return fact paths" in prompt.system_prompt
-    assert "separator and ending only" in prompt.system_prompt
+    assert "separator only" in prompt.system_prompt
     assert "provider" not in prompt.system_prompt.casefold()
     assert "recipe" not in prompt.system_prompt.casefold()
     assert "skill" not in prompt.system_prompt.casefold()
@@ -222,7 +220,7 @@ async def test_composer_schema_excludes_fact_paths_and_sentence_connectors() -> 
 
     schema = send.await_args.args[0].response_schema
     properties = schema["properties"]
-    assert set(properties) == {"schema", "separator", "ending"}
+    assert set(properties) == {"separator"}
     assert "segments" not in schema.get("$defs", {})
     assert all("path" not in name for name in properties)
     encoded = json.dumps(schema, sort_keys=True)
@@ -268,11 +266,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert request.require_structured_output is True
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
     assert "persona is not factual" in request.system_prompt
-    assert set(request.response_schema["properties"]) == {
-        "schema",
-        "separator",
-        "ending",
-    }
+    assert set(request.response_schema["properties"]) == {"separator"}
     assert draft.content == "1, KT, 2, 삼성, 3, LG."
 
 
@@ -421,7 +415,6 @@ async def test_composer_does_not_retry_legacy_segment_plan() -> None:
     assert send.await_count == 1
     request = send.await_args.args[0]
     assert "separator" in request.response_schema["required"]
-    assert "ending" in request.response_schema["required"]
     assert "segments" not in request.response_schema["properties"]
 
 
@@ -444,7 +437,6 @@ async def test_composer_rejects_provider_owned_reordered_paths_without_retry() -
             text=json.dumps(
                 {
                     "separator": "comma_space",
-                    "ending": "period",
                     "paths": provider_paths,
                 }
             )
@@ -470,7 +462,6 @@ async def test_composer_rejects_provider_owned_missing_path_subset() -> None:
             text=json.dumps(
                 {
                     "separator": "comma_space",
-                    "ending": "period",
                     "paths": ["data.items[0].team"],
                 }
             )
@@ -605,9 +596,25 @@ def test_render_plan_contract_forbids_provider_authored_content() -> None:
         CompositionRenderPlanV1.model_validate(
             {
                 "separator": "comma_space",
-                "ending": "period",
                 "content": "alpha on 2026-08-08 is rank 1.",
             }
+        )
+
+
+@pytest.mark.parametrize(
+    "fixed_field",
+    (
+        {"schema": "composition_render_plan.v1"},
+        {"ending": "period"},
+    ),
+    ids=("schema-version", "terminal-punctuation"),
+)
+def test_render_plan_contract_forbids_provider_owned_fixed_fields(
+    fixed_field: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError):
+        CompositionRenderPlanV1.model_validate(
+            {"separator": "comma_space", **fixed_field}
         )
 
 
@@ -661,7 +668,6 @@ def test_render_plan_contract_rejects_provider_owned_paths(
         CompositionRenderPlanV1.model_validate(
             {
                 "separator": "comma_space",
-                "ending": "period",
                 "paths": paths,
             }
         )
@@ -682,7 +688,6 @@ def test_render_plan_rejects_free_form_or_semantic_separator(separator: str) -> 
         CompositionRenderPlanV1.model_validate(
             {
                 "separator": separator,
-                "ending": "period",
             }
         )
 
@@ -780,7 +785,6 @@ async def test_composer_does_not_retry_invalid_render_plan() -> None:
     invalid = json.dumps(
         {
             "separator": "ready becomes",
-            "ending": "period",
         }
     )
     send = AsyncMock(return_value=LLMResponse(text=invalid))

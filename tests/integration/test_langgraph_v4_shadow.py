@@ -665,16 +665,11 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         provider_calls += 1
         assert request.tools is None
         assert request.require_structured_output is True
-        assert set(request.response_schema["properties"]) == {
-            "schema",
-            "separator",
-            "ending",
-        }
+        assert set(request.response_schema["properties"]) == {"separator"}
         return LLMResponse(
             text=json.dumps(
                 {
                     "separator": "comma_space",
-                    "ending": "period",
                 },
                 ensure_ascii=False,
             )

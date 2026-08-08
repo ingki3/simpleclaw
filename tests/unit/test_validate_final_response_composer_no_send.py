@@ -48,7 +48,6 @@ async def _draft_response(request) -> LLMResponse:
         text=json.dumps(
             {
                 "separator": "comma_space",
-                "ending": "period",
             }
         )
     )

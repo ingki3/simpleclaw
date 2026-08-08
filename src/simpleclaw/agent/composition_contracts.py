@@ -73,18 +73,14 @@ class CompositionInputV1(ContractModel):
 
 
 class CompositionRenderPlanV1(ContractModel):
-    """Provider가 fact/path authority 없이 구조적 구두점만 선택하는 계약이다."""
+    """Provider가 fact/path/terminal authority 없이 separator만 선택하는 계약이다."""
 
-    schema_version: Literal["composition_render_plan.v1"] = Field(
-        default="composition_render_plan.v1", alias="schema"
-    )
     separator: Literal[
         "space",
         "comma_space",
         "middle_dot_space",
         "semicolon_space",
     ]
-    ending: Literal["period"]
 
 
 class DraftResponseV1(ContractModel):
