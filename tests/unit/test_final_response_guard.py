@@ -56,6 +56,44 @@ def test_guard_accepts_grounded_natural_response() -> None:
     assert result.accepted is True
 
 
+def test_guard_defensively_rejects_empty_citations() -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=(),
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(_input(), draft)
+
+    assert result.code == "citations_required"
+
+
+@pytest.mark.parametrize(
+    ("cited_paths", "expected_code"),
+    [
+        (("data.items[*].team",), "citation_not_projected"),
+        (("data.items[99].team",), "citation_not_projected"),
+        (
+            ("data.items[0].team", "data.items[0].team"),
+            "duplicate_citation",
+        ),
+    ],
+)
+def test_guard_rejects_wildcard_unknown_and_duplicate_citations(
+    cited_paths: tuple[str, ...],
+    expected_code: str,
+) -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=cited_paths,
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(_input(), draft)
+
+    assert result.code == expected_code
+
+
 def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:
     result = guard_final_response(
         _input(),

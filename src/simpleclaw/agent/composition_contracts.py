@@ -58,8 +58,8 @@ class DraftResponseV1(ContractModel):
         default="draft_response.v1", alias="schema"
     )
     content: str = Field(min_length=1, max_length=3_500)
-    cited_paths: tuple[NonEmptyStr, ...] = ()
-    limitation_paths: tuple[NonEmptyStr, ...] = ()
+    cited_paths: tuple[NonEmptyStr, ...] = Field(min_length=1, max_length=128)
+    limitation_paths: tuple[NonEmptyStr, ...] = Field(default=(), max_length=64)
 
     @model_validator(mode="after")
     def validate_paths(self) -> DraftResponseV1:

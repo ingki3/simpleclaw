@@ -6,8 +6,12 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
-from simpleclaw.agent.composition_contracts import CompositionInputV1
+from simpleclaw.agent.composition_contracts import (
+    CompositionInputV1,
+    DraftResponseV1,
+)
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
@@ -34,6 +38,26 @@ def _input() -> CompositionInputV1:
             }
         },
     )
+
+
+def test_draft_schema_requires_at_least_one_cited_path() -> None:
+    schema = DraftResponseV1.model_json_schema(by_alias=True)
+
+    assert "cited_paths" in schema["required"]
+    assert schema["properties"]["cited_paths"]["minItems"] == 1
+    assert schema["properties"]["cited_paths"]["maxItems"] == 128
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"content": "KT입니다."},
+        {"content": "KT입니다.", "cited_paths": []},
+    ],
+)
+def test_draft_contract_rejects_missing_or_empty_citations(payload: dict) -> None:
+    with pytest.raises(ValidationError):
+        DraftResponseV1.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -88,3 +112,33 @@ async def test_composer_does_not_retry_invalid_structured_output() -> None:
         await composer.compose(_input())
 
     assert send.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_composer_does_not_retry_empty_citations() -> None:
+    send = AsyncMock(
+        return_value=LLMResponse(
+            text=json.dumps(
+                {
+                    "content": "현재 KBO 상위 팀은 KT입니다.",
+                    "cited_paths": [],
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+    composer = FinalResponseComposer(
+        send=send,
+        persona_prompt="간결하게",
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    )
+
+    with pytest.raises(RuntimeError, match="invalid"):
+        await composer.compose(_input())
+
+    assert send.await_count == 1
+    request = send.await_args.args[0]
+    assert "cited_paths" in request.response_schema["required"]
+    assert request.response_schema["properties"]["cited_paths"]["minItems"] == 1
