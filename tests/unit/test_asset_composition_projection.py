@@ -109,6 +109,124 @@ def test_projection_includes_only_declared_typed_facts() -> None:
     assert "RAW" not in serialized
 
 
+def test_projection_activates_descriptor_declared_neutral_relation() -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+    ref = ContractRefV1(
+        contract_id="recipe.neutral-records.output",
+        version="1",
+        owner_ref=owner,
+        schema_hash="neutral-schema-hash",
+    )
+    descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "state": {},
+                        "records": {
+                            "type": "array",
+                            "items": {"properties": {"state": {}}},
+                        },
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": [
+                "data.state",
+                "data.records[*].state",
+            ],
+            "x-simpleclaw-composition-relations": [
+                {
+                    "kind": "question_scope_absent",
+                    "when": {"path": "data.state", "equals": "absent"},
+                    "evidence_fields": ["data.state"],
+                }
+            ],
+        },
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="neutral-invocation",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"state": "absent", "records": []},
+        },
+        payload_hash="neutral-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+
+    projection = build_composition_input(
+        request_id="request",
+        question="Are records available?",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=result,
+        descriptor=descriptor,
+    )
+
+    assert [item.model_dump() for item in projection.semantic_relations] == [
+        {
+            "kind": "question_scope_absent",
+            "evidence_paths": ("data.state",),
+        }
+    ]
+
+    nonmatching = NormalizedAssetResultV1(
+        invocation_id="ready-invocation",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"state": "ready", "records": []},
+        },
+        payload_hash="ready-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+    nonmatching_projection = build_composition_input(
+        request_id="request-ready",
+        question="Are records available?",
+        locale="en-US",
+        selected_route="recipe",
+        normalized_result=nonmatching,
+        descriptor=descriptor,
+    )
+    assert nonmatching_projection.semantic_relations == ()
+
+
+def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+
+    with pytest.raises(ValueError, match="composition-visible"):
+        ContractDescriptorV1(
+            ref=ContractRefV1(
+                contract_id="recipe.neutral-records.output",
+                version="1",
+                owner_ref=owner,
+                schema_hash="neutral-schema-hash",
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "properties": {"state": {}, "reason": {}}
+                    }
+                },
+                "x-simpleclaw-composition-fields": ["data.state"],
+                "x-simpleclaw-composition-relations": [
+                    {
+                        "kind": "question_scope_absent",
+                        "when": {"path": "data.state", "equals": "absent"},
+                        "evidence_fields": ["data.reason"],
+                    }
+                ],
+            },
+        )
+
+
 def test_projection_rejects_contract_confusion_and_unsafe_effect() -> None:
     descriptor, result = _values()
     other_owner = AssetRefV1(type="recipe", name="other")

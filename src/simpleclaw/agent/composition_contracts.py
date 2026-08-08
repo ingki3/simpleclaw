@@ -16,6 +16,19 @@ from simpleclaw.graph_runtime.contracts import (
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 
+class CompositionSemanticRelationV1(ContractModel):
+    """Descriptor 조건에 의해 활성화된 추상 의미와 근거 path다."""
+
+    kind: Literal["question_scope_absent", "question_scope_state"]
+    evidence_paths: tuple[NonEmptyStr, ...] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_evidence_paths(self) -> CompositionSemanticRelationV1:
+        if len(set(self.evidence_paths)) != len(self.evidence_paths):
+            raise ValueError("semantic relation evidence_paths must be unique")
+        return self
+
+
 class CompositionInputV1(ContractModel):
     """계약 allowlist를 통과한 사실만 composer에 전달하는 불변 입력이다."""
 
@@ -33,6 +46,7 @@ class CompositionInputV1(ContractModel):
     public_facts_json: CanonicalJsonObject = Field(alias="public_facts")
     resolved_claims: tuple[NonEmptyStr, ...] = ()
     unresolved_claims: tuple[NonEmptyStr, ...] = ()
+    semantic_relations: tuple[CompositionSemanticRelationV1, ...] = ()
 
     @property
     def public_facts(self) -> dict[str, JsonValue]:

@@ -280,7 +280,7 @@ _SCHEDULE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.status", "data.empty_reason"),
+    expected_citations=("data.status",),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -297,7 +297,7 @@ _LIVE_EMPTY_SCENARIO = _Scenario(
         }
     },
     resolved_claims=("data.status", "data.empty_reason"),
-    expected_citations=("data.status", "data.empty_reason"),
+    expected_citations=("data.status",),
     locale="ko-KR",
     source_mode="production_shaped_fixed",
 )
@@ -650,15 +650,20 @@ async def _connected_probe(
             f"lexical_token_sha256={token_hashes}"
         )
     concrete = flatten_public_facts(capture.value.public_facts)
-    typed_empty = any(
-        isinstance(node, dict) and node.get("status") == "empty"
-        for node in capture.value.public_facts.values()
-    )
-    if not typed_empty and any(
+    nonliteral_evidence = {
+        path
+        for relation in capture.value.semantic_relations
+        if relation.kind == "question_scope_absent"
+        for path in relation.evidence_paths
+    }
+    if any(
         path not in concrete
-        or not projected_scalar_is_visible(
-            capture.draft.content,
-            concrete[path],
+        or (
+            path not in nonliteral_evidence
+            and not projected_scalar_is_visible(
+                capture.draft.content,
+                concrete[path],
+            )
         )
         for path in capture.draft.cited_paths
     ):

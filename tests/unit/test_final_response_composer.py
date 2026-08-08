@@ -86,7 +86,10 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
     assert prompt.version == 8
-    assert "TYPED EMPTY RESULTS" in prompt.system_prompt
+    assert "DECLARED SEMANTIC RELATIONS" in prompt.system_prompt
+    assert "TYPED EMPTY RESULTS" not in prompt.system_prompt
+    assert "no_scheduled_events" not in prompt.system_prompt
+    assert "경기 예정입니다" not in prompt.system_prompt
     assert "typed persona projection only" in prompt.system_prompt
     assert "ordered cited_paths as a one-way render plan" in prompt.system_prompt
     assert "strictly increasing in cited_paths order" in prompt.system_prompt

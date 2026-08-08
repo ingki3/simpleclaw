@@ -167,49 +167,36 @@ _LIMITATION_WORDS = frozenset(
         "cannot",
     }
 )
-_EMPTY_REASON_WORDS = {
-    "no_scheduled_events": frozenset(
-        {"예정된", "경기", "없습니다", "no", "events", "are", "scheduled"}
-    ),
-    "no_live_events": frozenset(
-        {
-            "현재",
-            "진행",
-            "중인",
-            "경기",
-            "없습니다",
-            "no",
-            "events",
-            "are",
-            "live",
-            "currently",
-        }
-    ),
-    "no_completed_results": frozenset(
-        {
-            "확정된",
-            "경기",
-            "결과",
-            "없습니다",
-            "no",
-            "completed",
-            "results",
-            "are",
-            "available",
-        }
-    ),
-    "no_standings": frozenset(
-        {
-            "순위",
-            "데이터",
-            "없습니다",
-            "no",
-            "standings",
-            "are",
-            "available",
-        }
-    ),
-}
+_ABSENCE_RELATION_WORDS = frozenset(
+    {
+        "없",
+        "없는",
+        "없다",
+        "없습니다",
+        "없어요",
+        "없음",
+        "no",
+        "not",
+        "none",
+        "absent",
+        "available",
+        "unavailable",
+        "there",
+    }
+)
+_CAUSAL_RELATION_WORDS = frozenset(
+    {
+        "because",
+        "cause",
+        "caused",
+        "due",
+        "reason",
+        "때문",
+        "때문에",
+        "원인",
+        "탓",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -625,47 +612,74 @@ def _cited_literal_order_error(
     return (None, tuple(allowed_unit_spans))
 
 
-def _typed_empty_paths(
-    concrete: dict[str, JsonValue],
-) -> tuple[str, str, str] | None:
-    """동일 payload object의 status/reason/empty items 경로를 찾는다."""
-    for status_path, status in concrete.items():
-        if status != "empty" or not status_path.endswith("status"):
-            continue
-        prefix = status_path.removesuffix("status")
-        reason_path = f"{prefix}empty_reason"
-        items_path = f"{prefix}items"
-        reason = concrete.get(reason_path)
-        if (
-            isinstance(reason, str)
-            and reason in _EMPTY_REASON_WORDS
-            and concrete.get(items_path) == []
-        ):
-            return status_path, reason_path, str(reason)
-    return None
-
-
-def _guard_typed_empty_response(
+def _guard_declared_semantic_relation(
     value: CompositionInputV1,
     draft: DraftResponseV1,
-    empty_paths: tuple[str, str, str],
-) -> GuardResult:
-    """Stable empty enum의 제한된 자연어 의미만 domain-neutral하게 허용한다."""
-    status_path, reason_path, reason = empty_paths
-    if tuple(draft.cited_paths) != (status_path, reason_path):
-        return _rejected("typed_empty_citations_required")
+    concrete: dict[str, JsonValue],
+) -> GuardResult | None:
+    """Descriptor가 활성화한 추상 relation을 domain/value 독립적으로 검증한다."""
+    relation = next(
+        (
+            item
+            for item in value.semantic_relations
+            if item.evidence_paths == tuple(draft.cited_paths)
+        ),
+        None,
+    )
+    if relation is None:
+        return None
     if draft.limitation_paths or value.unresolved_claims:
-        return _rejected("typed_empty_unresolved")
+        return _rejected("semantic_relation_unresolved")
+    cited_values: dict[str, JsonValue] = {}
+    for path in relation.evidence_paths:
+        if path not in concrete or isinstance(concrete[path], dict | list):
+            return _rejected("semantic_relation_evidence_invalid")
+        cited_values[path] = concrete[path]
     content = draft.content.strip()
-    if _URL_RE.search(content) or _NUMBER_RE.search(content):
-        return _rejected("typed_empty_ungrounded_fact")
-    allowed_words = _EMPTY_REASON_WORDS[reason] | _SAFE_CONNECTOR_WORDS
-    for token in _WORD_RE.findall(content):
-        folded = token.casefold()
-        stem = _word_stem(token).casefold()
-        if folded not in allowed_words and stem not in allowed_words:
-            return _rejected("typed_empty_ungrounded_fact")
-    symbol_residual = _WORD_RE.sub("", content)
+    if _URL_RE.search(content):
+        return _rejected("semantic_relation_ungrounded_fact")
+    if relation.kind == "question_scope_state" and any(
+        not projected_scalar_is_visible(content, item)
+        for item in cited_values.values()
+    ):
+        return _rejected("cited_value_not_rendered")
+    for path, projected in concrete.items():
+        if (
+            isinstance(projected, str)
+            and len(projected.strip()) >= 2
+            and projected_scalar_is_visible(content, projected)
+            and path not in cited_values
+        ):
+            return _rejected("rendered_value_not_cited")
+    residual = _remove_cited_literals(content, cited_values)
+    if _NUMBER_RE.search(residual):
+        return _rejected("semantic_relation_ungrounded_fact")
+    question_words = {
+        form
+        for token in _WORD_RE.findall(value.question)
+        for form in (token.casefold(), _word_stem(token).casefold())
+    }
+    residual_tokens = tuple(_WORD_RE.findall(residual))
+    residual_words = {
+        form
+        for token in residual_tokens
+        for form in (token.casefold(), _word_stem(token).casefold())
+    }
+    if (
+        relation.kind == "question_scope_absent"
+        and not residual_words & question_words
+    ):
+        return _rejected("semantic_relation_scope_missing")
+    if residual_words & _CAUSAL_RELATION_WORDS:
+        return _rejected("semantic_relation_ungrounded_fact")
+    if len(residual_tokens) > max(8, len(_WORD_RE.findall(value.question)) + 4):
+        return _rejected("semantic_relation_ungrounded_fact")
+    if (
+        relation.kind == "question_scope_absent"
+        and not residual_words & _ABSENCE_RELATION_WORDS
+    ):
+        return _rejected("semantic_relation_absence_missing")
+    symbol_residual = _WORD_RE.sub("", residual)
     if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
         return _rejected("ungrounded_symbol")
     return GuardResult(accepted=True, code="accepted")
@@ -696,9 +710,9 @@ def guard_final_response(
         return _rejected("citations_required")
     if len(draft.cited_paths) != len(set(draft.cited_paths)):
         return _rejected("duplicate_citation")
-    empty_paths = _typed_empty_paths(concrete)
-    if empty_paths is not None:
-        return _guard_typed_empty_response(value, draft, empty_paths)
+    semantic_result = _guard_declared_semantic_relation(value, draft, concrete)
+    if semantic_result is not None:
+        return semantic_result
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,7 +17,10 @@ from simpleclaw.graph_runtime.contracts import (
 )
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
-from .composition_contracts import CompositionInputV1
+from .composition_contracts import (
+    CompositionInputV1,
+    CompositionSemanticRelationV1,
+)
 
 MAX_COMPOSITION_ARRAY_ITEMS = 20
 MAX_COMPOSITION_SERIALIZED_CHARS = 12_000
@@ -150,6 +154,39 @@ def _claims(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value)
 
 
+def _concrete_path_pattern(path: str) -> re.Pattern[str]:
+    escaped = re.escape(path).replace(r"\[\*\]", r"\[\d+\]")
+    return re.compile(rf"^{escaped}$")
+
+
+def _semantic_relations(
+    public_facts: Mapping[str, JsonValue],
+    descriptor: ContractDescriptorV1,
+) -> tuple[CompositionSemanticRelationV1, ...]:
+    """Descriptor condition과 일치하는 추상 relation만 concrete path로 만든다."""
+    concrete = flatten_public_facts(public_facts)
+    activated: list[CompositionSemanticRelationV1] = []
+    for declaration in descriptor.composition_relations:
+        if concrete.get(declaration.when_path, _MISSING) != declaration.when_equals:
+            continue
+        evidence_paths: list[str] = []
+        for field in declaration.evidence_fields:
+            pattern = _concrete_path_pattern(field)
+            match = next((path for path in concrete if pattern.fullmatch(path)), None)
+            if match is None:
+                evidence_paths = []
+                break
+            evidence_paths.append(match)
+        if evidence_paths:
+            activated.append(
+                CompositionSemanticRelationV1(
+                    kind=declaration.kind,
+                    evidence_paths=tuple(evidence_paths),
+                )
+            )
+    return tuple(activated)
+
+
 def build_composition_input(
     *,
     request_id: str,
@@ -184,6 +221,7 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
+        semantic_relations=_semantic_relations(public_facts, descriptor),
     )
 
 

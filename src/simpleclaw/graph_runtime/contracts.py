@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -25,8 +26,10 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
+COMPOSITION_RELATIONS_EXTENSION = "x-simpleclaw-composition-relations"
 MAX_COMPOSITION_FIELD_PATHS = 64
 MAX_COMPOSITION_FIELD_DEPTH = 10
+MAX_COMPOSITION_RELATIONS = 8
 _COMPOSITION_PATH_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?"
     r"(?:\.[A-Za-z_][A-Za-z0-9_-]*(?:\[\*\])?)*$"
@@ -133,6 +136,75 @@ def validate_composition_fields(
     if len(set(paths)) != len(paths):
         raise ValueError("composition field paths must be unique")
     return tuple(paths)
+
+
+@dataclass(frozen=True, slots=True)
+class CompositionRelationDeclaration:
+    """Descriptor가 선언한 domain-neutral semantic relation 조건이다."""
+
+    kind: str
+    when_path: str
+    when_equals: JsonValue
+    evidence_fields: tuple[str, ...]
+
+
+def validate_composition_relations(
+    value: object,
+    *,
+    json_schema: dict[str, object],
+    composition_fields: tuple[str, ...],
+) -> tuple[CompositionRelationDeclaration, ...]:
+    """Semantic relation extension을 bounded typed declaration으로 검증한다."""
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_COMPOSITION_RELATIONS:
+        raise ValueError(
+            f"{COMPOSITION_RELATIONS_EXTENSION} must contain 1.."
+            f"{MAX_COMPOSITION_RELATIONS} relations"
+        )
+    declarations: list[CompositionRelationDeclaration] = []
+    supported_kinds = {"question_scope_absent", "question_scope_state"}
+    for raw in value:
+        if not isinstance(raw, dict) or set(raw) != {
+            "kind",
+            "when",
+            "evidence_fields",
+        }:
+            raise ValueError("composition relation has invalid fields")
+        kind = raw["kind"]
+        when = raw["when"]
+        evidence = raw["evidence_fields"]
+        if kind not in supported_kinds:
+            raise ValueError(f"unsupported composition relation kind: {kind!r}")
+        if not isinstance(when, dict) or set(when) != {"path", "equals"}:
+            raise ValueError("composition relation when must contain path and equals")
+        when_path = validate_composition_fields(
+            [when["path"]],
+            json_schema=json_schema,
+        )[0]
+        if "[*]" in when_path:
+            raise ValueError("composition relation condition cannot use a wildcard")
+        when_equals = when["equals"]
+        if when_equals is None or isinstance(when_equals, dict | list):
+            raise ValueError("composition relation condition must use a scalar value")
+        _validate_json_value(when_equals, path="composition relation condition")
+        evidence_fields = validate_composition_fields(
+            evidence,
+            json_schema=json_schema,
+        )
+        if any(path not in composition_fields for path in evidence_fields):
+            raise ValueError(
+                "composition relation evidence must be composition-visible"
+            )
+        declarations.append(
+            CompositionRelationDeclaration(
+                kind=str(kind),
+                when_path=when_path,
+                when_equals=when_equals,
+                evidence_fields=evidence_fields,
+            )
+        )
+    return tuple(declarations)
 
 
 def _validate_json_value(value: Any, *, path: str = "payload") -> None:
@@ -286,6 +358,20 @@ class ContractDescriptorV1(ContractModel):
             json_schema=self.json_schema,
         )
 
+    @property
+    def composition_relations(self) -> tuple[CompositionRelationDeclaration, ...]:
+        """계약이 선언한 추상 semantic relation을 반환한다."""
+        schema = self.json_schema
+        fields = validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
+        return validate_composition_relations(
+            schema.get(COMPOSITION_RELATIONS_EXTENSION),
+            json_schema=schema,
+            composition_fields=fields,
+        )
+
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
         """binding과 contract가 서로 다른 owner를 가리키는 상태를 차단한다."""
@@ -295,9 +381,14 @@ class ContractDescriptorV1(ContractModel):
         ):
             raise ValueError("binding owner must match the contract owner")
         schema = self.json_schema
-        validate_composition_fields(
+        composition_fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
+        )
+        validate_composition_relations(
+            schema.get(COMPOSITION_RELATIONS_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
         )
         return self
 

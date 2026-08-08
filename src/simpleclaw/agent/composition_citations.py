@@ -67,9 +67,21 @@ def canonicalize_draft_citations(
 ) -> DraftResponseV1:
     """본문 불변으로 provider citation의 safe visible subset만 반영한다."""
     concrete = flatten_public_facts(value.public_facts)
+    provider_paths = tuple(draft.cited_paths)
+    if len(provider_paths) == len(set(provider_paths)):
+        selected = set(provider_paths)
+        for relation in value.semantic_relations:
+            if (
+                relation.kind == "question_scope_absent"
+                and set(relation.evidence_paths) <= selected
+                and all(path in concrete for path in relation.evidence_paths)
+            ):
+                return draft.model_copy(
+                    update={"cited_paths": relation.evidence_paths}
+                )
     cited_paths = canonical_visible_cited_paths(
         draft.content,
-        draft.cited_paths,
+        provider_paths,
         concrete,
     )
     if not cited_paths or cited_paths == draft.cited_paths:
