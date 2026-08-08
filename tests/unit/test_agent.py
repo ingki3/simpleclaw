@@ -74,14 +74,22 @@ class TestAgentOrchestrator:
         assert orchestrator._metrics is None
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
-    def test_final_composer_persona_excludes_user_and_memory(self, config_file):
+    def test_final_composer_uses_typed_allowlisted_runtime_persona(self, config_file):
         persona_dir = config_file.parent / "persona_local"
         (persona_dir / "SOUL.md").write_text(
-            "# Soul\n\n따뜻하고 간결한 한국어 존댓말",
+            "# Identity\n\nSimpleClaw\n\n"
+            "# Speaking Style\n\n따뜻하고 간결한 한국어 존댓말",
+            encoding="utf-8",
+        )
+        (persona_dir / "AGENT.md").write_text(
+            "# Identity\n\n도움이 되는 비서\n\n"
+            "# Language\n\n한국어 존댓말\n\n"
+            "# Tool Usage Rules\n\nprivate-tool-rule",
             encoding="utf-8",
         )
         (persona_dir / "USER.md").write_text(
-            "# User\n\nprivate-user-identifier",
+            "# Preferences\n\n결론을 먼저 선호\n\n"
+            "# Private\n\nprivate-user-identifier",
             encoding="utf-8",
         )
         (persona_dir / "MEMORY.md").write_text(
@@ -90,16 +98,32 @@ class TestAgentOrchestrator:
         )
 
         orchestrator = AgentOrchestrator(config_file)
+        projection = orchestrator._composition_persona_projection
 
-        assert "따뜻하고 간결한 한국어 존댓말" in (
-            orchestrator._composition_persona_prompt
+        assert "따뜻하고 간결한 한국어 존댓말" in projection.instruction_text
+        assert "도움이 되는 비서" in projection.instruction_text
+        assert "결론을 먼저 선호" in projection.instruction_text
+        assert "private-tool-rule" not in projection.instruction_text
+        assert "private-user-identifier" not in projection.instruction_text
+        assert "private-memory-secret" not in projection.instruction_text
+
+    @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
+    def test_final_composer_persona_projection_hot_reloads(self, config_file):
+        agent_path = config_file.parent / "persona_local" / "AGENT.md"
+        agent_path.write_text(
+            "# Language\n\n간결한 한국어", encoding="utf-8"
         )
-        assert "private-user-identifier" not in (
-            orchestrator._composition_persona_prompt
+        orchestrator = AgentOrchestrator(config_file)
+        before = orchestrator._composition_persona_projection
+
+        agent_path.write_text(
+            "# Language\n\n간결한 한국어 존댓말", encoding="utf-8"
         )
-        assert "private-memory-secret" not in (
-            orchestrator._composition_persona_prompt
-        )
+        orchestrator._reload_dynamic_files()
+        after = orchestrator._composition_persona_projection
+
+        assert after.fingerprint != before.fingerprint
+        assert "간결한 한국어 존댓말" in after.instruction_text
 
     @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
     def test_init_accepts_metrics(self, config_file):

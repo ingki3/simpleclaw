@@ -238,6 +238,45 @@ def test_guard_rejects_partial_top_n_uncited_fact_and_private_identifier() -> No
     assert private.code == "raw_contract_exposed"
 
 
+def test_persona_conflict_cannot_bypass_grounding_citation_top_n_or_effect() -> None:
+    """Persona는 guard 입력 자체가 아니므로 충돌 지시에도 이 판정은 불변이다."""
+    unknown_citation = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="두산입니다.", cited_paths=("data.items[99].team",)
+        ),
+    )
+    ungrounded = guard_final_response(
+        _input().model_copy(update={"question": "현재 상위 1팀"}),
+        DraftResponseV1(
+            content="KT가 확실한 우승 후보입니다.",
+            cited_paths=("data.items[0].team",),
+        ),
+    )
+    partial_top_n = guard_final_response(
+        _input(),
+        DraftResponseV1(
+            content="KT입니다.", cited_paths=("data.items[0].team",)
+        ),
+    )
+    unsafe_effect = guard_final_response(
+        _input().model_copy(update={"effect_status": EffectStatus.AUTHORIZED}),
+        DraftResponseV1(
+            content="KT, 삼성, LG입니다.",
+            cited_paths=(
+                "data.items[0].team",
+                "data.items[1].team",
+                "data.items[2].team",
+            ),
+        ),
+    )
+
+    assert unknown_citation.code == "citation_not_projected"
+    assert ungrounded.code == "ungrounded_text"
+    assert partial_top_n.code == "requested_scope_not_fully_cited"
+    assert unsafe_effect.code == "unsafe_result"
+
+
 def test_guard_requires_visible_limitation_for_every_unresolved_claim() -> None:
     value = _input().model_copy(update={"unresolved_claims": ("동률 여부",)})
     certain = guard_final_response(

@@ -637,6 +637,15 @@ daemon:
 
 persona:
   token_budget: 4096
+  # Final Composer에는 아래 runtime 섹션만 projection한다. MEMORY와 그 밖의
+  # AGENT/USER 운영 섹션은 포함되지 않으며, 목록은 이 최대 allowlist 밖으로
+  # 확장할 수 없다.
+  composition:
+    token_budget: 2048
+    sections:
+      soul: ["Identity", "Personality", "Speaking Style", "Core Values"]
+      agent: ["Identity", "Language"]
+      user: ["Preferences", "Corrections", "Preferences and Corrections", "Stale Memory Guards"]
   # BIZ-302 — 페르소나 base folder 기본값. 개발 트리(~/Dev/SimpleClaw) / 배포 트리
   # (~/.simpleclaw)와 분리된 별도 위치를 사용한다.
   # 기존 ``~/.simpleclaw`` 에 있던 파일은 ``scripts/migrate_local_dir.py --target
