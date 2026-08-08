@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production default provider의 중앙 composer를 sink 없이 한 번 검증한다."""
+"""Production default provider의 중앙 composer를 고정 시나리오로 검증한다."""
 
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ class _OneCallSend:
         return await self._send(request)
 
 
-def _input() -> CompositionInputV1:
+def _single_scalar_input() -> CompositionInputV1:
     return CompositionInputV1(
-        request_id="biz-639-no-send-probe",
+        request_id="biz-640-single-scalar-no-send-probe",
         question="Repeat the first projected status exactly.",
         locale="en-US",
         selected_route="react",
@@ -59,12 +59,56 @@ def _input() -> CompositionInputV1:
     )
 
 
+def _top_three_input() -> CompositionInputV1:
+    return CompositionInputV1(
+        request_id="biz-640-top-three-no-send-probe",
+        question=(
+            "In one sentence without numbering, repeat only the top 3 projected "
+            "labels and values in order."
+        ),
+        locale="en-US",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="citation-activation-fixture"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="biz-640-top-three-synthetic-payload",
+        public_facts={
+            "items": [
+                {"label": "Alpha", "value": "One"},
+                {"label": "Beta", "value": "Two"},
+                {"label": "Gamma", "value": "Three"},
+            ]
+        },
+        resolved_claims=(
+            "items[0].label",
+            "items[0].value",
+            "items[1].label",
+            "items[1].value",
+            "items[2].label",
+            "items[2].value",
+        ),
+    )
+
+
+_SCENARIOS = (
+    ("single_scalar", _single_scalar_input),
+    ("top_three_items", _top_three_input),
+)
+
+
 async def _run(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser()
     if not config_path.is_file():
         print(
             json.dumps(
-                {"error_type": "ConfigNotFound", "provider_calls": 0},
+                {
+                    "delivery_sinks_configured": False,
+                    "error_type": "ConfigNotFound",
+                    "expected_provider_calls": len(_SCENARIOS),
+                    "provider_calls": 0,
+                    "retry_calls": 0,
+                    "scenario_count": len(_SCENARIOS),
+                },
                 sort_keys=True,
             )
         )
@@ -73,45 +117,64 @@ async def _run(args: argparse.Namespace) -> int:
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
     backend = router.get_default_backend()
-    counted_send = _OneCallSend(router.send)
-    composer = FinalResponseComposer(
-        send=counted_send,
-        persona_prompt="Use concise English and repeat supplied literals exactly.",
-        max_tokens=args.max_tokens,
-        backend_name=backend,
-    )
-    value = _input()
-    try:
-        draft = await asyncio.wait_for(
-            composer.compose(value), timeout=args.timeout
+    scenario_results: list[dict[str, object]] = []
+    provider_calls = 0
+    for scenario_name, input_factory in _SCENARIOS:
+        counted_send = _OneCallSend(router.send)
+        composer = FinalResponseComposer(
+            send=counted_send,
+            persona_prompt="Use concise English and repeat supplied literals exactly.",
+            max_tokens=args.max_tokens,
+            backend_name=backend,
         )
-    except (FinalResponseComposerError, TimeoutError) as exc:
-        result = {
-            "error_type": type(exc).__name__,
-            "provider_calls": counted_send.calls,
-            "telegram_writes": 0,
-            "notifier_writes": 0,
-            "conversation_store_writes": 0,
-            "external_sink_writes": 0,
-        }
-        print(json.dumps(result, sort_keys=True))
-        return 1
-    guard = guard_final_response(value, draft)
+        value = input_factory()
+        try:
+            draft = await asyncio.wait_for(
+                composer.compose(value), timeout=args.timeout
+            )
+        except (FinalResponseComposerError, TimeoutError) as exc:
+            scenario_results.append(
+                {
+                    "error_type": type(exc).__name__,
+                    "name": scenario_name,
+                    "provider_calls": counted_send.calls,
+                }
+            )
+            provider_calls += counted_send.calls
+            continue
+        provider_calls += counted_send.calls
+        guard = guard_final_response(value, draft)
+        scenario_results.append(
+            {
+                "citations": list(draft.cited_paths),
+                "content_length": len(draft.content),
+                "content_sha256": hashlib.sha256(
+                    draft.content.encode("utf-8")
+                ).hexdigest(),
+                "guard_accepted": guard.accepted,
+                "guard_code": guard.code,
+                "name": scenario_name,
+                "provider_calls": counted_send.calls,
+            }
+        )
+
+    passed = provider_calls == len(_SCENARIOS) and all(
+        scenario.get("guard_accepted") is True
+        and scenario.get("provider_calls") == 1
+        for scenario in scenario_results
+    )
     result = {
         "backend": backend,
-        "provider_calls": counted_send.calls,
-        "guard_accepted": guard.accepted,
-        "guard_code": guard.code,
-        "content_sha256": hashlib.sha256(draft.content.encode("utf-8")).hexdigest(),
-        "content_length": len(draft.content),
-        "citations": list(draft.cited_paths),
-        "telegram_writes": 0,
-        "notifier_writes": 0,
-        "conversation_store_writes": 0,
-        "external_sink_writes": 0,
+        "delivery_sinks_configured": False,
+        "expected_provider_calls": len(_SCENARIOS),
+        "passed": passed,
+        "provider_calls": provider_calls,
+        "retry_calls": 0,
+        "scenario_count": len(_SCENARIOS),
+        "scenarios": scenario_results,
     }
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if guard.accepted and counted_send.calls == 1 else 1
+    return 0 if passed else 1
 
 
 def _parser() -> argparse.ArgumentParser:

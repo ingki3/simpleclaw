@@ -73,6 +73,7 @@ def test_guard_defensively_rejects_empty_citations() -> None:
     [
         (("data.items[*].team",), "citation_not_projected"),
         (("data.items[99].team",), "citation_not_projected"),
+        (("public_facts.data.items[0].team",), "citation_not_projected"),
         (
             ("data.items[0].team", "data.items[0].team"),
             "duplicate_citation",

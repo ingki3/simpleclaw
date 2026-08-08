@@ -10,12 +10,44 @@ from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 
 from .composition_contracts import CompositionInputV1, DraftResponseV1
+from .composition_projection import flatten_public_facts
 
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]
+_MAX_CITATION_PATHS = 128
+_MAX_LIMITATION_PATHS = 64
 
 
 class FinalResponseComposerError(RuntimeError):
     """Provider 원문을 노출하지 않고 중앙 composer 실패를 표시한다."""
+
+
+def _response_schema(value: CompositionInputV1) -> dict:
+    """현재 projection의 concrete scalar path만 허용하는 schema를 만든다."""
+    concrete = flatten_public_facts(value.public_facts)
+    cited_paths = [
+        path
+        for path, projected in concrete.items()
+        if not isinstance(projected, dict | list)
+    ]
+    limitation_paths = [
+        f"unresolved_claims[{index}]"
+        for index in range(len(value.unresolved_claims))
+    ]
+    if not cited_paths:
+        raise FinalResponseComposerError("composer input has no citable scalar paths")
+    if len(cited_paths) > _MAX_CITATION_PATHS:
+        raise FinalResponseComposerError("composer input has too many citable paths")
+    if len(limitation_paths) > _MAX_LIMITATION_PATHS:
+        raise FinalResponseComposerError("composer input has too many limitation paths")
+
+    schema = DraftResponseV1.model_json_schema(by_alias=True)
+    properties = schema["properties"]
+    properties["cited_paths"]["items"]["enum"] = cited_paths
+    if limitation_paths:
+        properties["limitation_paths"]["items"]["enum"] = limitation_paths
+    else:
+        properties["limitation_paths"]["maxItems"] = 0
+    return schema
 
 
 class FinalResponseComposer:
@@ -73,7 +105,7 @@ class FinalResponseComposer:
             tools=None,
             max_tokens=self._max_tokens,
             response_mime_type="application/json",
-            response_schema=DraftResponseV1.model_json_schema(by_alias=True),
+            response_schema=_response_schema(value),
             require_structured_output=True,
             usage_task="langgraph_v4_composer",
         )
