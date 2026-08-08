@@ -71,6 +71,8 @@ def test_installer_discovery_declares_safe_structured_sports_capability(
     assert capability.requires_confirmation is False
     assert capability.domains == ("sports",)
     assert capability.intents == (
+        "event_schedule",
+        "upcoming_event",
         "current_result",
         "completed_result",
         "live_score",

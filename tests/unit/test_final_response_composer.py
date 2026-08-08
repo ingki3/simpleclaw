@@ -85,7 +85,8 @@ def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
     """BIZ-643 안전 계약과 BIZ-644 typed-persona prompt를 함께 보존한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 7
+    assert prompt.version == 8
+    assert "TYPED EMPTY RESULTS" in prompt.system_prompt
     assert "typed persona projection only" in prompt.system_prompt
     assert "ordered cited_paths as a one-way render plan" in prompt.system_prompt
     assert "strictly increasing in cited_paths order" in prompt.system_prompt

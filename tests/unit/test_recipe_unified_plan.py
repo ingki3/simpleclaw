@@ -50,11 +50,13 @@ def test_sports_recipe_routes_completed_result_to_results_mode() -> None:
     recipe = load_recipe(SPORTS_RECIPE)
 
     assert "completed_result" in recipe.capability.intents
-    assert "`live|completed_result|standings` typed intent" in recipe.instructions
+    assert "`schedule|live|completed_result|standings` typed intent" in recipe.instructions
     assert "`completed_result→results`" in recipe.instructions
     assert "`claim_keys` 배열" in recipe.instructions
     assert "`STARTED` empty를 과거 종료 경기 부재로 해석" in recipe.instructions
-    assert "--mode <live|results|standings>" in recipe.instructions
+    assert "--mode <schedule|live|results|standings>" in recipe.instructions
+    assert "`오늘 프로야구 하냐?`는" in recipe.instructions
+    assert "`지금 경기 중이야?`는 live" in recipe.instructions
     assert "`auto`이면 active/latest enabled season" in recipe.instructions
     assert "`--season` 자체를 생략" in recipe.instructions
 
