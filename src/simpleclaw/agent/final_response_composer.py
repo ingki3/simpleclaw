@@ -9,11 +9,11 @@ from collections.abc import Awaitable, Callable
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 
-from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_citations import (
     CITATION_CANONICALIZATION_POLICY_VERSION,
     canonicalize_draft_citations,
 )
+from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
 ComposerSend = Callable[[LLMRequest], Awaitable[LLMResponse]]

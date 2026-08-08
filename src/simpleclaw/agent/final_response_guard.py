@@ -10,11 +10,11 @@ from pydantic import JsonValue
 
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
-from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
 )
+from .composition_contracts import CompositionInputV1, DraftResponseV1
 from .composition_projection import flatten_public_facts
 
 _URL_RE = re.compile(r"https?://[^\s)>\]}]+")

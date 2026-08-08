@@ -12,8 +12,8 @@ from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
-from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
+from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 from simpleclaw.llm.models import LLMResponse

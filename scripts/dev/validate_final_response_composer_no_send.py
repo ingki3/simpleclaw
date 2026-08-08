@@ -32,12 +32,12 @@ from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
 )
+from simpleclaw.agent.composition_projection import flatten_public_facts
 from simpleclaw.agent.final_response_composer import (
     FinalResponseComposer,
     FinalResponseComposerError,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
-from simpleclaw.agent.composition_projection import flatten_public_facts
 from simpleclaw.agent.resolution_types import (
     CapabilityCoverage,
     ExecutionMode,
