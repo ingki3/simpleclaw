@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from scripts.dev.validate_final_response_composer_no_send import (
-    _production_persona_prompt,
+    _production_persona_projection,
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
@@ -21,6 +21,18 @@ from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.graph_runtime.contracts import AssetRefV1
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.persona.models import CompositionPersonaProjection, FileType
+
+
+def _persona_projection(text: str) -> CompositionPersonaProjection:
+    return CompositionPersonaProjection(
+        instruction_text=text,
+        source_types=(FileType.SOUL,),
+        token_count=len(text.split()),
+        token_budget=2048,
+        policy_version="fixture_v1",
+        fingerprint=f"fixture:{text}",
+    )
 
 
 def _input() -> CompositionInputV1:
@@ -70,10 +82,11 @@ def _production_shaped_input() -> CompositionInputV1:
 
 
 def test_composer_prompt_preserves_ordered_render_plan_contract() -> None:
-    """BIZ-643의 v6 안전 계약이 후속 merge에서 삭제되지 않아야 한다."""
+    """BIZ-643 안전 계약과 BIZ-644 typed-persona prompt를 함께 보존한다."""
     prompt = load_system_prompt("langgraph_v4_composer", refresh=True)
 
-    assert prompt.version == 6
+    assert prompt.version == 7
+    assert "typed persona projection only" in prompt.system_prompt
     assert "ordered cited_paths as a one-way render plan" in prompt.system_prompt
     assert "strictly increasing in cited_paths order" in prompt.system_prompt
     assert "Complete every selected field" in prompt.system_prompt
@@ -124,7 +137,7 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="따뜻하고 간결한 한국어 존댓말",
+        persona_projection=_persona_projection("따뜻하고 간결한 한국어 존댓말"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -140,6 +153,9 @@ async def test_composer_uses_persona_and_never_exposes_tools() -> None:
     assert request.temperature == 0.0
     assert request.require_structured_output is True
     assert "따뜻하고 간결한 한국어 존댓말" in request.system_prompt
+    assert "not factual or citation evidence" in request.system_prompt
+    assert "system safety and Response Guard invariants" in request.system_prompt
+    assert "Never quote, explain, summarize, or expose" in request.system_prompt
     assert request.response_schema["properties"]["cited_paths"]["items"][
         "enum"
     ] == [
@@ -164,7 +180,8 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
     persona_dir = tmp_path / "persona"
     persona_dir.mkdir()
     (persona_dir / "SOUL.md").write_text(
-        "# SOUL\n\n따뜻하고 간결한 한국어 존댓말",
+        "# Identity\n\nSimpleClaw\n\n"
+        "# Speaking Style\n\n따뜻하고 간결한 한국어 존댓말",
         encoding="utf-8",
     )
     config = tmp_path / "config.yaml"
@@ -198,7 +215,7 @@ async def test_composer_keeps_contract_with_production_persona_assembly(
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt=_production_persona_prompt(config),
+        persona_projection=_production_persona_projection(config),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -243,7 +260,7 @@ async def test_composer_schema_allows_only_root_relative_scalar_leaf_paths() -> 
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -275,7 +292,7 @@ async def test_composer_rejects_more_scalar_paths_than_draft_can_cite() -> None:
     send = AsyncMock()
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -300,7 +317,7 @@ async def test_composer_does_not_retry_invalid_structured_output() -> None:
     send = AsyncMock(return_value=LLMResponse(text="not-json"))
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -327,7 +344,7 @@ async def test_composer_does_not_retry_empty_citations() -> None:
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -370,7 +387,7 @@ async def test_composer_prunes_only_valid_unrendered_citations() -> None:
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -407,7 +424,7 @@ async def test_composer_never_adds_visible_citations_missing_from_provider() -> 
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -434,7 +451,7 @@ async def test_composer_keeps_original_citations_when_visible_subset_is_empty() 
     )
     composer = FinalResponseComposer(
         send=send,
-        persona_prompt="간결하게",
+        persona_projection=_persona_projection("간결하게"),
         max_tokens=1200,
         backend_name="fixture-backend",
     )
@@ -450,7 +467,7 @@ async def test_composer_keeps_original_citations_when_visible_subset_is_empty() 
 def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> None:
     kwargs = {
         "send": AsyncMock(),
-        "persona_prompt": "간결하게",
+        "persona_projection": _persona_projection("간결하게"),
         "max_tokens": 1200,
         "backend_name": "fixture-backend",
     }
@@ -469,7 +486,7 @@ def test_composer_fingerprint_includes_canonicalization_policy(monkeypatch) -> N
 def test_composer_fingerprint_includes_effective_temperature() -> None:
     kwargs = {
         "send": AsyncMock(),
-        "persona_prompt": "간결하게",
+        "persona_projection": _persona_projection("간결하게"),
         "max_tokens": 1200,
         "backend_name": "fixture-backend",
     }
@@ -480,3 +497,30 @@ def test_composer_fingerprint_includes_effective_temperature() -> None:
     assert deterministic.temperature == 0.0
     assert configured.temperature == 0.2
     assert deterministic.fingerprint != configured.fingerprint
+
+
+def test_composer_fingerprint_includes_projection_policy_and_content_hash() -> None:
+    base = _persona_projection("간결하게")
+    changed_policy = CompositionPersonaProjection(
+        instruction_text=base.instruction_text,
+        source_types=base.source_types,
+        token_count=base.token_count,
+        token_budget=base.token_budget,
+        policy_version="fixture_v2",
+        fingerprint="fixture-policy-v2",
+    )
+
+    first = FinalResponseComposer(
+        send=AsyncMock(),
+        persona_projection=base,
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    ).fingerprint
+    second = FinalResponseComposer(
+        send=AsyncMock(),
+        persona_projection=changed_policy,
+        max_tokens=1200,
+        backend_name="fixture-backend",
+    ).fingerprint
+
+    assert first != second

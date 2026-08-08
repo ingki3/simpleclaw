@@ -122,7 +122,7 @@ def _strip_html_comments(text: str) -> str:
     return _HTML_COMMENT_RE.sub("", text)
 
 
-def _count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
+def count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
     """tiktoken을 사용하여 텍스트의 토큰 수를 계산한다.
 
     Args:
@@ -285,7 +285,7 @@ def assemble_prompt(
 
     # 전체 텍스트 조합
     full_text = _SECTION_SEPARATOR.join(text for _, text in rendered)
-    total_tokens = _count_tokens(full_text)
+    total_tokens = count_tokens(full_text)
 
     if total_tokens <= token_budget:
         return PromptAssembly(
@@ -306,7 +306,7 @@ def assemble_prompt(
     # 마지막 파일부터 역순으로 절삭 시도
     for i in range(len(truncated_texts) - 1, 0, -1):
         assembled = _SECTION_SEPARATOR.join(truncated_texts)
-        current_tokens = _count_tokens(assembled)
+        current_tokens = count_tokens(assembled)
 
         if current_tokens <= token_budget:
             break
@@ -319,7 +319,7 @@ def assemble_prompt(
         was_truncated = True
 
     assembled = _SECTION_SEPARATOR.join(t for t in truncated_texts if t)
-    final_tokens = _count_tokens(assembled)
+    final_tokens = count_tokens(assembled)
 
     # 선택적 파일 제거 후에도 초과 시, 강제 절삭 (토큰 단위로 자름)
     if final_tokens > token_budget:
@@ -330,7 +330,11 @@ def assemble_prompt(
         was_truncated = True
 
     return PromptAssembly(
-        parts=ordered_files,
+        parts=[
+            rendered[index][0]
+            for index, text in enumerate(truncated_texts)
+            if text
+        ],
         assembled_text=assembled,
         token_count=final_tokens,
         token_budget=token_budget,

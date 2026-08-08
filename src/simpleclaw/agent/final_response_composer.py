@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 
 from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
+from simpleclaw.persona.models import CompositionPersonaProjection
 
 from .composition_citations import (
     CITATION_CANONICALIZATION_POLICY_VERSION,
@@ -62,7 +63,7 @@ class FinalResponseComposer:
         self,
         *,
         send: ComposerSend,
-        persona_prompt: str,
+        persona_projection: CompositionPersonaProjection,
         max_tokens: int,
         backend_name: str,
         max_output_chars: int = 3_500,
@@ -75,7 +76,7 @@ class FinalResponseComposer:
         if not 0.0 <= temperature <= 1.0:
             raise ValueError("composer temperature must be between 0.0 and 1.0")
         self._send = send
-        self._persona_prompt = persona_prompt.strip()
+        self._persona_projection = persona_projection
         self._max_tokens = max_tokens
         self._backend_name = backend_name.strip()
         self._max_output_chars = max(256, min(int(max_output_chars), 3_500))
@@ -95,7 +96,13 @@ class FinalResponseComposer:
                 ),
                 "max_tokens": self._max_tokens,
                 "max_output_chars": self._max_output_chars,
-                "persona": self._persona_prompt,
+                "persona_content_hash": hashlib.sha256(
+                    self._persona_projection.instruction_text.encode("utf-8")
+                ).hexdigest(),
+                "persona_policy_version": self._persona_projection.policy_version,
+                "persona_projection_fingerprint": (
+                    self._persona_projection.fingerprint
+                ),
                 "prompt": self._prompt,
                 "sampling_policy": _SAMPLING_POLICY_VERSION,
                 "temperature": self._temperature,
@@ -115,7 +122,9 @@ class FinalResponseComposer:
     async def compose(self, value: CompositionInputV1) -> DraftResponseV1:
         """Repair·retry·asset 호출 없이 provider를 정확히 한 번 호출한다."""
         system_prompt = "\n\n---\n\n".join(
-            part for part in (self._persona_prompt, self._prompt) if part
+            part
+            for part in (self._persona_projection.instruction_text, self._prompt)
+            if part
         )
         request = LLMRequest(
             system_prompt=system_prompt,

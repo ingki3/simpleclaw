@@ -88,3 +88,20 @@ class PromptAssembly:
     token_count: int = 0
     token_budget: int = 0
     was_truncated: bool = False
+
+
+@dataclass(frozen=True)
+class CompositionPersonaProjection:
+    """Final composer에 전달할 최소·불변 persona projection.
+
+    원본 경로와 원문은 보유하지 않는다. ``instruction_text``는 deterministic
+    allowlist와 sanitizer를 통과한 presentation 지침일 뿐, 사실·citation 권한이
+    아니다.
+    """
+
+    instruction_text: str
+    source_types: tuple[FileType, ...]
+    token_count: int
+    token_budget: int
+    policy_version: str
+    fingerprint: str
