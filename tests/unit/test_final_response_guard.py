@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -93,6 +94,33 @@ def test_guard_rejects_wildcard_unknown_and_duplicate_citations(
     result = guard_final_response(_input(), draft)
 
     assert result.code == expected_code
+
+
+@pytest.mark.parametrize(
+    ("cited_paths", "expected_code"),
+    [
+        (("data.items[*].team",), "citation_not_projected"),
+        (("data.items[99].team",), "citation_not_projected"),
+        (
+            ("data.items[0].team", "data.items[0].team"),
+            "duplicate_citation",
+        ),
+    ],
+)
+def test_canonicalizer_does_not_hide_invalid_citations(
+    cited_paths: tuple[str, ...],
+    expected_code: str,
+) -> None:
+    draft = DraftResponseV1.model_construct(
+        content="KT입니다.",
+        cited_paths=cited_paths,
+        limitation_paths=(),
+    )
+
+    canonical = canonicalize_draft_citations(_input(), draft)
+
+    assert canonical is draft
+    assert guard_final_response(_input(), canonical).code == expected_code
 
 
 def test_guard_rejects_unseen_fact_path_and_raw_contract_text() -> None:

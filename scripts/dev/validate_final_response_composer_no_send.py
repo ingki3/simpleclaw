@@ -17,8 +17,17 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from scripts.dev.validate_naver_sports_asset import (
+    KBO_SEASON_AUTO_ARGV,
+    ProductionAssetValidationError,
+    validate_production_asset,
+)
+from simpleclaw.agent.composition_citations import (
+    projected_scalar_is_visible,
+)
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -28,6 +37,7 @@ from simpleclaw.agent.final_response_composer import (
     FinalResponseComposerError,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
+from simpleclaw.agent.composition_projection import flatten_public_facts
 from simpleclaw.agent.resolution_types import (
     CapabilityCoverage,
     ExecutionMode,
@@ -81,12 +91,23 @@ class _OneCallSend:
     def __init__(self, send) -> None:
         self._send = send
         self.calls = 0
+        self.provider_citation_count = 0
 
     async def __call__(self, request):
         self.calls += 1
         if self.calls > 1:
             raise _ProbeInvariantError("composer_provider_call_cap_exceeded")
-        return await self._send(request)
+        response = await self._send(request)
+        try:
+            payload = json.loads(response.text)
+            cited_paths = payload.get("cited_paths", [])
+            if isinstance(cited_paths, list) and all(
+                isinstance(path, str) for path in cited_paths
+            ):
+                self.provider_citation_count = len(cited_paths)
+        except (AttributeError, TypeError, ValueError):
+            self.provider_citation_count = 0
+        return response
 
 
 @dataclass(slots=True)
@@ -166,6 +187,16 @@ class _Scenario:
     question: str
     payload: dict[str, object]
     resolved_claims: tuple[str, ...]
+    expected_citations: tuple[str, ...]
+    locale: str = "en-US"
+    persona_prompt: str = (
+        "In content, output only the requested projected scalar literals in "
+        "contract order. Separate literals only with spaces or commas. Do not "
+        "add headings, labels, numbering, relations, explanations, or repeat "
+        "any literal."
+    )
+    source_mode: str = "deterministic_fixture"
+    source_evidence: dict[str, object] | None = None
 
 
 _SCENARIOS = (
@@ -174,6 +205,7 @@ _SCENARIOS = (
         question="Repeat the first projected status exactly.",
         payload={"data": {"items": [{"status": _FACT}]}},
         resolved_claims=("data.items[0].status",),
+        expected_citations=("data.items[0].status",),
     ),
     _Scenario(
         name="top_three_items",
@@ -198,8 +230,115 @@ _SCENARIOS = (
             "data.items[2].name",
             "data.items[2].status",
         ),
+        expected_citations=(
+            "data.items[0].name",
+            "data.items[0].status",
+            "data.items[1].name",
+            "data.items[1].status",
+            "data.items[2].name",
+            "data.items[2].status",
+        ),
+    ),
+    _Scenario(
+        name="kbo_top_three_fixed",
+        question=(
+            "현재 KBO 순위 상위 3팀의 팀명과 승수 숫자만, '승' 단위 없이 "
+            "쉼표로 나열해줘."
+        ),
+        payload={
+            "data": {
+                "mode": "standings",
+                "category": "KBO",
+                "season": {"code": "2026", "title": "2026 KBO"},
+                "date": "2026-08-08",
+                "items": [
+                    {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
+                    {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
+                    {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
+                ],
+            }
+        },
+        resolved_claims=(
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+            "data.items[2].team",
+            "data.items[2].wins",
+        ),
+        expected_citations=(
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+            "data.items[2].team",
+            "data.items[2].wins",
+        ),
+        locale="ko-KR",
+        persona_prompt=(
+            "content에는 요청된 6개 scalar literal만 contract 순서대로 정확히 "
+            "한 번씩 쓰세요. 형식은 VALUE SPACE VALUE COMMA SPACE VALUE SPACE "
+            "VALUE COMMA SPACE VALUE SPACE VALUE 입니다. VALUE 외에는 공백과 "
+            "쉼표만 허용하며 문자 '승', 제목, 설명, 관계어, 단위, 번호, "
+            "종결어미를 절대 추가하지 마세요."
+        ),
+        source_mode="production_shaped_fixed",
     ),
 )
+
+
+def _limit_three_argv() -> tuple[str, ...]:
+    argv = list(KBO_SEASON_AUTO_ARGV)
+    argv[argv.index("--limit") + 1] = "3"
+    return tuple(argv)
+
+
+async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
+    result = await asyncio.to_thread(
+        validate_production_asset,
+        skill_dir,
+        source_mode="real_read_only",
+        argv=_limit_three_argv(),
+        expected_result_limit=3,
+    )
+    evidence = result.evidence
+    return _Scenario(
+        name="kbo_top_three_real_read_only",
+        question=(
+            "현재 KBO 순위 상위 3팀의 팀명과 승수 숫자만, '승' 단위 없이 "
+            "쉼표로 나열해줘."
+        ),
+        payload={"data": result.payload},
+        resolved_claims=(
+            "data.items[0].team",
+            "data.items[0].wins",
+            "data.items[1].team",
+            "data.items[1].wins",
+            "data.items[2].team",
+            "data.items[2].wins",
+        ),
+        expected_citations=(),
+        locale="ko-KR",
+        persona_prompt=(
+            "content에는 요청된 6개 scalar literal만 contract 순서대로 정확히 "
+            "한 번씩 쓰세요. 형식은 VALUE SPACE VALUE COMMA SPACE VALUE SPACE "
+            "VALUE COMMA SPACE VALUE SPACE VALUE 입니다. VALUE 외에는 공백과 "
+            "쉼표만 허용하며 문자 '승', 제목, 설명, 관계어, 단위, 번호, "
+            "종결어미를 절대 추가하지 마세요."
+        ),
+        source_mode="real_read_only",
+        source_evidence={
+            "asset_text_chars": evidence.asset_text_chars,
+            "external_write_count": evidence.external_write_count,
+            "helper_cli_executed": evidence.helper_cli_executed,
+            "helper_source_sha256": evidence.helper_source_sha256,
+            "installation_mode": (
+                "production_install" if skill_dir is not None else "exact_checkout_install"
+            ),
+            "item_count": evidence.item_count,
+            "requested_limit": evidence.requested_limit,
+        },
+    )
 
 
 def _plan(definitions, scenario: _Scenario) -> UnifiedTurnPlan:
@@ -346,7 +485,7 @@ async def _connected_probe(
             composition_mode="central_persona_v1",
             response_composer=compose,
             composer_fingerprint=composer.fingerprint,
-            locale="en-US",
+            locale=scenario.locale,
         )
 
         with ExitStack() as stack:
@@ -419,6 +558,16 @@ async def _connected_probe(
     guard = guard_final_response(capture.value, capture.draft)
     if not guard.accepted:
         raise _ProbeInvariantError(f"guard_rejected:{guard.code}")
+    concrete = flatten_public_facts(capture.value.public_facts)
+    if any(
+        path not in concrete
+        or not projected_scalar_is_visible(
+            capture.draft.content,
+            concrete[path],
+        )
+        for path in capture.draft.cited_paths
+    ):
+        raise _ProbeInvariantError("canonical_citation_not_visible")
     measured = result.side_effect_counts.as_dict()
     forbidden = counters.forbidden()
     checks = {
@@ -457,6 +606,12 @@ async def _connected_probe(
         "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "content_length": len(content),
         "citations": list(capture.draft.cited_paths),
+        "canonical_citation_count": len(capture.draft.cited_paths),
+        "provider_citation_count": counted_send.provider_citation_count,
+        "pruned_citation_count": max(
+            0,
+            counted_send.provider_citation_count - len(capture.draft.cited_paths),
+        ),
         "delivery_status": result.telemetry.delivery_status.value,
         "sink_spy_preflight_calls": preflight,
         "measured_side_effect_deltas": measured,
@@ -464,6 +619,8 @@ async def _connected_probe(
         "conversation_store_message_delta": conversation_delta,
         "connected_target_dispatch_calls": counters.target_dispatch,
         "retry_calls": max(0, counted_send.calls - 1),
+        "source_mode": scenario.source_mode,
+        "source_evidence": scenario.source_evidence,
         "configured_sink_boundaries": [
             "telegram_adapter",
             "cron_notifier_adapter",
@@ -475,16 +632,17 @@ async def _connected_probe(
 
 async def _run(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser()
+    expected_scenarios = len(_SCENARIOS) + int(args.real_kbo)
     if not config_path.is_file():
         print(
             json.dumps(
                 {
                     "delivery_sinks_configured": False,
                     "error_type": "ConfigNotFound",
-                    "expected_provider_calls": len(_SCENARIOS),
+                    "expected_provider_calls": expected_scenarios,
                     "provider_calls": 0,
                     "retry_calls": 0,
-                    "scenario_count": len(_SCENARIOS),
+                    "scenario_count": expected_scenarios,
                 },
                 sort_keys=True,
             )
@@ -494,14 +652,50 @@ async def _run(args: argparse.Namespace) -> int:
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
     backend = router.get_default_backend()
+    scenarios = list(_SCENARIOS)
+    if args.real_kbo:
+        try:
+            scenarios.append(
+                await _real_kbo_scenario(
+                    None
+                    if args.exact_checkout_install
+                    else args.installed_skill_dir.expanduser()
+                )
+            )
+        except ProductionAssetValidationError as exc:
+            print(
+                json.dumps(
+                    {
+                        "error_code": exc.code,
+                        "error_type": type(exc).__name__,
+                        "passed": False,
+                        "raw_content_exposed": False,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
+        except Exception:  # noqa: BLE001
+            print(
+                json.dumps(
+                    {
+                        "error_code": "unexpected_real_kbo_failure",
+                        "error_type": "RealKboSourceError",
+                        "passed": False,
+                        "raw_content_exposed": False,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
     scenario_results: list[dict[str, object]] = []
     provider_calls = 0
     retry_calls = 0
-    for scenario in _SCENARIOS:
+    for scenario in scenarios:
         counted_send = _OneCallSend(router.send)
         composer = FinalResponseComposer(
             send=counted_send,
-            persona_prompt="Use concise English and repeat supplied literals exactly.",
+            persona_prompt=scenario.persona_prompt,
             max_tokens=args.max_tokens,
             backend_name=backend,
         )
@@ -542,7 +736,7 @@ async def _run(args: argparse.Namespace) -> int:
         retry_calls += max(0, counted_send.calls - 1)
         scenario_results.append(scenario_result)
 
-    passed = provider_calls == len(_SCENARIOS) and all(
+    passed = provider_calls == len(scenarios) and all(
         scenario.get("guard_accepted") is True
         and scenario.get("provider_calls") == 1
         and scenario.get("retry_calls") == 0
@@ -551,11 +745,11 @@ async def _run(args: argparse.Namespace) -> int:
     result = {
         "backend": backend,
         "delivery_sinks_configured": True,
-        "expected_provider_calls": len(_SCENARIOS),
+        "expected_provider_calls": len(scenarios),
         "passed": passed,
         "provider_calls": provider_calls,
         "retry_calls": retry_calls,
-        "scenario_count": len(_SCENARIOS),
+        "scenario_count": len(scenarios),
         "scenarios": scenario_results,
     }
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
@@ -571,6 +765,29 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--real-kbo",
+        action="store_true",
+        help="Run one additional real read-only installed KBO helper scenario.",
+    )
+    parser.add_argument(
+        "--installed-skill-dir",
+        type=Path,
+        default=(
+            Path.home()
+            / ".agents"
+            / "skills"
+            / "naver-sports-skill"
+        ),
+    )
+    parser.add_argument(
+        "--exact-checkout-install",
+        action="store_true",
+        help=(
+            "Install the exact checkout asset into a temporary directory for the "
+            "real read-only helper scenario."
+        ),
+    )
     return parser
 
 

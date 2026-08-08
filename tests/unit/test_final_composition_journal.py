@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
@@ -543,6 +544,68 @@ async def test_restart_reuses_first_accepted_final_without_recomposing(tmp_path)
     assert replay_compose.await_count == 0
     assert replay == finals[0]
     assert all(item == finals[0] for item in finals)
+
+
+@pytest.mark.asyncio
+async def test_canonicalized_accepted_draft_is_written_once_and_replayed(
+    tmp_path,
+) -> None:
+    value, result = _values("canonicalized-replay-request")
+    provider_draft = DraftResponseV1(
+        content="KBO, KT, 59",
+        cited_paths=(
+            "data.category",
+            "data.items[0].rank",
+            "data.items[0].team",
+            "data.items[0].wins",
+        ),
+    )
+    canonical = canonicalize_draft_citations(value, provider_draft)
+    db_path = tmp_path / "canonicalized-replay.sqlite3"
+    compose = AsyncMock(return_value=canonical)
+
+    first = await FinalCompositionRuntime(
+        compose=compose,
+        guard=guard_final_response,
+        safe_render=lambda: "generic fallback",
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-visible-subset-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+    replay_compose = AsyncMock(return_value=_draft())
+    replay = await FinalCompositionRuntime(
+        compose=replay_compose,
+        guard=guard_final_response,
+        safe_render=lambda: "replay must not render",
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-visible-subset-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert canonical.content == provider_draft.content
+    assert canonical.cited_paths == (
+        "data.category",
+        "data.items[0].team",
+        "data.items[0].wins",
+    )
+    assert first is not None
+    assert first.content == provider_draft.content
+    assert replay == first
+    assert compose.await_count == 1
+    assert replay_compose.await_count == 0
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio

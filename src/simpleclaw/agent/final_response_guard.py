@@ -11,6 +11,10 @@ from pydantic import JsonValue
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
 from .composition_contracts import CompositionInputV1, DraftResponseV1
+from .composition_citations import (
+    projected_scalar_is_visible,
+    projected_scalar_literal_pattern,
+)
 from .composition_projection import flatten_public_facts
 
 _URL_RE = re.compile(r"https?://[^\s)>\]}]+")
@@ -236,18 +240,6 @@ def _remove_cited_literals(
     return residual
 
 
-def _literal_pattern(value: JsonValue) -> re.Pattern[str] | None:
-    if value is None or isinstance(value, dict | list):
-        return None
-    rendered = str(value).strip()
-    if not rendered:
-        return None
-    escaped = re.escape(rendered)
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return re.compile(rf"(?<![\d.+%-]){escaped}(?![\d.+%-])")
-    return re.compile(escaped, re.IGNORECASE)
-
-
 def _cited_literal_order_error(
     content: str,
     concrete: dict[str, JsonValue],
@@ -261,7 +253,7 @@ def _cited_literal_order_error(
     for path, value in concrete.items():
         if path not in cited_values:
             continue
-        pattern = _literal_pattern(value)
+        pattern = projected_scalar_literal_pattern(value)
         if pattern is None:
             return "cited_value_order_mismatch"
         match = pattern.search(content, cursor)
@@ -336,7 +328,7 @@ def guard_final_response(
         if (
             isinstance(cited, str)
             and len(cited.strip()) >= 2
-            and cited.strip().casefold() not in lowered
+            and not projected_scalar_is_visible(content, cited)
         ):
             return _rejected("cited_value_not_rendered")
     if top_n is not None and cited_item_indices != _required_item_indices(
