@@ -366,9 +366,12 @@ def _fallback_transition_boundary(
             previous_value=previous_value,
             question=question,
         )
-    if isinstance(previous_value, str) and isinstance(current_value, str):
-        if _safe_topic_separator(separator):
-            return (None, None)
+    if (
+        isinstance(previous_value, str)
+        and isinstance(current_value, str)
+        and _safe_topic_separator(separator)
+    ):
+        return (None, None)
     separator_without_conjunction = _LIST_SEPARATOR_WORD_RE.sub("", separator)
     if _SAFE_PUNCTUATION_RE.fullmatch(separator_without_conjunction) is None:
         return None

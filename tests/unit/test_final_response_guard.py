@@ -203,13 +203,17 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
     ("public_facts_json", "cited_paths"),
     [
         (
-            '{"first_label":"A","first_value":3,'
-            '"second_label":"B","second_value":2}',
+            (
+                '{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}'
+            ),
             ("first_label", "first_value", "second_label", "second_value"),
         ),
         (
-            '{"metrics":{"first_label":"A","first_value":3,'
-            '"second_label":"B","second_value":2}}',
+            (
+                '{"metrics":{"first_label":"A","first_value":3,'
+                '"second_label":"B","second_value":2}}'
+            ),
             (
                 "metrics.first_label",
                 "metrics.first_value",
