@@ -102,7 +102,7 @@ class _OneCallSend:
     def __init__(self, send) -> None:
         self._send = send
         self.calls = 0
-        self.provider_citation_count = 0
+        self.provider_plan_path_count = 0
 
     async def __call__(self, request):
         self.calls += 1
@@ -111,13 +111,14 @@ class _OneCallSend:
         response = await self._send(request)
         try:
             payload = json.loads(response.text)
-            cited_paths = payload.get("cited_paths", [])
-            if isinstance(cited_paths, list) and all(
-                isinstance(path, str) for path in cited_paths
+            segments = payload.get("segments", [])
+            if isinstance(segments, list) and all(
+                isinstance(item, dict) and isinstance(item.get("path"), str)
+                for item in segments
             ):
-                self.provider_citation_count = len(cited_paths)
+                self.provider_plan_path_count = len(segments)
         except (AttributeError, TypeError, ValueError):
-            self.provider_citation_count = 0
+            self.provider_plan_path_count = 0
         return response
 
 
@@ -215,7 +216,7 @@ _NATURAL_KBO_SCENARIO = _Scenario(
             "date": "2026-08-08",
             "items": [
                 {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
-                {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
+                {"rank": 2, "team": "한화", "wins": 55, "losses": 40},
                 {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
             ],
         }
@@ -327,11 +328,39 @@ def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
     )
 
 
-_SCENARIOS = (
-    _SCHEDULE_PRESENT_SCENARIO,
-    _SCHEDULE_EMPTY_SCENARIO,
-    _LIVE_EMPTY_SCENARIO,
-)
+_SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
+
+
+def _bounded_backend_names(
+    default_backend: str,
+    overrides: list[str] | tuple[str, ...],
+    available: list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Runtime default를 바꾸지 않고 최대 두 alternate만 eval에 추가한다."""
+    normalized = tuple(
+        dict.fromkeys(item.strip() for item in overrides if item.strip())
+    )
+    if len(normalized) > 2:
+        raise _ProbeInvariantError("backend_override_limit_exceeded")
+    selected = tuple(dict.fromkeys((default_backend, *normalized)))
+    unknown = tuple(item for item in selected if item not in available)
+    if unknown:
+        raise _ProbeInvariantError("backend_override_unknown")
+    return selected
+
+
+def _first_failure(
+    scenario_results: list[dict[str, object]],
+) -> dict[str, object] | None:
+    """후속 성공이 앞선 실패 증거를 지우지 않도록 첫 실패를 복사한다."""
+    return next(
+        (
+            dict(item)
+            for item in scenario_results
+            if item.get("guard_accepted") is not True
+        ),
+        None,
+    )
 
 
 def _production_persona_projection(
@@ -390,7 +419,9 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
             "helper_cli_executed": evidence.helper_cli_executed,
             "helper_source_sha256": evidence.helper_source_sha256,
             "installation_mode": (
-                "production_install" if skill_dir is not None else "exact_checkout_install"
+                "production_install"
+                if skill_dir is not None
+                else "exact_checkout_install"
             ),
             "item_count": evidence.item_count,
             "requested_limit": evidence.requested_limit,
@@ -507,18 +538,14 @@ async def _connected_probe(
         counters.notifier += 1
         raise _ForbiddenBoundaryReached("notifier")
 
-    def forbidden_conversation(
-        _self, _session, _identity, _payload_hash, _content
-    ):
+    def forbidden_conversation(_self, _session, _identity, _payload_hash, _content):
         counters.conversation_write += 1
         raise _ForbiddenBoundaryReached("conversation_write")
 
     def forbidden_sender(*_args):
         raise _ForbiddenBoundaryReached("sender_callback")
 
-    with TemporaryDirectory(
-        prefix=f"simpleclaw-biz-643-{scenario.name}-"
-    ) as directory:
+    with TemporaryDirectory(prefix=f"simpleclaw-biz-643-{scenario.name}-") as directory:
         temp = Path(directory)
         recipes_dir = temp / "runtime-recipes"
         skills_dir = temp / "runtime-skills"
@@ -596,9 +623,7 @@ async def _connected_probe(
             except _ForbiddenBoundaryReached:
                 pass
             else:
-                raise _ProbeInvariantError(
-                    "conversation_write_spy_preflight_failed"
-                )
+                raise _ProbeInvariantError("conversation_write_spy_preflight_failed")
             preflight = counters.forbidden()
             if set(preflight.values()) != {1}:
                 raise _ProbeInvariantError("sink_spy_preflight_count_mismatch")
@@ -635,9 +660,7 @@ async def _connected_probe(
             match = pattern.search(content) if pattern is not None else None
             if match is not None:
                 rendered_positions.append((match.start(), path))
-        render_order = ",".join(
-            path for _, path in sorted(rendered_positions)
-        )
+        render_order = ",".join(path for _, path in sorted(rendered_positions))
         lexical_probe = content
         for projected in concrete.values():
             if isinstance(projected, str) and projected.strip():
@@ -678,20 +701,18 @@ async def _connected_probe(
             result.telemetry.delivery_status is DeliveryStatus.SHADOWED
         ),
         "rollback_clear": result.execution.rollback_required is False,
-        "side_effect_delta_zero": all(
-            value == 0 for value in measured.values()
-        ),
-        "forbidden_boundary_zero": all(
-            value == 0 for value in forbidden.values()
-        ),
+        "side_effect_delta_zero": all(value == 0 for value in measured.values()),
+        "forbidden_boundary_zero": all(value == 0 for value in forbidden.values()),
         "conversation_delta_zero": conversation_delta == 0,
         "target_dispatch_once": counters.target_dispatch == 1,
+        "plan_path_count_exact": (
+            counted_send.provider_plan_path_count == len(capture.draft.cited_paths)
+        ),
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
         raise _ProbeInvariantError(
-            "connected_no_send_invariant_failed:"
-            + ",".join(failed)
+            "connected_no_send_invariant_failed:" + ",".join(failed)
         )
 
     content = capture.draft.content
@@ -707,11 +728,7 @@ async def _connected_probe(
         "content_length": len(content),
         "citations": list(capture.draft.cited_paths),
         "canonical_citation_count": len(capture.draft.cited_paths),
-        "provider_citation_count": counted_send.provider_citation_count,
-        "pruned_citation_count": max(
-            0,
-            counted_send.provider_citation_count - len(capture.draft.cited_paths),
-        ),
+        "provider_plan_path_count": counted_send.provider_plan_path_count,
         "delivery_status": result.telemetry.delivery_status.value,
         "sink_spy_preflight_calls": preflight,
         "measured_side_effect_deltas": measured,
@@ -751,7 +768,25 @@ async def _run(args: argparse.Namespace) -> int:
 
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
-    backend = router.get_default_backend()
+    default_backend = router.get_default_backend()
+    try:
+        backends = _bounded_backend_names(
+            default_backend,
+            args.backend,
+            router.list_backends(),
+        )
+    except _ProbeInvariantError as exc:
+        print(
+            json.dumps(
+                {
+                    "error_code": str(exc),
+                    "error_type": type(exc).__name__,
+                    "passed": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
     agent_config = load_agent_config(config_path)
     planner_config = agent_config.get("unified_turn_planner", {})
     langgraph_config = planner_config.get("langgraph_v4", {})
@@ -813,39 +848,43 @@ async def _run(args: argparse.Namespace) -> int:
         if args.real_kbo
         else list(_SCENARIOS)
     )
-    scenario_results: list[dict[str, object]] = []
+    backend_results: list[dict[str, object]] = []
     provider_calls = 0
     retry_calls = 0
-    for scenario in scenarios:
-        counted_send = _OneCallSend(router.send)
-        composer = FinalResponseComposer(
-            send=counted_send,
-            persona_projection=persona_projection,
-            max_tokens=args.max_tokens,
-            backend_name=backend,
-            temperature=temperature,
-        )
-        try:
-            scenario_result = await asyncio.wait_for(
-                _connected_probe(
-                    composer=composer,
-                    counted_send=counted_send,
-                    scenario=scenario,
-                    timeout=args.timeout,
-                ),
-                timeout=args.timeout,
+    for backend in backends:
+        scenario_results: list[dict[str, object]] = []
+        backend_provider_calls = 0
+        backend_retry_calls = 0
+        for scenario in scenarios:
+            counted_send = _OneCallSend(router.send)
+            composer = FinalResponseComposer(
+                send=counted_send,
+                persona_projection=persona_projection,
+                max_tokens=args.max_tokens,
+                backend_name=backend,
+                temperature=temperature,
             )
-        except (
-            FinalResponseComposerError,
-            TimeoutError,
-            AttributeError,
-            TypeError,
-            ValueError,
-            _ForbiddenBoundaryReached,
-            _ProbeInvariantError,
-        ) as exc:
-            scenario_results.append(
-                {
+            try:
+                scenario_result = await asyncio.wait_for(
+                    _connected_probe(
+                        composer=composer,
+                        counted_send=counted_send,
+                        scenario=scenario,
+                        timeout=args.timeout,
+                    ),
+                    timeout=args.timeout,
+                )
+            except (
+                FinalResponseComposerError,
+                TimeoutError,
+                AttributeError,
+                TypeError,
+                ValueError,
+                _ForbiddenBoundaryReached,
+                _ProbeInvariantError,
+            ) as exc:
+                scenario_result = {
+                    "backend": backend,
                     "error_code": (
                         str(exc) if isinstance(exc, _ProbeInvariantError) else None
                     ),
@@ -854,29 +893,54 @@ async def _run(args: argparse.Namespace) -> int:
                     "provider_calls": counted_send.calls,
                     "retry_calls": max(0, counted_send.calls - 1),
                 }
-            )
-            provider_calls += counted_send.calls
-            retry_calls += max(0, counted_send.calls - 1)
-            continue
-        provider_calls += counted_send.calls
-        retry_calls += max(0, counted_send.calls - 1)
-        scenario_results.append(scenario_result)
+            scenario_result["backend"] = backend
+            scenario_results.append(scenario_result)
+            backend_provider_calls += counted_send.calls
+            backend_retry_calls += max(0, counted_send.calls - 1)
+        backend_passed = backend_provider_calls == len(scenarios) and all(
+            scenario.get("guard_accepted") is True
+            and scenario.get("provider_calls") == 1
+            and scenario.get("retry_calls") == 0
+            for scenario in scenario_results
+        )
+        backend_results.append(
+            {
+                "backend": backend,
+                "first_failure": _first_failure(scenario_results),
+                "pass_count": sum(
+                    scenario.get("guard_accepted") is True
+                    for scenario in scenario_results
+                ),
+                "passed": backend_passed,
+                "provider_calls": backend_provider_calls,
+                "retry_calls": backend_retry_calls,
+                "scenario_count": len(scenarios),
+                "scenarios": scenario_results,
+            }
+        )
+        provider_calls += backend_provider_calls
+        retry_calls += backend_retry_calls
 
-    passed = provider_calls == len(scenarios) and all(
-        scenario.get("guard_accepted") is True
-        and scenario.get("provider_calls") == 1
-        and scenario.get("retry_calls") == 0
-        for scenario in scenario_results
+    passed = all(item["passed"] is True for item in backend_results)
+    first_failure = next(
+        (
+            dict(item["first_failure"])
+            for item in backend_results
+            if item["first_failure"] is not None
+        ),
+        None,
     )
     result = {
-        "backend": backend,
+        "backend_results": backend_results,
+        "default_backend": default_backend,
         "delivery_sinks_configured": True,
-        "expected_provider_calls": len(scenarios),
+        "evaluated_backends": list(backends),
+        "expected_provider_calls": len(scenarios) * len(backends),
+        "first_failure": first_failure,
         "passed": passed,
         "provider_calls": provider_calls,
         "retry_calls": retry_calls,
         "scenario_count": len(scenarios),
-        "scenarios": scenario_results,
         "temperature": temperature,
         "persona_source_types": [
             source_type.value for source_type in persona_projection.source_types
@@ -902,6 +966,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=1200)
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        help=(
+            "Add up to two configured alternate backends for this eval only; "
+            "the runtime default remains unchanged."
+        ),
+    )
+    parser.add_argument(
         "--real-kbo",
         action="store_true",
         help="Use one real read-only KBO payload for all three independent runs.",
@@ -909,12 +982,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--installed-skill-dir",
         type=Path,
-        default=(
-            Path.home()
-            / ".agents"
-            / "skills"
-            / "naver-sports-skill"
-        ),
+        default=(Path.home() / ".agents" / "skills" / "naver-sports-skill"),
     )
     parser.add_argument(
         "--exact-checkout-install",

@@ -12,6 +12,8 @@ from scripts.dev.validate_final_response_composer_no_send import (
     _connected_probe,
     _ConnectedProbeFacade,
     _OneCallSend,
+    _bounded_backend_names,
+    _first_failure,
     _production_persona_projection,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
@@ -39,30 +41,26 @@ def _persona_projection(text: str) -> CompositionPersonaProjection:
 
 
 async def _draft_response(request) -> LLMResponse:
-    citation_paths = request.response_schema["properties"]["cited_paths"]["items"][
-        "enum"
-    ]
+    segment = request.response_schema["$defs"]["CompositionRenderSegmentV1"]
+    allowed_paths = segment["properties"]["path"]["enum"]
+    citation_paths = list(_NATURAL_KBO_SCENARIO.expected_citations)
+    assert set(citation_paths) <= set(allowed_paths)
     value = json.loads(request.user_message)
-    data = value["public_facts"]["data"]
-    if data.get("empty_reason") == "no_scheduled_events":
-        content = "empty, no_scheduled_events."
-        citation_paths = ["data.status", "data.empty_reason"]
-    elif data.get("empty_reason") == "no_live_events":
-        content = "empty, no_live_events."
-        citation_paths = ["data.status", "data.empty_reason"]
-    else:
-        assert value["question"] == "오늘 프로야구 하냐?"
-        content = "경기 예정, 두산, 한화."
-        citation_paths = [
-            "data.items[0].status",
-            "data.items[0].participants.away.name",
-            "data.items[0].participants.home.name",
-        ]
+    assert value["question"] == "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘"
     return LLMResponse(
         text=json.dumps(
             {
-                "content": content,
-                "cited_paths": citation_paths,
+                "segments": [
+                    {
+                        "path": path,
+                        "connector": (
+                            "polite_copula_period"
+                            if index == len(citation_paths) - 1
+                            else "comma_space"
+                        ),
+                    }
+                    for index, path in enumerate(citation_paths)
+                ],
                 "limitation_paths": [],
             }
         )
@@ -75,9 +73,7 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     counted_send = _OneCallSend(_draft_response)
     composer = FinalResponseComposer(
         send=counted_send,
-        persona_projection=_persona_projection(
-            "Answer only from the supplied facts."
-        ),
+        persona_projection=_persona_projection("Answer only from the supplied facts."),
         max_tokens=1200,
         backend_name="offline-fixture",
     )
@@ -97,9 +93,8 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     assert result["guard_accepted"] is True
     assert tuple(result["citations"]) == scenario.expected_citations
     assert result["canonical_citation_count"] == len(scenario.expected_citations)
-    assert result["provider_citation_count"] >= len(scenario.expected_citations)
+    assert result["provider_plan_path_count"] == len(scenario.expected_citations)
     assert "content" not in result
-    assert result["pruned_citation_count"] >= 0
     assert result["source_mode"] == "production_shaped_fixed"
     assert result["sink_spy_preflight_calls"] == {
         "telegram_send": 1,
@@ -124,16 +119,53 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
 def test_activation_scenarios_use_natural_question_without_local_persona() -> None:
     assert len(_SCENARIOS) == 3
     assert [scenario.question for scenario in _SCENARIOS] == [
-        "오늘 프로야구 하냐?",
-        "오늘 프로야구 하냐?",
-        "지금 KBO 경기 중이야?",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+        "현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
     ]
     assert [scenario.name for scenario in _SCENARIOS] == [
-        "production_schedule_present",
-        "production_schedule_empty",
-        "production_live_empty",
+        "production_persona_natural_kbo_1",
+        "production_persona_natural_kbo_2",
+        "production_persona_natural_kbo_3",
+    ]
+    assert [item["wins"] for item in _SCENARIOS[0].payload["data"]["items"]] == [
+        60,
+        55,
+        55,
     ]
     assert not hasattr(_NATURAL_KBO_SCENARIO, "persona_prompt")
+
+
+def test_backend_override_is_eval_only_bounded_and_default_first() -> None:
+    assert _bounded_backend_names(
+        "default",
+        ("alternate_a", "alternate_b", "alternate_a"),
+        ("default", "alternate_a", "alternate_b"),
+    ) == ("default", "alternate_a", "alternate_b")
+
+    with pytest.raises(RuntimeError, match="limit"):
+        _bounded_backend_names(
+            "default",
+            ("a", "b", "c"),
+            ("default", "a", "b", "c"),
+        )
+
+
+def test_first_failure_is_preserved_after_later_pass() -> None:
+    first = {
+        "name": "run-1",
+        "error_code": "guard_rejected",
+        "provider_calls": 1,
+    }
+    results = [
+        first,
+        {"name": "run-2", "guard_accepted": True, "provider_calls": 1},
+    ]
+
+    captured = _first_failure(results)
+    results[0]["error_code"] = "changed"
+
+    assert captured == first | {"error_code": "guard_rejected"}
 
 
 def test_production_persona_uses_allowlisted_runtime_projection(tmp_path) -> None:

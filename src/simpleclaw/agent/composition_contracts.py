@@ -72,6 +72,56 @@ class CompositionInputV1(ContractModel):
         return self
 
 
+class CompositionRenderSegmentV1(ContractModel):
+    """Provider가 concrete path 뒤에 붙일 bounded grammar만 표현한다."""
+
+    path: NonEmptyStr
+    connector: Literal[
+        "space",
+        "comma_space",
+        "middle_dot_space",
+        "semicolon_space",
+        "period",
+        "question_mark",
+        "topic_eun_space",
+        "topic_neun_space",
+        "subject_i_space",
+        "subject_ga_space",
+        "object_eul_space",
+        "object_reul_space",
+        "and_wa_space",
+        "and_gwa_space",
+        "also_do_space",
+        "to_ro_space",
+        "at_e_space",
+        "copula_imyeo_space",
+        "copula_igo_space",
+        "polite_copula_period",
+        "polite_become_period",
+        "english_and_space",
+        "english_is_space",
+        "english_are_space",
+        "english_with_space",
+        "english_respectively_period",
+        "limitation_uncertain_period",
+        "limitation_unverified_period",
+        "limitation_korean_uncertain_period",
+    ]
+
+
+class CompositionRenderPlanV1(ContractModel):
+    """Provider-authored final 본문 없이 path와 grammar만 선택하는 계약이다."""
+
+    schema_version: Literal["composition_render_plan.v1"] = Field(
+        default="composition_render_plan.v1", alias="schema"
+    )
+    segments: tuple[CompositionRenderSegmentV1, ...] = Field(
+        min_length=1,
+        max_length=128,
+    )
+    limitation_paths: tuple[NonEmptyStr, ...] = Field(default=(), max_length=64)
+
+
 class DraftResponseV1(ContractModel):
     """중앙 composer가 반환하는 자연어 본문과 grounding 경로다."""
 

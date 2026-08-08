@@ -28,6 +28,7 @@ from simpleclaw.agent.composition_contracts import (
     DraftResponseV1,
 )
 from simpleclaw.agent.context_candidates import ContextCandidateSet
+from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.agent.orchestrator import (
     AgentOrchestrator,
     _allow_v4_legacy_fallback,
@@ -119,6 +120,7 @@ from simpleclaw.llm.models import (
 )
 from simpleclaw.llm.router import LLMRouter
 from simpleclaw.memory import ConversationMessage, ConversationStore, MessageRole
+from simpleclaw.persona.models import CompositionPersonaProjection, FileType
 from simpleclaw.outbound_delivery import (
     PrimaryDeliveryCoordinator,
     PrimaryDeliveryMetadataV1,
@@ -583,6 +585,8 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
     assert _v4_connected_contract_eligible(gate.effective_plan, catalog) is True
 
     calls = 0
+    composer_calls = 0
+    provider_calls = 0
     pending_argv: tuple[str, ...] | None = None
     exact_recipe = AgentOrchestrator.__new__(AgentOrchestrator)
     exact_recipe._recipes = (recipe,)
@@ -656,16 +660,59 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert "answer" not in helper_payload
         return result
 
-    async def compose(value: CompositionInputV1) -> DraftResponseV1:
-        assert len(value.public_facts["data"]["items"]) == 3
-        return DraftResponseV1(
-            content="LG, 한화, 롯데입니다.",
-            cited_paths=(
-                "data.items[0].team",
-                "data.items[1].team",
-                "data.items[2].team",
-            ),
+    async def send_render_plan(request: LLMRequest) -> LLMResponse:
+        nonlocal provider_calls
+        provider_calls += 1
+        assert request.tools is None
+        assert request.require_structured_output is True
+        paths = (
+            "data.items[0].team",
+            "data.items[1].team",
+            "data.items[2].team",
         )
+        segment_schema = request.response_schema["$defs"][
+            "CompositionRenderSegmentV1"
+        ]
+        assert set(paths) <= set(segment_schema["properties"]["path"]["enum"])
+        return LLMResponse(
+            text=json.dumps(
+                {
+                    "segments": [
+                        {
+                            "path": path,
+                            "connector": (
+                                "period"
+                                if index == len(paths) - 1
+                                else "comma_space"
+                            ),
+                        }
+                        for index, path in enumerate(paths)
+                    ],
+                    "limitation_paths": [],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    central_composer = FinalResponseComposer(
+        send=send_render_plan,
+        persona_projection=CompositionPersonaProjection(
+            instruction_text="Use concise bounded grammar.",
+            source_types=(FileType.SOUL,),
+            token_count=4,
+            token_budget=128,
+            policy_version="integration_fixture_v1",
+            fingerprint="integration-fixture-v1",
+        ),
+        max_tokens=1200,
+        backend_name="offline-render-plan",
+    )
+
+    async def compose(value: CompositionInputV1) -> DraftResponseV1:
+        nonlocal composer_calls
+        composer_calls += 1
+        assert len(value.public_facts["data"]["items"]) == 3
+        return await central_composer.compose(value)
 
     store = ConversationStore(tmp_path / "kbo-conversation.db")
     runner = ConnectedShadowTurnRunner(
@@ -683,7 +730,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         recipe_executor=executor,
         composition_mode="central_persona_v1",
         response_composer=compose,
-        composer_fingerprint="kbo-fixture-composer-v1",
+        composer_fingerprint=central_composer.fingerprint,
     )
 
     for index in range(3):
@@ -696,7 +743,7 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
             planner_tokens=100,
         )
         assert result.execution.final_content is not None
-        assert result.execution.final_content == "LG, 한화, 롯데입니다."
+        assert result.execution.final_content == "LG, 한화, 롯데."
         assert "asset_result.v1" not in result.execution.final_content
         assert "status" not in result.execution.final_content
         assert "error" not in result.execution.final_content
@@ -706,6 +753,8 @@ async def test_kbo_asset_zero_plan_repairs_and_completes_three_no_send_runs(
         assert result.execution.side_effect_counts.total == 0
 
     assert calls == 3
+    assert composer_calls == 3
+    assert provider_calls == 3
     assert store.get_recent() == []
 
 

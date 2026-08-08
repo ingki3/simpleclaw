@@ -433,6 +433,20 @@ def test_structural_relation_accepts_visible_identity_evidence_in_source_order()
     assert result.accepted is True
 
 
+def test_structural_relation_accepts_repeated_scalar_materialized_per_identity() -> None:
+    value = _neutral_top_two_relation(repeated_state=True)
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="alpha ready, beta ready.",
+            cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.accepted is True
+
+
 def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
     value = CompositionInputV1(
         request_id="request-neutral-mixed-roots",
