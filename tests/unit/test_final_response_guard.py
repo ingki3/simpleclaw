@@ -25,7 +25,7 @@ def _input() -> CompositionInputV1:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
-        composition_list_roots=("data.items",),
+        composition_list_root="data.items",
         public_facts={
             "data": {
                 "category": "KBO",
@@ -283,7 +283,7 @@ def test_structural_relation_cannot_bypass_top_n_cardinality() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="top-two-payload-hash",
-        composition_list_roots=("records",),
+        composition_list_root="records",
         public_facts={
             "records": [{"state": "alpha"}, {"state": "beta"}]
         },
@@ -328,7 +328,7 @@ def _neutral_top_two_relation(
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="top-two-relation-payload-hash",
-        composition_list_roots=("records",),
+        composition_list_root="records",
         public_facts={
             "records": [
                 {"name": "alpha", "state": "ready"},
@@ -443,7 +443,7 @@ def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="mixed-roots-payload-hash",
-        composition_list_roots=("left", "right"),
+        composition_list_root="left",
         public_facts={
             "left": [{"name": "alpha"}],
             "right": [{"name": "unused"}, {"name": "beta"}],
@@ -469,7 +469,7 @@ def test_structural_relation_rejects_top_n_mixed_list_roots() -> None:
 
 def test_top_n_rejects_list_root_not_declared_by_descriptor() -> None:
     value = _neutral_top_two_relation().model_copy(
-        update={"composition_list_roots": ("other_records",)}
+        update={"composition_list_root": "other_records"}
     )
 
     result = guard_final_response(
@@ -477,6 +477,34 @@ def test_top_n_rejects_list_root_not_declared_by_descriptor() -> None:
         DraftResponseV1(
             content="alpha ready, beta waiting.",
             cited_paths=value.structural_evidence_relations[0].evidence_paths,
+        ),
+    )
+
+    assert result.code == "requested_scope_list_root_not_declared"
+
+
+def test_top_n_rejects_auxiliary_declared_wildcard_root() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-auxiliary-root",
+        question="What are the top 2 records?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="auxiliary-root-payload-hash",
+        composition_list_root="records",
+        public_facts={
+            "records": [{"name": "real-a"}, {"name": "real-b"}],
+            "warnings": ["alpha", "beta"],
+        },
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(
+            content="top 2 records alpha, beta.",
+            cited_paths=("warnings[0]", "warnings[1]"),
         ),
     )
 
@@ -1352,7 +1380,7 @@ def test_guard_accepts_grounded_english_multiword_name() -> None:
         result_status=AssetResultStatus.RESOLVED,
         effect_status=EffectStatus.NONE,
         normalized_payload_hash="payload-hash",
-        composition_list_roots=("items",),
+        composition_list_root="items",
         public_facts={"items": [{"team": "New York Yankees"}]},
     )
     result = guard_final_response(
@@ -1767,7 +1795,7 @@ def test_guard_requires_separator_between_cited_literals(
     value = _input().model_copy(
         update={
             "question": "현재 상위 2팀",
-            "composition_list_roots": ("items",),
+            "composition_list_root": "items",
             "public_facts_json": (
                 '{"items":['
                 f'{{"team":"{teams[0]}"}},'

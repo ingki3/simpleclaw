@@ -342,6 +342,7 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
                 "data.phase",
                 "data.records[*].value",
             ],
+            "x-simpleclaw-composition-list-root": "data.records",
             "x-simpleclaw-structural-evidence-relations": [
                 {
                     "when": {"path": "data.phase", "equals": "ready"},
@@ -384,7 +385,7 @@ def test_structural_relation_expands_all_wildcard_evidence_in_index_order() -> N
         "data.records[0].value",
         "data.records[1].value",
     )
-    assert projection.composition_list_roots == ("data.records",)
+    assert projection.composition_list_root == "data.records"
 
     sparse = NormalizedAssetResultV1(
         invocation_id="neutral-sparse-wildcard",

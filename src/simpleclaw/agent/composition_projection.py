@@ -306,18 +306,6 @@ def _structural_evidence_relations(
     return tuple(activated)
 
 
-def _composition_list_roots(paths: Sequence[str]) -> tuple[str, ...]:
-    """Descriptor wildcard path가 선언한 마지막 list container를 보존한다."""
-    roots: list[str] = []
-    for path in paths:
-        if "[*]" not in path:
-            continue
-        root = path.rsplit("[*]", maxsplit=1)[0]
-        if root not in roots:
-            roots.append(root)
-    return tuple(roots)
-
-
 def build_composition_input(
     *,
     request_id: str,
@@ -352,9 +340,7 @@ def build_composition_input(
         public_facts=public_facts,
         resolved_claims=_claims(payload, "resolved_claims"),
         unresolved_claims=_claims(payload, "unresolved_claims"),
-        composition_list_roots=_composition_list_roots(
-            descriptor.composition_fields
-        ),
+        composition_list_root=descriptor.composition_list_root,
         structural_evidence_relations=_structural_evidence_relations(
             public_facts,
             descriptor,

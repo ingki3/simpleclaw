@@ -122,6 +122,7 @@ output_contract:
       - items[*].source_url
       - warnings[*]
       - source.urls[*]
+    x-simpleclaw-composition-list-root: items
     x-simpleclaw-structural-evidence-relations:
       - when: {path: status, equals: empty}
         fallback_for: [schedule_items]

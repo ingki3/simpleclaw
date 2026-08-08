@@ -691,12 +691,11 @@ def guard_final_response(
         if not cited_list_roots:
             return _rejected("requested_scope_not_fully_cited")
         list_root = next(iter(cited_list_roots))
-        matching_declared_roots = {
-            declared_root
-            for declared_root in value.composition_list_roots
-            if _matches_declared_list_root(list_root, declared_root)
-        }
-        if len(matching_declared_roots) != 1:
+        declared_root = value.composition_list_root
+        if declared_root is None or not _matches_declared_list_root(
+            list_root,
+            declared_root,
+        ):
             return _rejected("requested_scope_list_root_not_declared")
         required_indices = _required_item_indices(
             concrete,

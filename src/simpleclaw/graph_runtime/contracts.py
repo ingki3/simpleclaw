@@ -26,6 +26,7 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 
 COMPOSITION_FIELDS_EXTENSION = "x-simpleclaw-composition-fields"
+COMPOSITION_LIST_ROOT_EXTENSION = "x-simpleclaw-composition-list-root"
 STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION = (
     "x-simpleclaw-structural-evidence-relations"
 )
@@ -139,6 +140,23 @@ def validate_composition_fields(
     if len(set(paths)) != len(paths):
         raise ValueError("composition field paths must be unique")
     return tuple(paths)
+
+
+def validate_composition_list_root(
+    value: object,
+    *,
+    json_schema: dict[str, object],
+    composition_fields: tuple[str, ...],
+) -> str | None:
+    """Top-N 대상 list root를 descriptor의 단일 explicit path로 검증한다."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError(f"{COMPOSITION_LIST_ROOT_EXTENSION} must be a path")
+    root = validate_composition_fields([value], json_schema=json_schema)[0]
+    if not any(path.startswith(f"{root}[*]") for path in composition_fields):
+        raise ValueError("composition list root must own a visible wildcard path")
+    return root
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,6 +483,20 @@ class ContractDescriptorV1(ContractModel):
             composition_fields=fields,
         )
 
+    @property
+    def composition_list_root(self) -> str | None:
+        """Top-N scope에 사용할 descriptor-declared primary list root다."""
+        schema = self.json_schema
+        fields = validate_composition_fields(
+            schema.get(COMPOSITION_FIELDS_EXTENSION),
+            json_schema=schema,
+        )
+        return validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=fields,
+        )
+
     @model_validator(mode="after")
     def validate_binding_owner(self) -> ContractDescriptorV1:
         """binding과 contract가 서로 다른 owner를 가리키는 상태를 차단한다."""
@@ -477,6 +509,11 @@ class ContractDescriptorV1(ContractModel):
         composition_fields = validate_composition_fields(
             schema.get(COMPOSITION_FIELDS_EXTENSION),
             json_schema=schema,
+        )
+        validate_composition_list_root(
+            schema.get(COMPOSITION_LIST_ROOT_EXTENSION),
+            json_schema=schema,
+            composition_fields=composition_fields,
         )
         validate_structural_evidence_relations(
             schema.get(STRUCTURAL_EVIDENCE_RELATIONS_EXTENSION),
