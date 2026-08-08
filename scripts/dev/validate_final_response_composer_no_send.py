@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import sys
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -27,6 +28,7 @@ from scripts.dev.validate_naver_sports_asset import (
 )
 from simpleclaw.agent.composition_citations import (
     projected_scalar_is_visible,
+    projected_scalar_literal_pattern,
 )
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
@@ -53,6 +55,7 @@ from simpleclaw.agent.turn_plan import (
     FactCheckPlan,
     UnifiedTurnPlan,
 )
+from simpleclaw.config_sections.agents import load_persona_config
 from simpleclaw.graph_runtime.adapters.delivery import (
     CronDeliveryAdapter,
     NullDeliveryAdapter,
@@ -71,10 +74,11 @@ from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import DeliveryStatus
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
+from simpleclaw.persona.assembler import assemble_prompt
+from simpleclaw.persona.models import FileType
+from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
-
-_FACT = "The activation gate is READY."
 
 
 class _ProbeInvariantError(RuntimeError):
@@ -189,102 +193,86 @@ class _Scenario:
     resolved_claims: tuple[str, ...]
     expected_citations: tuple[str, ...]
     locale: str = "en-US"
-    persona_prompt: str = (
-        "In content, output only the requested projected scalar literals in "
-        "contract order. Separate literals only with spaces or commas. Do not "
-        "add headings, labels, numbering, relations, explanations, or repeat "
-        "any literal."
-    )
     source_mode: str = "deterministic_fixture"
     source_evidence: dict[str, object] | None = None
 
 
-_SCENARIOS = (
-    _Scenario(
-        name="single_scalar",
-        question="Repeat the first projected status exactly.",
-        payload={"data": {"items": [{"status": _FACT}]}},
-        resolved_claims=("data.items[0].status",),
-        expected_citations=("data.items[0].status",),
+_NATURAL_KBO_SCENARIO = _Scenario(
+    name="production_persona_natural_kbo",
+    question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
+    payload={
+        "data": {
+            "mode": "standings",
+            "category": "KBO",
+            "season": {"code": "2026", "title": "2026 KBO"},
+            "date": "2026-08-08",
+            "items": [
+                {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
+                {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
+                {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
+            ],
+        }
+    },
+    resolved_claims=(
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
     ),
-    _Scenario(
-        name="top_three_items",
-        question=(
-            "In one sentence without numbering, repeat only the top 3 projected "
-            "names and statuses in order."
-        ),
-        payload={
-            "data": {
-                "items": [
-                    {"name": "Alpha", "status": "One"},
-                    {"name": "Beta", "status": "Two"},
-                    {"name": "Gamma", "status": "Three"},
-                ]
-            }
-        },
-        resolved_claims=(
-            "data.items[0].name",
-            "data.items[0].status",
-            "data.items[1].name",
-            "data.items[1].status",
-            "data.items[2].name",
-            "data.items[2].status",
-        ),
-        expected_citations=(
-            "data.items[0].name",
-            "data.items[0].status",
-            "data.items[1].name",
-            "data.items[1].status",
-            "data.items[2].name",
-            "data.items[2].status",
-        ),
+    expected_citations=(
+        "data.items[0].team",
+        "data.items[0].wins",
+        "data.items[1].team",
+        "data.items[1].wins",
+        "data.items[2].team",
+        "data.items[2].wins",
     ),
-    _Scenario(
-        name="kbo_top_three_fixed",
-        question=(
-            "현재 KBO 순위 상위 3팀의 팀명과 승수 숫자만, '승' 단위 없이 "
-            "쉼표로 나열해줘."
-        ),
-        payload={
-            "data": {
-                "mode": "standings",
-                "category": "KBO",
-                "season": {"code": "2026", "title": "2026 KBO"},
-                "date": "2026-08-08",
-                "items": [
-                    {"rank": 1, "team": "LG", "wins": 60, "losses": 38},
-                    {"rank": 2, "team": "한화", "wins": 58, "losses": 40},
-                    {"rank": 3, "team": "롯데", "wins": 55, "losses": 43},
-                ],
-            }
-        },
-        resolved_claims=(
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
-            "data.items[2].team",
-            "data.items[2].wins",
-        ),
-        expected_citations=(
-            "data.items[0].team",
-            "data.items[0].wins",
-            "data.items[1].team",
-            "data.items[1].wins",
-            "data.items[2].team",
-            "data.items[2].wins",
-        ),
-        locale="ko-KR",
-        persona_prompt=(
-            "content에는 요청된 6개 scalar literal만 contract 순서대로 정확히 "
-            "한 번씩 쓰세요. 형식은 VALUE SPACE VALUE COMMA SPACE VALUE SPACE "
-            "VALUE COMMA SPACE VALUE SPACE VALUE 입니다. VALUE 외에는 공백과 "
-            "쉼표만 허용하며 문자 '승', 제목, 설명, 관계어, 단위, 번호, "
-            "종결어미를 절대 추가하지 마세요."
-        ),
-        source_mode="production_shaped_fixed",
-    ),
+    locale="ko-KR",
+    source_mode="production_shaped_fixed",
 )
+
+
+def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
+    return tuple(
+        _Scenario(
+            name=f"{base.name}_{run}",
+            question=base.question,
+            payload=base.payload,
+            resolved_claims=base.resolved_claims,
+            expected_citations=base.expected_citations,
+            locale=base.locale,
+            source_mode=base.source_mode,
+            source_evidence=base.source_evidence,
+        )
+        for run in range(1, 4)
+    )
+
+
+_SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
+
+
+def _production_persona_prompt(config_path: Path) -> str:
+    """Orchestrator와 동일하게 configured SOUL만 composer persona로 조립한다."""
+    config = load_persona_config(config_path)
+    persona_files = resolve_persona_files(
+        local_dir=config["local_dir"],
+        global_dir=config["global_dir"],
+    )
+    style_files = [
+        persona
+        for persona in persona_files
+        if persona.file_type is FileType.SOUL
+    ]
+    assembly = assemble_prompt(
+        style_files,
+        min(int(config["token_budget"]), 2_048),
+    )
+    prompt = (assembly.assembled_text or "").strip()
+    if not prompt:
+        raise _ProbeInvariantError("production_persona_missing")
+    return prompt
 
 
 def _limit_three_argv() -> tuple[str, ...]:
@@ -303,11 +291,8 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
     )
     evidence = result.evidence
     return _Scenario(
-        name="kbo_top_three_real_read_only",
-        question=(
-            "현재 KBO 순위 상위 3팀의 팀명과 승수 숫자만, '승' 단위 없이 "
-            "쉼표로 나열해줘."
-        ),
+        name="production_persona_natural_kbo",
+        question="현재 KBO 순위 상위 3팀을 승수와 함께 알려줘",
         payload={"data": result.payload},
         resolved_claims=(
             "data.items[0].team",
@@ -319,13 +304,6 @@ async def _real_kbo_scenario(skill_dir: Path | None) -> _Scenario:
         ),
         expected_citations=(),
         locale="ko-KR",
-        persona_prompt=(
-            "content에는 요청된 6개 scalar literal만 contract 순서대로 정확히 "
-            "한 번씩 쓰세요. 형식은 VALUE SPACE VALUE COMMA SPACE VALUE SPACE "
-            "VALUE COMMA SPACE VALUE SPACE VALUE 입니다. VALUE 외에는 공백과 "
-            "쉼표만 허용하며 문자 '승', 제목, 설명, 관계어, 단위, 번호, "
-            "종결어미를 절대 추가하지 마세요."
-        ),
         source_mode="real_read_only",
         source_evidence={
             "asset_text_chars": evidence.asset_text_chars,
@@ -398,10 +376,10 @@ def _budget(timeout: float) -> ShadowBudgetUsageV1:
 
 def _dummy_intent() -> DeliveryIntentV1:
     return DeliveryIntentV1(
-        delivery_id="biz-641-spy-preflight",
-        request_id="biz-641-spy-preflight",
-        artifact_id="biz-641-spy-preflight",
-        artifact_hash="biz-641-spy-preflight",
+        delivery_id="biz-643-spy-preflight",
+        request_id="biz-643-spy-preflight",
+        artifact_id="biz-643-spy-preflight",
+        artifact_hash="biz-643-spy-preflight",
         channel="telegram",
         destination_ref="forbidden:no-send",
         status=DeliveryStatus.READY,
@@ -461,7 +439,7 @@ async def _connected_probe(
         raise _ForbiddenBoundaryReached("sender_callback")
 
     with TemporaryDirectory(
-        prefix=f"simpleclaw-biz-641-{scenario.name}-"
+        prefix=f"simpleclaw-biz-643-{scenario.name}-"
     ) as directory:
         temp = Path(directory)
         store = ConversationStore(temp / "conversation.db")
@@ -545,8 +523,8 @@ async def _connected_probe(
             result = await runner.run(
                 plan=_plan(definitions, scenario),
                 legacy=None,
-                request_id=f"biz-641-{scenario.name}-connected-no-send",
-                session_key=f"biz-641-{scenario.name}-connected-no-send",
+                request_id=f"biz-643-{scenario.name}-connected-no-send",
+                session_key=f"biz-643-{scenario.name}-connected-no-send",
                 planner_model_calls=0,
                 planner_tokens=0,
             )
@@ -557,7 +535,44 @@ async def _connected_probe(
         raise _ProbeInvariantError("composer_capture_missing")
     guard = guard_final_response(capture.value, capture.draft)
     if not guard.accepted:
-        raise _ProbeInvariantError(f"guard_rejected:{guard.code}")
+        content = capture.draft.content
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        citations = ",".join(capture.draft.cited_paths)
+        concrete = flatten_public_facts(capture.value.public_facts)
+        visible_uncited = ",".join(
+            path
+            for path, projected in concrete.items()
+            if path not in capture.draft.cited_paths
+            and projected_scalar_is_visible(content, projected)
+        )
+        rendered_positions: list[tuple[int, str]] = []
+        for path in capture.draft.cited_paths:
+            pattern = projected_scalar_literal_pattern(concrete[path])
+            match = pattern.search(content) if pattern is not None else None
+            if match is not None:
+                rendered_positions.append((match.start(), path))
+        render_order = ",".join(
+            path for _, path in sorted(rendered_positions)
+        )
+        lexical_probe = content
+        for projected in concrete.values():
+            if isinstance(projected, str) and projected.strip():
+                lexical_probe = re.sub(
+                    re.escape(projected.strip()),
+                    "",
+                    lexical_probe,
+                    flags=re.IGNORECASE,
+                )
+        token_hashes = ",".join(
+            hashlib.sha256(token.encode("utf-8")).hexdigest()
+            for token in re.findall(r"[^\W\d_]+", lexical_probe)
+        )
+        raise _ProbeInvariantError(
+            f"guard_rejected:{guard.code}:content_sha256={digest}:"
+            f"content_length={len(content)}:citations={citations}:"
+            f"visible_uncited_paths={visible_uncited}:render_order={render_order}:"
+            f"lexical_token_sha256={token_hashes}"
+        )
     concrete = flatten_public_facts(capture.value.public_facts)
     if any(
         path not in concrete
@@ -632,7 +647,7 @@ async def _connected_probe(
 
 async def _run(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser()
-    expected_scenarios = len(_SCENARIOS) + int(args.real_kbo)
+    expected_scenarios = 3
     if not config_path.is_file():
         print(
             json.dumps(
@@ -652,15 +667,13 @@ async def _run(args: argparse.Namespace) -> int:
     logging.disable(logging.CRITICAL)
     router = create_router(config_path)
     backend = router.get_default_backend()
-    scenarios = list(_SCENARIOS)
+    base_scenario = _NATURAL_KBO_SCENARIO
     if args.real_kbo:
         try:
-            scenarios.append(
-                await _real_kbo_scenario(
-                    None
-                    if args.exact_checkout_install
-                    else args.installed_skill_dir.expanduser()
-                )
+            base_scenario = await _real_kbo_scenario(
+                None
+                if args.exact_checkout_install
+                else args.installed_skill_dir.expanduser()
             )
         except ProductionAssetValidationError as exc:
             print(
@@ -688,6 +701,24 @@ async def _run(args: argparse.Namespace) -> int:
                 )
             )
             return 1
+    try:
+        persona_prompt = _production_persona_prompt(config_path)
+    except (OSError, TypeError, ValueError, _ProbeInvariantError) as exc:
+        print(
+            json.dumps(
+                {
+                    "error_code": (
+                        str(exc) if isinstance(exc, _ProbeInvariantError) else None
+                    ),
+                    "error_type": type(exc).__name__,
+                    "passed": False,
+                    "raw_content_exposed": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    scenarios = list(_independent_scenarios(base_scenario))
     scenario_results: list[dict[str, object]] = []
     provider_calls = 0
     retry_calls = 0
@@ -695,7 +726,7 @@ async def _run(args: argparse.Namespace) -> int:
         counted_send = _OneCallSend(router.send)
         composer = FinalResponseComposer(
             send=counted_send,
-            persona_prompt=scenario.persona_prompt,
+            persona_prompt=persona_prompt,
             max_tokens=args.max_tokens,
             backend_name=backend,
         )
@@ -768,7 +799,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--real-kbo",
         action="store_true",
-        help="Run one additional real read-only installed KBO helper scenario.",
+        help="Use one real read-only KBO payload for all three independent runs.",
     )
     parser.add_argument(
         "--installed-skill-dir",
