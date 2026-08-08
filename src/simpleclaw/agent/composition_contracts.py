@@ -106,3 +106,12 @@ class DraftResponseV1(ContractModel):
         if len(self.cited_paths) > 128 or len(self.limitation_paths) > 64:
             raise ValueError("draft response contains too many paths")
         return self
+
+
+def validated_draft_snapshot(candidate: object) -> DraftResponseV1:
+    """정확한 draft instance를 새 immutable contract로 방어 재검증한다."""
+    if type(candidate) is not DraftResponseV1:
+        raise TypeError("candidate must be a DraftResponseV1 instance")
+    return DraftResponseV1.model_validate(
+        candidate.model_dump(mode="python", by_alias=True, warnings="error")
+    )

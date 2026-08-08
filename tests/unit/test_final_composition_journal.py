@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import threading
 from unittest.mock import AsyncMock, Mock
@@ -80,6 +81,76 @@ def _draft() -> DraftResponseV1:
             "records[0].measure_a",
         ),
     )
+
+
+class _StatefulDuckDraft:
+    schema_version = "draft_response.v1"
+    cited_paths = ("records[0].name", "records[0].measure_a")
+    limitation_paths: tuple[str, ...] = ()
+
+    def __init__(self) -> None:
+        self.content_reads = 0
+
+    @property
+    def content(self) -> str:
+        self.content_reads += 1
+        if self.content_reads <= 2:
+            return "alpha, 59."
+        return "raw diagnostic SECRET."
+
+
+@pytest.mark.asyncio
+async def test_mutable_duck_draft_fails_closed_without_content_reaccess(
+    tmp_path,
+) -> None:
+    value, result = _values("stateful-duck-request")
+    db_path = tmp_path / "stateful-duck.sqlite3"
+    candidate = _StatefulDuckDraft()
+    compose = AsyncMock(return_value=candidate)
+    guard = AsyncMock()
+    fallback = "요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요."
+    safe_render = Mock(return_value=fallback)
+
+    first = await FinalCompositionRuntime(
+        compose=compose,
+        guard=guard,
+        safe_render=safe_render,
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+    replay = await FinalCompositionRuntime(
+        compose=AsyncMock(return_value=_draft()),
+        guard=guard_final_response,
+        safe_render=Mock(return_value="must not render"),
+        journal=SQLiteFinalArtifactJournal(db_path),
+        composer_fingerprint="composer-v1",
+    ).finalize(
+        request_id=value.request_id,
+        normalized_result=result,
+        outcome=TerminalOutcome.COMPLETED,
+        composition_input=value,
+    )
+
+    assert first is not None
+    assert first.content == fallback
+    assert replay == first
+    assert candidate.content_reads == 0
+    assert guard.await_count == 0
+    assert safe_render.call_count == 1
+    with sqlite3.connect(db_path) as connection:
+        stored = connection.execute(
+            "SELECT artifact_json FROM graph_final_artifacts WHERE request_id = ?",
+            (value.request_id,),
+        ).fetchall()
+    assert len(stored) == 1
+    assert json.loads(stored[0][0])["content"] == fallback
+    assert "raw diagnostic" not in stored[0][0]
+    assert "SECRET" not in stored[0][0]
 
 
 class _ComposerStop(FinalResponseComposerError):

@@ -11,6 +11,7 @@ from pydantic import JsonValue
 
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
+from .composition_admissibility import citation_list_root_violation
 from .composition_citations import (
     projected_scalar_is_visible,
     projected_scalar_literal_pattern,
@@ -19,6 +20,7 @@ from .composition_contracts import (
     CompositionInputV1,
     DraftResponseV1,
     StructuralEvidenceRelationV1,
+    validated_draft_snapshot,
 )
 from .composition_projection import flatten_public_facts
 
@@ -258,11 +260,6 @@ def _required_item_indices(
     if not available:
         return set()
     return set(range(min(top_n, max(available) + 1)))
-
-
-def _matches_declared_list_root(concrete_root: str, declared_root: str) -> bool:
-    pattern = re.escape(declared_root).replace(r"\[\*\]", r"\[\d+\]")
-    return re.fullmatch(pattern, concrete_root) is not None
 
 
 def _word_stem(token: str) -> str:
@@ -637,6 +634,31 @@ def guard_final_response(
     draft: DraftResponseV1,
 ) -> GuardResult:
     """Projection 밖 사실·raw 진단·unsafe effect의 final 승격을 거부한다."""
+    if type(draft) is not DraftResponseV1:
+        return _rejected("invalid_draft_contract")
+    try:
+        raw_cited_paths = draft.cited_paths
+        raw_limitation_paths = draft.limitation_paths
+        if (
+            not isinstance(raw_cited_paths, tuple)
+            or not isinstance(raw_limitation_paths, tuple)
+            or len(raw_cited_paths) > 128
+            or len(raw_limitation_paths) > 64
+            or any(not isinstance(path, str) for path in raw_cited_paths)
+            or any(not isinstance(path, str) for path in raw_limitation_paths)
+        ):
+            return _rejected("invalid_draft_contract")
+        if not raw_cited_paths:
+            if not value.structural_evidence_relations and tuple(
+                raw_cited_paths
+            ) != tuple(value.citable_paths):
+                return _rejected("citable_path_citation_mismatch")
+            return _rejected("citations_required")
+        if len(raw_cited_paths) != len(set(raw_cited_paths)):
+            return _rejected("duplicate_citation")
+        draft = validated_draft_snapshot(draft)
+    except (AttributeError, TypeError, ValueError):
+        return _rejected("invalid_draft_contract")
     if value.result_status is not AssetResultStatus.RESOLVED or (
         value.effect_status not in {EffectStatus.NONE, EffectStatus.VERIFIED}
     ):
@@ -657,10 +679,6 @@ def guard_final_response(
         draft.cited_paths
     ) != tuple(value.citable_paths):
         return _rejected("citable_path_citation_mismatch")
-    if not draft.cited_paths:
-        return _rejected("citations_required")
-    if len(draft.cited_paths) != len(set(draft.cited_paths)):
-        return _rejected("duplicate_citation")
     top_n = _requested_top_n(value.question)
     cited_values: dict[str, JsonValue] = {}
     cited_item_indices: set[int] = set()
@@ -678,6 +696,22 @@ def guard_final_response(
     structural_relation = _matched_structural_evidence_relation(value, draft)
     if value.structural_evidence_relations and structural_relation is None:
         return _rejected("structural_relation_citation_mismatch")
+    list_root_violation = citation_list_root_violation(
+        tuple(draft.cited_paths),
+        declared_root=value.composition_list_root,
+    )
+    if list_root_violation == "mixed_list_roots":
+        return _rejected(
+            "requested_scope_mixed_list_roots"
+            if top_n is not None
+            else "citation_mixed_list_roots"
+        )
+    if list_root_violation == "auxiliary_list_root":
+        return _rejected(
+            "requested_scope_list_root_not_declared"
+            if top_n is not None
+            else "citation_auxiliary_list_root"
+        )
     for cited in cited_values.values():
         if _guard_projected_scalar_literal_pattern(cited) is None:
             return _rejected("citation_not_scalar")
@@ -695,17 +729,9 @@ def guard_final_response(
             for path in draft.cited_paths
             if (location := _item_location(path)) is not None
         }
-        if len(cited_list_roots) > 1:
-            return _rejected("requested_scope_mixed_list_roots")
         if not cited_list_roots:
             return _rejected("requested_scope_not_fully_cited")
         list_root = next(iter(cited_list_roots))
-        declared_root = value.composition_list_root
-        if declared_root is None or not _matches_declared_list_root(
-            list_root,
-            declared_root,
-        ):
-            return _rejected("requested_scope_list_root_not_declared")
         required_indices = _required_item_indices(
             concrete,
             top_n,

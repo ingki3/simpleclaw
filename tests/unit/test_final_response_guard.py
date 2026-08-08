@@ -1012,6 +1012,61 @@ def test_top_n_rejects_auxiliary_declared_wildcard_root() -> None:
     assert result.code == "requested_scope_list_root_not_declared"
 
 
+def test_non_top_n_guard_and_materializer_reject_mixed_list_roots() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-non-top-mixed",
+        question="Return the projected records.",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="non-top-mixed-hash",
+        composition_list_root="left",
+        public_facts={
+            "left": [{"name": "alpha"}],
+            "right": [{"name": "beta"}],
+        },
+        citable_paths=("left[0].name", "right[0].name"),
+    )
+    draft = DraftResponseV1(
+        content="alpha, beta.",
+        cited_paths=value.citable_paths,
+    )
+
+    guarded = guard_final_response(value, draft)
+    with pytest.raises(FinalResponseComposerError, match="mixes list roots"):
+        materialize_render_plan(value, CompositionRenderPlanV1(separator="comma_space"))
+
+    assert guarded.code == "citation_mixed_list_roots"
+
+
+def test_non_top_n_guard_and_materializer_reject_auxiliary_list_root() -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-non-top-auxiliary",
+        question="Return the projected records.",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="non-top-auxiliary-hash",
+        composition_list_root="left",
+        public_facts={
+            "left": [{"name": "unused"}],
+            "right": [{"name": "alpha"}],
+        },
+        citable_paths=("right[0].name",),
+    )
+    draft = DraftResponseV1(content="alpha.", cited_paths=value.citable_paths)
+
+    guarded = guard_final_response(value, draft)
+    with pytest.raises(FinalResponseComposerError, match="auxiliary list root"):
+        materialize_render_plan(value, CompositionRenderPlanV1(separator="space"))
+
+    assert guarded.code == "citation_auxiliary_list_root"
+
+
 def test_structural_relation_rejects_required_evidence_subset() -> None:
     value = _neutral_top_two_relation()
     subset = DraftResponseV1(
@@ -1350,6 +1405,7 @@ def test_guard_rejects_cross_item_relations_for_domain_neutral_fields(
     value = _input().model_copy(
         update={
             "question": "두 항목의 개수를 알려줘",
+            "composition_list_root": cited_paths[0].split("[", 1)[0],
             "public_facts_json": public_facts_json,
             "citable_paths": cited_paths,
             "structural_evidence_relations": (),
@@ -1483,13 +1539,14 @@ def test_guard_rejects_cross_container_numeric_predicate_reassembly() -> None:
         ),
     )
 
-    assert result.code == "ungrounded_text"
+    assert result.code == "citation_mixed_list_roots"
 
 
 def test_guard_accepts_domain_neutral_label_value_materializer_sequence() -> None:
     value = _input().model_copy(
         update={
             "question": "두 항목의 개수를 알려줘",
+            "composition_list_root": "records",
             "public_facts_json": (
                 '{"records":['
                 '{"label":"A","value":3},'
@@ -1536,6 +1593,7 @@ def test_guard_rejects_cross_item_predicate_or_ungrounded_units(
     value = _input().model_copy(
         update={
             "question": "두 항목의 개수를 알려줘",
+            "composition_list_root": "records",
             "public_facts_json": (
                 '{"records":['
                 '{"label":"A","value":3},'
@@ -1572,6 +1630,7 @@ def test_guard_rejects_reversed_value_to_label_relation_within_item() -> None:
     value = _input().model_copy(
         update={
             "question": "항목의 개수를 알려줘",
+            "composition_list_root": "items",
             "public_facts_json": '{"items":[{"value":3,"label":"A"}]}',
             "citable_paths": ("items[0].value", "items[0].label"),
             "structural_evidence_relations": (),
@@ -1625,6 +1684,75 @@ def test_guard_defensively_rejects_empty_citations() -> None:
     result = guard_final_response(_input(), draft)
 
     assert result.code == "citations_required"
+
+
+def test_guard_accepts_128_citations_at_contract_boundary() -> None:
+    facts = {f"measure_{index:03d}": f"value_{index:03d}" for index in range(128)}
+    paths = tuple(facts)
+    value = CompositionInputV1(
+        request_id="request-128-citations",
+        question="Return the projected measures.",
+        locale="en-US",
+        selected_route="react",
+        asset_ref=AssetRefV1(type="skill", name="neutral-measures"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="citation-boundary-hash",
+        public_facts=facts,
+        citable_paths=paths,
+    )
+    draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
+    )
+
+    result = guard_final_response(value, draft)
+
+    assert len(draft.cited_paths) == 128
+    assert result.accepted is True
+
+
+def test_guard_rejects_129_citations_constructed_without_validation() -> None:
+    value = _neutral_records_input(question="Return alpha.").model_copy(
+        update={
+            "citable_paths": ("records[0].name",),
+            "structural_evidence_relations": (),
+        }
+    )
+    draft = DraftResponseV1.model_construct(
+        content="alpha.",
+        cited_paths=tuple(f"measure_{index:03d}" for index in range(129)),
+        limitation_paths=(),
+    )
+
+    result = guard_final_response(value, draft)
+
+    assert result.code == "invalid_draft_contract"
+
+
+@pytest.mark.parametrize(
+    "draft",
+    [
+        object(),
+        DraftResponseV1.model_construct(
+            cited_paths=("records[0].name",), limitation_paths=()
+        ),
+        DraftResponseV1.model_construct(
+            content=123,
+            cited_paths=("records[0].name",),
+            limitation_paths=(),
+        ),
+        DraftResponseV1.model_construct(
+            content="alpha.",
+            cited_paths=["records[0].name"],
+            limitation_paths=(),
+        ),
+    ],
+)
+def test_guard_rejects_wrong_type_or_shape_draft_contract(draft: object) -> None:
+    result = guard_final_response(_neutral_records_input(), draft)  # type: ignore[arg-type]
+
+    assert result.code == "invalid_draft_contract"
 
 
 @pytest.mark.parametrize(

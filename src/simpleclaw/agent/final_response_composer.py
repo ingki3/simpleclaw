@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Awaitable, Callable
 
 from pydantic import JsonValue
@@ -13,6 +12,7 @@ from simpleclaw.agent.system_prompts import load_system_prompt
 from simpleclaw.llm.models import LLMRequest, LLMResponse
 from simpleclaw.persona.models import CompositionPersonaProjection
 
+from .composition_admissibility import citation_list_root_violation
 from .composition_citations import (
     CITATION_CANONICALIZATION_POLICY_VERSION,
     projected_scalar_literal_pattern,
@@ -65,12 +65,6 @@ def _same_json_scalar(left: JsonValue, right: JsonValue) -> bool:
     if isinstance(left, int | float) and isinstance(right, int | float):
         return left == right
     return type(left) is type(right) and left == right
-
-
-def _list_root(path: str) -> str | None:
-    """첫 concrete index 앞 root를 추출해 auxiliary list 혼합을 막는다."""
-    match = re.search(r"\[\d+\]", path)
-    return None if match is None else path[: match.start()]
 
 
 def _citable_paths(
@@ -127,13 +121,13 @@ def materialize_render_plan(
 ) -> DraftResponseV1:
     """Source-owned canonical path order로 projected literal을 exactly-once 삽입한다."""
     concrete, paths = _citable_paths(value)
-    list_roots = {root for path in paths if (root := _list_root(path)) is not None}
-    if len(list_roots) > 1:
+    list_root_violation = citation_list_root_violation(
+        paths,
+        declared_root=value.composition_list_root,
+    )
+    if list_root_violation == "mixed_list_roots":
         raise FinalResponseComposerError("render plan mixes list roots")
-    if list_roots and (
-        value.composition_list_root is None
-        or list_roots != {value.composition_list_root}
-    ):
+    if list_root_violation == "auxiliary_list_root":
         raise FinalResponseComposerError("render plan uses an auxiliary list root")
     selected_values = tuple(concrete[path] for path in paths)
     bool_numbers = {int(item) for item in selected_values if isinstance(item, bool)}
