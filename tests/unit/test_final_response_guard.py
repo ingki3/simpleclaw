@@ -204,6 +204,38 @@ def test_guard_rejects_case_changed_opaque_string_evidence(content: str) -> None
     assert result.code == "cited_value_not_rendered"
 
 
+@pytest.mark.parametrize("evidence", [" ready ", "ready ", " ready"])
+@pytest.mark.parametrize("content", ["ready.", " ready ."])
+def test_guard_rejects_edge_whitespace_string_evidence(
+    evidence: str,
+    content: str,
+) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-edge-whitespace",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-edge-whitespace-payload-hash",
+        public_facts={"data": {"state": evidence}},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.accepted is False
+    assert result.code == "citation_not_scalar"
+
+
 @pytest.mark.parametrize(
     "content",
     [

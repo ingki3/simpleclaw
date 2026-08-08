@@ -17,6 +17,7 @@ from simpleclaw.graph_runtime.contracts import (
 )
 from simpleclaw.graph_runtime.status import AssetResultStatus, EffectStatus
 
+from .composition_citations import projected_scalar_literal_pattern
 from .composition_contracts import (
     CompositionInputV1,
     StructuralEvidenceRelationV1,
@@ -237,6 +238,14 @@ def _structural_evidence_relations(
         ):
             raise CompositionProjectionError(
                 "projection.structural_evidence_not_scalar"
+            )
+        if any(
+            projected_scalar_literal_pattern(concrete[path]) is None
+            for paths in matches_by_pattern
+            for path in paths
+        ):
+            raise CompositionProjectionError(
+                "projection.structural_evidence_not_renderable"
             )
         if any(not matches for matches in matches_by_pattern):
             continue

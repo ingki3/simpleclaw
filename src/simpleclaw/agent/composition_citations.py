@@ -21,6 +21,10 @@ def projected_scalar_literal_pattern(
         return None
     if value is None or isinstance(value, bool):
         rendered = json.dumps(value)
+    elif isinstance(value, str):
+        if value != value.strip():
+            return None
+        rendered = value
     else:
         rendered = str(value).strip()
     if not rendered:

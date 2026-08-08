@@ -198,6 +198,65 @@ def test_projection_activates_descriptor_declared_neutral_relation() -> None:
     assert nonmatching_projection.structural_evidence_relations == ()
 
 
+@pytest.mark.parametrize("evidence", [" ready ", "ready ", " ready"])
+def test_projection_rejects_edge_whitespace_structural_evidence(
+    evidence: str,
+) -> None:
+    owner = AssetRefV1(type="recipe", name="neutral-records")
+    ref = ContractRefV1(
+        contract_id="recipe.neutral-records.output",
+        version="1",
+        owner_ref=owner,
+        schema_hash="neutral-edge-whitespace-hash",
+    )
+    descriptor = ContractDescriptorV1(
+        ref=ref,
+        json_schema={
+            "type": "object",
+            "properties": {
+                "data": {
+                    "properties": {
+                        "phase": {},
+                        "state": {},
+                    }
+                }
+            },
+            "x-simpleclaw-composition-fields": ["data.phase", "data.state"],
+            "x-simpleclaw-structural-evidence-relations": [
+                {
+                    "when": {"path": "data.phase", "equals": "active"},
+                    "evidence_fields": ["data.state"],
+                }
+            ],
+        },
+    )
+    result = NormalizedAssetResultV1(
+        invocation_id="neutral-edge-whitespace",
+        output_contract=ref,
+        status=AssetResultStatus.RESOLVED,
+        payload={
+            "status": "completed",
+            "side_effect": False,
+            "data": {"phase": "active", "state": evidence},
+        },
+        payload_hash="neutral-edge-whitespace-payload-hash",
+        effect_status=EffectStatus.NONE,
+    )
+
+    with pytest.raises(
+        CompositionProjectionError,
+        match="projection.structural_evidence_not_renderable",
+    ):
+        build_composition_input(
+            request_id="neutral-edge-whitespace-request",
+            question="What is the record state?",
+            locale="en-US",
+            selected_route="recipe",
+            normalized_result=result,
+            descriptor=descriptor,
+        )
+
+
 def test_descriptor_rejects_relation_evidence_outside_projection() -> None:
     owner = AssetRefV1(type="recipe", name="neutral-records")
 
