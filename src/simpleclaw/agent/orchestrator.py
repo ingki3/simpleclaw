@@ -218,7 +218,9 @@ from simpleclaw.outbound_delivery import (
     PrimaryResponseText,
 )
 from simpleclaw.persona.assembler import assemble_prompt
-from simpleclaw.persona.models import FileType
+from simpleclaw.persona.composition_projection import (
+    build_composition_persona_projection,
+)
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.proactive.conversation_detector import ConversationEndDetector
 from simpleclaw.proactive.store import OpportunityStore
@@ -1139,18 +1141,14 @@ class AgentOrchestrator:
             persona_files, self._persona_config["token_budget"]
         )
         self._persona_prompt = assembly.assembled_text or ""
-        # Final composer에는 말투/정체성(SOUL)만 전달한다. USER/MEMORY와 운영
-        # AGENT 지침은 verified public facts가 아니므로 출력 유출면에서 제외한다.
-        style_files = [
-            persona
-            for persona in persona_files
-            if persona.file_type is FileType.SOUL
-        ]
-        style_assembly = assemble_prompt(
-            style_files,
-            min(int(self._persona_config["token_budget"]), 2_048),
+        composition_config = self._persona_config["composition"]
+        self._composition_persona_projection = (
+            build_composition_persona_projection(
+                persona_files,
+                token_budget=int(composition_config["token_budget"]),
+                section_policy=composition_config["sections"],
+            )
         )
-        self._composition_persona_prompt = style_assembly.assembled_text or ""
 
         # --- 스킬 리로드 (.agent/skills, ~/.agents/skills) ---
         self._skills = discover_skills(
@@ -2908,7 +2906,7 @@ class AgentOrchestrator:
         if composition_mode == "central_persona_v1":
             composer = FinalResponseComposer(
                 send=self._router.send,
-                persona_prompt=self._composition_persona_prompt,
+                persona_projection=self._composition_persona_projection,
                 max_tokens=int(composition_config.get("max_tokens", 1200)),
                 max_output_chars=int(
                     composition_config.get("max_output_chars", 3500)

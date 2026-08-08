@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from simpleclaw.persona.composition_projection import DEFAULT_COMPOSITION_SECTIONS
+
 # 페르소나 엔진 기본 설정값
 # BIZ-313: 페르소나 파일(AGENT/USER/MEMORY)도 배포 repo(`~/.simpleclaw`)가
 # 아니라 런타임 루트(`~/.simpleclaw-agent/default`)에서 읽는다. git 작업과
@@ -28,7 +30,55 @@ _DEFAULTS = {
         {"name": "USER.md", "type": "user"},
         {"name": "MEMORY.md", "type": "memory"},
     ],
+    "composition": {
+        "token_budget": 2048,
+        "sections": {
+            file_type.value: list(sections)
+            for file_type, sections in DEFAULT_COMPOSITION_SECTIONS.items()
+        },
+    },
 }
+
+
+def _load_persona_composition_config(value: object) -> dict:
+    """Composer persona 정책을 고정된 최대 allowlist 안에서 검증한다."""
+    defaults = _DEFAULTS["composition"]
+    if not isinstance(value, dict):
+        return {
+            "token_budget": defaults["token_budget"],
+            "sections": {
+                key: list(sections)
+                for key, sections in defaults["sections"].items()
+            },
+        }
+    configured_budget = value.get("token_budget")
+    token_budget = (
+        configured_budget
+        if isinstance(configured_budget, int)
+        and not isinstance(configured_budget, bool)
+        and configured_budget > 0
+        else defaults["token_budget"]
+    )
+    configured_sections = value.get("sections")
+    sections: dict[str, list[str]] = {}
+    for source_type, allowed in defaults["sections"].items():
+        configured = (
+            configured_sections.get(source_type)
+            if isinstance(configured_sections, dict)
+            else None
+        )
+        if not isinstance(configured, list) or not all(
+            isinstance(section, str) for section in configured
+        ):
+            sections[source_type] = list(allowed)
+            continue
+        allowed_lookup = {section.casefold(): section for section in allowed}
+        sections[source_type] = [
+            allowed_lookup[section.strip().casefold()]
+            for section in configured
+            if section.strip().casefold() in allowed_lookup
+        ]
+    return {"token_budget": token_budget, "sections": sections}
 
 
 def load_persona_config(config_path: str | Path) -> dict:
@@ -58,6 +108,9 @@ def load_persona_config(config_path: str | Path) -> dict:
         "local_dir": persona.get("local_dir", _DEFAULTS["local_dir"]),
         "global_dir": persona.get("global_dir", _DEFAULTS["global_dir"]),
         "files": persona.get("files", _DEFAULTS["files"]),
+        "composition": _load_persona_composition_config(
+            persona.get("composition")
+        ),
     }
 
 

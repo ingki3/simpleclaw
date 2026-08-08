@@ -74,8 +74,10 @@ from simpleclaw.graph_runtime.shadow import ConnectedShadowTurnRunner
 from simpleclaw.graph_runtime.status import DeliveryStatus
 from simpleclaw.llm.router import create_router
 from simpleclaw.memory import ConversationStore
-from simpleclaw.persona.assembler import assemble_prompt
-from simpleclaw.persona.models import FileType
+from simpleclaw.persona.composition_projection import (
+    build_composition_persona_projection,
+)
+from simpleclaw.persona.models import CompositionPersonaProjection
 from simpleclaw.persona.resolver import resolve_persona_files
 from simpleclaw.recipes.loader import discover_recipes
 from simpleclaw.skills.discovery import discover_skills
@@ -253,26 +255,24 @@ def _independent_scenarios(base: _Scenario) -> tuple[_Scenario, ...]:
 _SCENARIOS = _independent_scenarios(_NATURAL_KBO_SCENARIO)
 
 
-def _production_persona_prompt(config_path: Path) -> str:
-    """Orchestrator와 동일하게 configured SOUL만 composer persona로 조립한다."""
+def _production_persona_projection(
+    config_path: Path,
+) -> CompositionPersonaProjection:
+    """Orchestrator와 같은 live runtime persona projection을 만든다."""
     config = load_persona_config(config_path)
     persona_files = resolve_persona_files(
         local_dir=config["local_dir"],
         global_dir=config["global_dir"],
     )
-    style_files = [
-        persona
-        for persona in persona_files
-        if persona.file_type is FileType.SOUL
-    ]
-    assembly = assemble_prompt(
-        style_files,
-        min(int(config["token_budget"]), 2_048),
+    composition_config = config["composition"]
+    projection = build_composition_persona_projection(
+        persona_files,
+        token_budget=int(composition_config["token_budget"]),
+        section_policy=composition_config["sections"],
     )
-    prompt = (assembly.assembled_text or "").strip()
-    if not prompt:
+    if not projection.instruction_text:
         raise _ProbeInvariantError("production_persona_missing")
-    return prompt
+    return projection
 
 
 def _limit_three_argv() -> tuple[str, ...]:
@@ -702,7 +702,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             return 1
     try:
-        persona_prompt = _production_persona_prompt(config_path)
+        persona_projection = _production_persona_projection(config_path)
     except (OSError, TypeError, ValueError, _ProbeInvariantError) as exc:
         print(
             json.dumps(
@@ -726,7 +726,7 @@ async def _run(args: argparse.Namespace) -> int:
         counted_send = _OneCallSend(router.send)
         composer = FinalResponseComposer(
             send=counted_send,
-            persona_prompt=persona_prompt,
+            persona_projection=persona_projection,
             max_tokens=args.max_tokens,
             backend_name=backend,
         )
@@ -782,6 +782,15 @@ async def _run(args: argparse.Namespace) -> int:
         "retry_calls": retry_calls,
         "scenario_count": len(scenarios),
         "scenarios": scenario_results,
+        "persona_source_types": [
+            source_type.value for source_type in persona_projection.source_types
+        ],
+        "persona_policy_version": persona_projection.policy_version,
+        "persona_fingerprint": persona_projection.fingerprint,
+        "persona_content_hash": hashlib.sha256(
+            persona_projection.instruction_text.encode("utf-8")
+        ).hexdigest(),
+        "persona_length": len(persona_projection.instruction_text),
     }
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0 if passed else 1

@@ -210,6 +210,39 @@ persona:
         names = [f["name"] for f in result["files"]]
         assert names == ["SOUL.md", "AGENT.md", "USER.md", "MEMORY.md"]
 
+    def test_composition_defaults_and_fail_closed_section_validation(self, tmp_path):
+        cfg = tmp_path / "config.yaml"
+        _write_yaml(
+            cfg,
+            """\
+persona:
+  composition:
+    token_budget: -1
+    sections:
+      soul: [Identity, Secrets]
+      agent: [Language, Tool Usage Rules]
+      user: [Preferences, Private Profile]
+""",
+        )
+
+        composition = load_persona_config(cfg)["composition"]
+
+        assert composition["token_budget"] == 2048
+        assert composition["sections"] == {
+            "soul": ["Identity"],
+            "agent": ["Language"],
+            "user": ["Preferences"],
+        }
+
+    def test_example_config_has_safe_composition_policy(self):
+        example = Path(__file__).parents[2] / "config.yaml.example"
+
+        composition = load_persona_config(example)["composition"]
+
+        assert composition["token_budget"] == 2048
+        assert composition["sections"]["agent"] == ["Identity", "Language"]
+        assert "memory" not in composition["sections"]
+
 
 # ---------------------------------------------------------------------------
 # 2. load_llm_config

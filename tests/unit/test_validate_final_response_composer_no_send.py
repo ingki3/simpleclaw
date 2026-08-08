@@ -12,7 +12,7 @@ from scripts.dev.validate_final_response_composer_no_send import (
     _connected_probe,
     _ConnectedProbeFacade,
     _OneCallSend,
-    _production_persona_prompt,
+    _production_persona_projection,
 )
 from simpleclaw.agent.final_response_composer import FinalResponseComposer
 from simpleclaw.graph_runtime.adapters.delivery import (
@@ -24,6 +24,18 @@ from simpleclaw.graph_runtime.runtime import (
     ShadowBudgetUsageV1,
 )
 from simpleclaw.llm.models import LLMResponse
+from simpleclaw.persona.models import CompositionPersonaProjection, FileType
+
+
+def _persona_projection(text: str) -> CompositionPersonaProjection:
+    return CompositionPersonaProjection(
+        instruction_text=text,
+        source_types=(FileType.SOUL,),
+        token_count=len(text.split()),
+        token_budget=2048,
+        policy_version="fixture_v1",
+        fingerprint=f"fixture:{text}",
+    )
 
 
 async def _draft_response(request) -> LLMResponse:
@@ -50,7 +62,9 @@ async def test_connected_probe_measures_configured_sink_deltas(scenario) -> None
     counted_send = _OneCallSend(_draft_response)
     composer = FinalResponseComposer(
         send=counted_send,
-        persona_prompt="Answer only from the supplied facts.",
+        persona_projection=_persona_projection(
+            "Answer only from the supplied facts."
+        ),
         max_tokens=1200,
         backend_name="offline-fixture",
     )
@@ -106,15 +120,15 @@ def test_activation_scenarios_use_natural_question_without_local_persona() -> No
     assert not hasattr(_NATURAL_KBO_SCENARIO, "persona_prompt")
 
 
-def test_production_persona_uses_configured_soul_assembly_only(tmp_path) -> None:
+def test_production_persona_uses_allowlisted_runtime_projection(tmp_path) -> None:
     persona_dir = tmp_path / "persona"
     persona_dir.mkdir()
     (persona_dir / "SOUL.md").write_text(
-        "# SOUL\n\n따뜻하고 간결한 한국어 존댓말",
+        "# Identity\n\nSimpleClaw\n\n# Speaking Style\n\n따뜻하고 간결한 한국어 존댓말",
         encoding="utf-8",
     )
     (persona_dir / "USER.md").write_text(
-        "# USER\n\n비공개 사용자 정보",
+        "# Preferences\n\n짧은 목록 선호\n\n# Private\n\n비공개 사용자 정보",
         encoding="utf-8",
     )
     config = tmp_path / "config.yaml"
@@ -126,10 +140,12 @@ def test_production_persona_uses_configured_soul_assembly_only(tmp_path) -> None
         encoding="utf-8",
     )
 
-    prompt = _production_persona_prompt(config)
+    projection = _production_persona_projection(config)
 
-    assert "따뜻하고 간결한 한국어 존댓말" in prompt
-    assert "비공개 사용자 정보" not in prompt
+    assert "따뜻하고 간결한 한국어 존댓말" in projection.instruction_text
+    assert "짧은 목록 선호" in projection.instruction_text
+    assert "비공개 사용자 정보" not in projection.instruction_text
+    assert projection.source_types == (FileType.SOUL, FileType.USER)
 
 
 def test_probe_facade_connects_production_delivery_adapter_types(tmp_path) -> None:
