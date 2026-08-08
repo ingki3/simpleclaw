@@ -381,7 +381,7 @@ def _validate_schema_definition(schema: object) -> None:
             json_schema=schema,
             composition_fields=composition_fields,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise ContractRegistryError("schema.invalid_composition_fields") from exc
 
     for keyword in ("$id", "$schema", "title", "description"):
