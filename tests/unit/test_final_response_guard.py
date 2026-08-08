@@ -9,8 +9,13 @@ import pytest
 from simpleclaw.agent.composition_citations import canonicalize_draft_citations
 from simpleclaw.agent.composition_contracts import (
     CompositionInputV1,
+    CompositionRenderPlanV1,
     DraftResponseV1,
     StructuralEvidenceRelationV1,
+)
+from simpleclaw.agent.final_response_composer import (
+    FinalResponseComposerError,
+    materialize_render_plan,
 )
 from simpleclaw.agent.final_response_guard import guard_final_response
 from simpleclaw.graph_runtime.contracts import AssetRefV1
@@ -141,6 +146,108 @@ def _neutral_records_input(
             ),
         ),
     )
+
+
+def _same_item_render_input(
+    facts: dict[str, object],
+    fields: tuple[str, ...],
+) -> CompositionInputV1:
+    evidence_paths = tuple(f"records[0].{field}" for field in fields)
+    return CompositionInputV1(
+        request_id="request-same-item-render",
+        question="Return the record fields.",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="same-item-render-payload-hash",
+        composition_list_root="records",
+        public_facts={"records": [facts]},
+        structural_evidence_relations=(
+            StructuralEvidenceRelationV1(evidence_paths=evidence_paths),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("facts", "fields", "expected_content"),
+    [
+        ({"left": 1, "right": 2}, ("left", "right"), "1, 2."),
+        ({"flag": True, "state": "ready"}, ("flag", "state"), "true, ready."),
+        ({"left": 1, "right": 1}, ("left", "right"), "1, 1."),
+    ],
+    ids=("number-number", "bool-string", "repeated-equal-number"),
+)
+def test_guard_accepts_exact_materialized_same_item_scalar_sequence(
+    facts: dict[str, object],
+    fields: tuple[str, ...],
+    expected_content: str,
+) -> None:
+    value = _same_item_render_input(facts, fields)
+
+    draft = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
+    )
+
+    assert draft.content == expected_content
+    assert guard_final_response(value, draft).accepted is True
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_code"),
+    [
+        ("3, 2, 1.", "cited_value_order_mismatch"),
+        ("1 and 2 and 3.", "cited_value_order_mismatch"),
+        ("1, 2; 3.", "cited_value_order_mismatch"),
+        ("1, 2, 3, hidden.", "cited_value_order_mismatch"),
+        ("1, 2, 3, 4.", "cited_value_order_mismatch"),
+        (" 1, 2, 3.", "ungrounded_symbol"),
+        ("1, 2, 3..", "cited_value_order_mismatch"),
+    ],
+    ids=(
+        "reversed-order",
+        "semantic-connector",
+        "mixed-separator",
+        "uncited-scalar",
+        "uncited-number",
+        "leading-whitespace",
+        "duplicate-punctuation",
+    ),
+)
+def test_guard_rejects_noncanonical_same_item_scalar_sequence(
+    content: str,
+    expected_code: str,
+) -> None:
+    value = _same_item_render_input(
+        {"left": 1, "middle": 2, "right": 3, "extra": "hidden"},
+        ("left", "middle", "right"),
+    )
+    canonical = materialize_render_plan(
+        value,
+        CompositionRenderPlanV1(separator="comma_space"),
+    )
+
+    result = guard_final_response(
+        value,
+        canonical.model_copy(update={"content": content}),
+    )
+
+    assert result.code == expected_code
+
+
+def test_materializer_rejects_same_item_typed_literal_collision() -> None:
+    value = _same_item_render_input(
+        {"string_value": "1", "number_value": 1},
+        ("string_value", "number_value"),
+    )
+
+    with pytest.raises(FinalResponseComposerError, match="typed literal collision"):
+        materialize_render_plan(
+            value,
+            CompositionRenderPlanV1(separator="comma_space"),
+        )
 
 
 def test_guard_accepts_visible_exact_structural_evidence() -> None:

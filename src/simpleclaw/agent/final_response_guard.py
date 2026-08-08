@@ -487,6 +487,7 @@ def _cited_literal_order_error(
     question: str,
 ) -> tuple[str | None, tuple[tuple[int, int], ...]]:
     """인용 scalar 순서와 concrete item 관계 shape를 함께 검증한다."""
+    matches_exact_layout = _matches_exact_materializer_layout(content, cited_values)
     cursor = 0
     previous_end: int | None = None
     previous_path: str | None = None
@@ -514,9 +515,10 @@ def _cited_literal_order_error(
                 and current_location is not None
                 and previous_location[:2] == current_location[:2]
             ):
-                if not isinstance(previous_value, str) or not _safe_topic_separator(
-                    separator
-                ):
+                if (
+                    not isinstance(previous_value, str)
+                    and not matches_exact_layout
+                ) or not _safe_topic_separator(separator):
                     return ("cited_value_order_mismatch", ())
             elif (
                 previous_location is not None
