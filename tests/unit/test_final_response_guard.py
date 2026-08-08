@@ -88,6 +88,22 @@ def test_guard_rejects_undeclared_semantic_cause() -> None:
     assert result.code == "semantic_relation_ungrounded_fact"
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "No records unicorn available.",
+        "No records fabricated outage available.",
+    ],
+)
+def test_guard_rejects_undeclared_absence_relation_tokens(content: str) -> None:
+    result = guard_final_response(
+        _neutral_empty_input(),
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.code == "semantic_relation_ungrounded_fact"
+
+
 def test_canonicalizer_keeps_only_declared_absence_evidence() -> None:
     draft = DraftResponseV1(
         content="No records are available.",
@@ -128,6 +144,40 @@ def test_guard_accepts_declared_question_scoped_state() -> None:
     )
 
     assert result.accepted is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "The record state is ready unicorn.",
+        "Fabricated outage says ready.",
+    ],
+)
+def test_guard_rejects_undeclared_state_relation_tokens(content: str) -> None:
+    value = CompositionInputV1(
+        request_id="request-neutral-state-mutation",
+        question="What is the record state?",
+        locale="en-US",
+        selected_route="recipe",
+        asset_ref=AssetRefV1(type="skill", name="neutral-records"),
+        result_status=AssetResultStatus.RESOLVED,
+        effect_status=EffectStatus.NONE,
+        normalized_payload_hash="state-mutation-payload-hash",
+        public_facts={"data": {"state": "ready"}},
+        semantic_relations=(
+            CompositionSemanticRelationV1(
+                kind="question_scope_state",
+                evidence_paths=("data.state",),
+            ),
+        ),
+    )
+
+    result = guard_final_response(
+        value,
+        DraftResponseV1(content=content, cited_paths=("data.state",)),
+    )
+
+    assert result.code == "semantic_relation_ungrounded_fact"
 
 
 def test_guard_accepts_grounded_natural_response() -> None:

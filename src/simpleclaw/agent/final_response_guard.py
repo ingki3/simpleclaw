@@ -197,6 +197,38 @@ _CAUSAL_RELATION_WORDS = frozenset(
         "탓",
     }
 )
+_SEMANTIC_RELATION_GRAMMAR_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "are",
+        "current",
+        "currently",
+        "is",
+        "the",
+        "there",
+        "was",
+        "were",
+        "각각",
+        "결과",
+        "기준",
+        "다음",
+        "됩니다",
+        "로",
+        "를",
+        "만",
+        "에",
+        "와",
+        "은",
+        "의",
+        "이",
+        "이고",
+        "이며",
+        "입니다",
+        "중",
+        "현재",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +297,11 @@ def _word_stem(token: str) -> str:
         if token.endswith(suffix) and len(token) > len(suffix):
             return token[: -len(suffix)]
     return token
+
+
+def _word_forms(token: str) -> frozenset[str]:
+    """표면형과 공통 조사 제거형을 동일 semantic slot 후보로 취급한다."""
+    return frozenset({token.casefold(), _word_stem(token).casefold()})
 
 
 def _remove_cited_literals(
@@ -655,15 +692,11 @@ def _guard_declared_semantic_relation(
     if _NUMBER_RE.search(residual):
         return _rejected("semantic_relation_ungrounded_fact")
     question_words = {
-        form
-        for token in _WORD_RE.findall(value.question)
-        for form in (token.casefold(), _word_stem(token).casefold())
+        form for token in _WORD_RE.findall(value.question) for form in _word_forms(token)
     }
     residual_tokens = tuple(_WORD_RE.findall(residual))
     residual_words = {
-        form
-        for token in residual_tokens
-        for form in (token.casefold(), _word_stem(token).casefold())
+        form for token in residual_tokens for form in _word_forms(token)
     }
     if (
         relation.kind == "question_scope_absent"
@@ -679,6 +712,11 @@ def _guard_declared_semantic_relation(
         and not residual_words & _ABSENCE_RELATION_WORDS
     ):
         return _rejected("semantic_relation_absence_missing")
+    allowed_words = question_words | _SEMANTIC_RELATION_GRAMMAR_WORDS
+    if relation.kind == "question_scope_absent":
+        allowed_words |= _ABSENCE_RELATION_WORDS
+    if any(not (_word_forms(token) & allowed_words) for token in residual_tokens):
+        return _rejected("semantic_relation_ungrounded_fact")
     symbol_residual = _WORD_RE.sub("", residual)
     if not _SAFE_PUNCTUATION_RE.fullmatch(symbol_residual):
         return _rejected("ungrounded_symbol")
