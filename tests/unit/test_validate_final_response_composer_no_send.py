@@ -191,6 +191,9 @@ async def test_parse_failure_preserves_sanitized_provenance_without_raw_content(
         "root_cause_type": "ValidationError",
     }
     assert counted_send.provider_plan_error_code == "provider_plan_invalid_json"
+    assert counted_send.provider_plan_validation_signature == (
+        "root:json_invalid",
+    )
     assert "raw-provider-content-must-not-escape" not in str(failure)
     assert "raw-provider-content-must-not-escape" not in str(captured.value)
 
@@ -223,6 +226,7 @@ async def test_provider_failure_preserves_type_without_raw_error_message() -> No
         "root_cause_type": "LLMProviderError",
     }
     assert counted_send.provider_plan_error_code is None
+    assert counted_send.provider_plan_validation_signature == ()
     assert "raw-provider-error-must-not-escape" not in str(failure)
     assert "raw-provider-error-must-not-escape" not in str(captured.value)
 

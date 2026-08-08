@@ -201,6 +201,7 @@ class _OneCallSend:
         self.calls = 0
         self.provider_plan_shape_valid = False
         self.provider_plan_error_code: str | None = None
+        self.provider_plan_validation_signature: tuple[str, ...] = ()
 
     async def __call__(self, request):
         self.calls += 1
@@ -211,13 +212,45 @@ class _OneCallSend:
             CompositionRenderPlanV1.model_validate_json(response.text)
             self.provider_plan_shape_valid = True
             self.provider_plan_error_code = None
+            self.provider_plan_validation_signature = ()
         except ValidationError as exc:
             self.provider_plan_shape_valid = False
             self.provider_plan_error_code = _render_plan_validation_code(exc)
+            self.provider_plan_validation_signature = (
+                _render_plan_validation_signature(exc)
+            )
         except (AttributeError, TypeError):
             self.provider_plan_shape_valid = False
             self.provider_plan_error_code = "provider_plan_response_type_invalid"
+            self.provider_plan_validation_signature = ()
         return response
+
+
+def _render_plan_validation_signature(exc: ValidationError) -> tuple[str, ...]:
+    """입력값·메시지를 제외한 bounded field/error-type signature를 만든다."""
+    signature: set[str] = set()
+    for item in exc.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
+        location = item.get("loc") or ()
+        raw_field = str(location[0]) if location else "root"
+        field = {
+            "schema_version": "schema",
+            "schema": "schema",
+            "separator": "separator",
+            "ending": "ending",
+            "root": "root",
+        }.get(raw_field, "other")
+        raw_error_type = str(item.get("type") or "validation_error")
+        error_type = (
+            raw_error_type
+            if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", raw_error_type)
+            else "validation_error"
+        )
+        signature.add(f"{field}:{error_type}")
+    return tuple(sorted(signature))
 
 
 def _render_plan_validation_code(exc: ValidationError) -> str:
@@ -1022,6 +1055,9 @@ async def _run(args: argparse.Namespace) -> int:
                     "provider_plan_error_code": (
                         counted_send.provider_plan_error_code
                     ),
+                    "provider_plan_validation_signature": list(
+                        counted_send.provider_plan_validation_signature
+                    ),
                     "provider_calls": counted_send.calls,
                     "retry_calls": max(0, counted_send.calls - 1),
                 }
@@ -1054,6 +1090,9 @@ async def _run(args: argparse.Namespace) -> int:
                     scenario_result.update(sanitized)
                     scenario_result["provider_plan_error_code"] = (
                         counted_send.provider_plan_error_code
+                    )
+                    scenario_result["provider_plan_validation_signature"] = list(
+                        counted_send.provider_plan_validation_signature
                     )
             scenario_result["backend"] = backend
             scenario_results.append(scenario_result)
